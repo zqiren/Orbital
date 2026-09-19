@@ -8,6 +8,8 @@ session path.
 
 A. @mention journey: POST /inject with a target reaches a (simulated) running
    sub-agent and returns success — not the seam-3 404 "No active session".
+   Spec 091 deleted the @mention path; the composer pin's target send rides
+   the same route, so the journey now sends pinned.
 B. Session-less recovery poll: GET /pending-approval with no session_id returns
    200 {"pending": false}, not the seam-3 500 from the over-migrated resolver.
 """
@@ -72,7 +74,8 @@ def test_mention_journey_reaches_running_sub_agent(client_and_project):
 
     resp = client.post(
         f"/api/v2/agents/{pid}/inject",
-        json={"content": "hello", "target": "researcher", "session_id": sid},
+        json={"content": "hello", "target": "researcher", "pinned": True,
+              "session_id": sid},
     )
 
     assert resp.status_code == 200, resp.text

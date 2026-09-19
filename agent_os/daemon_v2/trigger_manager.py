@@ -526,7 +526,7 @@ class TriggerManager:
         self, project_id: str, config, agent: str, *,
         initial_message: str, trigger_id: str,
     ) -> None:
-        """Fire a worker-assigned automation down the chat @mention path.
+        """Fire a worker-assigned automation down the chat direct-send path.
 
         Mirrors what ``start_agent(initial_message=…)`` does for an unassigned
         trigger, minus the management turn: mint the fire's own session, write
@@ -658,7 +658,7 @@ class TriggerManager:
             config = self._agent_manager._build_agent_config_from_project(project_id)
             if chosen_agent:
                 # Spec 079 §3.3: the user assigned this automation to a worker.
-                # Same mechanism as a chat @mention and as an assigned queue
+                # Same mechanism as a pinned chat send and as an assigned queue
                 # item — the task goes straight to the worker, and the manager
                 # is woken by the worker's terminal event to act on the result
                 # and notify, which is what its turn does today anyway. No hold

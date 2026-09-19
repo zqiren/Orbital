@@ -72,6 +72,12 @@ class ProjectHandle:
     # Drives idle eviction; ephemeral (never persisted — a daemon restart
     # drops all handles anyway). See ``_evict_idle_once``.
     last_activity: float = field(default_factory=time.time)
+    # Spec 091 §4: set when ``inject_system_message`` defers a wake-eligible
+    # sub-agent terminal while this handle's loop is running. The loop's own
+    # ``finally`` drains the deferred buffer before ``_on_loop_done`` runs, so
+    # the done-callback cannot find the row there — the wake has to be
+    # decided at defer time. Consumed by ``_on_loop_done``.
+    wake_after_turn: bool = False
 
 
 @dataclass
@@ -1975,6 +1981,11 @@ class AgentManager:
         # Loop is running — defer for safe insertion after tool batch
         handle.session.defer_message(content, role="system", source="daemon",
                                      meta=meta)
+        if (meta and meta.get("event") == "sub_agent_terminal"
+                and not suppress_wake):
+            # Decide the wake now (spec 091 §4): by the time _on_loop_done
+            # runs, the loop's own finally has already drained this row.
+            handle.wake_after_turn = True
         return "deferred"
 
     def _read_session_f1(self, filepath: str) -> str | None:
@@ -5017,6 +5028,29 @@ class AgentManager:
     # (shielded) kill.
     SUB_AGENT_TEARDOWN_BUDGET = 25.0
 
+    def _consume_wake_after_turn(self, sk: SessionKey) -> bool:
+        """Read and clear the handle's defer-time wake flag (spec 091 §4)."""
+        handle = self._handles.get(sk)
+        if handle is None:
+            return False
+        # ``is True``: a stray non-bool attribute (e.g. on a mock) never wakes.
+        flagged = getattr(handle, "wake_after_turn", False) is True
+        handle.wake_after_turn = False
+        return flagged
+
+    @staticmethod
+    def _terminal_unread(session) -> bool:
+        """True when a wake-eligible sub-agent terminal row sits after the
+        session's last assistant message — no LLM call has read it yet."""
+        for msg in reversed(session.get_messages()):
+            if msg.get("role") == "assistant":
+                return False
+            meta = msg.get("_meta") or {}
+            if (meta.get("event") == "sub_agent_terminal"
+                    and not meta.get("suppress_wake")):
+                return True
+        return False
+
     def _on_loop_done(self, project_id: str, *,
                       session_id: str | None = None):
         """Returns done-callback for the loop asyncio.Task.
@@ -5029,6 +5063,9 @@ class AgentManager:
         sk = make_session_key(project_id, session_id)
 
         def callback(task: asyncio.Task):
+            # Consume this turn's wake decision before any early return below,
+            # so it can never carry into a later turn (spec 091 §4).
+            wake_after_turn = self._consume_wake_after_turn(sk)
             try:
                 exc = task.exception()
             except asyncio.CancelledError:
@@ -5115,6 +5152,15 @@ class AgentManager:
                 if (meta.get("event") == "sub_agent_terminal"
                         and not meta.get("suppress_wake")):
                     wake_on_deferred_terminal = True
+            # Spec 091 §4: the scan above only sees a row deferred after the
+            # loop's own finally already drained the buffer — the rare case.
+            # The common one was recorded at defer time. Honour it only while
+            # the terminal is still unread: one drained after a tool batch is
+            # read by that turn's next LLM call, and waking again for it would
+            # re-run a turn that has already answered it.
+            if (wake_after_turn and not wake_on_deferred_terminal
+                    and self._terminal_unread(handle.session)):
+                wake_on_deferred_terminal = True
 
             # Check if paused for approval FIRST — don't drain the queue
             # or broadcast idle while a tool call is awaiting user decision.

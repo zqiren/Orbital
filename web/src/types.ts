@@ -1062,14 +1062,23 @@ export interface DirectoryListing {
   entries: FileEntry[];
 }
 
+/** Spec 090 — document formats the client renders from raw bytes. */
+export type DocumentFormat = 'pdf' | 'doc' | 'docx' | 'xlsx' | 'xls' | 'csv';
+
 export interface FileContent {
   path: string;
   content: string;
   size: number;
   truncated: boolean;
-  type?: 'text' | 'image' | 'binary' | 'html';
+  type?: 'text' | 'image' | 'binary' | 'html' | 'document';
   mime?: string;
   download_url?: string;
+  /** Spec 090 — present when `type === 'document'` (content is then empty). */
+  format?: DocumentFormat;
+  /** Spec 090 — raw-bytes route the document renderer fetches. */
+  preview_url?: string;
+  /** Spec 090 — the daemon will not serve preview bytes (above the 50 MB ceiling). */
+  preview_unavailable?: 'too_large';
 }
 
 export interface PlatformStatus {

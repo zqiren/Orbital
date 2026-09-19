@@ -61,6 +61,8 @@ describe('FileExplorer initialPath (spec 078 D15)', () => {
     expect(calls.some((u) => u.includes('path=docs') && !u.includes('notes'))).toBe(true);
     expect(calls.some((u) => u.includes('path=docs%2Fnotes'))).toBe(true);
     expect(calls.some((u) => u.includes('/files/content?path=docs%2Fnotes%2Fplan.md'))).toBe(true);
+    // Spec 090: the Files tab renders documents, so it opts in to the envelope.
+    expect(calls.some((u) => u.includes('/files/content?') && u.includes('document_preview=1'))).toBe(true);
     expect(container.textContent).toContain('plan.md');
   });
 });

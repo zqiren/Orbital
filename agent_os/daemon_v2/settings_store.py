@@ -439,6 +439,26 @@ class SettingsStore:
     def key_source(self, card_id: str | None) -> str:
         return self._cards.source(card_id) if card_id else "none"
 
+    def key_for_provider(self, provider: str, region: str | None = None) -> str:
+        """The key of a card serving ``provider`` on its own endpoint, or "".
+
+        Read-only lookup for handing ONE key to a sub-agent CLI that talks to
+        that provider natively (spec 087). A card with its own ``base_url``
+        is passed over: its key belongs to a gateway or proxy, not to the
+        provider. ``region`` narrows region-locked providers. The default card
+        wins when it matches; otherwise the most recently used keyed card.
+        """
+        default = self.default_card()
+        candidates = ([default] if default is not None else []) + self.list_cards()
+        for card in candidates:
+            if (card.provider != provider or card.base_url
+                    or (region is not None and card.region != region)):
+                continue
+            key = self.key_for(card.id)
+            if key:
+                return key
+        return ""
+
     def masked_card(self, card: CredentialCard,
                     default_id: str | None = None) -> dict:
         """The wire shape of a card. The raw key is NEVER in it."""

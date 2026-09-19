@@ -30,36 +30,31 @@ class TestLifecycleObserver:
         assert "/path/transcript.jsonl" in content
 
     @pytest.mark.asyncio
-    async def test_on_message_routed_user_mention_carries_guidance_with_clean_display(self):
-        """Backlog #23 D3 (supersedes backlog #24 D3's no-op): SubAgentManager
-        .send() now threads the ORIGINAL caller's initiator through to this,
-        its ONE internal notification for a dispatch — the @mention route no
-        longer fires a second, redundant call of its own. Since this is the
-        only marker a mention dispatch ever gets, "user_mention" can no
-        longer be a no-op: the LLM-facing content carries one guidance line
-        (the user addressed the sub-agent directly; don't answer on its
-        behalf), while _meta.display_content keeps the rendered row on the
-        same clean "Message sent to …" text a management_agent dispatch
-        gets."""
+    async def test_on_message_routed_user_pinned_is_a_plain_wake_suppressed_marker(self):
+        """Spec 091: the composer pin is the only direct user send left (the
+        @mention path and its "user_mention" initiator are gone).
+        SubAgentManager.send() threads the caller's initiator through to this,
+        its ONE internal notification for a dispatch. A pinned send's marker
+        is the plain "Message sent to …" text — no supervise/relay guidance,
+        so no display split — and wake-suppressed: the management agent takes
+        no turn."""
         am = MagicMock()
-        am.inject_system_message = AsyncMock(return_value="delivered")
+        am.inject_system_message = AsyncMock(return_value="suppressed")
         ws = MagicMock()
 
         observer = LifecycleObserver(am, ws)
         await observer.on_message_routed(
-            "proj1", "claude-code", "user_mention",
+            "proj1", "claude-code", "user_pinned",
             "refactor the auth module", "/path/t.jsonl",
             dispatch_id="sess_X:bbbb2222",
         )
 
         am.inject_system_message.assert_awaited_once()
         content = am.inject_system_message.call_args[0][1]
-        kwargs = am.inject_system_message.await_args.kwargs
-        display = kwargs["meta"]["display_content"]
-        assert display == '[Sub-agent] Message sent to claude-code: "refactor the auth module". Transcript: /path/t.jsonl'
-        assert content.startswith(display)
-        assert "do not answer on its behalf" in content
-        assert "do not answer on its behalf" not in display
+        meta = am.inject_system_message.await_args.kwargs["meta"]
+        assert content == '[Sub-agent] Message sent to claude-code: "refactor the auth module". Transcript: /path/t.jsonl'
+        assert meta["suppress_wake"] is True
+        assert "display_content" not in meta
 
     @pytest.mark.asyncio
     async def test_on_message_routed_management_agent(self):
@@ -143,12 +138,12 @@ class TestLifecycleObserver:
         ws.broadcast = MagicMock()
 
         observer = LifecycleObserver(am, ws)
-        await observer.on_started("proj1", "claude-code", "user_mention",
+        await observer.on_started("proj1", "claude-code", "user_pinned",
                                    transcript_path="/path/t.jsonl")
 
         content = am.inject_system_message.call_args[0][1]
         assert "[Sub-agent] claude-code started" in content
-        assert "user_mention" in content
+        assert "user_pinned" in content
         assert "/path/t.jsonl" in content
 
         ws.broadcast.assert_called_once()

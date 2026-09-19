@@ -1,0 +1,1 @@
+{"id": "p5", "type": "response", "command": "prompt", "success": false, "error": "No API key found for openrouter.\n\nUse /login to log into a provider via OAuth or API key. See:\n  <pi>/docs/providers.md\n  <pi>/docs/models.md"}

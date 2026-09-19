@@ -60,7 +60,7 @@ import { SessionSidebar } from './SessionSidebar';
 import ChatView from './ChatView';
 import ScopeChip from './ScopeChip';
 import FilePreviewDrawer from './FilePreviewDrawer';
-import WorkspacePanel from './panel/WorkspacePanel';
+import WorkspacePanel, { WorkspacePanelBar } from './panel/WorkspacePanel';
 import FilesView from './panel/FilesView';
 import BrowserView from './panel/BrowserView';
 import PanelHandle from './panel/PanelHandle';
@@ -86,7 +86,7 @@ interface ChatTabProps {
   project: Project;
   agentStatus: AgentRunStatus;
   statusTick?: number;
-  mentionAgents: Array<{ slug: string; name: string }>;
+  agents: Array<{ slug: string; name: string }>;
   route: Extract<Route, { name: 'project' }>;
   setRoute: Dispatch<SetStateAction<Route>>;
   /** Re-fetch this project's runtime fields (e.g. budget) after a turn ends. */
@@ -131,7 +131,7 @@ export default function ChatTab({
   project,
   agentStatus,
   statusTick,
-  mentionAgents,
+  agents,
   route,
   setRoute,
   onRefreshProject,
@@ -437,7 +437,7 @@ export default function ChatTab({
             project={project}
             agentStatus={agentStatus}
             statusTick={statusTick}
-            mentionAgents={mentionAgents}
+            agents={agents}
             sessionId={routeSessionId}
             initialDraft={route.draft}
             onDraftConsumed={handleDraftConsumed}
@@ -456,12 +456,17 @@ export default function ChatTab({
             fileContent={null}
             loading={false}
             onClose={collapsePanel}
+            header={
+              <WorkspacePanelBar
+                view={panelView}
+                onViewChange={setPanelView}
+                annotating={annotating}
+                onToggleAnnotate={() => setAnnotating(!annotating)}
+              />
+            }
           >
             <WorkspacePanel
               view={panelView}
-              onViewChange={setPanelView}
-              annotating={annotating}
-              onToggleAnnotate={() => setAnnotating(!annotating)}
               browser={
                 <BrowserView
                   projectId={projectId}

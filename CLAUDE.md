@@ -267,14 +267,21 @@ Cutting an Orbital release means producing platform-specific installers (`.exe` 
    ```
    All four commands must exit zero before proceeding. **Do not skip — local builds can pass on stale caches while fresh checkouts fail.**
 
-4. **Live mid-turn sub-agent terminal smoke** (backlog #23/#28): with a real LLM
-   configured, dispatch a sub-agent from a management session, and while the
-   management turn is still in flight have the worker hit a terminal outcome
-   (an error is easiest — e.g. an invalid worker model). Confirm the manager
-   wakes and acts on it and the timeline renders the terminal row. The
-   deferred-terminal wake path is unit-proven through the real defer buffer,
-   but it must be exercised under a live LLM dispatch at least once per
-   release.
+4. **Live mid-turn sub-agent terminal smoke** (backlog #23/#28, spec 091 §4):
+   with a real LLM configured, make a worker's terminal event land while a
+   management turn in the same session is still streaming, and confirm the
+   manager wakes after that turn and acts on it. Orbital's own dispatches end
+   their turn and hold user messages while the worker runs, so build the
+   overlap with an automation assigned to a worker: create a `file_watch`
+   trigger with `agent` set (e.g. codex, task "Reply with the single word
+   PONG"), fire it by touching a watched file, and the moment the log shows
+   `Trigger … dispatched directly to '<agent>' (session=…)` send a long
+   text-only request (e.g. a 1200-word essay) into that session. Pass: the
+   terminal row is timestamped inside the essay's LLM call but written after
+   the essay row, and a second management run follows it and answers it. The
+   deferred path is also unit-tested through a real `AgentLoop.run()` task
+   (`tests/unit/test_wake_on_deferred_terminal.py`), but it must be exercised
+   under a live LLM at least once per release.
 
 ---
 

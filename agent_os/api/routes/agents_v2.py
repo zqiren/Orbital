@@ -249,12 +249,12 @@ class InjectRequest(BaseModel):
     content: str
     target: str | None = None
     nonce: str | None = None
-    # Spec 074: True when the client resolved ``target`` from the composer's
-    # sticky "Talking to" dropdown (the session pin) rather than a leading
-    # @mention. Maps to ``initiator="user_pinned"`` — the dispatch whose
-    # terminal events are wake-suppressed (the management LLM takes zero
-    # turns). A plain @mention keeps ``initiator="user_mention"`` and today's
-    # manager-supervises semantics. Ignored without ``target``.
+    # Spec 074 added this to tell a composer-pin send from an @mention. Spec
+    # 091 deleted the @mention path: every ``target`` send is now
+    # ``initiator="user_pinned"`` (wake-suppressed dispatch; the management
+    # LLM takes zero turns) whatever this says. Still accepted, and ignored,
+    # so a cached older SPA — which sends it, or omits it on an old @mention —
+    # never gets a 422.
     pinned: bool = False
     attachments: list[InjectAttachment] | None = None
     # F1 (user-facing chat thread id) — select which chat session within
@@ -1370,16 +1370,16 @@ async def inject_message(project_id: str, req: InjectRequest):
         attachment_dicts = None
 
     if req.target and _sub_agent_manager is not None:
-        # Route to sub-agent (Path B: direct @mention).
+        # Route to sub-agent (Path B: a direct send — the composer pin).
         #
-        # Seam 3 / D1: resolve the @mention's chat session EXACTLY ONCE through
+        # Seam 3 / D1: resolve the send's chat session EXACTLY ONCE through
         # the canonical inject funnel (passthrough / disk-hydrate / canonical
         # mint) and thread the single concrete id to persistence, dispatch, and
-        # lifecycle. This persists the authored mention to the project's REAL
+        # lifecycle. This persists the authored message to the project's REAL
         # chat session — never a fabricated subagent_<hex> log — and does NOT
         # auto-wake the management loop: the record sits in the shared session
         # JSONL for the management agent to read on demand (it must not be
-        # re-dispatched off the mention).
+        # re-dispatched off the send).
         user_ts = datetime.now(timezone.utc).isoformat()
         user_msg: dict = {
             "role": "user",
@@ -1421,21 +1421,19 @@ async def inject_message(project_id: str, req: InjectRequest):
         # send() spawns-on-demand (TASK-collapse-dispatch-to-send): the
         # manual try-send -> on-error-start -> re-send dance that used to
         # live here is now the manager's single built-in implementation.
-        # initiator="user_mention" (backlog #23 D3): threaded through to
-        # send()'s one internal on_message_routed notification (fired here
-        # immediately, or later when a queued prompt drains) so the
-        # management agent is told the user addressed this sub-agent
-        # directly. This route used to ALSO fire its own direct
-        # on_message_routed call for the same dispatch_id — a double
-        # marker for one physical dispatch (backlog #24 D3) — now deleted;
-        # send()'s internal notification is the only one this dispatch
-        # ever gets.
-        # initiator (spec 074): "user_pinned" when the target came from the
-        # composer's sticky dropdown — the wake-suppressed, zero-manager-turn
-        # dispatch class. A leading @mention (req.pinned False) keeps
-        # "user_mention" and today's manager-supervises semantics.
-        initiator = "user_pinned" if req.pinned else "user_mention"
-        if req.pinned and _pinned_consolidation is not None:
+        # The initiator is threaded through to send()'s one internal
+        # on_message_routed notification (fired here immediately, or later
+        # when a queued prompt drains; backlog #23 D3). This route used to
+        # ALSO fire its own direct on_message_routed call for the same
+        # dispatch_id — a double marker for one physical dispatch (backlog
+        # #24 D3) — now deleted; send()'s internal notification is the only
+        # one this dispatch ever gets.
+        # initiator (spec 074, spec 091): always "user_pinned" — the
+        # wake-suppressed, zero-manager-turn dispatch class. The @mention
+        # path ("user_mention", manager-supervised) is gone, and req.pinned
+        # is ignored: an old SPA's @mention degrades to a pinned send.
+        initiator = "user_pinned"
+        if _pinned_consolidation is not None:
             # A new pinned dispatch: the exchange is active again — cancel
             # any pending quiescence consolidation timer.
             _pinned_consolidation.note_pinned_dispatch(
@@ -1791,8 +1789,8 @@ class SessionPatchRequest(BaseModel):
     ``pinned_target`` (spec 074) pins the chat session to a sub-agent: the
     composer's sticky "Talking to" selection. Tri-state via
     ``model_fields_set``: absent → untouched; explicit ``null`` → unpin; a
-    slug → pin (validated against the installed registry; ``orbital`` is a
-    reserved mention, never a pin target).
+    slug → pin (validated against the installed registry; ``orbital`` is the
+    management agent itself, never a pin target).
     """
     name: str | None = None
     pinned: bool | None = None
@@ -1829,9 +1827,9 @@ async def patch_session(project_id: str, session_id: str, req: SessionPatchReque
             raise HTTPException(status_code=400, detail="name must not be empty")
     if target_set and req.pinned_target is not None:
         # Spec 074 validation: the pin target must be an installed, non-built-in
-        # registry agent; ``@orbital`` is the reserved manager-aside mention
-        # and is rejected here explicitly, before (and regardless of) the
-        # registry-slug check.
+        # registry agent; ``orbital`` (with or without ``@``) names the
+        # management agent itself and is rejected here explicitly, before (and
+        # regardless of) the registry-slug check.
         slug = req.pinned_target
         if slug.lstrip("@").lower() == "orbital":
             raise HTTPException(

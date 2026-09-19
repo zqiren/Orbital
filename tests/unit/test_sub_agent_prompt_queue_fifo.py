@@ -360,15 +360,15 @@ async def test_dropped_queued_mention_lands_a_durable_row_in_session_jsonl(tmp_p
     manager._adapters[make_session_key("p1", "s1")] = {
         "cursor": SimpleNamespace(_transport=transport, _broken=False)}
 
-    # An @mention that dispatches, then a second one that queues behind it.
+    # A pinned send that dispatches, then a second one that queues behind it.
     await manager.send("p1", "cursor", "first", session_id="s1",
-                       dispatch_id="d1", initiator="user_mention")
+                       dispatch_id="d1", initiator="user_pinned")
     queued = await manager.send("p1", "cursor", "the dropped one",
                                 session_id="s1", dispatch_id="d2",
-                                initiator="user_mention")
+                                initiator="user_pinned")
     assert "position 1" in queued
 
-    # Transport dies with no honest boundary — the queued mention is dropped.
+    # Transport dies with no honest boundary — the queued send is dropped.
     await manager._on_prompt_turn_closed(
         "p1", "cursor", session_id="s1", cause="stream_ended")
 

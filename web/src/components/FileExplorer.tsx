@@ -66,8 +66,10 @@ export default function FileExplorer({ projectId, initialPath }: FileExplorerPro
     async (path: string) => {
       setContentLoading(true);
       try {
+        // `document_preview=1`: this tab renders documents (spec 090), so it
+        // opts in to the `document` envelope (see useFiles' fileContentPath).
         const data = await api<FileContent>(
-          `/api/v2/projects/${encodeURIComponent(projectId)}/files/content?path=${encodeURIComponent(path)}`,
+          `/api/v2/projects/${encodeURIComponent(projectId)}/files/content?path=${encodeURIComponent(path)}&document_preview=1`,
         );
         setFileContent(data);
       } catch {

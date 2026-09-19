@@ -4,7 +4,7 @@
 
 import type { ReactNode } from 'react';
 import { isValidElement, useMemo } from 'react';
-import ReactMarkdown, { type Components } from 'react-markdown';
+import ReactMarkdown, { type Components, type Options } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { FileText, PanelRightOpen } from 'lucide-react';
 import { detectWorkspacePath } from '../utils/pathDetection';
@@ -22,6 +22,8 @@ interface MarkdownContentProps {
    */
   workspace?: string;
   onOpenPath?: (path: string) => void;
+  /** Extra remark plugins, run after GFM (FilePreview hides HTML comments — spec 088). */
+  remarkPlugins?: Options['remarkPlugins'];
 }
 
 /** http(s):// or protocol-relative `//` — anything that would leave the app. */
@@ -151,7 +153,12 @@ function CodeBlock({ children }: { children?: ReactNode }) {
   );
 }
 
-export default function MarkdownContent({ content, workspace, onOpenPath }: MarkdownContentProps) {
+export default function MarkdownContent({
+  content,
+  workspace,
+  onOpenPath,
+  remarkPlugins,
+}: MarkdownContentProps) {
   // Kind-aware path renderers are installed ONLY when a workspace + open
   // handler are supplied (i.e. in chat) — without them, react-markdown falls
   // back to the original bare behavior for paths, so reused surfaces
@@ -211,7 +218,7 @@ export default function MarkdownContent({ content, workspace, onOpenPath }: Mark
 
   return (
     <div className="markdown-content">
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+      <ReactMarkdown remarkPlugins={[remarkGfm, ...(remarkPlugins ?? [])]} components={components}>
         {content}
       </ReactMarkdown>
     </div>

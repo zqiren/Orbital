@@ -55,7 +55,8 @@ def _make_app(workspace, *, with_sub_agent=False):
 
     # Management-agent branch: inject_message is mocked (asserted by the
     # management tests). Sub-agent branch: the route persists the authored
-    # @mention via AgentManager.persist_mention_message → resolve-then-append
+    # target send (the composer pin; spec 091 retired the @mention) via
+    # AgentManager.persist_mention_message → resolve-then-append
     # into the project's real chat session. Emulate that here so the
     # persisted-message assertions read a real (canonical, never subagent_) log.
     agent_manager = MagicMock()
@@ -245,7 +246,7 @@ class TestSubAgentBranch:
             "/api/v2/agents/proj_test/inject",
             json={
                 "content": "check this",
-                "target": "@worker",
+                "target": "@worker", "pinned": True,
                 "attachments": [
                     {"path": "uploads/hello.txt", "mime": "text/plain", "size": size},
                 ],
@@ -282,7 +283,7 @@ class TestSubAgentBranch:
 
         resp = client.post(
             "/api/v2/agents/proj_test/inject",
-            json={"content": "hi", "target": "@worker"},
+            json={"content": "hi", "target": "@worker", "pinned": True},
         )
         assert resp.status_code == 200, resp.text
 
@@ -308,7 +309,7 @@ class TestValidationFailures:
         client = TestClient(app)
         client.post(
             "/api/v2/agents/proj_test/inject",
-            json={"content": "first", "target": "@worker"},
+            json={"content": "first", "target": "@worker", "pinned": True},
         )
         files = glob.glob(
             os.path.join(workspace, "orbital", "sessions", "*.jsonl"),
@@ -321,7 +322,7 @@ class TestValidationFailures:
             "/api/v2/agents/proj_test/inject",
             json={
                 "content": "second",
-                "target": "@worker",
+                "target": "@worker", "pinned": True,
                 "attachments": [
                     {"path": "uploads/missing.txt", "mime": "text/plain", "size": 11},
                 ],

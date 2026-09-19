@@ -68,9 +68,9 @@ async def test_assigned_trigger_dispatches_to_the_worker():
     assert args[1] == "codex"
     assert "Do the thing" in args[2]
     assert kwargs["session_id"] == "proj_sess1"
-    # queue_item (spec 079), not user_mention: same direct-send funnel, but
-    # the dispatch marker must not wake the manager — only the worker's
-    # terminal event does.
+    # queue_item (spec 079), not user_pinned: same direct-send funnel, but
+    # the worker's terminal event must still wake the manager for the verdict
+    # — only the dispatch marker is wake-suppressed.
     assert kwargs["initiator"] == "queue_item"
 
     # The fire still counts — the automation ran, it just ran elsewhere.

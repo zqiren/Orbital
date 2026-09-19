@@ -4,11 +4,16 @@
 //
 // Task 5 (spec 009 §0.5): row-click destination from FanoutCard. Replaces the
 // chat message area (never a modal — see ChatView's drillIn conditional) with
-// a read-only transcript for one sub-agent handle, plus a composer gated on
-// the transcript's `resumable` flag. No live stream in v1: polls the
-// transcript every 3s while the handle's status is non-idle, reusing the same
-// /sub-agents/status endpoint SubAgentStatusBar already polls (matches its
-// pattern rather than inventing a second status source).
+// a read-only transcript for one sub-agent handle. No live stream in v1: polls
+// the transcript every 3s while the handle's status is non-idle, reusing the
+// same /sub-agents/status endpoint SubAgentStatusBar already polls (matches
+// its pattern rather than inventing a second status source).
+//
+// Spec 091: no composer. The one that used to sit under the transcript sent
+// `target=handle` without `pinned` — an @mention in all but name — and making
+// it a pinned send instead would silence the terminal event the manager may
+// be awaiting from a worker it dispatched. Talking to a worker directly is
+// the chat composer's pin switcher.
 //
 // Round 2 (2026-07-05, Task D, issues 2+3): a worker transcript whose
 // `session_uuid` is discoverable (live via the fanout registry mid-batch,
@@ -28,7 +33,7 @@
 // itself is a static layout with no enter/exit transition.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronLeft, Send } from 'lucide-react';
+import { ChevronLeft } from 'lucide-react';
 import { api } from '../config';
 import { useAgent } from '../hooks/useAgent';
 import { useT } from '../i18n/useT';
@@ -106,12 +111,10 @@ function WorkerCapsule({ capsule, t }: { capsule: WorkerCapsuleItem; t: Translat
 
 export default function SubAgentDrillIn({ projectId, sessionId, handle, displayName, onBack }: SubAgentDrillInProps) {
   const t = useT();
-  const { getSubAgentTranscript, injectMessage } = useAgent();
+  const { getSubAgentTranscript } = useAgent();
   const [transcript, setTranscript] = useState<SubAgentTranscriptResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
-  const [composerText, setComposerText] = useState('');
-  const [sending, setSending] = useState(false);
   // Round 2 (Task D2): the worker's own chat history, fetched when the
   // transcript names a `session_uuid` for a `kind === 'worker'` handle. null
   // means "not applicable" (no session_uuid, or a cli handle, or the fetch
@@ -132,9 +135,7 @@ export default function SubAgentDrillIn({ projectId, sessionId, handle, displayN
   const aliveRef = useRef(true);
   // Guards the 3s status poll: null when not currently polling. Cleared
   // (and the timer stopped) the moment a tick observes the handle is idle,
-  // so the poll doesn't run forever once the task is done — `startStatusPoll`
-  // is called again from `handleSend` to resume it, covering the case where
-  // the user sends a follow-up that respawns work after it went idle.
+  // so the poll doesn't run forever once the task is done.
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const fetchTranscript = useCallback(async () => {
@@ -260,24 +261,7 @@ export default function SubAgentDrillIn({ projectId, sessionId, handle, displayN
     };
   }, [on, off, handle, fetchTranscript]);
 
-  async function handleSend() {
-    const text = composerText.trim();
-    if (!text || sending) return;
-    setSending(true);
-    try {
-      await injectMessage(projectId, text, handle, undefined, undefined, sessionId);
-      setComposerText('');
-      await fetchTranscript();
-      // The poll may have stopped (handle had gone idle) — a follow-up send
-      // likely respawned work, so resume it.
-      startStatusPoll();
-    } finally {
-      if (aliveRef.current) setSending(false);
-    }
-  }
-
   const headerName = transcript?.display_name || displayName;
-  const resumable = transcript?.resumable ?? false;
 
   // `transformChatHistory`'s translator param defaults to English
   // (ship-English-first, per CLAUDE.md's i18n rules) — acceptable here since
@@ -352,36 +336,6 @@ export default function SubAgentDrillIn({ projectId, sessionId, handle, displayN
             <div className="whitespace-pre-wrap break-words text-primary">{entry.content}</div>
           </div>
         ))}
-      </div>
-
-      <div className="shrink-0 px-4 pb-4 pt-2">
-        <div className="relative flex items-center gap-2 bg-background border border-border rounded-lg shadow-lg px-3 py-2">
-          <input
-            type="text"
-            data-testid="drillin-composer-input"
-            value={composerText}
-            onChange={(e) => setComposerText(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                e.preventDefault();
-                handleSend();
-              }
-            }}
-            disabled={!resumable}
-            placeholder={resumable ? undefined : t('fanout.drillin.readonly')}
-            className="flex-1 text-[13px] bg-transparent focus:outline-none disabled:opacity-50"
-          />
-          <button
-            type="button"
-            data-testid="drillin-composer-send"
-            onClick={handleSend}
-            disabled={!resumable || !composerText.trim() || sending}
-            aria-label={t('chat.send')}
-            className="shrink-0 p-1.5 rounded-lg text-accent hover:bg-accent/10 disabled:opacity-40 disabled:cursor-default"
-          >
-            <Send size={18} />
-          </button>
-        </div>
       </div>
     </div>
   );

@@ -557,7 +557,6 @@ chat.empty,No messages yet. Send a message to get started.,empty_state,ChatView.
 chat.dropFiles,Drop files to attach,status,ChatView.tsx,Drag-and-drop overlay text,拖至此处上传,
 chat.thinking,Thinking...,status,ChatView.tsx,Indicator while the agent is thinking,思考中…,
 chat.previousSession,Previous session,misc,ChatView.tsx,Separator label between sessions in history,上一个会话,
-chat.noAgents,No agents available,empty_state,ChatView.tsx,@-mention dropdown empty state,没有可用的Agent,
 chat.attachFiles,Attach files,tooltip,ChatView.tsx,aria-label for the attach (+) button,添加附件,
 chat.composer.placeholder,Send a message...,placeholder,ChatView.tsx,Main chat composer placeholder,发送消息…,
 chat.stop,Stop,tooltip,ChatView.tsx,aria-label for the stop button (agent running),停止,

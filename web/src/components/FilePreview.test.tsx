@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Orbital Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import FilePreview from './FilePreview';
 import type { FileContent } from '../types';
@@ -495,6 +495,263 @@ describe('FilePreview — text-span quoting (rendered markdown)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Quote' }));
     // Verbatim text always; lines only when unique (spec §13 Q4).
     expect(onQuote).toHaveBeenCalledWith({ path: 'notes.md', text: 'beta' });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Spec 088 §7a.6 — HTML comments are bookkeeping, not prose: the rendered
+// preview drops them, the editor keeps the raw file.
+// ---------------------------------------------------------------------------
+
+const MD_WITH_COMMENTS = [
+  '<!--format PROJECT_STATE is what is true NOW-->',
+  '',
+  '# State',
+  '',
+  '- Card 18 pending user go. <!--mem id:773e25 touched:2026-09-09-->',
+  '',
+  '```html',
+  '<!-- fenced comment stays -->',
+  '```',
+  '',
+].join('\n');
+
+describe('FilePreview — Markdown HTML comments (spec 088)', () => {
+  it('drops HTML comments from the rendered preview but not code', () => {
+    const { container } = render(
+      <FilePreview
+        fileContent={mdContent({ content: MD_WITH_COMMENTS })}
+        loading={false}
+        selectedPath="notes.md"
+      />,
+    );
+    const rendered = container.querySelector('.markdown-content')!;
+    expect(rendered.textContent).toContain('Card 18 pending user go.');
+    expect(rendered.textContent).not.toContain('format PROJECT_STATE');
+    expect(rendered.textContent).not.toContain('mem id:773e25');
+    // Inside a fence it is code, not HTML, and stays visible.
+    expect(rendered.textContent).toContain('<!-- fenced comment stays -->');
+  });
+
+  it('keeps every comment in the editor, and hides them again in the edit Preview', () => {
+    render(
+      <FilePreview
+        fileContent={mdContent({ content: MD_WITH_COMMENTS })}
+        loading={false}
+        selectedPath="notes.md"
+        onSave={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    const textarea = screen.getByRole('textbox') as HTMLTextAreaElement;
+    expect(textarea.value).toContain('<!--format PROJECT_STATE is what is true NOW-->');
+    expect(textarea.value).toContain('<!--mem id:773e25 touched:2026-09-09-->');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Preview' }));
+    expect(screen.queryByText(/mem id:773e25/)).toBeNull();
+    expect(screen.getByText(/Card 18 pending user go\./)).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Spec 088 — the docked panel's contextual header. Opt-in via `panelHeader`;
+// without it every header above renders exactly as the Files tab has it.
+// ---------------------------------------------------------------------------
+
+function panelHeaderProps() {
+  return { onBack: vi.fn(), onOpenInFiles: vi.fn() };
+}
+
+describe('FilePreview — default (Files tab) header is unchanged', () => {
+  it('keeps Edit and Copy as visible buttons, with no Back and no More', () => {
+    render(
+      <FilePreview fileContent={mdContent()} loading={false} selectedPath="notes.md" onSave={vi.fn()} />,
+    );
+    expect(screen.getByRole('button', { name: 'Edit' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Copy' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Back to files' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'More actions' })).toBeNull();
+    expect(screen.queryByTestId('file-preview-panel-header')).toBeNull();
+  });
+
+  it('keeps Download visible on the html header', () => {
+    render(<FilePreview fileContent={htmlContent()} loading={false} selectedPath="report.html" />);
+    expect(screen.getByRole('button', { name: 'Download' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'More actions' })).toBeNull();
+  });
+});
+
+describe('FilePreview — panel header (spec 088)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('is ONE row: icon Back · filename · Edit · More — Copy is not a visible button', () => {
+    const header = panelHeaderProps();
+    render(
+      <FilePreview
+        fileContent={mdContent({ path: 'docs/notes.md' })}
+        loading={false}
+        selectedPath="docs/notes.md"
+        onSave={vi.fn()}
+        panelHeader={header}
+      />,
+    );
+    expect(screen.getAllByTestId('file-preview-panel-header')).toHaveLength(1);
+    const row = screen.getByTestId('file-preview-panel-header');
+    const back = within(row).getByRole('button', { name: 'Back to files' });
+    expect(back).toHaveAttribute('title', 'Back to files');
+    expect(back.textContent).toBe(''); // icon-only
+    expect(within(row).getByRole('heading', { name: 'notes.md' })).toBeInTheDocument();
+    expect(within(row).getByRole('button', { name: 'Edit' })).toBeInTheDocument();
+    expect(within(row).getByRole('button', { name: 'More actions' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Copy' })).toBeNull();
+
+    fireEvent.click(back);
+    expect(header.onBack).toHaveBeenCalledTimes(1);
+  });
+
+  it('More holds Copy and Open in Files', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    const header = panelHeaderProps();
+    render(
+      <FilePreview
+        fileContent={mdContent()}
+        loading={false}
+        selectedPath="notes.md"
+        onSave={vi.fn()}
+        panelHeader={header}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+    expect(screen.getAllByRole('menuitem').map((i) => i.textContent)).toEqual(['Copy', 'Open in Files']);
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Copy' }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(MD_BODY));
+    await screen.findByText('Copied');
+
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Open in Files' }));
+    expect(header.onOpenInFiles).toHaveBeenCalledTimes(1);
+  });
+
+  it('edit mode swaps Edit/More for Write|Preview · Cancel · Save in the same row', () => {
+    render(
+      <FilePreview
+        fileContent={mdContent()}
+        loading={false}
+        selectedPath="notes.md"
+        onSave={vi.fn()}
+        panelHeader={panelHeaderProps()}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    const row = screen.getByTestId('file-preview-panel-header');
+    expect(within(row).getByRole('button', { name: 'Back to files' })).toBeInTheDocument();
+    expect(within(row).getByRole('button', { name: 'Write' })).toBeInTheDocument();
+    expect(within(row).getByRole('button', { name: 'Preview' })).toBeInTheDocument();
+    expect(within(row).getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
+    expect(within(row).getByRole('button', { name: 'Save' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull();
+
+    fireEvent.click(within(row).getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('textbox')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Edit' })).toBeInTheDocument();
+  });
+
+  it('edit mode’s narrow-width overflow offers only Write / Preview — never Cancel or Save', () => {
+    render(
+      <FilePreview
+        fileContent={mdContent()}
+        loading={false}
+        selectedPath="notes.md"
+        onSave={vi.fn()}
+        panelHeader={panelHeaderProps()}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    // The overflow trigger is CSS-hidden above the narrow container width;
+    // jsdom has no container queries, so it is always reachable here.
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+    expect(screen.getAllByRole('menuitemradio').map((i) => i.textContent)).toEqual(['Write', 'Preview']);
+    expect(screen.queryByRole('menuitem')).toBeNull();
+    fireEvent.click(screen.getByRole('menuitemradio', { name: 'Preview' }));
+    expect(screen.queryByRole('textbox')).toBeNull(); // now showing the draft preview
+    expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument();
+  });
+
+  it('keeps Back while loading and when the file cannot be loaded', () => {
+    const header = panelHeaderProps();
+    const { rerender } = render(
+      <FilePreview fileContent={null} loading selectedPath="docs/notes.md" panelHeader={header} />,
+    );
+    expect(screen.getByRole('button', { name: 'Back to files' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'notes.md' })).toBeInTheDocument();
+
+    rerender(
+      <FilePreview fileContent={null} loading={false} selectedPath="docs/notes.md" panelHeader={header} />,
+    );
+    expect(screen.getByText('Unable to load file')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Back to files' }));
+    expect(header.onBack).toHaveBeenCalledTimes(1);
+  });
+
+  it('html: Rendered|Source stays visible, Download moves into More', () => {
+    render(
+      <FilePreview
+        fileContent={htmlContent()}
+        loading={false}
+        selectedPath="report.html"
+        panelHeader={panelHeaderProps()}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'Source' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Download' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+    expect(screen.getAllByRole('menuitem').map((i) => i.textContent)).toEqual(['Download', 'Open in Files']);
+  });
+
+  it('image and binary previews get the same one-row header', () => {
+    const header = panelHeaderProps();
+    const { rerender } = render(
+      <FilePreview
+        fileContent={{ path: 'shots/a.png', content: 'AAAA', size: 4, truncated: false, type: 'image', mime: 'image/png' }}
+        loading={false}
+        selectedPath="shots/a.png"
+        panelHeader={header}
+      />,
+    );
+    expect(screen.getAllByTestId('file-preview-panel-header')).toHaveLength(1);
+    expect(screen.getByRole('button', { name: 'Back to files' })).toBeInTheDocument();
+
+    rerender(
+      <FilePreview
+        fileContent={{ path: 'a.pdf', content: '', size: 9, truncated: false, type: 'binary', mime: 'application/pdf' }}
+        loading={false}
+        selectedPath="a.pdf"
+        panelHeader={header}
+      />,
+    );
+    expect(screen.getAllByTestId('file-preview-panel-header')).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Open in Files' }));
+    expect(header.onOpenInFiles).toHaveBeenCalledTimes(1);
+  });
+
+  it('hosts `headerExtras` in the row, before More (the spec 090 slot)', () => {
+    render(
+      <FilePreview
+        fileContent={mdContent()}
+        loading={false}
+        selectedPath="notes.md"
+        panelHeader={panelHeaderProps()}
+        headerExtras={<span data-testid="doc-nav">page 1 / 3</span>}
+      />,
+    );
+    const row = screen.getByTestId('file-preview-panel-header');
+    const extras = within(row).getByTestId('doc-nav');
+    const more = within(row).getByRole('button', { name: 'More actions' });
+    expect(extras.compareDocumentPosition(more) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });
 

@@ -74,7 +74,20 @@ interface SubAgentEntry {
   emits_tool_activity?: boolean;
   /** Manifest-declared credentials, when the daemon reports them. */
   credentials?: CredentialSpec[];
+  /** For an agent whose credential follows its configured model's provider
+   *  (Pi): a credential-card key or the CLI's own login. `unknown` is still
+   *  dispatchable, but only the CLI can confirm it. Absent for agents whose
+   *  credential is a login or a key Orbital holds. */
+  credential_state?: CredentialState | null;
 }
+
+type CredentialState = 'configured' | 'missing' | 'unknown';
+
+const CREDENTIAL_STATE_KEY: Record<CredentialState, StringKey> = {
+  configured: 'subAgentCard.credState.configured',
+  missing: 'subAgentCard.credState.missing',
+  unknown: 'subAgentCard.credState.unknown',
+};
 
 // Map daemon param names (kebab-case) to camelCase request body fields.
 const PARAM_REQUEST_KEY: Record<string, string> = {
@@ -344,6 +357,9 @@ function SubAgentCard({ entry, onChanged }: CardProps) {
   // and keeps its own branch.
   const usesManagedCredentials =
     !supportsLogin && !isApiKeyFlow && credentialFields.length > 0;
+  // Set only for agents whose credential follows the configured model's
+  // provider; Orbital owns no login for those, so neither Login nor Logout.
+  const credentialState = entry.credential_state ?? null;
 
   const canInstall = entry.install?.supported === true;
   const installUnsupported = entry.install !== undefined && !canInstall;
@@ -545,18 +561,34 @@ function SubAgentCard({ entry, onChanged }: CardProps) {
               label={entry.installed ? t('subAgentCard.installed') : t('subAgentCard.notInstalled')}
               variant={entry.installed ? 'success' : 'warning'}
             />
-            <StatusPill
-              label={usesManagedCredentials
-                ? (entry.credentials_configured ? t('subAgentCard.keySaved') : t('subAgentCard.keyNeeded'))
-                : (entry.credentials_configured ? t('subAgentCard.loggedIn') : t('subAgentCard.notLoggedIn'))}
-              variant={entry.credentials_configured ? 'success' : 'warning'}
-            />
+            {credentialState ? (
+              <StatusPill
+                label={t(CREDENTIAL_STATE_KEY[credentialState], { name: entry.name })}
+                variant={credentialState === 'configured' ? 'success' : 'warning'}
+              />
+            ) : (
+              <StatusPill
+                label={usesManagedCredentials
+                  ? (entry.credentials_configured ? t('subAgentCard.keySaved') : t('subAgentCard.keyNeeded'))
+                  : (entry.credentials_configured ? t('subAgentCard.loggedIn') : t('subAgentCard.notLoggedIn'))}
+                variant={entry.credentials_configured ? 'success' : 'warning'}
+              />
+            )}
             {entry.version && (
               <span className="text-secondary/80 font-mono">v{entry.version}</span>
             )}
           </div>
         </div>
       </div>
+
+      {entry.slug === 'pi' && (
+        <p
+          data-testid={`sub-agent-host-note-${entry.slug}`}
+          className="text-xs text-secondary mt-2"
+        >
+          {t('subAgentCard.pi.hostNote')}
+        </p>
+      )}
 
       {entry.emits_tool_activity === false && (
         <p
@@ -665,7 +697,7 @@ function SubAgentCard({ entry, onChanged }: CardProps) {
         )}
         {/* Logout drives the agent's own CLI logout command; agents whose key
             Orbital holds have a per-credential Remove instead. */}
-        {entry.credentials_configured && !usesManagedCredentials && (
+        {entry.credentials_configured && !usesManagedCredentials && !credentialState && (
           <button
             onClick={handleLogout}
             disabled={logoutBusy}
@@ -795,6 +827,11 @@ function SubAgentCard({ entry, onChanged }: CardProps) {
                 {entry.slug === 'cursor' && paramKey === 'permission-mode' && (
                   <p className="text-xs text-secondary">
                     {t('subAgentCard.permission.cursorHint')}
+                  </p>
+                )}
+                {entry.slug === 'pi' && paramKey === 'model' && (
+                  <p className="text-xs text-secondary">
+                    {t('subAgentCard.pi.modelHint')}
                   </p>
                 )}
               </div>

@@ -68,7 +68,9 @@ def daemon():
         yield client, r.json()["project_id"]
 
 
-# Root A — @mention inject to a running sub-agent returns 2xx (not the 404).
+# Root A — a target inject to a running sub-agent returns 2xx (not the 404).
+# Written for the @mention; spec 091 left the composer pin as the only target
+# send, on the same route, so this sends pinned.
 def test_smoke_a_mention_inject_returns_2xx(daemon):
     client, pid = daemon
     sid = "smoke_a_sess"
@@ -77,7 +79,8 @@ def test_smoke_a_mention_inject_returns_2xx(daemon):
     }
     resp = client.post(
         f"/api/v2/agents/{pid}/inject",
-        json={"content": "hi", "target": "researcher", "session_id": sid},
+        json={"content": "hi", "target": "researcher", "pinned": True,
+              "session_id": sid},
     )
     assert resp.status_code == 200, resp.text
 

@@ -2,9 +2,13 @@
 # Copyright (C) 2026 Orbital Contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Regression (Root A / seam 3): the @mention inject route must forward the
-chat session id to the sub-agent manager's send()/start(), and stamp the
+"""Regression (Root A / seam 3): the inject route's target send must forward
+the chat session id to the sub-agent manager's send()/start(), and stamp the
 RESOLVED session (never None) on the ack broadcast and the lifecycle marker.
+
+Written for the @mention send; spec 091 deleted that path, and the composer
+pin (``target`` + ``pinned``) rides the same route and session funnel, so the
+cases below drive a pinned send.
 
 Before the fix the route called send()/start() WITHOUT session_id, so send()'s
 sub-agent resolver hard-raised on None and POST /agents/{pid}/inject returned
@@ -33,7 +37,7 @@ def _wire(monkeypatch, *, send_result="delivered"):
     ws_manager = MagicMock()
     ws_manager.broadcast = MagicMock()
     agent_manager = MagicMock()
-    # The @mention path now persists via the canonical resolver
+    # The target send persists via the canonical resolver
     # AgentManager.persist_mention_message(project_id, session_id, user_msg),
     # which returns the ONE concrete session id threaded to dispatch + ack +
     # lifecycle. Mirror its resolution: passthrough a client-supplied id, else
@@ -51,9 +55,10 @@ def _wire(monkeypatch, *, send_result="delivered"):
 
 
 @pytest.mark.asyncio
-async def test_mention_forwards_client_session_id_to_send(monkeypatch):
+async def test_target_send_forwards_client_session_id_to_send(monkeypatch):
     sam, ws, lifecycle = _wire(monkeypatch)
-    req = InjectRequest(content="hi", target="researcher", session_id="proj_x_sessA")
+    req = InjectRequest(content="hi", target="researcher", pinned=True,
+                        session_id="proj_x_sessA")
 
     result = await agents_v2.inject_message("proj_x", req)
 
@@ -64,11 +69,11 @@ async def test_mention_forwards_client_session_id_to_send(monkeypatch):
     # ack broadcast carries the resolved session, not None
     ack_payload = ws.broadcast.call_args.args[1]
     assert ack_payload["session_id"] == "proj_x_sessA"
-    # backlog #23 D3: the route threads initiator="user_mention" into send()
-    # itself now — send()'s own internal on_message_routed call (inside the
-    # real SubAgentManager, mocked away here) is what carries the resolved
-    # session onward; the route no longer fires a lifecycle call directly.
-    assert sam.send.await_args.kwargs.get("initiator") == "user_mention"
+    # The route threads its initiator into send() itself — send()'s own
+    # internal on_message_routed call (inside the real SubAgentManager, mocked
+    # away here) is what carries the resolved session onward; the route fires
+    # no lifecycle call directly. Spec 091: every target send is user_pinned.
+    assert sam.send.await_args.kwargs.get("initiator") == "user_pinned"
     # arg-threading guard (persist_mention_message is mocked here): the route must
     # hand the resolver (project_id, req.session_id, authored user_msg) so an
     # arg-threading regression is caught even though the resolver is stubbed.
@@ -81,7 +86,7 @@ async def test_mention_forwards_client_session_id_to_send(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_mention_spawn_on_demand_send_forwards_session_id(monkeypatch):
+async def test_target_send_spawn_on_demand_forwards_session_id(monkeypatch):
     """send() spawns-on-demand inside the manager now
     (TASK-collapse-dispatch-to-send): the route makes ONE send call — no
     manual auto-start/retry — and that call must carry the session id. A
@@ -89,7 +94,8 @@ async def test_mention_spawn_on_demand_send_forwards_session_id(monkeypatch):
     from fastapi import HTTPException
 
     sam, ws, lifecycle = _wire(monkeypatch)
-    req = InjectRequest(content="go", target="researcher", session_id="proj_x_sessB")
+    req = InjectRequest(content="go", target="researcher", pinned=True,
+                        session_id="proj_x_sessB")
 
     result = await agents_v2.inject_message("proj_x", req)
 
@@ -105,32 +111,33 @@ async def test_mention_spawn_on_demand_send_forwards_session_id(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_mention_passes_dispatch_id_and_user_mention_initiator_to_send(monkeypatch):
-    """TASK-dispatch-id-pairing + backlog #23 D3: the @mention route mints a
-    dispatch_id up front and passes BOTH it and initiator="user_mention"
-    into send() — send()'s own single internal on_message_routed
-    notification (fired inside the real SubAgentManager; mocked away here)
-    is now the ONLY marker this dispatch ever gets, so the route itself must
-    no longer fire a direct notification of its own."""
+async def test_target_send_passes_dispatch_id_and_user_pinned_initiator_to_send(monkeypatch):
+    """TASK-dispatch-id-pairing + backlog #23 D3: the route mints a
+    dispatch_id up front and passes BOTH it and the initiator
+    (``"user_pinned"``, spec 091) into send() — send()'s own single internal
+    on_message_routed notification (fired inside the real SubAgentManager;
+    mocked away here) is the ONLY marker this dispatch ever gets, so the
+    route itself must not fire a direct notification of its own."""
     sam, ws, lifecycle = _wire(monkeypatch)
-    req = InjectRequest(content="hi", target="researcher", session_id="proj_x_sessA")
+    req = InjectRequest(content="hi", target="researcher", pinned=True,
+                        session_id="proj_x_sessA")
 
     await agents_v2.inject_message("proj_x", req)
 
     send_kwargs = sam.send.await_args.kwargs
     assert send_kwargs.get("dispatch_id"), "route must pass a dispatch_id into send()"
-    assert send_kwargs.get("initiator") == "user_mention"
+    assert send_kwargs.get("initiator") == "user_pinned"
 
     # The route fires no direct notification of its own anymore.
     lifecycle.on_message_routed.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_mention_session_less_resolves_to_chat_session_not_raise(monkeypatch):
+async def test_target_send_session_less_resolves_to_chat_session_not_raise(monkeypatch):
     # No session_id from the client: must resolve to the persisted chat session
     # (a concrete uuid), never forward None into the hard-raising resolver.
     sam, ws, lifecycle = _wire(monkeypatch)
-    req = InjectRequest(content="hi", target="researcher")  # session_id omitted
+    req = InjectRequest(content="hi", target="researcher", pinned=True)  # session_id omitted
 
     result = await agents_v2.inject_message("proj_x", req)
 
