@@ -11,10 +11,14 @@ import {
   ChevronDown,
   ArrowLeft,
   Plus,
+  FolderOpen,
+  SquareArrowOutUpRight,
 } from 'lucide-react';
 import { api, BASE_URL, isRelayMode } from '../config';
 import type { FileEntry, DirectoryListing, FileContent } from '../types';
 import FilePreview from './FilePreview';
+import { revealPath } from '../hooks/useFiles';
+import { canRevealInFileManager, revealLabelKey } from '../utils/clientPlatform';
 import { useT } from '../i18n/useT';
 
 const MAX_UPLOAD_SIZE = 10 * 1024 * 1024; // 10MB
@@ -50,6 +54,23 @@ export default function FileExplorer({ projectId, initialPath }: FileExplorerPro
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Spec 093: Reveal in Finder / Show in File Explorer — tree rows, the
+  // preview header and the footer's "Open project folder" ('' = the root).
+  const canReveal = canRevealInFileManager();
+  const [revealFailed, setRevealFailed] = useState(false);
+  const handleReveal = useCallback(
+    async (path: string) => {
+      setRevealFailed(false);
+      if (!(await revealPath(projectId, path))) setRevealFailed(true);
+    },
+    [projectId],
+  );
+  useEffect(() => {
+    if (!revealFailed) return;
+    const timer = setTimeout(() => setRevealFailed(false), 4000);
+    return () => clearTimeout(timer);
+  }, [revealFailed]);
 
   const fetchDirectory = useCallback(
     async (path: string): Promise<FileEntry[]> => {
@@ -118,6 +139,7 @@ export default function FileExplorer({ projectId, initialPath }: FileExplorerPro
     setFileContent(null);
     setMobileShowPreview(false);
     setUploadError(null);
+    setRevealFailed(false);
 
     fetchDirectory('').then((entries) => {
       if (cancelled) return;
@@ -308,6 +330,7 @@ export default function FileExplorer({ projectId, initialPath }: FileExplorerPro
                 selectedPath={selectedPath}
                 onToggle={toggleDirectory}
                 onFileClick={handleFileClick}
+                onReveal={canReveal ? handleReveal : undefined}
               />
             ))
           )}
@@ -319,6 +342,11 @@ export default function FileExplorer({ projectId, initialPath }: FileExplorerPro
             <p className="text-xs text-error">{uploadError}</p>
           </div>
         )}
+        {revealFailed && (
+          <div role="status" className="mx-3 mb-3 px-3 py-2 bg-error/10 border border-error/30 rounded-md">
+            <p className="text-xs text-error">{t('fileExplorer.revealFailed')}</p>
+          </div>
+        )}
 
         {/* Hidden file input */}
         <input
@@ -328,15 +356,15 @@ export default function FileExplorer({ projectId, initialPath }: FileExplorerPro
           onChange={handleFileSelected}
         />
 
-        {/* Upload button - fixed footer, always visible at bottom */}
-        <div className="shrink-0 px-3 pb-3 max-md:pb-[max(12px,env(safe-area-inset-bottom,12px))] flex justify-end md:block">
+        {/* Upload button (+ "Open project folder") - fixed footer, always visible at bottom */}
+        <div className="shrink-0 px-3 pb-3 max-md:pb-[max(12px,env(safe-area-inset-bottom,12px))] flex items-center justify-end gap-2">
           <button
             onClick={handleUploadClick}
             disabled={uploading}
             className="
               flex items-center justify-center gap-1.5
               bg-accent text-white rounded-full md:rounded-lg
-              w-10 h-10 md:w-auto md:h-auto md:px-3 md:py-2 md:w-full
+              w-10 h-10 md:w-auto md:h-auto md:px-3 md:py-2 md:flex-1
               text-sm font-medium
               hover:bg-accent/90 transition-all duration-150
               disabled:opacity-50 disabled:cursor-not-allowed
@@ -350,6 +378,23 @@ export default function FileExplorer({ projectId, initialPath }: FileExplorerPro
             )}
             <span className="hidden md:inline">{uploading ? t('fileExplorer.uploading') : t('fileExplorer.uploadFile')}</span>
           </button>
+          {canReveal && (
+            <button
+              type="button"
+              onClick={() => void handleReveal('')}
+              aria-label={t('fileExplorer.openProjectFolder')}
+              title={t('fileExplorer.openProjectFolder')}
+              className="
+                flex items-center justify-center shrink-0
+                w-10 h-10 md:w-9 md:h-9 rounded-full md:rounded-lg
+                border border-border bg-background text-secondary
+                hover:text-primary hover:bg-card-hover transition-colors duration-150
+                shadow-lg md:shadow-none
+              "
+            >
+              <FolderOpen size={16} aria-hidden />
+            </button>
+          )}
         </div>
       </div>
 
@@ -374,6 +419,7 @@ export default function FileExplorer({ projectId, initialPath }: FileExplorerPro
           loading={contentLoading}
           selectedPath={selectedPath}
           onSave={saveFileContent}
+          onReveal={canReveal ? (path) => void handleReveal(path) : undefined}
         />
       </div>
     </div>
@@ -386,9 +432,11 @@ interface TreeItemProps {
   selectedPath: string | null;
   onToggle: (path: string) => void;
   onFileClick: (path: string) => void;
+  /** Spec 093 — reveal the row in Finder / File Explorer; absent = no action. */
+  onReveal?: (path: string) => void;
 }
 
-function TreeItem({ node, depth, selectedPath, onToggle, onFileClick }: TreeItemProps) {
+function TreeItem({ node, depth, selectedPath, onToggle, onFileClick, onReveal }: TreeItemProps) {
   const t = useT();
   const isDirectory = node.entry.type === 'directory';
   const isSelected = node.path === selectedPath;
@@ -401,13 +449,26 @@ function TreeItem({ node, depth, selectedPath, onToggle, onFileClick }: TreeItem
     }
   };
 
+  // A div with role="button", not a <button>: the row holds the reveal
+  // button, and a button inside a button is invalid (SessionListItem pattern).
   return (
     <>
-      <button
+      <div
+        role="button"
+        tabIndex={0}
+        aria-label={node.entry.name}
+        aria-expanded={isDirectory ? node.expanded : undefined}
         onClick={handleClick}
+        onKeyDown={(e) => {
+          if (e.target !== e.currentTarget) return;
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            handleClick();
+          }
+        }}
         className={`
-          flex items-center gap-1.5 w-full text-left py-1 px-2 rounded-md
-          text-sm transition-colors duration-150
+          group relative flex items-center gap-1.5 w-full text-left py-1 px-2 rounded-md
+          text-sm cursor-pointer select-none transition-colors duration-150
           ${isSelected ? 'bg-card-hover text-primary' : 'text-primary hover:bg-card-hover'}
         `}
         style={{ paddingLeft: `${depth * 16 + 8}px` }}
@@ -432,7 +493,28 @@ function TreeItem({ node, depth, selectedPath, onToggle, onFileClick }: TreeItem
           </>
         )}
         <span className="truncate">{node.entry.name}</span>
-      </button>
+        {onReveal && (
+          // Absolutely positioned, so showing it on hover never reflows the row.
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onReveal(node.path);
+            }}
+            aria-label={t(revealLabelKey())}
+            title={t(revealLabelKey())}
+            className="
+              absolute right-1 top-1/2 -translate-y-1/2
+              flex items-center justify-center w-6 h-6 rounded
+              bg-card-hover text-secondary hover:text-primary
+              opacity-0 group-hover:opacity-100 focus-visible:opacity-100
+              transition-opacity duration-150
+            "
+          >
+            <SquareArrowOutUpRight size={14} aria-hidden />
+          </button>
+        )}
+      </div>
 
       {isDirectory && node.expanded && node.children && (
         <div className="transition-all duration-150">
@@ -444,6 +526,7 @@ function TreeItem({ node, depth, selectedPath, onToggle, onFileClick }: TreeItem
               selectedPath={selectedPath}
               onToggle={onToggle}
               onFileClick={onFileClick}
+              onReveal={onReveal}
             />
           ))}
           {node.children.length === 0 && !node.loading && (

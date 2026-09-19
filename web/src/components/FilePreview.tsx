@@ -10,7 +10,17 @@ import {
   type IframeHTMLAttributes,
   type ReactNode,
 } from 'react';
-import { File, Download, Copy, Check, Pencil, ChevronLeft, FolderOpen, Info } from 'lucide-react';
+import {
+  File,
+  Download,
+  Copy,
+  Check,
+  Pencil,
+  ChevronLeft,
+  FolderOpen,
+  Info,
+  SquareArrowOutUpRight,
+} from 'lucide-react';
 import type { FileContent } from '../types';
 import MarkdownContent from './MarkdownContent';
 import AnnotateOverlay from './panel/AnnotateOverlay';
@@ -19,6 +29,7 @@ import DocumentPreview from './preview/DocumentPreview';
 import DocumentNav from './preview/DocumentNav';
 import { useDocumentController } from './preview/documentController';
 import type { AnnotationBox } from '../utils/annotations';
+import { revealLabelKey } from '../utils/clientPlatform';
 import { useT } from '../i18n/useT';
 
 export interface FilePreviewProps {
@@ -67,6 +78,13 @@ export interface FilePreviewProps {
    * sheet tabs). Only rendered with `panelHeader`.
    */
   headerExtras?: ReactNode;
+  /**
+   * Spec 093 — show the previewed file in Finder / File Explorer. The parent
+   * owns the call and passes this only where it can work (never through the
+   * relay). The Files tab gets a header button, the panel a More-menu item;
+   * omit it and nothing renders.
+   */
+  onReveal?: (path: string) => void;
 }
 
 // Defense-in-depth CSP for the HTML preview iframe (spec 003 §0.1). The
@@ -335,6 +353,7 @@ export default function FilePreview({
   onQuote,
   panelHeader,
   headerExtras,
+  onReveal,
 }: FilePreviewProps) {
   const t = useT();
   const [copied, setCopied] = useState(false);
@@ -486,6 +505,29 @@ export default function FilePreview({
   // What a quote names. `selectedPath` is the path the caller asked for (and
   // is non-null past the guard above); `fileContent.path` is the fallback.
   const quotePath = selectedPath || fileContent.path;
+  // Spec 093: offered only once the file has loaded, so the path is a real one
+  // (the panel may have asked for an abbreviated path it then resolved).
+  const revealLabel = t(revealLabelKey());
+  const revealItems: PanelMenuItem[] = onReveal
+    ? [
+        {
+          id: 'reveal',
+          label: revealLabel,
+          icon: <SquareArrowOutUpRight size={14} aria-hidden />,
+          onSelect: () => onReveal(quotePath),
+        },
+      ]
+    : [];
+  const revealButton = onReveal && (
+    <button
+      type="button"
+      onClick={() => onReveal(quotePath)}
+      className="flex items-center gap-1 shrink-0 whitespace-nowrap text-xs text-secondary hover:text-primary transition-colors"
+    >
+      <SquareArrowOutUpRight size={14} aria-hidden />
+      {revealLabel}
+    </button>
+  );
 
   const handleCopy = async () => {
     try {
@@ -518,12 +560,15 @@ export default function FilePreview({
             <span className="text-xs text-secondary shrink-0 @max-[24rem]:hidden">
               {formatSize(fileContent.size)}
             </span>,
-            [openInFilesItem],
+            [openInFilesItem, ...revealItems],
           )
         ) : (
           <div className="px-4 py-3 border-b border-border flex items-center justify-between">
             <h3 className="font-semibold text-sm text-primary truncate">{fileName}</h3>
-            <span className="text-xs text-secondary ml-2 shrink-0">{formatSize(fileContent.size)}</span>
+            <div className="flex items-center gap-2 ml-2 shrink-0">
+              <span className="text-xs text-secondary">{formatSize(fileContent.size)}</span>
+              {revealButton}
+            </div>
           </div>
         )}
         <div className="flex-1 overflow-auto flex items-center justify-center p-4 bg-sidebar">
@@ -557,10 +602,11 @@ export default function FilePreview({
     return (
       <div className="flex flex-col h-full">
         {panelHeader ? (
-          renderPanelHeader(fileName, null, [openInFilesItem])
+          renderPanelHeader(fileName, null, [openInFilesItem, ...revealItems])
         ) : (
-          <div className="px-4 py-3 border-b border-border">
+          <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-2">
             <h3 className="font-semibold text-sm text-primary truncate">{fileName}</h3>
+            {revealButton}
           </div>
         )}
         <div className="flex-1 flex items-center justify-center p-8">
@@ -627,7 +673,7 @@ export default function FilePreview({
     if (quoteFile) {
       documentMenuItems.push({ id: 'quote-file', label: t('panel.files.quoteFile'), onSelect: quoteFile });
     }
-    documentMenuItems.push(openInFilesItem);
+    documentMenuItems.push(openInFilesItem, ...revealItems);
     return (
       <div className="flex flex-col h-full">
         {panelHeader ? (
@@ -650,7 +696,10 @@ export default function FilePreview({
         ) : (
           <div className="px-4 py-3 border-b border-border flex items-center justify-between">
             <h3 className="font-semibold text-sm text-primary truncate">{fileName}</h3>
-            <span className="text-xs text-secondary ml-2 shrink-0">{formatSize(fileContent.size)}</span>
+            <div className="flex items-center gap-2 ml-2 shrink-0">
+              <span className="text-xs text-secondary">{formatSize(fileContent.size)}</span>
+              {revealButton}
+            </div>
           </div>
         )}
         <div className="flex-1 min-h-0">
@@ -711,6 +760,7 @@ export default function FilePreview({
                 onSelect: () => handleDownloadRaw(fileContent.content, 'text/html', fileName),
               },
               openInFilesItem,
+              ...revealItems,
             ],
           )
         ) : (
@@ -726,6 +776,7 @@ export default function FilePreview({
                 <Download size={14} />
                 {t('fileExplorer.download')}
               </button>
+              {revealButton}
             </div>
           </div>
         )}
@@ -916,7 +967,7 @@ export default function FilePreview({
   return (
     <div className="flex flex-col h-full">
       {panelHeader ? (
-        renderPanelHeader(fileName, panelActions, editing ? [] : [copyItem, openInFilesItem])
+        renderPanelHeader(fileName, panelActions, editing ? [] : [copyItem, openInFilesItem, ...revealItems])
       ) : (
         <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-2">
           <h3 className="font-semibold text-sm text-primary truncate">{fileName}</h3>
@@ -939,6 +990,7 @@ export default function FilePreview({
                   {copied ? <Check size={14} /> : <Copy size={14} />}
                   {copied ? t('fileExplorer.copied') : t('fileExplorer.copy')}
                 </button>
+                {revealButton}
               </>
             )}
           </div>

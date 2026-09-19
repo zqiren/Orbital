@@ -23,6 +23,7 @@ import type { TouchedFile } from '../../utils/panelSelectors';
 const listDirectory = vi.fn<(projectId: string, path?: string) => Promise<DirectoryListing | null>>();
 const getFileContent = vi.fn<(projectId: string, path: string) => Promise<FileContent | null>>();
 const resolvePath = vi.fn<(projectId: string, path: string) => Promise<string[] | null>>();
+const revealPath = vi.fn<(projectId: string, path: string) => Promise<boolean>>();
 
 vi.mock('../../hooks/useFiles', () => ({
   useFiles: () => ({
@@ -34,7 +35,14 @@ vi.mock('../../hooks/useFiles', () => ({
     getFileContent,
     resolvePath,
     saveFileContent: vi.fn(),
+    revealPath,
   }),
+}));
+
+// Spec 093: whether this client can reveal in Finder / File Explorer.
+const reveal = vi.hoisted(() => ({ can: true }));
+vi.mock('../../utils/clientPlatform', () => ({
+  canRevealInFileManager: () => reveal.can,
 }));
 
 let lastFilePreviewProps: Record<string, unknown> = {};
@@ -96,6 +104,9 @@ beforeEach(() => {
   listDirectory.mockReset();
   getFileContent.mockReset();
   resolvePath.mockReset();
+  revealPath.mockReset();
+  revealPath.mockResolvedValue(true);
+  reveal.can = true;
   lastFilePreviewProps = {};
   listDirectory.mockImplementation(async (_projectId, path) => TREE[path ?? ''] ?? null);
   getFileContent.mockImplementation(async (_projectId, path) => ({
@@ -292,6 +303,34 @@ describe('FilesView — preview state', () => {
     await settle();
     expect(lastFilePreviewProps.quoting).toBe(true);
     expect(typeof lastFilePreviewProps.onQuote).toBe('function');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Reveal in Finder / File Explorer (spec 093)
+// ---------------------------------------------------------------------------
+
+describe('FilesView — reveal in the file manager (spec 093)', () => {
+  it('hands the preview an onReveal that reveals the resolved path', async () => {
+    getFileContent.mockImplementation(async (_projectId, path) =>
+      path === 'src/app.ts'
+        ? { path, content: 'x', size: 1, truncated: false, type: 'text' }
+        : null,
+    );
+    resolvePath.mockResolvedValue(['src/app.ts']);
+    renderView({ file: 'app.ts' });
+    await settle();
+    const onReveal = lastFilePreviewProps.onReveal as (path: string) => void;
+    expect(typeof onReveal).toBe('function');
+    act(() => onReveal('src/app.ts'));
+    expect(revealPath).toHaveBeenCalledWith('proj-1', 'src/app.ts');
+  });
+
+  it('offers nothing where the reveal cannot work (relay, a phone)', async () => {
+    reveal.can = false;
+    renderView({ file: 'README.md' });
+    await settle();
+    expect(lastFilePreviewProps.onReveal).toBeUndefined();
   });
 });
 

@@ -821,3 +821,125 @@ describe('FilePreview — image and binary quoting', () => {
     expect(onQuote).toHaveBeenCalledWith({ path: 'docs/handbook.pdf' });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Spec 093 — "Reveal in Finder" / "Show in File Explorer". Opt-in via
+// `onReveal`; the parents pass it only where the reveal can work.
+// ---------------------------------------------------------------------------
+
+describe('FilePreview — reveal in the file manager (spec 093)', () => {
+  function setPlatform(platform: string) {
+    Object.defineProperty(window.navigator, 'platform', { value: platform, configurable: true });
+  }
+  afterEach(() => {
+    delete (window.navigator as unknown as { platform?: string }).platform;
+    vi.restoreAllMocks();
+  });
+
+  const image: FileContent = { path: 'shots/a.png', content: 'AAAA', size: 4, truncated: false, type: 'image', mime: 'image/png' };
+  const binary: FileContent = { path: 'bin/a.dat', content: '', size: 9, truncated: false, type: 'binary', mime: 'application/octet-stream' };
+
+  it('Files tab: every type header gets the action, and it reveals the previewed path', () => {
+    setPlatform('MacIntel');
+    const cases: [FileContent, string][] = [
+      [mdContent({ path: 'docs/notes.md' }), 'docs/notes.md'],
+      [htmlContent({ path: 'site/report.html' }), 'site/report.html'],
+      [image, 'shots/a.png'],
+      [binary, 'bin/a.dat'],
+    ];
+    for (const [content, path] of cases) {
+      const onReveal = vi.fn();
+      const { unmount } = render(
+        <FilePreview fileContent={content} loading={false} selectedPath={path} onReveal={onReveal} />,
+      );
+      fireEvent.click(screen.getByRole('button', { name: 'Reveal in Finder' }));
+      expect(onReveal).toHaveBeenCalledWith(path);
+      unmount();
+    }
+  });
+
+  it('is labelled for File Explorer on Windows', () => {
+    setPlatform('Win32');
+    render(<FilePreview fileContent={mdContent()} loading={false} selectedPath="notes.md" onReveal={vi.fn()} />);
+    expect(screen.getByRole('button', { name: 'Show in File Explorer' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Reveal in Finder' })).toBeNull();
+  });
+
+  it('renders nothing without onReveal', () => {
+    setPlatform('MacIntel');
+    render(<FilePreview fileContent={mdContent()} loading={false} selectedPath="notes.md" />);
+    expect(screen.queryByRole('button', { name: 'Reveal in Finder' })).toBeNull();
+  });
+
+  it('is hidden while editing, like Copy', () => {
+    setPlatform('MacIntel');
+    render(
+      <FilePreview fileContent={mdContent()} loading={false} selectedPath="notes.md" onSave={vi.fn()} onReveal={vi.fn()} />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    expect(screen.queryByRole('button', { name: 'Reveal in Finder' })).toBeNull();
+  });
+
+  it('panel: a More-menu item after Open in Files, never a header button', () => {
+    setPlatform('MacIntel');
+    const onReveal = vi.fn();
+    render(
+      <FilePreview
+        fileContent={mdContent({ path: 'docs/notes.md' })}
+        loading={false}
+        selectedPath="docs/notes.md"
+        onSave={vi.fn()}
+        panelHeader={panelHeaderProps()}
+        onReveal={onReveal}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: 'Reveal in Finder' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+    expect(screen.getAllByRole('menuitem').map((i) => i.textContent)).toEqual([
+      'Copy',
+      'Open in Files',
+      'Reveal in Finder',
+    ]);
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Reveal in Finder' }));
+    expect(onReveal).toHaveBeenCalledWith('docs/notes.md');
+  });
+
+  it('panel: html, image and binary menus carry it too', () => {
+    setPlatform('Win32');
+    for (const [content, path] of [
+      [htmlContent(), 'report.html'],
+      [image, 'shots/a.png'],
+      [binary, 'bin/a.dat'],
+    ] as [FileContent, string][]) {
+      const onReveal = vi.fn();
+      const { unmount } = render(
+        <FilePreview
+          fileContent={content}
+          loading={false}
+          selectedPath={path}
+          panelHeader={panelHeaderProps()}
+          onReveal={onReveal}
+        />,
+      );
+      fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Show in File Explorer' }));
+      expect(onReveal).toHaveBeenCalledWith(path);
+      unmount();
+    }
+  });
+
+  it('panel: not offered before the file has loaded (the path may still be abbreviated)', () => {
+    setPlatform('MacIntel');
+    render(
+      <FilePreview
+        fileContent={null}
+        loading
+        selectedPath="notes.md"
+        panelHeader={panelHeaderProps()}
+        onReveal={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+    expect(screen.getAllByRole('menuitem').map((i) => i.textContent)).toEqual(['Open in Files']);
+  });
+});

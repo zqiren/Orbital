@@ -56,6 +56,24 @@ export function fileContentPath(projectId: string, path: string): string {
   return `/api/v2/projects/${encodeURIComponent(projectId)}/files/content?path=${encodeURIComponent(path)}&document_preview=1`;
 }
 
+/**
+ * Spec 093 — show a workspace path in Finder / File Explorer on the machine
+ * running the daemon ('' = open the project folder itself). Resolves `false`
+ * when the daemon refuses (missing path, relayed request, unsupported OS)
+ * rather than throwing, so a click handler can just report it.
+ */
+export async function revealPath(projectId: string, path: string): Promise<boolean> {
+  try {
+    await api(`/api/v2/projects/${encodeURIComponent(projectId)}/files/reveal`, {
+      method: 'POST',
+      body: JSON.stringify({ path }),
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function useFiles() {
   const [directory, setDirectory] = useState<DirectoryListing | null>(null);
   const [fileContent, setFileContent] = useState<FileContent | null>(null);
@@ -144,5 +162,6 @@ export function useFiles() {
     getFileContent,
     resolvePath,
     saveFileContent,
+    revealPath,
   };
 }
