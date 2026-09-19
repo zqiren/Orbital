@@ -168,45 +168,27 @@ class TestLiveSubAgentDeploymentInstructions:
 
 
 class TestSessionEndConsolidation:
+    """Spec 089: the session-end pass is the memory editor — it chooses by id
+    and never regenerates a file, so existing memory cannot be silently
+    dropped by the pass (the intent these tests always guarded)."""
 
-    def test_session_end_prompt_has_replace_instruction(self):
-        """Session-end prompt tells LLM to REPLACE lessons, not append."""
-        wfm = WorkspaceFileManager("/tmp/test")
-        prompt = wfm.build_session_end_prompt({
-            "message_count": 5,
-            "tool_calls_count": 2,
-            "files_modified": [],
-            "recent_messages": [],
-        })
-        assert "REPLACE" in prompt or "SUPERSEDE" in prompt
-        # NOTE: a literal "Cap at 20" assertion was retired here. The wording
-        # has shifted with prompt rewrites; the cap is now enforced server-side
-        # at write time (deterministic hard cap → demote-to-archive).
-        # The lessons field should NOT contain the old append-only wording.
-        # Extract just the lessons instruction from the prompt. In the Layer-1
-        # redesign the field that follows lessons is "index" (CONTEXT → INDEX),
-        # so isolate the lessons section between the "lessons" and "index" keys.
-        lessons_section = prompt.split('"lessons"')[1].split('"index"')[0]
-        assert "Only include genuinely new" not in lessons_section
+    def _prompt(self):
+        from agent_os.agent import memory_editor
+        return memory_editor.build_prompt(
+            {"state": "- a", "decisions": "", "lessons": "", "index": ""},
+            today="2026-09-19", since=None, sessions=[],
+        )
 
-    def test_session_end_prompt_carries_forward(self):
-        """Session-end prompt instructs preserving/carrying forward existing content.
+    def test_editor_prompt_asks_for_choices_by_id_not_files(self):
+        prompt = self._prompt()
+        assert "BY ID" in prompt or "by id" in prompt
+        assert '"project_state"' not in prompt
+        assert "COMPLETE updated" not in prompt
 
-        In the Layer-1 redesign the explicit "carry forward" phrasing was
-        replaced by the cleaner "return '' / preserve the existing file
-        unchanged" contract plus "keep currently-true" guidance. The intent is
-        unchanged: existing memory must not be silently dropped by the pass.
-        """
-        wfm = WorkspaceFileManager("/tmp/test")
-        prompt = wfm.build_session_end_prompt({
-            "message_count": 1,
-            "tool_calls_count": 0,
-            "files_modified": [],
-            "recent_messages": [],
-        })
-        lower = prompt.lower()
-        assert "preserve the existing file" in lower
-        assert "keep currently-true" in lower
+    def test_editor_prompt_never_deletes(self):
+        lower = self._prompt().lower()
+        assert "nothing is ever deleted" in lower
+        assert "never a source of new facts" in lower
 
 
 # ===========================================================================

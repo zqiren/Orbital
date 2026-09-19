@@ -431,11 +431,12 @@ async def test_session_end_demotes_oversized_decisions_to_archive(
             )
         return "".join(out)
 
-    # The LLM merely returns the same (already-stamped) content; the point is
-    # the deterministic demotion that runs afterwards.
-    llm_decisions = _decisions(12)
+    # Spec 089: the editor chooses nothing here ({}); the point is the
+    # deterministic demotion that runs afterwards.
+    ws.write("decisions", _decisions(12))
+    before = ws.read("decisions")
     session = _mock_session(session_id="s_demote")
-    provider = _mock_provider(_llm_response(decisions=llm_decisions))
+    provider = _mock_provider("{}")
 
     await run_session_end_routine(
         session, provider, ws,
@@ -446,8 +447,9 @@ async def test_session_end_demotes_oversized_decisions_to_archive(
     archive = ws.read("decisions_archive") or ""
     index = ws.read("index") or ""
 
-    # Live file is within the hard budget.
-    assert M.est_tokens(kept) <= M.FILE_BUDGETS["decisions"]["hard"]
+    # Live file shrank (each demoted entry leaves a one-line id pointer).
+    assert M.est_tokens(kept) < M.est_tokens(before)
+    assert "[archived " in kept and "→ DECISIONS_ARCHIVE.md" in kept
     # Oldest-3 protected, never demoted.
     for i in (1, 2, 3):
         assert f"Decision {i} " in kept

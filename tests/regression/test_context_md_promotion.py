@@ -102,30 +102,27 @@ class TestIndexMdInLayer1:
 # ---------------------------------------------------------------------------
 
 class TestSessionEndPromptFormat:
-    def test_prompt_defines_index_as_navigation_map(self, tmp_path):
-        mgr = WorkspaceFileManager(str(tmp_path))
-        prompt = mgr.build_session_end_prompt(
-            {"message_count": 1, "tool_calls_count": 0, "recent_messages": []}
+    """Spec 089: the session-end pass is the memory editor. It frames INDEX.md
+    as a navigation map and asks for choices by id — never whole files."""
+
+    def _prompt(self):
+        from agent_os.agent import memory_editor
+        return memory_editor.build_prompt(
+            {"state": "", "decisions": "", "lessons": "", "index": "# INDEX\n"},
+            today="2026-09-19", since=None, sessions=[],
         )
-        # The cleanup pass asks the LLM for the four Layer-1 fields, and frames
-        # INDEX.md as a navigation map (not a place for decisions/status/lessons).
+
+    def test_prompt_defines_index_as_navigation_map(self, tmp_path):
+        prompt = self._prompt()
         assert "INDEX.md" in prompt
-        assert "NAVIGATION ONLY" in prompt
+        assert "navigation map" in prompt
         assert '"index"' in prompt
-        assert '"project_state"' in prompt
+        assert '"project_state"' not in prompt
 
     def test_prompt_drops_old_entry_cap_and_token_language_for_index(self, tmp_path):
-        """The old CONTEXT.md guidance capped at 25 entries, then at a <1000-token
-        budget. The redesign drops both: INDEX is a navigation map sized by the
-        deterministic hard cap, and the prompt no longer carries an entry cap or a
-        token target."""
-        mgr = WorkspaceFileManager(str(tmp_path))
-        prompt = mgr.build_session_end_prompt(
-            {"message_count": 1, "tool_calls_count": 0, "recent_messages": []}
-        )
+        prompt = self._prompt()
         assert "under 1000 tokens" not in prompt
         assert "25 entries" not in prompt
-        # SESSION_LOG was removed entirely; the prompt never asks for it.
         assert "session_log" not in prompt.lower()
 
 

@@ -8,14 +8,17 @@ Incident (orbital-marketing_33eed65d, 2026-07-09): the flag re-fired
 identically every turn while a background consolidation pass was in flight,
 and its text suggested "edit the file directly" — so the agent concluded the
 async checkpoint_state tool had failed and hand-trimmed PROJECT_STATE.md
-mid-pass. New invariant: the flag is a state machine driven by scheduler
-state (RefreshView), not a repeating alarm:
+mid-pass. The flag is a state machine driven by scheduler state
+(RefreshView), not a repeating alarm.
 
-  idle           → nudge to call checkpoint_state (or edit directly)
-  in-flight      → "pass in flight — no action needed", no re-trigger/hand-edit
-  backstop_only  → LLM merge failed; manual edit is the sanctioned path
-  llm_merged     → consolidation ran, remainder is genuinely large
-  near hard cap  → escalation warning appended in ANY state
+Spec 089: over-budget files are tidied AUTOMATICALLY by the memory editor, so
+no state asks the agent to call checkpoint_state or to trim a file by hand:
+
+  idle           → "tidied automatically in the background, no action"
+  in-flight      → "the memory editor is tidying it — no action needed"
+  backstop_only  → the editor could not run; it retries on its own
+  edited / ...   → tidied; what remains is recent or live
+  near hard cap  → escalation note appended in ANY state
 """
 
 import pytest
@@ -56,12 +59,13 @@ def test_under_soft_returns_none_in_every_state():
     ) is None
 
 
-def test_idle_flag_keeps_both_options():
-    """No scheduler state → current behavior: suggest the tool or a manual edit."""
+def test_idle_flag_says_the_tidy_is_automatic():
     flag = M.soft_flag(_over_soft(), "state")
     assert flag is not None
-    assert "checkpoint_state" in flag
-    assert "edit the file directly" in flag
+    assert "automatically" in flag
+    assert "no action needed" in flag.lower()
+    assert "call the checkpoint_state tool" not in flag
+    assert "edit the file directly" not in flag
 
 
 # ---------------------------------------------------------------------------
@@ -74,11 +78,10 @@ def test_in_flight_flag_says_no_action_needed():
         refresh=RefreshView(in_flight=True, in_flight_since_turn=14),
     )
     assert flag is not None
-    assert "in flight" in flag
+    assert "memory editor" in flag
     assert "turn 14" in flag
     assert "no action needed" in flag.lower()
-    # Must NOT steer the agent to the two failure modes from the incident:
-    assert "edit the file directly" not in flag
+    assert "do not trim it by hand" in flag.lower()
     assert "call the checkpoint_state tool" not in flag
 
 
@@ -87,7 +90,7 @@ def test_in_flight_without_turn_number_still_renders():
         _over_soft(), "state", refresh=RefreshView(in_flight=True),
     )
     assert flag is not None
-    assert "in flight" in flag
+    assert "in the background" in flag
 
 
 # ---------------------------------------------------------------------------
@@ -95,44 +98,36 @@ def test_in_flight_without_turn_number_still_renders():
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("outcome", ["backstop_only", "failed"])
-def test_failed_merge_sanctions_manual_edit(outcome):
-    """LLM merge failed → manual edit is the explicit, sanctioned path
-    (OCC makes concurrent hand-edits safe). Re-triggering the tool is
-    explicitly discouraged — it cannot reduce the file."""
+def test_failed_pass_says_it_retries_by_itself(outcome):
     flag = M.soft_flag(
         _over_soft(), "state",
         refresh=RefreshView(last_outcome=outcome, last_turn=14),
     )
     assert flag is not None
-    assert "edit the file directly" in flag
+    assert "could not run" in flag
+    assert "retries on its own" in flag
     assert "call the checkpoint_state tool" not in flag
-    # Says WHY the tool won't help: the background merge could not run.
-    assert "could not" in flag or "failed" in flag
 
 
-def test_llm_merged_but_still_over_says_content_is_current():
-    """Consolidation succeeded and the file is STILL over soft budget —
-    the remainder is genuinely large; nag differently (trim stale content
-    manually), don't re-suggest the tool that just ran."""
+@pytest.mark.parametrize("outcome", ["edited", "no_change", "llm_merged"])
+def test_successful_pass_but_still_over_says_content_is_current(outcome):
     flag = M.soft_flag(
         _over_soft(), "state",
-        refresh=RefreshView(last_outcome="llm_merged", last_turn=9),
+        refresh=RefreshView(last_outcome=outcome, last_turn=9),
     )
     assert flag is not None
     assert "turn 9" in flag
-    assert "edit the file directly" in flag
+    assert "recent or still live" in flag
     assert "call the checkpoint_state tool" not in flag
 
 
 def test_no_delta_outcome_falls_back_to_idle_text():
-    """no_delta / unknown outcomes carry no signal about tool efficacy —
-    render the idle nudge."""
     flag = M.soft_flag(
         _over_soft(), "state",
         refresh=RefreshView(last_outcome="no_delta", last_turn=3),
     )
     assert flag is not None
-    assert "checkpoint_state" in flag
+    assert "automatically" in flag
 
 
 # ---------------------------------------------------------------------------
@@ -143,6 +138,7 @@ def test_near_hard_cap_escalates_idle():
     flag = M.soft_flag(_near_hard(), "state")
     assert flag is not None
     assert "hard cap" in flag
+    assert "pointer" in flag
 
 
 def test_near_hard_cap_escalates_even_in_flight():

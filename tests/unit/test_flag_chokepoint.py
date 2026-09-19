@@ -2,458 +2,263 @@
 # Copyright (C) 2026 Orbital Contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Write-chokepoint reconciliation (spec §5, §5.2, §5.5, §8).
+"""Write-chokepoint reconciliation (spec 089 §4.1).
 
-The chokepoint keeps machine identity (ids, created/from/evidence) and user
-lifecycle decisions (resolved, confidence:stated, retractions) stable while
-agents freely rewrite PROJECT_STATE.md — agents never see the ``<!--mem-->``
-comments, so every write is diffed against the previous on-disk content.
+Every PROJECT_STATE bullet carries a daemon-managed ``<!--mem-->`` comment
+with ``id`` / ``created`` / ``touched``. Agents never see those comments (they
+are stripped from the injected view), so every state write is diffed against
+the previous on-disk content and the comments are re-attached — but ONLY on an
+exact (whitespace-normalised) text match. A reworded line is a new line: new
+id, today's dates. That errs toward keeping it (younger lines are protected
+from the size floor).
+
+The fuzzy title matcher, the ``resolved`` lock, the retraction drop and the
+omission lint are gone (089 v2 retired them); these tests pin their absence.
 """
-import os
+
 import re
 
-import pytest
-
-from agent_os.agent import user_flags
+from agent_os.agent import state_blocks, user_flags
 from agent_os.agent.flag_chokepoint import reconcile_flags
 
 
 TODAY = "2026-07-23"
 
 
-def _entry(content, idx=0):
-    entries = user_flags.parse_entries(content)
-    return entries[idx]
+def _blocks(content):
+    return state_blocks.parse(content)[1]
+
+
+def _block(content, idx=0):
+    return _blocks(content)[idx]
 
 
 # ---------------------------------------------------------------------------
-# id-preserving merge
+# every bullet is stamped
 # ---------------------------------------------------------------------------
 
-class TestIdPreservation:
-    def test_exact_text_rewrite_without_comments_keeps_id(self):
-        prev = (
-            "# State\n\n"
-            "- [user] Send drafts to the client.\n"
-            "  <!--mem id:abc123 from:sess_1 evidence:\"send the drafts\" "
-            "confidence:unconfirmed created:2026-07-19 touched:2026-07-19-->\n"
-        )
-        # Agent rewrite: same sentence, comment stripped (never seen by agent).
-        new = "# State\n\n- [user] Send drafts to the client.\n"
-        merged, warns = reconcile_flags(prev, new, TODAY)
-        e = _entry(merged)
-        assert e.id == "abc123"
-        assert e.created == "2026-07-19"
-        # text unchanged → touched preserved, not bumped to today
-        assert e.touched == "2026-07-19"
-        assert e.evidence == "send the drafts"
-        assert e.from_session == "sess_1"
-        assert e.confidence == "unconfirmed"
+class TestEveryBulletStamped:
+    def test_plain_bullet_gets_id_created_touched_today(self):
+        merged, _ = reconcile_flags(None, "# State\n\n- Shipping the installer.\n", TODAY)
+        b = _block(merged)
+        assert re.fullmatch(r"[0-9a-f]{6}", b.id)
+        assert b.fields["created"] == TODAY
+        assert b.fields["touched"] == TODAY
 
-    def test_fuzzy_reassociation_of_rephrased_bullet(self):
-        prev = (
-            "- [user] Send the DM drafts to 宝玉 and Simon.\n"
-            "  <!--mem id:x7f3a2 from:s1 evidence:\"发 draft\" "
-            "created:2026-07-19 touched:2026-07-19-->\n"
-        )
-        # Rephrased (normalized ratio >= 0.75) and comment-less.
-        new = "- [user] Send DM drafts to 宝玉 and Simon.\n"
-        merged, warns = reconcile_flags(prev, new, TODAY)
-        e = _entry(merged)
-        assert e.id == "x7f3a2"                 # re-associated by fuzzy title
-        assert e.created == "2026-07-19"        # created preserved
-        assert e.touched == TODAY               # body changed → touched bumped
+    def test_comment_sits_directly_under_the_bullet(self):
+        merged, _ = reconcile_flags(None, "- Shipping the installer.\n", TODAY)
+        lines = merged.split("\n")
+        assert lines[0] == "- Shipping the installer."
+        assert lines[1].startswith("  <!--mem id:")
 
-    def test_unrelated_new_bullet_does_not_steal_id(self):
-        prev = (
-            "- [user] Book the venue for the offsite.\n"
-            "  <!--mem id:aaa000 from:s1 evidence:\"book it\" "
-            "created:2026-07-10 touched:2026-07-10-->\n"
-        )
-        new = "- [user] Buy a birthday cake for the team.\n"
-        merged, warns = reconcile_flags(prev, new, TODAY)
-        e = _entry(merged)
-        assert e.id != "aaa000"                 # < 0.75 ratio → fresh id
-        assert re.fullmatch(r"[0-9a-f]{6}", e.id)
+    def test_numbered_item_keeps_its_marker(self):
+        merged, _ = reconcile_flags(None, "## Next\n3. Verify the DMG.\n", TODAY)
+        assert "3. Verify the DMG." in merged
+        assert _block(merged).prefix == "3. "
+        assert _block(merged).id
 
-    def test_numbered_item_id_survives_comment_stripped_rewrite(self):
-        # A `3. [user] ...` item's id must survive the agent's comment-less
-        # rewrite exactly like a `- [user] ...` bullet does — the chokepoint
-        # doesn't special-case the marker, it just diffs by (id else fuzzy
-        # title) match, so this exercises the numbered grammar end-to-end.
-        prev = (
-            "## Blockers\n\n"
-            "3. [user] Approve the vendor contract.\n"
-            "  <!--mem id:num900 from:sess_1 evidence:\"approve it\" "
-            "created:2026-07-19 touched:2026-07-19-->\n"
-        )
-        new = "## Blockers\n\n3. [user] Approve the vendor contract.\n"
-        merged, warns = reconcile_flags(prev, new, TODAY)
-        e = _entry(merged)
-        assert e.id == "num900"
-        assert e.created == "2026-07-19"
-        assert e.prefix == "3. "
-        assert "3. [user] Approve the vendor contract." in merged
-
-
-class TestNewEntries:
-    def test_new_flagged_bullet_gets_id_and_created_today(self):
-        new = "# State\n\n- [user] Review the vendor contract.\n"
-        merged, warns = reconcile_flags(None, new, TODAY)
-        e = _entry(merged)
-        assert re.fullmatch(r"[0-9a-f]{6}", e.id)
-        assert e.created == TODAY
-        assert e.touched == TODAY
-
-    def test_new_flagged_bullet_with_explicit_id_is_preserved(self):
-        # A writer that already stamped an id (e.g. a system write) keeps it.
-        new = (
-            "- [user] Ship the release.\n"
-            "  <!--mem id:keep99 from:s1 evidence:\"ship it\" "
-            "created:2026-07-01 touched:2026-07-01-->\n"
-        )
-        merged, warns = reconcile_flags(None, new, TODAY)
-        e = _entry(merged)
-        assert e.id == "keep99"
-        assert e.created == "2026-07-01"
-
-    def test_dated_fact_passes_through_unstamped(self):
-        new = "- [due:2026-07-28] Quarterly report auto-generates.\n"
-        merged, warns = reconcile_flags(None, new, TODAY)
-        e = _entry(merged)
-        assert e.id is None                     # facts stay unstamped
-        assert e.due == "2026-07-28"
-        assert not e.flagged
-        assert "<!--mem" not in merged
-
-    def test_new_numbered_flagged_item_gets_id_and_keeps_its_marker(self):
-        # Tag-in-place grammar: a `3. [user] ...` item goes through the SAME
-        # id-stamping merge as a `- [user] ...` bullet — no source change to
-        # the chokepoint itself was needed, since it operates on whatever
-        # line text/marker parse_entries handed it.
-        new = "## Blockers\n\n3. [user] Approve the numbered blocker.\n"
-        merged, warns = reconcile_flags(None, new, TODAY)
-        e = _entry(merged)
-        assert re.fullmatch(r"[0-9a-f]{6}", e.id)
-        assert e.created == TODAY
-        assert e.touched == TODAY
-        assert e.prefix == "3. "
-        assert "3. [user] Approve the numbered blocker." in merged
-
-
-class TestTouchedStamp:
-    def test_text_change_stamps_touched_today(self):
-        prev = (
-            "- [user] Approve Q3 budget.\n"
-            "  <!--mem id:def456 from:s1 evidence:\"approve\" "
-            "created:2026-07-01 touched:2026-07-01-->\n"
-        )
-        new = "- [user] Approve the Q3 budget now.\n"
-        merged, warns = reconcile_flags(prev, new, TODAY)
-        assert _entry(merged).touched == TODAY
-
-    def test_no_text_change_keeps_touched(self):
-        prev = (
-            "- [user] Approve Q3 budget.\n"
-            "  <!--mem id:def456 from:s1 evidence:\"approve\" "
-            "created:2026-07-01 touched:2026-07-01-->\n"
-        )
-        new = "- [user] Approve Q3 budget.\n"
-        merged, warns = reconcile_flags(prev, new, TODAY)
-        assert _entry(merged).touched == "2026-07-01"
-
-
-# ---------------------------------------------------------------------------
-# lifecycle-fields-win (spec §5.5)
-# ---------------------------------------------------------------------------
-
-class TestLifecycleFieldsWin:
-    def test_resolved_survives_agent_rewrite(self):
-        prev = (
-            "- [user] Confirm the flight booking.\n"
-            "  <!--mem id:res111 from:s1 evidence:\"confirm\" "
-            "created:2026-07-10 touched:2026-07-20 resolved:2026-07-20-->\n"
-        )
-        # Agent rewrites the bullet and drops the resolved stamp.
-        new = "- [user] Confirm the flight booking.\n"
-        merged, warns = reconcile_flags(prev, new, TODAY)
-        assert _entry(merged).resolved == "2026-07-20"
-
-    def test_best_ratio_bullet_wins_id_when_two_clear_threshold(self):
-        # Two new bullets both clear 0.75 against ONE previous entry. The
-        # continuation (ratio 1.0) must win the id + lifecycle fields even
-        # though a weaker decoy (ratio ~0.86) appears FIRST in the file.
-        prev = (
-            "- [user] Send the DM drafts to 宝玉 and Simon today.\n"
-            "  <!--mem id:old111 from:s1 evidence:\"发 draft\" "
-            "confidence:stated created:2026-07-10 touched:2026-07-10 "
-            "resolved:2026-07-20-->\n"
-        )
-        new = (
-            "- [user] Send the DM drafts to 宝玉 today.\n"          # decoy, first
-            "- [user] Send the DM drafts to 宝玉 and Simon today.\n"  # verbatim, second
-        )
-        merged, warns = reconcile_flags(prev, new, TODAY)
+    def test_flagged_and_dated_bullets_are_stamped_too(self):
+        new = "- [user] Approve the budget.\n- [due:2026-08-01] Renew the domain.\n"
+        merged, _ = reconcile_flags(None, new, TODAY)
+        ids = [b.id for b in _blocks(merged)]
+        assert len(ids) == 2 and all(ids) and ids[0] != ids[1]
+        # the user_flags grammar still reads them
         entries = user_flags.parse_entries(merged)
-        by_text = {e.text: e for e in entries}
-        verbatim = by_text["Send the DM drafts to 宝玉 and Simon today."]
-        decoy = by_text["Send the DM drafts to 宝玉 today."]
-        assert verbatim.id == "old111"
-        assert verbatim.resolved == "2026-07-20"
-        assert verbatim.confidence == "stated"
-        # The decoy is a genuinely new bullet — fresh id, no inherited lifecycle.
-        assert decoy.id != "old111"
-        assert re.fullmatch(r"[0-9a-f]{6}", decoy.id)
-        assert decoy.resolved is None
+        assert entries[0].flagged and entries[1].due == "2026-08-01"
 
-    def test_confidence_stated_wins_over_reverted_unconfirmed(self):
+    def test_continuation_and_nested_lines_are_kept_with_their_bullet(self):
+        new = (
+            "- GOAI booth prep:\n"
+            "  flyers ordered, posters printed\n"
+            "  - sub: sticker count 300\n"
+            "- Next thing.\n"
+        )
+        merged, _ = reconcile_flags(None, new, TODAY)
+        # nothing lost, and the nested bullet is part of the parent block
+        for text in ("flyers ordered, posters printed", "  - sub: sticker count 300"):
+            assert text in merged
+        blocks = _blocks(merged)
+        assert len(blocks) == 2
+        assert "sticker count" in blocks[0].raw
+
+    def test_each_block_gets_exactly_one_comment(self):
+        merged, _ = reconcile_flags(None, "- a\n- b\n- c\n", TODAY)
+        assert merged.count("<!--mem") == 3
+
+    def test_pointer_lines_and_prose_are_not_stamped(self):
+        new = (
+            "Current focus: the release.\n"
+            "[archived 2026-07-01 id:abc123] old launch plan → PROJECT_STATE_ARCHIVE.md\n"
+        )
+        merged, _ = reconcile_flags(None, new, TODAY)
+        assert merged == new
+
+
+# ---------------------------------------------------------------------------
+# exact-text carry-forward
+# ---------------------------------------------------------------------------
+
+PREV = (
+    "# State\n\n"
+    "- Send drafts to the client.\n"
+    "  <!--mem id:abc123 from:sess_1 evidence:\"send the drafts\" "
+    "created:2026-07-19 touched:2026-07-20-->\n"
+    "- Ship the release.\n"
+    "  <!--mem id:ship01 created:2026-07-01 touched:2026-07-01-->\n"
+)
+
+
+class TestExactTextCarryForward:
+    def test_comment_stripped_rewrite_keeps_id_and_dates(self):
+        new = user_flags.strip_mem_comments(PREV)
+        merged, _ = reconcile_flags(PREV, new, TODAY)
+        assert merged == PREV
+
+    def test_legacy_fields_are_carried_verbatim(self):
+        new = "# State\n\n- Send drafts to the client.\n"
+        merged, _ = reconcile_flags(PREV, new, TODAY)
+        b = _block(merged)
+        assert b.id == "abc123"
+        assert b.fields["from"] == "sess_1"
+        assert b.fields["evidence"] == "send the drafts"
+        assert b.fields["created"] == "2026-07-19"
+        assert b.fields["touched"] == "2026-07-20"
+
+    def test_whitespace_only_difference_keeps_id(self):
+        new = "# State\n\n-   Send   drafts to the   client. \n"
+        merged, _ = reconcile_flags(PREV, new, TODAY)
+        assert _block(merged).id == "abc123"
+
+    def test_reworded_line_gets_new_id_and_today(self):
+        new = "# State\n\n- Send the drafts to the client today.\n"
+        merged, _ = reconcile_flags(PREV, new, TODAY)
+        b = _block(merged)
+        assert b.id not in ("abc123", "ship01")
+        assert b.fields["created"] == TODAY and b.fields["touched"] == TODAY
+        assert "from" not in b.fields and "evidence" not in b.fields
+
+    def test_reworded_line_with_its_old_comment_still_attached_gets_new_id(self):
+        # The edit tool rewrites the bullet line on disk and leaves the
+        # comment line under it: a new sentence is still a new line.
+        new = PREV.replace("- Send drafts to the client.", "- Drafts are sent.")
+        merged, _ = reconcile_flags(PREV, new, TODAY)
+        b = _block(merged)
+        assert b.id != "abc123"
+        assert b.fields["created"] == TODAY
+
+    def test_tag_toggle_is_not_a_rewording(self):
+        prev = "- [user] Approve the budget.\n  <!--mem id:bud001 created:2026-07-01 touched:2026-07-01-->\n"
+        merged, _ = reconcile_flags(prev, "- Approve the budget.\n", TODAY)
+        assert _block(merged).id == "bud001"
+        assert _block(merged).fields["created"] == "2026-07-01"
+
+    def test_renumbered_item_keeps_id(self):
+        prev = "1. Verify the DMG.\n  <!--mem id:dmg001 created:2026-07-01 touched:2026-07-01-->\n"
+        merged, _ = reconcile_flags(prev, "1. New first step.\n2. Verify the DMG.\n", TODAY)
+        assert _block(merged, 1).id == "dmg001"
+        assert _block(merged, 0).id != "dmg001"
+
+    def test_duplicated_line_second_copy_gets_new_id(self):
+        new = "# State\n\n- Ship the release.\n- Ship the release.\n"
+        merged, _ = reconcile_flags(PREV, new, TODAY)
+        a, b = _blocks(merged)
+        assert a.id == "ship01"
+        assert b.id != "ship01" and b.fields["created"] == TODAY
+
+    def test_new_comment_fields_win_over_prev_for_the_same_line(self):
+        # A daemon writer (e.g. the Workbench) adds a field to a kept line.
+        new = PREV.replace(
+            "created:2026-07-01 touched:2026-07-01-->",
+            "created:2026-07-01 touched:2026-07-01 resolved:2026-07-22-->",
+        )
+        merged, _ = reconcile_flags(PREV, new, TODAY)
+        b = [x for x in _blocks(merged) if x.id == "ship01"][0]
+        assert b.fields["resolved"] == "2026-07-22"
+
+    def test_unknown_id_in_new_content_is_kept(self):
+        # Restoring from a backup / the editor re-inserting a stamped block.
+        new = "- Restored line.\n  <!--mem id:fff000 created:2026-06-01 touched:2026-06-02-->\n"
+        merged, _ = reconcile_flags(PREV, new, TODAY)
+        b = _block(merged)
+        assert b.id == "fff000"
+        assert b.fields["created"] == "2026-06-01"
+
+    def test_duplicate_ids_in_new_content_are_split(self):
+        new = (
+            "- One.\n  <!--mem id:fff000 created:2026-06-01 touched:2026-06-01-->\n"
+            "- Two.\n  <!--mem id:fff000 created:2026-06-01 touched:2026-06-01-->\n"
+        )
+        merged, _ = reconcile_flags(None, new, TODAY)
+        a, b = _blocks(merged)
+        assert a.id == "fff000" and b.id != "fff000"
+
+    def test_comment_moved_below_continuation_is_canonicalised(self):
+        new = (
+            "- Long line\n"
+            "  wrapped here\n"
+            "  <!--mem id:abc999 created:2026-07-01 touched:2026-07-01-->\n"
+        )
+        merged, _ = reconcile_flags(None, new, TODAY)
+        assert merged == (
+            "- Long line\n"
+            "  <!--mem id:abc999 created:2026-07-01 touched:2026-07-01-->\n"
+            "  wrapped here\n"
+        )
+
+    def test_wrapped_legacy_comment_is_read(self):
         prev = (
-            "- [user] Cancel the old subscription.\n"
-            "  <!--mem id:con222 from:s1 evidence:\"cancel it\" "
-            "confidence:stated created:2026-07-10 touched:2026-07-10-->\n"
+            "- [user due:2026-07-28] Send DM drafts.\n"
+            "  <!--mem id:x7f3a2 from:orbital-marketing_7c045c40\n"
+            "      evidence:\"draft 写好就准备发\" confidence:unconfirmed\n"
+            "      created:2026-07-19 touched:2026-07-23-->\n"
         )
-        # Agent's stale copy re-asserts unconfirmed; user's 'stated' must win.
-        new = (
-            "- [user] Cancel the old subscription.\n"
-            "  <!--mem confidence:unconfirmed-->\n"
-        )
-        merged, warns = reconcile_flags(prev, new, TODAY)
-        assert _entry(merged).confidence == "stated"
+        merged, _ = reconcile_flags(prev, prev, TODAY)
+        b = _block(merged)
+        assert b.id == "x7f3a2"
+        assert b.fields["created"] == "2026-07-19"
+        assert merged.count("<!--mem") == 1
 
 
 # ---------------------------------------------------------------------------
-# resolved-trace re-attachment (F1) — a fulfilled entry's tag-less trace
-# (id + resolved in a comment) must survive an agent rewrite that strips the
-# comment and re-emits the sentence as a plain bullet.
+# retired machinery stays retired
 # ---------------------------------------------------------------------------
 
-class TestResolvedTraceReattach:
-    def _trace(self, eid, resolved="2026-07-20"):
-        return (
-            f"- Send the DM drafts to 宝玉 and Simon.\n"
-            f"  <!--mem id:{eid} from:s1 evidence:\"发 draft\" "
-            f"created:2026-07-19 touched:2026-07-20 resolved:{resolved}-->\n"
-        )
-
-    def test_verbatim_plain_bullet_reattaches_resolved_trace(self):
-        # (1) prev = tag-less bullet + comment (id+resolved); new = the SAME
-        # sentence as a plain bullet with no comment (the comment-stripped
-        # agent view, re-emitted). The comment must re-attach, resolved intact.
-        prev = self._trace("trc001")
-        new = "- Send the DM drafts to 宝玉 and Simon.\n"
-        merged, warns = reconcile_flags(prev, new, TODAY)
-        e = _entry(merged)
-        assert e.id == "trc001"
-        assert e.resolved == "2026-07-20"
-        assert e.created == "2026-07-19"
-        assert e.flagged is False               # stays a retired, tag-less trace
-
-    def test_rephrased_plain_bullet_reattaches_resolved_trace(self):
-        # (2) rephrased-but->=0.75 plain bullet re-associates the same way.
-        prev = self._trace("trc002")
-        new = "- Send DM drafts to 宝玉 and Simon.\n"     # dropped "the", >=0.75
-        merged, warns = reconcile_flags(prev, new, TODAY)
-        e = _entry(merged)
-        assert e.id == "trc002"
-        assert e.resolved == "2026-07-20"
-
-    def test_deleted_sentence_lets_trace_die_without_warning(self):
-        # (3) the sentence is absent from new (agent deleted it) → the trace
-        # legitimately dies; no id/resolved lingers and nothing warns loudly.
-        prev = self._trace("trc003")
-        new = "- Book the venue for the offsite.\n"      # unrelated, < 0.75
-        merged, warns = reconcile_flags(prev, new, TODAY)
-        assert "trc003" not in merged
-        assert "resolved" not in merged
-        assert user_flags.parse_entries(merged) == []    # the plain bullet is untouched
-        assert not any("trc003" in w for w in warns)
-
-    def test_flagged_bullet_wins_trace_over_plain_duplicate(self):
-        # (4) both a flagged bullet AND a plain bullet match the same prev
-        # trace. Flagged matching takes precedence (existing semantics): the
-        # flagged entry claims the id + resolved; the plain duplicate does
-        # NOT also steal it (one-to-one), so it stays a plain, untracked bullet.
-        # The claimer then emits UNFLAGGED, because the trace it claimed is
-        # resolved (see TestResolvedNeverReopens) — so the file ends up with
-        # exactly one entry carrying the id and nothing flagged at all.
-        prev = self._trace("trc004")
-        new = (
-            "- [user] Send the DM drafts to 宝玉 and Simon.\n"   # flagged
-            "- Send the DM drafts to 宝玉 and Simon.\n"           # plain duplicate
-        )
-        merged, warns = reconcile_flags(prev, new, TODAY)
-        entries = user_flags.parse_entries(merged)
-        assert [e.id for e in entries if e.id == "trc004"] == ["trc004"]  # exactly one
-        claimer = next(e for e in entries if e.id == "trc004")
-        assert claimer.resolved == "2026-07-20"
-        assert [e for e in entries if e.flagged] == []
-
-    def test_round_trip_fulfilled_exit_survives_agent_rewrite(self):
-        # (5) end-to-end: a fulfilled exit's on-disk output → the agent's
-        # comment-stripped view → an identical re-emit → reconcile. The entry
-        # is still resolved, still carries its original id.
-        fulfilled_exit = (
-            "# State\n\n"
-            "## Done\n"
-            "- Send the DM drafts to 宝玉 and Simon.\n"
-            "  <!--mem id:trc005 from:s1 evidence:\"发 draft\" "
-            "created:2026-07-19 touched:2026-07-20 resolved:2026-07-20-->\n"
-        )
-        agent_view = user_flags.strip_mem_comments(fulfilled_exit)
-        assert "<!--mem" not in agent_view          # the agent never sees the comment
-        merged, warns = reconcile_flags(fulfilled_exit, agent_view, TODAY)
-        e = _entry(merged)
-        assert e.id == "trc005"
-        assert e.resolved == "2026-07-20"
-        assert e.flagged is False
-
-    def test_new_flagged_bullet_matching_resolved_trace_inherits_lifecycle(self):
-        # m17, now DECIDED (was: "pins CURRENT behavior for the backlogged m17
-        # decision ... THIS assertion is the deliberate line to revisit").
-        # A NEW [user]-tagged bullet whose sentence matches a resolved trace
-        # still inherits the trace's id + resolved via lifecycle-wins — but it
-        # no longer comes back flagged. Re-flagging a settled entry silently
-        # undid the user's "Done" click and re-rendered the card; `resolved` is
-        # now a lock, enforced in code rather than by a prompt rail.
-        prev = self._trace("trc017")
-        new = "- [user] Send the DM drafts to 宝玉 and Simon.\n"
-        merged, warns = reconcile_flags(prev, new, TODAY)
-        e = _entry(merged)
-        assert e.id == "trc017"
-        assert e.resolved == "2026-07-20"
-        assert e.flagged is False
-
-    def test_verbatim_numbered_item_reattaches_resolved_trace(self):
-        # Same as test_verbatim_plain_bullet_reattaches_resolved_trace, but
-        # the retired entry was found as a numbered item ("3. ..."), not a
-        # dash bullet. A later freeform agent rewrite drops the mem-comment
-        # and re-emits the same numbered line — the id + resolved stamp must
-        # still re-attach (review finding 1).
+class TestRetiredMachinery:
+    def test_no_resolved_lock(self):
         prev = (
-            "3. Approve the vendor contract.\n"
-            "  <!--mem id:trc010 from:s1 evidence:\"approve it\" "
-            "created:2026-07-19 touched:2026-07-20 resolved:2026-07-20-->\n"
+            "- Pick option A, B or C?\n"
+            "  <!--mem id:4148d8 created:2026-07-20 touched:2026-07-20 resolved:2026-07-22-->\n"
         )
-        new = "3. Approve the vendor contract.\n"
-        merged, warns = reconcile_flags(prev, new, TODAY)
-        e = _entry(merged)
-        assert e.id == "trc010"
-        assert e.resolved == "2026-07-20"
-        assert e.created == "2026-07-19"
-        assert e.flagged is False
-        assert e.prefix == "3. "
+        merged, warns = reconcile_flags(prev, "- [user] Pick option A, B or C?\n", TODAY)
+        assert "- [user] Pick option A, B or C?" in merged
+        assert not any("resolved" in w.lower() for w in warns)
 
-    def test_rephrased_paren_numbered_item_reattaches_resolved_trace(self):
-        # A "12) ..." marker (the other numbered-list style) rephrased just
-        # enough to stay >= 0.75 ratio must also re-associate.
-        prev = (
-            "12) Send the DM drafts to 宝玉 and Simon.\n"
-            "  <!--mem id:trc011 from:s1 evidence:\"发 draft\" "
-            "created:2026-07-19 touched:2026-07-20 resolved:2026-07-20-->\n"
-        )
-        new = "12) Send DM drafts to 宝玉 and Simon.\n"   # dropped "the", >=0.75
-        merged, warns = reconcile_flags(prev, new, TODAY)
-        e = _entry(merged)
-        assert e.id == "trc011"
-        assert e.resolved == "2026-07-20"
-        assert e.prefix == "12) "
-
-
-# ---------------------------------------------------------------------------
-# retraction resurrection guard (spec §5.2)
-# ---------------------------------------------------------------------------
-
-class TestRetractionGuard:
-    def test_retracted_title_match_keeps_entry_out_and_warns_loudly(self):
-        new = (
-            "# State\n\n"
-            "- [user] Send 宝玉 + Simon the DM drafts.\n"
-            "- [user] Draft the Q3 report.\n"
-        )
-        retractions = ["Send 宝玉 and Simon the DM drafts"]
-        merged, warns = reconcile_flags(None, new, TODAY, retraction_titles=retractions)
-        titles = [e.text for e in user_flags.parse_entries(merged)]
-        assert not any("宝玉" in t for t in titles)       # retracted one dropped
-        assert any("Q3 report" in t for t in titles)     # the other survives
-        assert any("RETRACT" in w.upper() for w in warns)  # loud warning
-
-    def test_no_retraction_titles_keeps_everything(self):
-        new = "- [user] Send 宝玉 + Simon the DM drafts.\n"
-        merged, warns = reconcile_flags(None, new, TODAY, retraction_titles=None)
-        assert len(user_flags.parse_entries(merged)) == 1
-
-
-# ---------------------------------------------------------------------------
-# omission heuristic lint (spec §8) — warns, never blocks
-# ---------------------------------------------------------------------------
-
-class TestOmissionHeuristic:
-    def test_unflagged_bullet_under_blocker_heading_warns(self):
-        new = (
-            "# State\n\n"
-            "## Blockers\n"
-            "- Waiting on the client to approve the vendor.\n"
-        )
-        merged, warns = reconcile_flags(None, new, TODAY)
-        assert any("user-facing" in w.lower() or "flag" in w.lower() for w in warns)
-        # Never blocks: the line is still present in the output.
-        assert "Waiting on the client" in merged
-
-    def test_you_must_phrasing_warns(self):
-        new = "## Notes\n- You must sign the release form before Friday.\n"
-        merged, warns = reconcile_flags(None, new, TODAY)
-        assert any("user-facing" in w.lower() or "flag" in w.lower() for w in warns)
-
-    def test_cjk_user_phrasing_warns(self):
-        new = "## 进度\n- 用户需要确认预算。\n"
-        merged, warns = reconcile_flags(None, new, TODAY)
-        assert any("user-facing" in w.lower() or "flag" in w.lower() for w in warns)
-
-    def test_flagged_bullet_under_blocker_heading_does_not_warn(self):
-        new = (
-            "## Blockers\n"
-            "- [user] Approve the vendor contract.\n"
-            "  <!--mem id:zzz999 from:s1 evidence:\"approve\" "
-            "created:2026-07-01 touched:2026-07-01-->\n"
-        )
-        merged, warns = reconcile_flags(new, new, TODAY)
-        assert not any("user-facing" in w.lower() for w in warns)
-
-    def test_plain_bullet_without_triggers_does_not_warn(self):
-        new = "## Progress\n- Refactored the exporter module.\n"
-        merged, warns = reconcile_flags(None, new, TODAY)
+    def test_retraction_titles_are_ignored(self):
+        new = "- Launch on Product Hunt.\n"
+        merged, warns = reconcile_flags(None, new, TODAY, ["Launch on Product Hunt"])
+        assert "- Launch on Product Hunt." in merged
         assert warns == []
 
-    def test_unflagged_numbered_item_under_blocker_heading_warns(self):
-        # Same heuristic as test_unflagged_bullet_under_blocker_heading_warns,
-        # but the unflagged line is a numbered item ("1. ..."), not a dash
-        # bullet (review finding 2).
-        new = (
-            "# State\n\n"
-            "## Blockers\n"
-            "1. Waiting on the client to approve the vendor.\n"
-        )
-        merged, warns = reconcile_flags(None, new, TODAY)
-        assert any("user-facing" in w.lower() or "flag" in w.lower() for w in warns)
-        # Never blocks: the line is still present in the output.
-        assert "Waiting on the client" in merged
+    def test_no_omission_lint(self):
+        new = "## Blockers\n- You must sign the release form.\n- 用户需要确认\n"
+        _merged, warns = reconcile_flags(None, new, TODAY)
+        assert warns == []
 
-    def test_you_must_phrasing_numbered_item_warns(self):
-        new = "## Notes\n2) You must sign the release form before Friday.\n"
-        merged, warns = reconcile_flags(None, new, TODAY)
-        assert any("user-facing" in w.lower() or "flag" in w.lower() for w in warns)
+    def test_malformed_due_still_warns(self):
+        _merged, warns = reconcile_flags(None, "- [due:tomorrow] Renew.\n", TODAY)
+        assert any("malformed due" in w for w in warns)
 
 
 # ---------------------------------------------------------------------------
-# round-trip / idempotency / non-adopting files
+# round-trip / idempotency
 # ---------------------------------------------------------------------------
 
 class TestRoundTrip:
-    def test_plain_state_file_is_byte_identical(self):
+    def test_file_without_bullets_is_byte_identical(self):
         plain = (
             "# State\n\n"
             "Current focus: shipping the installer.\n"
-            "Blockers: none.\n\n\n"          # 3 blank lines must NOT collapse
+            "Blockers: none.\n\n\n"
             "Next: verify the DMG on a clean machine.\n"
         )
         merged, warns = reconcile_flags(None, plain, TODAY)
@@ -461,21 +266,23 @@ class TestRoundTrip:
         assert warns == []
 
     def test_reconcile_is_idempotent(self):
-        prev = (
-            "- [user] Send drafts to the client.\n"
-            "  <!--mem id:abc123 from:sess_1 evidence:\"send the drafts\" "
-            "confidence:unconfirmed created:2026-07-19 touched:2026-07-19-->\n"
-        )
-        new = "- [user] Send drafts to the client.\n"
-        merged1, _ = reconcile_flags(prev, new, TODAY)
+        merged1, _ = reconcile_flags(None, "- a\n- b\n\n## X\n1. c\n", TODAY)
         merged2, _ = reconcile_flags(merged1, merged1, TODAY)
         assert merged2 == merged1
 
-    def test_no_prev_no_flags_returns_new(self):
-        new = "just some freeform prose\nwith no bullets at all\n"
-        merged, warns = reconcile_flags(None, new, TODAY)
-        assert merged == new
-        assert warns == []
+    def test_stripped_view_round_trips(self):
+        merged1, _ = reconcile_flags(None, "# S\n\n- a\n  wrapped\n- b\n", TODAY)
+        merged2, _ = reconcile_flags(merged1, user_flags.strip_mem_comments(merged1), "2026-09-01")
+        assert merged2 == merged1
+
+    def test_unterminated_comment_does_not_swallow_the_file(self):
+        new = "- a <!--mem id:abc\n## Heading\n- b\n"
+        merged, _ = reconcile_flags(None, new, TODAY)
+        assert "## Heading" in merged and "- b" in merged
+        assert len(_blocks(merged)) == 2
+
+    def test_empty_content_passes_through(self):
+        assert reconcile_flags("- a\n", "", TODAY) == ("", [])
 
 
 # ---------------------------------------------------------------------------
@@ -492,23 +299,20 @@ class TestWiring:
         # for ASKS.md before the chokepoint runs (tests/unit/test_asks.py).
         state_path.write_text(
             "- Send drafts to the client.\n"
-            "  <!--mem id:abc123 from:s1 evidence:\"send it\" "
-            "created:2026-07-19 touched:2026-07-19-->\n",
+            "  <!--mem id:abc123 created:2026-07-19 touched:2026-07-19-->\n",
             encoding="utf-8",
         )
-        new = "- Send drafts to the client.\n"
-        out, warns = memory_entries.process_on_write(
-            str(tmp_path), str(state_path), new, today=TODAY
+        out, _warns = memory_entries.process_on_write(
+            str(tmp_path), str(state_path), "- Send drafts to the client.\n", today=TODAY
         )
-        assert _entry(out).id == "abc123"
+        assert _block(out).id == "abc123"
 
     def test_process_on_write_index_unchanged_behavior(self, tmp_path):
-        # Non-state volatile file keeps header-only behavior (no reconcile).
         from agent_os.agent import memory_entries
         orbital = tmp_path / "orbital"
         orbital.mkdir()
         target = orbital / "INDEX.md"
-        out, warns = memory_entries.process_on_write(
+        out, _warns = memory_entries.process_on_write(
             str(tmp_path), str(target), "# INDEX\n- a.py — thing\n"
         )
         assert out.startswith(memory_entries.FORMAT_HEADERS["index"])
@@ -519,100 +323,17 @@ class TestWiring:
         wf = WorkspaceFileManager(str(tmp_path))
         wf.write(
             "state",
-            "- [user] Ship the release.\n"
-            "  <!--mem id:ship01 from:s1 evidence:\"ship it\" "
-            "created:2026-07-01 touched:2026-07-01-->\n",
+            "- Ship the release.\n"
+            "  <!--mem id:ship01 created:2026-07-01 touched:2026-07-01-->\n",
         )
-        assert _entry(wf.read("state")).id == "ship01"
-        # Agent rewrite with the comment stripped: id must survive.
-        wf.write("state", "# State\n\n- [user] Ship the release.\n")
-        assert _entry(wf.read("state")).id == "ship01"
+        assert _block(wf.read("state")).id == "ship01"
+        wf.write("state", "# State\n\n- Ship the release.\n")
+        assert _block(wf.read("state")).id == "ship01"
 
-    def test_manager_write_plain_state_byte_identical(self, tmp_path):
-        # A non-adopting state file still round-trips to header + content.
+    def test_manager_write_prose_state_round_trips(self, tmp_path):
         from agent_os.agent import memory_entries as mem
         from agent_os.agent.workspace_files import WorkspaceFileManager
         wf = WorkspaceFileManager(str(tmp_path))
         content = "# State\nDoing well.\n"
         wf.write("state", content)
         assert wf.read("state") == mem.FORMAT_HEADERS["state"] + "\n" + content
-
-
-# ---------------------------------------------------------------------------
-# Resolved is a lock, not a note (Workbench stickiness fix)
-# ---------------------------------------------------------------------------
-
-class TestResolvedNeverReopens:
-    """A `resolved:` stamp is the user's deliberate close (Workbench "Done").
-
-    The format header's rail 6 already tells the agent never to re-open a
-    settled line, but that was prompt-only: an agent rewriting from its
-    comment-stripped view cannot see the stamp, re-adds `[user]`, and
-    `_merge_fields` faithfully re-attaches `resolved` — yielding an entry that
-    is flagged AND resolved, which the Workbench renders as a card again. The
-    user's click is silently undone. These lock it in code.
-    """
-
-    def test_reflagging_a_resolved_entry_strips_the_tag(self):
-        # Previous file: the user pressed Done — tag dropped, resolved stamped.
-        prev = (
-            "# State\n\n"
-            "- Pick option A, B or C (default A)?\n"
-            "  <!--mem id:4148d8 created:2026-07-20 resolved:2026-07-22-->\n"
-        )
-        # The agent, blind to the comment, re-flags the line.
-        new = "# State\n\n- [user] Pick option A, B or C (default A)?\n"
-        merged, _warns = reconcile_flags(prev, new, TODAY)
-        e = _entry(merged)
-        assert e.resolved == "2026-07-22", "the resolved stamp must survive"
-        assert e.flagged is False, "a resolved entry must never come back flagged"
-
-    def test_reflagging_a_resolved_entry_warns(self):
-        prev = (
-            "# State\n\n"
-            "- Pick option A, B or C (default A)?\n"
-            "  <!--mem id:4148d8 created:2026-07-20 resolved:2026-07-22-->\n"
-        )
-        new = "# State\n\n- [user] Pick option A, B or C (default A)?\n"
-        _merged, warns = reconcile_flags(prev, new, TODAY)
-        assert any("resolved" in w.lower() for w in warns), warns
-
-    def test_self_carried_resolved_stamp_is_also_unflagged(self):
-        # A file already corrupted on disk (flagged AND resolved inline) heals
-        # on the next write — not only the prev-match path.
-        new = (
-            "# State\n\n"
-            "- [user] Pick option A, B or C (default A)?\n"
-            "  <!--mem id:4148d8 created:2026-07-20 resolved:2026-07-22-->\n"
-        )
-        merged, _warns = reconcile_flags(None, new, TODAY)
-        e = _entry(merged)
-        assert e.flagged is False
-        assert e.resolved == "2026-07-22"
-
-    def test_unresolved_entries_are_untouched(self):
-        # Guard against over-reach: a normal flagged entry keeps its flag.
-        prev = (
-            "# State\n\n"
-            "- [user] Approve the Q3 budget.\n"
-            "  <!--mem id:bud001 created:2026-07-20-->\n"
-        )
-        new = "# State\n\n- [user] Approve the Q3 budget.\n"
-        merged, warns = reconcile_flags(prev, new, TODAY)
-        e = _entry(merged)
-        assert e.flagged is True
-        assert e.id == "bud001"
-        assert not any("resolved" in w.lower() for w in warns)
-
-    def test_numbered_entry_keeps_its_marker_when_unflagged(self):
-        # Unflagging rewrites the line, so the exact list marker must survive
-        # (the grammar forbids converting a numbered item to a bullet).
-        prev = (
-            "# State\n\n"
-            "3. Pick option A, B or C (default A)?\n"
-            "   <!--mem id:4148d8 created:2026-07-20 resolved:2026-07-22-->\n"
-        )
-        new = "# State\n\n3. [user] Pick option A, B or C (default A)?\n"
-        merged, _warns = reconcile_flags(prev, new, TODAY)
-        assert "3. Pick option A, B or C (default A)?" in merged
-        assert "[user]" not in merged

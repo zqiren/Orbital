@@ -37,8 +37,15 @@ from tests.testutils import streamable
 from agent_os.agent import workspace_files as wsf_module
 from agent_os.agent.workspace_files import (
     WorkspaceFileManager,
-    run_session_end_routine,
+    run_session_end_routine as _run_session_end_routine,
 )
+
+
+def run_session_end_routine(*args, **kwargs):
+    """Spec 089: without ``force`` the pass only runs over budget; these
+    tests exercise the boundary gates, so every call is an explicit pass."""
+    kwargs.setdefault("force", True)
+    return _run_session_end_routine(*args, **kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -67,18 +74,9 @@ def _mock_provider(response_text):
 
 
 def _valid_llm_response(tag="x"):
-    """A well-formed session-end merge payload in the NEW Layer-1 schema.
-
-    Keys are the post-redesign set: project_state / decisions / lessons / index.
-    The old ``session_log_entry`` and ``context`` keys are gone (SESSION_LOG was
-    removed; CONTEXT.md became INDEX.md).
-    """
-    return json.dumps({
-        "project_state": f"# State\nstate-{tag}",
-        "decisions": f"## Decision {tag}\n**Chose:** A",
-        "lessons": f"## Lesson {tag}\n**Problem:** p\n**Fix:** f",
-        "index": f"## People\n- Person {tag}",
-    })
+    """A well-formed memory-editor reply (spec 089): choices by id, plus the
+    one whole file the editor may rewrite — INDEX.md."""
+    return json.dumps({"index": f"## People\n- Person {tag}"})
 
 
 def _force_delta(ws: WorkspaceFileManager, tag="seed"):
@@ -221,26 +219,19 @@ async def test_concurrent_calls_same_session_id(tmp_path):
         f"The idempotency / no-delta guard did not prevent the duplicate run."
     )
 
-    # No file corruption: each entry-structured file contains exactly ONE entry.
-    # DECISIONS is stamped with metadata on the header line by the persist path,
-    # so match the entry title rather than exact bytes.
+    # No file corruption: nothing duplicated by a second pass.
     decisions = ws.read("decisions") or ""
     index = ws.read("index") or ""
 
-    assert decisions.count("## Decision s_conc") == 1, (
+    assert decisions.count("Seed s_conc") == 1, (
         f"DECISIONS has duplicate entries:\n{decisions}"
     )
     assert index.count("## People") == 1, (
         f"INDEX has duplicate entries:\n{index}"
     )
 
-    # Volatile/overwrite files reflect the single merge (no truncation / torn
-    # writes). STATE and INDEX are overwrite-intent; LESSONS is stamped but its
-    # body is byte-intact.
-    assert ws.read("state") == "# State\nstate-s_conc"
-    lessons = ws.read("lessons") or ""
-    assert "## Lesson s_conc" in lessons
-    assert "**Problem:** p" in lessons and "**Fix:** f" in lessons
+    # The single pass's INDEX landed once, whole (no torn write).
+    assert index.count("- Person s_conc") == 1
 
 
 # ---------------------------------------------------------------------------
@@ -301,8 +292,8 @@ async def test_bypass_idempotency_reruns_and_does_not_record(tmp_path):
     assert provider2.complete.call_count == 1
     assert "s_bypass" not in wsf_module._completed_session_ends
 
-    # The second merge's content is what persisted.
-    assert ws.read("state") == "# State\nstate-second"
+    # The second pass's INDEX is what persisted.
+    assert "- Person second" in ws.read("index")
 
 
 # ---------------------------------------------------------------------------

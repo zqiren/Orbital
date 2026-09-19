@@ -14,7 +14,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from agent_os.agent.loop import AgentLoop, COOLDOWN_TURNS
+from agent_os.agent.loop import AgentLoop
 from agent_os.agent.providers.types import LLMResponse, TokenUsage
 from agent_os.agent.tools.base import ToolResult
 from agent_os.agent.session import persist_user_row
@@ -63,13 +63,19 @@ def _make_session():
 async def test_refresh_task_is_registered_and_cancellable():
     """The _refresh_task attribute exists and is an asyncio.Task while refresh runs.
 
-    We hit COOLDOWN_TURNS via tool-call responses to keep the loop alive,
-    then when the refresh task starts we call terminate() to cancel it.
+    Tool-call responses keep the loop alive; the first prepare() reports an
+    over-budget memory file (spec 089 — the automatic trigger), which starts a
+    background pass; when it starts we call terminate() to cancel it.
     """
     session = _make_session()
 
     context_manager = MagicMock()
-    context_manager.prepare.return_value = [{"role": "system", "content": "sys"}]
+
+    def _prepare():
+        context_manager._on_memory_over_budget(["state"])
+        return [{"role": "system", "content": "sys"}]
+
+    context_manager.prepare.side_effect = _prepare
     context_manager.model_context_limit = 128_000
     context_manager.should_compact.return_value = False
     context_manager.usage_percentage = 0.0
@@ -103,7 +109,7 @@ async def test_refresh_task_is_registered_and_cancellable():
         tool_registry=tool_registry,
         context_manager=context_manager,
         on_session_end_refresh=slow_refresh,
-        max_iterations=COOLDOWN_TURNS + 5,  # ensure refresh fires
+        max_iterations=20,
     )
 
     call_n = {"n": 0}
@@ -158,7 +164,7 @@ async def test_terminate_before_refresh_starts_is_safe():
         tool_registry=tool_registry,
         context_manager=context_manager,
         on_session_end_refresh=mock_refresh,
-        max_iterations=5,  # well below COOLDOWN_TURNS
+        max_iterations=5,
     )
 
     streaming_event = asyncio.Event()

@@ -52,14 +52,12 @@ _diag_logger = logging.getLogger("agent.diag")
 # audit channel so per-call and per-session lines land together in daemon.log.
 _cache_logger = logging.getLogger("orbital.cache_audit")
 
-# Number of turns between automatic state checkpoints (turn-count trigger).
-# Also used as the global cooldown between ANY two refreshes (except token-pressure).
-COOLDOWN_TURNS = 50
-
-# Spec 013: minimum seconds between STARTED background consolidation passes.
-# Applies to every scheduler-routed trigger (agent_decided, turn_count,
+# Spec 013: minimum seconds between STARTED background memory passes.
+# Applies to every scheduler-routed trigger (agent_decided, over_budget,
 # agent_decided_coalesced) — NOT to token_pressure or the session boundary,
-# which stay synchronous and drain the gate instead.
+# which stay synchronous and drain the gate instead. (The every-50-iterations
+# turn-count trigger was removed by spec 089: the memory editor now runs when
+# a file is over budget, noticed in ContextManager.prepare().)
 REFRESH_DEBOUNCE_S = 300
 
 # Spec 013's single-flight gate and debounce originally lived on the AgentLoop,
@@ -206,6 +204,11 @@ class AgentLoop:
         # Periodic state refresh callback (async callable(trigger_name: str))
         # Injected by agent_manager so loop.py stays decoupled from workspace_files.
         self._on_session_end_refresh = on_session_end_refresh
+        # prepare() reports over-budget memory files here (spec 089 §4.2).
+        try:
+            context_manager._on_memory_over_budget = self._schedule_over_budget_edit
+        except AttributeError:
+            pass  # a context manager that cannot take the hook just never asks
 
         # Cancellation state (cancel_turn / terminate)
         self._task: asyncio.Task | None = None
@@ -928,8 +931,8 @@ class AgentLoop:
 
                 iteration += 1
 
-                # --- State refresh: turn-count trigger ---
-                # Track current iteration for agent-decided trigger callback.
+                # --- Memory pass bookkeeping ---
+                # Track current iteration for the checkpoint status line.
                 self._current_iteration = iteration
                 # Increment the per-refresh turn counter and expose it to the
                 # context_manager so the agent sees accurate metadata.
@@ -937,28 +940,10 @@ class AgentLoop:
                 if hasattr(self._context_manager, "_turns_since_last_update"):
                     self._context_manager._turns_since_last_update = self._turns_since_last_update
 
-                # Fire turn-count trigger when cooldown has elapsed — via the
-                # spec-013 scheduler (background, single-flight, debounced).
-                # Token-pressure trigger is handled separately (before compaction).
-                if (
-                    self._turns_since_last_update >= COOLDOWN_TURNS
-                    and self._on_session_end_refresh is not None
-                ):
-                    # While debounced/in-flight the counter stays >= COOLDOWN_TURNS
-                    # and this re-enters EVERY turn — log only on an actual spawn
-                    # (reviewer finding D: avoids per-turn log spam for up to
-                    # REFRESH_DEBOUNCE_S). Capture the count before spawn resets it.
-                    _turns = self._turns_since_last_update
-                    if self.schedule_checkpoint("turn_count").startswith(
-                        "Consolidation scheduled"
-                    ):
-                        logger.info(
-                            "State refresh: turn-count trigger at iteration %d "
-                            "(%d turns since last update)",
-                            iteration, _turns,
-                        )
-                else:
-                    self._maybe_consume_dirty()
+                # Pick up a coalesced/deferred checkpoint_state request. The
+                # automatic trigger is not here: prepare() reports over-budget
+                # files to _schedule_over_budget_edit on every call.
+                self._maybe_consume_dirty()
 
                 # Reset per-iteration cancellation flags. The
                 # cancellation-marker flag is sticky across cancelled
@@ -2030,8 +2015,8 @@ class AgentLoop:
             gate["last_merge_at"] = self._last_merge_at
         self._refresh_dirty = False           # fresh pass reads files fresh — covers all prior triggers
         # Reset at SPAWN (and again in _run_refresh's finally): turns counted
-        # while a slow pass runs are deliberately discarded — benign, and it
-        # prevents turn_count refire churn while the pass is in flight.
+        # while a slow pass runs are deliberately discarded — the status line
+        # counts from the latest pass.
         self._turns_since_last_update = 0
         # Mark the pass in flight for the context manager BEFORE create_task
         # (synchronous, so the very next prompt build renders the hygiene flag
@@ -2132,6 +2117,39 @@ class AgentLoop:
                 "minutes — the [MEMORY HYGIENE] flag may persist for several "
                 "turns while it runs; do not re-trigger checkpoint_state or "
                 "hand-edit the file in the meantime.")
+
+    def _schedule_over_budget_edit(self, over_keys: list[str]) -> bool:
+        """Automatic memory-editor trigger (spec 089 §4.2).
+
+        Called by ``ContextManager.prepare()`` with the Layer-1 files it just
+        measured over their soft budget — so it fires on files written by any
+        writer, external agents included. Synchronous and cheap: it only
+        spawns a background pass through the same project-scoped single-flight
+        gate and debounce as ``schedule_checkpoint``, and only when a live file
+        changed since the last pass and that pass is old enough
+        (``memory_editor.auto_run_due``). Never sets the dirty bit: the next
+        prepare() re-evaluates anyway. Returns True when it spawned.
+        """
+        if self._on_session_end_refresh is None or self._session.is_stopped():
+            return False
+        inflight, last_merge_at = self._refresh_gate_state()
+        if inflight is not None and not inflight.done():
+            return False
+        if time.monotonic() - last_merge_at < REFRESH_DEBOUNCE_S:
+            return False
+        if self._project_dir:
+            from agent_os.agent import memory_editor
+            from agent_os.agent.project_paths import ProjectPaths
+            if memory_editor.is_running(self._project_dir):
+                return False       # e.g. the pinned-chat coordinator's pass
+            if not memory_editor.auto_run_due(ProjectPaths(self._project_dir).orbital_dir):
+                return False
+        logger.info(
+            "Memory editor: over-budget trigger at iteration %d (%s)",
+            self._current_iteration, ", ".join(over_keys),
+        )
+        self._spawn_refresh("over_budget")
+        return True
 
     def _maybe_consume_dirty(self) -> None:
         """Turn-boundary pickup of a coalesced/deferred trigger (spec 013)."""

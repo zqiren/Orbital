@@ -561,20 +561,6 @@ def _fits_stripped(text: str, hard_budget: int) -> bool:
     return len(user_flags.strip_mem_comments(text)) <= hard_budget * 4
 
 
-def _flagged_lines(content: str) -> set[int]:
-    """0-based line indices spanned by every ``[user]``-flagged entry in
-    ``content`` (its bullet line through a trailing mem-comment line, if
-    present) — the set overflow trimming must never drop (spec §4.1
-    resolution 2)."""
-    lines: set[int] = set()
-    for e in user_flags.parse_entries(content):
-        if e.flagged:
-            lines.update(range(e.line_start, e.line_end + 1))
-    return lines
-
-
-_SECTION_HEADING = re.compile(r"^#{1,6}\s")
-
 # Lines naming an archive file are the ONLY route from a Layer-1 file to its
 # Layer-2 archive. On the real project the LESSONS_ARCHIVE pointer was the last
 # line of INDEX.md — the first casualty of a tail-dropping trim, which would
@@ -582,55 +568,12 @@ _SECTION_HEADING = re.compile(r"^#{1,6}\s")
 _ARCHIVE_POINTER = re.compile(r"_ARCHIVE\.md")
 
 
-def _flagged_sections(content: str) -> set[int]:
-    """0-based line indices of every ``##`` section containing a flagged entry.
-
-    The protected unit is the SECTION, not the flagged line. A ``[user]`` item
-    is a question, and the prose that makes it answerable is by definition
-    unflagged — so line-level protection reliably keeps the question and
-    destroys its briefing. That is exactly what happened to orbital-marketing
-    on 2026-07-27: ``- [user] **选方案 A / B / C**（默认 A）？`` survived while
-    the description of A, B and C did not.
-
-    Block-level would not have helped either: the briefing sat two blank lines
-    above its questions. Sections are the unit that actually holds a topic
-    together, so the whole section lives or dies as one.
-
-    Archive-pointer lines are pinned here too — they are unflagged navigation,
-    but losing one strands a whole archive.
-    """
-    lines = content.split("\n")
-    flagged = _flagged_lines(content)
-    protected: set[int] = {
-        i for i, l in enumerate(lines) if _ARCHIVE_POINTER.search(l)
-    }
-
-    heading_idx = [i for i, l in enumerate(lines) if _SECTION_HEADING.match(l)]
-    if not heading_idx:
-        # No headings means no sections to reason about — treating the whole
-        # file as one would make any flagged file entirely untrimmable. Fall
-        # back to protecting just the flagged entries, as before.
-        return protected | flagged
-
-    starts = heading_idx if heading_idx[0] == 0 else [0, *heading_idx]
-    for start, end in zip(starts, starts[1:] + [len(lines)]):
-        if any(i in flagged for i in range(start, end)):
-            protected.update(range(start, end))
-    return protected | flagged
-
-
-def _drop_unflagged_tail_first(
-    content: str, hard_budget: int, flagged_lines: set[int]
+def _drop_tail_first(
+    content: str, hard_budget: int, protected: set[int]
 ) -> tuple[str, bool]:
-    """Drop lines NOT in ``flagged_lines``, tail-first, until ``content``
-    fits ``hard_budget`` (comment-stripped) or no droppable line remains.
-
-    Shared by ``trim_volatile`` (the on-disk hard-cap backstop) and
-    ``_state_injected_view`` (the per-turn injected view) — both protect
-    flagged entries and drop unflagged prose first, tail-first, mirroring
-    the legacy head-keep/tail-drop direction; they differ only in what
-    happens when flagged content ALONE still exceeds the budget, which is
-    the caller's call, not this helper's. Returns ``(result, fits)``.
+    """Drop lines NOT in ``protected``, tail-first, until ``content`` fits
+    ``hard_budget`` (comment-stripped) or no droppable line remains.
+    Returns ``(result, fits)``.
     """
     lines = content.split("\n")
     n = len(lines)
@@ -643,66 +586,85 @@ def _drop_unflagged_tail_first(
 
     i = n - 1
     while i >= 0 and not _cur_fits():
-        if i not in flagged_lines:
+        if i not in protected:
             keep[i] = False
         i -= 1
 
     return "\n".join(lines[j] for j in range(n) if keep[j]), _cur_fits()
 
 
-def _state_injected_view(content: str, hard_budget: int) -> str:
-    """PROJECT_STATE's flag-aware ``inject_view`` overflow fallback.
+_ISO_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
-    ``content`` here has ALREADY had its mem-comments stripped by the
-    caller. Mirrors ``trim_volatile``'s protect-flagged/drop-unflagged-first
-    policy — but unlike the on-disk hard-cap trim, this is what the agent
-    sees THIS TURN, so it must always return something within budget: if
-    flagged-only content still exceeds it, the flagged lines themselves are
-    head-trimmed as a last resort (showing the newest flagged content beats
-    showing none, and this only ever loses the OLDEST flagged material, on a
-    view that refreshes every turn). Content with no flagged entries at all
-    falls back to the exact legacy ``_head_within`` behavior, byte-identical.
+
+def _state_omitted_note(count: int) -> str:
+    return (
+        f"\n[... {count} older PROJECT_STATE line(s) omitted from this view — "
+        "read orbital/PROJECT_STATE.md for the full text ...]"
+    )
+
+
+def _state_injected_view(raw: str, hard_budget: int) -> str:
+    """PROJECT_STATE's per-turn view: everything, or oldest-first omission.
+
+    A file over its hard budget hides its OLDEST lines from this turn's view
+    (by the ``created`` stamp every bullet carries; old pointer lines by
+    their date), never the newest. Agents append, so the old head-trim hid
+    exactly the current work. Lines without a stamp (written outside the
+    tools, not yet reconciled) count as newest. Nothing on disk changes —
+    the view refreshes every call, and the editor / size floor do the real
+    work. Only when that still cannot fit does it fall back to a head-trim.
     """
-    if _fits_stripped(content, hard_budget):
-        return content
+    stripped = user_flags.strip_mem_comments(raw)
+    if _fits_stripped(stripped, hard_budget):
+        return stripped
 
-    flagged_lines = _flagged_lines(content)
-    if not flagged_lines:
-        return _head_within(content, hard_budget)
+    from agent_os.agent import state_blocks
 
-    trimmed, fits = _drop_unflagged_tail_first(content, hard_budget, flagged_lines)
-    if fits:
-        return trimmed + _TRIM_NOTE
+    lines, blocks = state_blocks.parse(raw)
+    order: list[tuple[str, int, int]] = []        # (date, start, end)
+    for b in blocks:
+        if b.created and _ISO_DATE_RE.fullmatch(b.created):
+            order.append((b.created, b.start, b.end))
+    for idx, ln in enumerate(lines):
+        d = state_blocks.pointer_date(ln)
+        if d:
+            order.append((d, idx, idx))
+    order.sort()
 
-    # Flagged-only content alone still exceeds the budget — deterministic
-    # last resort: head-trim the flagged remainder itself rather than crash
-    # or return nothing useful.
-    return _head_within(trimmed, hard_budget)
+    body_budget = max(1, int(hard_budget - est_tokens(_state_omitted_note(999))))
+    hidden: set[int] = set()
+    omitted = 0
+    for _date, start, end in order:
+        if _fits_stripped(
+            "\n".join(ln for i, ln in enumerate(lines) if i not in hidden), body_budget
+        ):
+            break
+        hidden.update(range(start, end + 1))
+        omitted += 1
+    kept = user_flags.strip_mem_comments(
+        "\n".join(ln for i, ln in enumerate(lines) if i not in hidden)
+    )
+    if not _fits_stripped(kept, body_budget):
+        return _head_within(kept, hard_budget)
+    return kept.rstrip("\n") + _state_omitted_note(omitted) + "\n"
 
 
 def inject_view(content: str | None, key: str, hard_budget: int) -> str | None:
     """Return the injected view of a Layer-1 file: newest-within-budget.
 
     Durable files (decisions/lessons): inject the newest entries that fit, PLUS
-    the oldest ``PROTECT_OLDEST`` foundational entries. Volatile files
-    (state/index): head-trim. Returns the SAME object unchanged when everything
-    fits, so a healthy project injects everything and the prefix cache is kept.
+    the oldest ``PROTECT_OLDEST`` foundational entries. INDEX: head-trim.
+    Returns the SAME object unchanged when everything fits, so a healthy
+    project injects everything and the prefix cache is kept.
 
     PROJECT_STATE's ``<!--mem ...-->`` comments are daemon-managed machine
-    metadata (spec §4.1) — stripped here before anything else, so the agent
-    never sees them and they never count against (or get counted toward
-    filling) the budget. A no-op for content without the grammar.
-
-    The state overflow fallback is flag-aware (spec §4.1 resolution 2):
-    ``trim_volatile`` only runs at the session-end hard-cap pass, so without
-    this a state file temporarily over hard budget mid-session could still
-    have a ``[user]``-flagged entry cut out of THIS turn's agent-visible
-    context by a plain head-trim. See ``_state_injected_view``.
+    metadata — stripped here before anything else, so the agent never sees
+    them and they never count against the budget. Its overflow view drops the
+    OLDEST lines first (see ``_state_injected_view``).
     """
     if not content:
         return content
     if key == "state":
-        content = user_flags.strip_mem_comments(content)
         return _state_injected_view(content, hard_budget)
     if key in VOLATILE_KEYS or key not in ENTRY_MARKERS:
         return _head_within(content, hard_budget)
@@ -748,14 +710,14 @@ def entry_count(content: str | None, key: str) -> int:
 
 @dataclass(frozen=True)
 class RefreshView:
-    """Consolidation-scheduler state snapshot threaded into ``soft_flag``.
+    """Memory-editor scheduler state snapshot threaded into ``soft_flag``.
 
     The flag renders as a state machine driven by this view, not a repeating
     alarm. Incident (orbital-marketing, 2026-07-09): the flag re-fired
     identically every turn while a background pass was in flight, so the agent
     read "still over budget" as "checkpoint_state failed" and hand-trimmed the
-    file mid-pass. ``last_outcome`` uses run_session_end_routine's vocabulary:
-    "llm_merged" | "backstop_only" | "failed" | "no_delta" | None.
+    file mid-pass. ``last_outcome`` uses run_session_end_routine's vocabulary
+    (``EDITOR_OK_OUTCOMES`` / ``EDITOR_FAILED_OUTCOMES``), or None.
     """
     in_flight: bool = False
     in_flight_since_turn: int | None = None
@@ -763,27 +725,40 @@ class RefreshView:
     last_turn: int | None = None
 
 
+# Outcomes of a pass whose editor ran (the two legacy names are what a pass
+# from before the editor reported; a session can carry one across an upgrade).
+EDITOR_OK_OUTCOMES = ("edited", "no_change", "llm_merged", "llm_merged_archived")
+# A pass whose editor could not run: only the deterministic floor did.
+EDITOR_FAILED_OUTCOMES = ("backstop_only", "failed")
+
 # Escalation band: within this fraction of the hard cap, the flag warns about
-# the deterministic demote-to-archive that fires at the cap.
+# the deterministic floor that fires at the cap.
 _HARD_CAP_WARN_FRACTION = 0.9
+
+
+def over_soft_budget(content: str | None, key: str) -> bool:
+    """True when ``key``'s content is over its soft budget — the editor's
+    trigger, measured exactly the way the hygiene flag measures it."""
+    budgets = FILE_BUDGETS.get(key)
+    if not content or not budgets:
+        return False
+    return est_tokens(_budget_text(content, key)) > budgets["soft"]
 
 
 def soft_flag(
     content: str | None, key: str, refresh: RefreshView | None = None
 ) -> str | None:
-    """A persistent nudge while a file is over its soft threshold, or None.
+    """A persistent note while a file is over its soft threshold, or None.
 
     Token bound + entry count for legibility. The caller MUST place this in the
     dynamic/uncached slot (never the cached prefix) — a churning flag in the
     prefix busts the cache every turn.
 
-    The nudge is state-aware via ``refresh``: while a consolidation pass is in
-    flight it says "no action needed" (never re-suggests the tool or a manual
-    edit); after a pass that couldn't run its LLM merge, the manual edit is the
-    sanctioned path (OCC makes concurrent hand-edits safe); after a successful
-    merge that still leaves the file over budget, the remainder is genuinely
-    large and only a manual trim can help. Near the hard cap an escalation
-    warning is appended in every state.
+    Over-budget files are tidied automatically (the memory editor runs in the
+    background, archiving stale entries by id with a pointer left behind), so
+    no state of this flag asks the agent to do anything but keep its lines
+    true. It is state-aware via ``refresh`` so an in-flight pass never reads
+    as a failure. Near the hard cap an escalation note is appended.
     """
     budgets = FILE_BUDGETS.get(key)
     if not content or not budgets:
@@ -806,36 +781,36 @@ def soft_flag(
             if r.in_flight_since_turn is not None else ""
         )
         body = (
-            f"{head} — a consolidation pass is in flight{since}; no action "
-            "needed. Do NOT re-trigger checkpoint_state or hand-edit this file "
-            "— the flag may persist until the pass lands."
+            f"{head} — the memory editor is tidying it in the background{since}; "
+            "no action needed. Do not trim it by hand; keep recording new facts "
+            "as usual — the flag may persist until the pass lands."
         )
-    elif r.last_outcome in ("backstop_only", "failed"):
+    elif r.last_outcome in EDITOR_FAILED_OUTCOMES:
         at = f" (turn {r.last_turn})" if r.last_turn is not None else ""
         body = (
-            f"{head} — the last background consolidation{at} could not run its "
-            "LLM merge (deterministic backstop only), so re-triggering "
-            "checkpoint_state will not reduce this file; edit the file directly "
-            "to merge duplicates and trim stale entries."
+            f"{head} — the last automatic tidy{at} could not run its editor "
+            "(only the size floor ran); it retries on its own once the file "
+            "changes again. No action needed beyond keeping lines true: "
+            "overwrite any line that no longer is."
         )
-    elif r.last_outcome == "llm_merged":
+    elif r.last_outcome in EDITOR_OK_OUTCOMES:
         at = f" at turn {r.last_turn}" if r.last_turn is not None else ""
         body = (
-            f"{head} — consolidation already ran{at} and this is what remains; "
-            "the content is genuinely large. If entries are stale, edit the "
-            "file directly to trim them; otherwise no action is useful."
+            f"{head} — tidied{at}; what remains is recent or still live. No "
+            "action needed; overwrite any line that is no longer true."
         )
     else:
         body = (
-            f"{head} — call the checkpoint_state tool to consolidate (merge "
-            "duplicates, supersede stale entries), or edit the file directly."
+            f"{head} — over its soft budget; the memory editor tidies it "
+            "automatically in the background (stale entries move to the archive, "
+            "leaving an [archived … id:…] pointer). No action needed."
         )
 
     if toks >= hard * _HARD_CAP_WARN_FRACTION:
         body += (
-            f" ⚠ {max(0, int(hard - toks))} tok from the hard cap ({hard}): at "
-            "the cap, over-budget durable entries are demoted to the archive "
-            "automatically."
+            f" ⚠ {max(0, int(hard - toks))} tok from the hard cap ({hard}): past "
+            "it, the oldest entries move to the archive automatically, each "
+            "leaving a pointer."
         )
     return body
 
@@ -945,27 +920,14 @@ def split_for_demotion(content: str, key: str, hard_budget: int) -> tuple[str, s
 
 
 def trim_volatile(content: str, hard_budget: int) -> str:
-    """Trim oldest (tail) content of a volatile file to fit its budget.
+    """INDEX.md's size floor: trim tail lines until the file fits.
 
-    Volatile = disposable; no archive. Head-keep mirrors ``_head_within`` so the
-    current status/overview survives.
-
-    Overflow never deletes a ``[user]``-flagged entry (spec §4.1 resolution
-    2): every line belonging to a flagged bullet (its comment line included)
-    is protected. Unflagged prose is dropped tail-first — oldest first, same
-    direction as the legacy head-keep/tail-drop shape — until the file fits.
-    Budget fitting is measured on the comment-stripped length (resolution 1:
-    mem-comments never count against the cap), so a comment-heavy file that
-    already fits once its machine metadata is excluded is left untouched.
-    If flagged entries alone still exceed the cap after every unflagged line
-    is gone, the content is returned COMPLETELY UNCHANGED — no partial or
-    silent deletion of a user-facing obligation — and the existing soft-cap
-    hygiene nudge (``soft_flag``) keeps signalling that a manual/checkpoint
-    pass is needed, exactly as it does today.
-
-    A file with no ``[user]``-flagged entries (including any file that
-    hasn't adopted the grammar at all, e.g. INDEX.md) falls back to the
-    original head-trim behavior unchanged.
+    INDEX is regenerable navigation with no archive, so this is a plain
+    head-keep / tail-drop — except for lines naming an ``*_ARCHIVE.md`` file,
+    which are the only route to an archive and are never dropped. Fitting is
+    measured comment-stripped. When the protected lines alone exceed the
+    budget the content is returned unchanged. PROJECT_STATE no longer comes
+    through here — its floor is age-based (``floor_state``).
     """
     if not content:
         return content
@@ -973,11 +935,11 @@ def trim_volatile(content: str, hard_budget: int) -> str:
     if _fits_stripped(content, hard_budget):
         return content
 
-    # Protect the SECTION around a flag, not just the flagged line, so a
-    # question keeps the briefing that makes it answerable. Archive-pointer
-    # lines are pinned here too — see _flagged_sections.
-    flagged_lines = _flagged_sections(content)
-    if not flagged_lines:
+    protected = {
+        i for i, line in enumerate(content.split("\n"))
+        if _ARCHIVE_POINTER.search(line)
+    }
+    if not protected:
         # _head_within appends its own note; leave its budgeting alone.
         return _head_within(content, hard_budget)
 
@@ -985,13 +947,217 @@ def trim_volatile(content: str, hard_budget: int) -> str:
     # otherwise the result lands a note's width OVER the target and the file
     # stays permanently over budget by exactly that margin.
     fit_budget = max(1, int(hard_budget - est_tokens(_TRIM_NOTE)))
-    trimmed, fits = _drop_unflagged_tail_first(content, fit_budget, flagged_lines)
+    trimmed, fits = _drop_tail_first(content, fit_budget, protected)
     if not fits:
-        # Flagged entries alone exceed the cap even with every unflagged
-        # line removed — leave the file untouched.
         return content
 
     return trimmed + _TRIM_NOTE
+
+
+# ---------------------------------------------------------------------------
+# Pointers + the deterministic floor (spec 089 §4.3, §4.4).
+# ---------------------------------------------------------------------------
+
+# PROJECT_STATE lines younger than this are never cut by the floor.
+STATE_PROBATION_DAYS = 14
+
+_POINTER_SUMMARY_CHARS = 60
+
+
+def pointer_line(day: str, ids: list[str], summary: str, archive_filename: str) -> str:
+    """``[archived YYYY-MM-DD id:<id>] <one-line pointer> → <ARCHIVE_FILE>``.
+
+    The ONE pointer format every archiving path writes, so a future reader can
+    grep the archive for ``id:<id>`` and read only that entry.
+    """
+    summary = " ".join((summary or "").replace("→", "->").split()) or "older entry"
+    tag = " ".join(f"id:{i}" for i in ids if i)
+    head = f"[archived {day} {tag}]" if tag else f"[archived {day}]"
+    return f"{head} {summary} → {archive_filename}"
+
+
+def pointer_summary(text: str, limit: int = _POINTER_SUMMARY_CHARS) -> str:
+    """A pointer's default one-liner: the entry's own opening words."""
+    text = " ".join(text.replace("**", "").split())
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+def _is_pointer(line: str) -> bool:
+    from agent_os.agent import state_blocks
+    return state_blocks.pointer_date(line) is not None
+
+
+@dataclass
+class FloorResult:
+    content: str               # new live content (the input object when untouched)
+    archived: str              # moved blocks, verbatim ("" when none)
+    moved_ids: list[str]
+    dropped_pointers: int
+    over_by: int               # tokens still over target afterwards (0 = fits)
+
+
+def floor_state(
+    content: str, target_tokens: int, today: str,
+    archive_filename: str = "PROJECT_STATE_ARCHIVE.md",
+) -> FloorResult:
+    """PROJECT_STATE's last-resort size floor: age-based, never recent.
+
+    Candidates are bullets whose ``created`` stamp is older than
+    ``STATE_PROBATION_DAYS`` and pointer lines dated older than that, oldest
+    first. A bullet moves to the archive verbatim (its mem-comment keeps its
+    id) and a pointer line takes its place; an old pointer is simply removed
+    (its body is already archived). Nothing inside the probation window is
+    ever a candidate, so when candidates run out before the target the file
+    stays over budget — over budget beats losing current work — and
+    ``over_by`` says by how much.
+    """
+    from datetime import timedelta
+    from agent_os.agent import state_blocks
+
+    def measure(text: str) -> float:
+        return est_tokens(_budget_text(text, "state"))
+
+    if not content or measure(content) <= target_tokens:
+        return FloorResult(content, "", [], 0, 0)
+
+    lines, blocks = state_blocks.parse(content)
+    cutoff = (date.fromisoformat(today) - timedelta(days=STATE_PROBATION_DAYS)).isoformat()
+    candidates: list[tuple[str, int, object]] = []
+    for b in blocks:
+        if b.id and b.created and _ISO_DATE_RE.fullmatch(b.created) and b.created < cutoff:
+            candidates.append((b.created, b.start, b))
+    for idx, line in enumerate(lines):
+        d = state_blocks.pointer_date(line)
+        if d and d < cutoff:
+            candidates.append((d, idx, None))
+    candidates.sort(key=lambda c: (c[0], c[1]))
+
+    # start line -> (end line, replacement lines)
+    replaced: dict[int, tuple[int, list[str]]] = {}
+
+    def render() -> str:
+        out: list[str] = []
+        i = 0
+        while i < len(lines):
+            if i in replaced:
+                end, repl = replaced[i]
+                out.extend(repl)
+                i = end + 1
+                continue
+            out.append(lines[i])
+            i += 1
+        return "\n".join(out)
+
+    moved: list = []
+    dropped = 0
+    current = content
+    for _d, start, block in candidates:
+        if measure(current) <= target_tokens:
+            break
+        if block is None:
+            replaced[start] = (start, [])
+            dropped += 1
+        else:
+            ptr = pointer_line(
+                today, [block.id], pointer_summary(block.text), archive_filename)
+            if len(ptr) >= len("\n".join(block.content_lines)):
+                continue       # a pointer this long would GROW the file
+            replaced[start] = (block.end, [ptr])
+            moved.append(block)
+        current = render()
+
+    over_by = max(0, int(measure(current) - target_tokens))
+    if not moved and not dropped:
+        return FloorResult(content, "", [], 0, over_by)
+    moved.sort(key=lambda b: b.start)
+    return FloorResult(
+        current,
+        "\n".join(b.raw for b in moved),
+        [b.id for b in moved],
+        dropped,
+        over_by,
+    )
+
+
+def split_out_pointer_lines(raw: str) -> tuple[str, list[str]]:
+    """Separate pointer lines from an entry chunk.
+
+    In DECISIONS/LESSONS a pointer line left between two entries parses as
+    the tail of the entry ABOVE it. When that entry later moves to the
+    archive, its pointers must stay in the live file — they are the route to
+    OTHER archived entries.
+    """
+    kept: list[str] = []
+    pointers: list[str] = []
+    for line in raw.split("\n"):
+        (pointers if _is_pointer(line) else kept).append(line)
+    return "\n".join(kept), pointers
+
+
+def _entry_title(raw: str, key: str) -> str:
+    first_line, _rest = _first_line_split(raw)
+    title, _meta = _parse_meta(first_line)
+    return re.sub(r"^(##\s+|\d+\.\s+)", "", title).strip()
+
+
+def entry_id(raw: str) -> str | None:
+    first_line, _rest = _first_line_split(raw)
+    return _parse_meta(first_line)[1].get("id") or None
+
+
+def demote_with_pointers(
+    content: str, key: str, target_tokens: int, today: str, archive_filename: str,
+) -> tuple[str, str, list[str]]:
+    """DECISIONS/LESSONS floor: demote coldest-``touched`` entries, by id.
+
+    Same order and protection as ``split_for_demotion`` (oldest
+    ``PROTECT_OLDEST`` and ``pinned`` entries never move), but every demoted
+    entry leaves a ``pointer_line`` in its place, pointer lines sitting in a
+    demoted chunk stay behind, and an entry without an id is never moved
+    (the caller stamps ids first; an unaddressable entry could not be
+    recalled). Returns ``(kept, demoted_text, demoted_ids)``.
+    """
+    marker = ENTRY_MARKERS[key]
+
+    def measure(text: str) -> float:
+        return est_tokens(_budget_text(text, key))
+
+    pre, raws = _split_entries(content, marker)
+    if len(raws) < 2 or measure(content) <= target_tokens:
+        return content, "", []
+
+    protected = set(range(min(PROTECT_OLDEST, len(raws))))
+    info = []
+    for i, raw in enumerate(raws):
+        first_line, _rest = _first_line_split(raw)
+        _title, meta = _parse_meta(first_line)
+        if meta.get("tag") == "pinned" or not meta.get("id"):
+            protected.add(i)
+        info.append((meta.get("touched", "0000-00-00"), i, meta.get("id")))
+    candidates = sorted((t, i, eid) for t, i, eid in info if i not in protected)
+
+    new_raws = list(raws)
+    demoted: list[tuple[int, str]] = []
+    ids: list[str] = []
+    for _touched, i, eid in candidates:
+        if measure(pre + "".join(new_raws)) <= target_tokens:
+            break
+        body, pointers = split_out_pointer_lines(raws[i])
+        trailing = raws[i][len(raws[i].rstrip("\n")):] or "\n"
+        ptr = pointer_line(
+            today, [eid], pointer_summary(_entry_title(raws[i], key), 80),
+            archive_filename,
+        )
+        if len(ptr) >= len(body.strip()):
+            continue           # a pointer this long would GROW the file
+        new_raws[i] = "\n".join([ptr, *[p for p in pointers if p.strip()]]) + trailing
+        demoted.append((i, body.rstrip("\n") + "\n"))
+        ids.append(eid)
+
+    if not demoted:
+        return content, "", []
+    demoted.sort()
+    return pre + "".join(new_raws), "\n".join(b for _i, b in demoted), ids
 
 
 # ---------------------------------------------------------------------------

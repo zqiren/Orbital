@@ -188,7 +188,8 @@ def _truncate_content(content: Any) -> Any:
     return content
 
 
-def _iter_messages(path: str, needle: str | None) -> Iterator[dict]:
+def _iter_messages(path: str, needle: str | None,
+                   since: datetime | None = None) -> Iterator[dict]:
     with open(path, "r", encoding="utf-8", errors="replace") as stream:
         for raw in stream:
             if not raw.strip():
@@ -199,6 +200,12 @@ def _iter_messages(path: str, needle: str | None) -> Iterator[dict]:
                 continue
             if not isinstance(record, dict) or record.get("role") == "meta":
                 continue
+            if since is not None:
+                # A row with no readable timestamp cannot be shown to be
+                # recent, so a `since` read leaves it out.
+                stamp = _parse_iso_timestamp(record.get("timestamp"))
+                if stamp is None or stamp < since:
+                    continue
             if needle is not None and not _content_contains(record.get("content"), needle):
                 continue
             yield record
@@ -250,6 +257,14 @@ class ReadSessionTool(Tool):
                     "type": "string",
                     "description": "Optional case-insensitive literal content filter.",
                 },
+                "since": {
+                    "type": "string",
+                    "description": (
+                        "Optional ISO-8601 lower bound: only messages at or "
+                        "after this time (messages without a timestamp are "
+                        "left out)."
+                    ),
+                },
             },
             "required": ["session_uuid"],
             "additionalProperties": False,
@@ -281,6 +296,11 @@ class ReadSessionTool(Tool):
             if grep is not None and not isinstance(grep, str):
                 return ToolResult(content="Error: grep must be a string")
             needle = grep.casefold() if grep is not None else None
+            since = None
+            if arguments.get("since") is not None:
+                since = _parse_iso_timestamp(arguments["since"])
+                if since is None:
+                    return ToolResult(content="Error: since must be a valid ISO-8601 timestamp")
 
             authorized = any(
                 isinstance(row, dict) and row.get("session_uuid") == stem
@@ -333,12 +353,12 @@ class ReadSessionTool(Tool):
 
             # Pass one counts matches; pass two retains only the requested page,
             # keeping memory bounded by the clamped page size even for large logs.
-            total = sum(1 for _ in _iter_messages(path, needle))
+            total = sum(1 for _ in _iter_messages(path, needle, since))
             end = max(0, total - offset)
             start = max(0, end - limit)
             messages = []
             if end > start:
-                for index, record in enumerate(_iter_messages(path, needle)):
+                for index, record in enumerate(_iter_messages(path, needle, since)):
                     if index < start:
                         continue
                     if index >= end:

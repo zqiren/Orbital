@@ -5,7 +5,8 @@
 """Integration test (Test 5) — CONTEXT.md session-end lifecycle.
 
 Uses a mock LLM (no live API key) to drive run_session_end_routine and verify:
-  - an existing CONTEXT.md is UPDATED (overwritten), not destroyed
+  - an existing CONTEXT.md (now INDEX.md — the one file the memory editor may
+    rewrite whole, spec 089) is UPDATED (overwritten), not destroyed
   - old flat "- entry" content is replaced by the new section format the LLM
     is now asked to produce
   - the updated CONTEXT.md is then injected into the next prepare() context
@@ -47,7 +48,7 @@ class _JsonProvider:
     def __init__(self, payload: dict):
         self._text = json.dumps(payload)
 
-    async def complete(self, messages, disable_reasoning=False):
+    async def complete(self, messages, tools=None, disable_reasoning=False):
         return _Resp(self._text)
 
     async def stream(self, messages, tools=None, **kwargs):
@@ -86,14 +87,16 @@ async def test_session_end_restructures_old_context_md(tmp_path):
     })
 
     await run_session_end_routine(
-        session, provider, mgr, session_uuid=session.session_uuid,
+        session, provider, mgr, session_uuid=session.session_uuid, force=True,
     )
 
     updated = mgr.read("index")
     assert updated is not None
     assert "## Overview" in updated and "## Key Files" in updated
-    # old flat-only content replaced (no longer just dash entries)
-    assert updated == NEW_CONTEXT
+    # old flat-only content replaced (no longer just dash entries); the write
+    # path self-heals the <!--format--> header on top.
+    assert updated.endswith(NEW_CONTEXT + "\n")
+    assert "- **Tencent:** vendor" not in updated
 
 
 @pytest.mark.asyncio
@@ -107,7 +110,7 @@ async def test_updated_context_md_appears_in_next_prepare(tmp_path):
 
     provider = _JsonProvider({"project_state": "s", "index": NEW_CONTEXT})
     await run_session_end_routine(
-        session, provider, mgr, session_uuid=session.session_uuid,
+        session, provider, mgr, session_uuid=session.session_uuid, force=True,
     )
 
     # Fresh session reads the updated file from disk

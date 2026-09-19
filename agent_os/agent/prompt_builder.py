@@ -100,10 +100,10 @@ _TOOL_DESCRIPTIONS: dict[str, str] = {
     "update_trigger": "Update an existing trigger's settings",
     "delete_trigger": "Delete a trigger from this project",
     "checkpoint_state": (
-        "Consolidate the project state files (merge duplicates, supersede stale "
-        "entries) to relieve inflation. Your write/edit calls already saved the "
-        "content; this does NOT persist anything new. Call ONLY when a "
-        "[MEMORY HYGIENE] flag shows a file is over its soft budget."
+        "Ask the background memory editor to tidy the memory files now "
+        "(archive stale entries by id, merge duplicates). Over-budget files are "
+        "tidied automatically, so this is rarely needed. It never records new "
+        "facts — write those yourself with write/edit."
     ),
     "mark_task_complete": (
         "Signal that the current queued task is finished. Exits the loop "
@@ -550,8 +550,8 @@ class PromptBuilder:
                 "- On confirmation: (1) write the agreed Goals to\n"
                 f"  {context.workspace}/orbital/instructions/project_goals.md using the `write`\n"
                 "  tool (Mission, Triggers, Scope, Rules, Preferences; under 1500 words), then\n"
-                "  (2) call the `checkpoint_state` tool to seed/tidy PROJECT_STATE.md and INDEX.md\n"
-                "     (a one-time bootstrap seed — afterward call it only on a [MEMORY HYGIENE] flag).\n"
+                "  (2) write PROJECT_STATE.md (current focus, in-progress work, next steps) and\n"
+                "     INDEX.md (navigation map) in orbital/ yourself with the `write` tool.\n"
                 "- After writing, announce readiness and begin working."
             )
         if content is None:
@@ -769,17 +769,28 @@ class PromptBuilder:
             "  intact — do not shorten a real lesson to save space.\n"
             "- INDEX.md: a NAVIGATION MAP only — the important files/dirs, ONE sentence each\n"
             "  ('path — what it is'). It is how a future session finds things; it is NOT where\n"
-            "  decisions, status, or lessons go. When older entries are archived, INDEX points\n"
-            "  to DECISIONS_ARCHIVE.md / LESSONS_ARCHIVE.md (read those on demand).\n"
+            "  decisions, status, or lessons go. Older entries live in DECISIONS_ARCHIVE.md /\n"
+            "  LESSONS_ARCHIVE.md / PROJECT_STATE_ARCHIVE.md (read on demand, see below).\n"
             "Update them proactively with the write/edit tools as you work — the system stamps\n"
-            "bookkeeping metadata and merges duplicates at session end, so just keep them\n"
-            "accurate. Update INDEX.md whenever the set of important files changes (a new\n"
-            "artifact, a key file, a renamed path); one sentence per file, detail lives in the\n"
-            "file itself.\n"
+            "bookkeeping metadata, and when a file grows past its budget a background editor\n"
+            "automatically moves stale entries to its archive, leaving a pointer line. So just\n"
+            "keep them accurate; never trim them to save space. Update INDEX.md whenever the\n"
+            "set of important files changes (a new artifact, a key file, a renamed path); one\n"
+            "sentence per file, detail lives in the file itself.\n"
             "Each file begins with a <!--format--> header stating its contract — follow it\n"
             "(the system restores it if removed). If you catch yourself writing a\n"
             "date, status, or decision into INDEX.md, stop — it belongs in\n"
             "PROJECT_STATE.md or DECISIONS.md.\n\n"
+            "Sources and pointers:\n"
+            "- Follow the pointer. When memory names a file as the source of truth for a kind\n"
+            "  of output, open that file before producing that output; a derivative described\n"
+            "  as aligned with it does not substitute.\n"
+            "- Never name a file as your source unless you read it in this session.\n"
+            "- A line `[archived DATE id:X] … → FILE` means that entry moved to FILE. To\n"
+            "  follow it, grep FILE for `id:X` and read only that entry (read with\n"
+            "  offset/limit around the match). For a topic with no pointer, grep the\n"
+            "  *_ARCHIVE.md files for it and read only the matching entries.\n"
+            "  Never read an archive file whole.\n\n"
             "When you produce deliverables the user will want to keep (reports, generated code,\n"
             "exports, summaries, documentation), place them in the workspace at a path that\n"
             "fits the project — e.g., docs/, src/, output/, or wherever the user already\n"
@@ -997,16 +1008,15 @@ class PromptBuilder:
                 if context.refresh_in_flight_since_turn is not None else ""
             )
             return (
-                f"State checkpoint: consolidation pass in flight{since} — it "
+                f"State checkpoint: memory editor pass in flight{since} — it "
                 "can take a few minutes. Do not re-trigger checkpoint_state "
-                "and do not hand-edit memory files; [MEMORY HYGIENE] flags "
+                "and do not trim memory files by hand; [MEMORY HYGIENE] flags "
                 "may persist until the pass lands."
             )
         if context.last_state_update_turn is None:
             return (
-                "State checkpoint: no consolidation yet this session. "
-                "Use the checkpoint_state tool only when a [MEMORY HYGIENE] flag "
-                "shows a memory file is over its soft budget."
+                "State checkpoint: no memory editor pass yet this session. "
+                "Over-budget memory files are tidied automatically."
             )
         # No per-turn delta here: "N turns ago" changed the block's bytes on
         # every call while saying nothing the agent acts on (checkpoint_state is
@@ -1018,9 +1028,9 @@ class PromptBuilder:
         ]
         if context.last_state_update_outcome in ("backstop_only", "failed"):
             lines.append(
-                "That pass could not run its LLM merge (deterministic backstop "
-                "only) — if a [MEMORY HYGIENE] flag persists, edit the file "
-                "directly instead of re-triggering checkpoint_state."
+                "That pass could not run its memory editor (deterministic "
+                "backstop only); it retries on its own once the files change — "
+                "no need to re-trigger checkpoint_state."
             )
         return "\n".join(lines)
 

@@ -6,7 +6,9 @@
 no orphan .tmp files left in workspace.
 
 Scenario:
-  - Agent loop is running; turn-count trigger fires at turn 15.
+  - Agent loop is running; its first prepare() reports an over-budget memory
+    file, which starts a background memory pass (spec 089 — the automatic
+    trigger that replaced the turn-count one).
   - Refresh routine (run_session_end_routine) is artificially slowed with a
     sleep to create a window for the Stop to land mid-refresh.
   - loop.terminate() is called while the refresh is in-flight.
@@ -31,7 +33,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from agent_os.agent import workspace_files as wsf_module
-from agent_os.agent.loop import AgentLoop, COOLDOWN_TURNS
+from agent_os.agent.loop import AgentLoop
 from agent_os.agent.project_paths import ProjectPaths
 from agent_os.agent.providers.types import LLMResponse, TokenUsage
 from agent_os.agent.session import Session, persist_user_row
@@ -95,7 +97,9 @@ def _find_tmp_files(workspace: str) -> list[str]:
 
 
 class _TrackingContextManager:
-    def __init__(self, session):
+    def __init__(self, session, *, over_budget: bool = True):
+        self._over_budget = over_budget
+        self._on_memory_over_budget = None     # installed by AgentLoop
         self.model_context_limit = 128_000
         self.should_compact = MagicMock(return_value=False)
         self.usage_percentage = 0.0
@@ -104,6 +108,8 @@ class _TrackingContextManager:
         self._turns_since_last_update: int = 0
 
     def prepare(self):
+        if self._over_budget and self._on_memory_over_budget is not None:
+            self._on_memory_over_budget(["state"])
         return [{"role": "system", "content": "You are helpful."}]
 
 
@@ -140,7 +146,7 @@ async def test_stop_during_refresh_leaves_no_tmp_files():
     The refresh routine is slowed with a sleep. terminate() is called while
     the sleep is active. After the loop exits, scan orbital/ for .tmp files.
     """
-    total_turns = COOLDOWN_TURNS + 5  # enough to trigger turn-count at turn 15
+    total_turns = 10
 
     with tempfile.TemporaryDirectory() as workspace:
         pp = ProjectPaths(workspace)
@@ -320,7 +326,7 @@ async def test_stop_before_refresh_no_tmp_files():
         wfm = WorkspaceFileManager(workspace)
         wfm.ensure_dir()
 
-        ctx = _TrackingContextManager(session)
+        ctx = _TrackingContextManager(session, over_budget=False)
         registry = _UniqueRegistry()
 
         stream_started = asyncio.Event()
@@ -426,7 +432,7 @@ async def test_cancel_propagates_to_refresh_task():
             tool_registry=registry,
             context_manager=ctx,
             on_session_end_refresh=slow_refresh_callback,
-            max_iterations=COOLDOWN_TURNS + 5,
+            max_iterations=20,
         )
 
         call_n = {"n": 0}

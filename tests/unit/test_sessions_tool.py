@@ -374,3 +374,70 @@ class TestRegistration:
 
         assert "list_sessions" not in registry.tool_names()
         assert "read_session" not in registry.tool_names()
+
+
+# ---------------------------------------------------------------------------
+# read_session `since` (spec 089 §4.2): the memory editor reads only what
+# happened after its last run.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def dated_session_workspace(tmp_path):
+    sessions = tmp_path / "orbital" / "sessions"
+    sessions.mkdir(parents=True)
+    records = [
+        {"role": "meta", "event": "session_start", "timestamp": "2026-09-17T09:00:00+00:00"},
+        {"role": "user", "timestamp": "2026-09-17T10:00:00+00:00", "content": "old ask"},
+        {"role": "assistant", "timestamp": "2026-09-17T10:01:00Z", "content": "old answer"},
+        {"role": "user", "content": "no timestamp"},
+        {"role": "user", "timestamp": "2026-09-18T08:00:00+00:00", "content": "booth prep done"},
+        {"role": "assistant", "timestamp": "2026-09-18T08:05:00+08:00", "content": "noted, booth"},
+    ]
+    with (sessions / "legacy_uuid.jsonl").open("w", encoding="utf-8") as stream:
+        for record in records:
+            stream.write(json.dumps(record) + "\n")
+    return tmp_path
+
+
+class TestReadSessionSince:
+    def test_since_keeps_only_newer_messages(self, dated_session_workspace):
+        result = _result(
+            _read_tool(dated_session_workspace),
+            session_uuid="legacy_uuid",
+            since="2026-09-18T00:00:00Z",
+        )
+        assert [m["content"] for m in result["messages"]] == ["booth prep done", "noted, booth"]
+        assert result["total_matches"] == 2
+
+    def test_since_compares_instants_across_timezones(self, dated_session_workspace):
+        # 08:05+08:00 is 00:05Z — after 00:00Z, before 01:00Z.
+        result = _result(
+            _read_tool(dated_session_workspace),
+            session_uuid="legacy_uuid",
+            since="2026-09-18T01:00:00Z",
+        )
+        assert [m["content"] for m in result["messages"]] == ["booth prep done"]
+
+    def test_since_combines_with_grep(self, dated_session_workspace):
+        result = _result(
+            _read_tool(dated_session_workspace),
+            session_uuid="legacy_uuid",
+            since="2026-09-17T00:00:00Z",
+            grep="booth",
+        )
+        assert result["total_matches"] == 2
+
+    def test_without_since_undated_messages_still_count(self, dated_session_workspace):
+        result = _result(_read_tool(dated_session_workspace), session_uuid="legacy_uuid")
+        assert result["total_matches"] == 5
+
+    def test_invalid_since_is_a_tool_error(self, dated_session_workspace):
+        result = _read_tool(dated_session_workspace).execute(
+            session_uuid="legacy_uuid", since="yesterday")
+        assert result.content.startswith("Error:")
+        assert "since" in result.content
+
+    def test_schema_advertises_since(self):
+        tool = ReadSessionTool(workspace="/tmp", list_sessions=lambda: [])
+        assert "since" in tool.parameters["properties"]

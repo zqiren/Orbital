@@ -563,14 +563,16 @@ class TestConsolidationCoordinator:
         gate.set()
 
     @pytest.mark.asyncio
-    async def test_pass_windows_since_last_pass(self):
-        """The pass hands run_session_end_routine the message index of the
-        previous pass (in-memory) so each pass distills only the new tail."""
+    async def test_pass_runs_the_memory_editor_with_the_projects_sessions(self):
+        """Spec 089: the pass is the memory editor (single flight per
+        project). It no longer windows the transcript — the editor reads the
+        sessions active since its own last run — so it is handed the
+        project's session lister instead of a message index."""
         agent_manager = MagicMock()
         session = MagicMock()
-        session.get_messages.return_value = [{"role": "user"}] * 7
         session.session_uuid = "chat_x_cafebabe"
         agent_manager.get_session.return_value = session
+        agent_manager.list_sessions.return_value = [{"session_uuid": "chat_x_cafebabe"}]
         cfg = MagicMock()
         cfg.workspace = "/tmp/ws074"
         agent_manager._build_agent_config_from_project.return_value = cfg
@@ -582,20 +584,18 @@ class TestConsolidationCoordinator:
 
         async def _fake_routine(**kwargs):
             calls.append(kwargs)
-            return "llm_merged"
+            return "edited"
 
         with patch(
             "agent_os.agent.workspace_files.run_session_end_routine",
             new=_fake_routine,
         ), patch("agent_os.agent.workspace_files.WorkspaceFileManager"):
             await c._run_pass(("proj", SID), "retarget")
-            session.get_messages.return_value = [{"role": "user"}] * 12
-            await c._run_pass(("proj", SID), "quiescence")
 
-        assert calls[0]["since_index"] is None
-        assert calls[0]["pinned_exchange"] is True
         assert calls[0]["bypass_idempotency"] is True
-        assert calls[1]["since_index"] == 7
+        assert "since_index" not in calls[0] and "pinned_exchange" not in calls[0]
+        assert calls[0]["list_sessions"]() == [{"session_uuid": "chat_x_cafebabe"}]
+        agent_manager.list_sessions.assert_called_with("proj")
 
 
 # ---------------------------------------------------------------------------

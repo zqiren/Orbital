@@ -152,30 +152,25 @@ class TestShapeReport:
         assert mem.shape_report(None, "index") is None
 
 
-class TestMergePromptRideAlong:
-    def _summary(self):
-        return {"recent_messages": [], "files_modified": [], "message_count": 0,
-                "tool_calls_count": 0}
+class TestEditorPromptRideAlong:
+    """Spec 089: the memory editor replaced the whole-file merge. INDEX is the
+    one file it may rewrite whole, so INDEX's format drift rides along in the
+    editor prompt (report-only — never a trigger of its own)."""
 
-    def test_prompt_contains_formatting_section_when_dirty(self, tmp_path):
-        wf = WorkspaceFileManager(str(tmp_path))
-        os.makedirs(tmp_path / "orbital", exist_ok=True)
-        (tmp_path / "orbital" / "INDEX.md").write_text(_DIRTY_INDEX, encoding="utf-8")
-        prompt = wf.build_session_end_prompt(self._summary())
-        assert "FORMATTING TO FIX" in prompt
+    def _prompt(self, index_text):
+        from agent_os.agent import memory_editor
+        return memory_editor.build_prompt(
+            {"state": "", "decisions": "", "lessons": "", "index": index_text},
+            today="2026-09-19", since=None, sessions=[],
+        )
+
+    def test_prompt_contains_formatting_section_when_dirty(self):
+        prompt = self._prompt(_DIRTY_INDEX)
+        assert "INDEX FORMATTING TO FIX" in prompt
         assert mem.FORMAT_HEADERS["index"] in prompt
 
-    def test_prompt_omits_formatting_section_when_clean(self, tmp_path):
-        wf = WorkspaceFileManager(str(tmp_path))
-        os.makedirs(tmp_path / "orbital", exist_ok=True)
-        (tmp_path / "orbital" / "INDEX.md").write_text(_CLEAN_INDEX, encoding="utf-8")
-        prompt = wf.build_session_end_prompt(self._summary())
-        assert "FORMATTING TO FIX" not in prompt
-
-    def test_prompt_always_contains_cross_file_consistency_rule(self, tmp_path):
-        wf = WorkspaceFileManager(str(tmp_path))
-        prompt = wf.build_session_end_prompt(self._summary())
-        assert "stale copies" in prompt
+    def test_prompt_omits_formatting_section_when_clean(self):
+        assert "FORMATTING TO FIX" not in self._prompt(_CLEAN_INDEX)
 
 
 class TestShapeReportFilenameDates:

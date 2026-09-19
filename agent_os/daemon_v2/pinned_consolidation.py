@@ -23,14 +23,15 @@ triggers that keep Layer-1 tidy for pinned exchanges:
 
 Per-completion passes were rejected by design (every pinned message is a
 dispatch — that would be one LLM pass per exchange). The pass itself is
-``run_session_end_routine`` — already daemon-invokable: it needs only a
-session, a provider, and a ``WorkspaceFileManager``, none of which are
-loop-bound — run as a single-flight detached task with a dirty flag: a
+``run_session_end_routine`` — the memory editor followed by the size floor
+(spec 089) — run as a single-flight detached task with a dirty flag: a
 trigger landing during a running pass coalesces into exactly one re-run.
+Pinned workers write memory files directly, so this is where what they
+appended gets tidied; the editor only runs when a file is over its budget,
+and it is single-flight per PROJECT, so it never overlaps a manager pass.
 
-The input window is "messages since the last pass" (``since_index``),
-tracked in memory per session key; a daemon restart resets it to the whole
-tail, mirroring the in-memory idempotency guard the routine already uses.
+The editor reads the sessions active since its own last successful run
+through read-only tools, so this coordinator no longer windows a transcript.
 """
 
 from __future__ import annotations
@@ -64,9 +65,6 @@ class PinnedConsolidationCoordinator:
         self._running: set[tuple[str, str | None]] = set()
         # Keys re-triggered while running — exactly one re-run after.
         self._dirty: set[tuple[str, str | None]] = set()
-        # (project_id, session_id) -> message count at the START of the last
-        # pass; the next pass distills only messages after it.
-        self._last_pass_index: dict[tuple[str, str | None], int] = {}
         # Strong refs to detached pass tasks (asyncio keeps only weak ones).
         self._pass_tasks: set[asyncio.Task] = set()
 
@@ -194,14 +192,9 @@ class PinnedConsolidationCoordinator:
         )
         workspace_files = WorkspaceFileManager(config.workspace)
 
-        # Window start captured BEFORE the (long) LLM pass: rows appended
-        # while it runs belong to the NEXT window.
-        start_count = len(session.get_messages())
-        since = self._last_pass_index.get(key)
         logger.info(
-            "pinned consolidation pass starting for %s/%s (trigger=%s, "
-            "window=%s..%s)", project_id, session_id, reason,
-            since or 0, start_count,
+            "pinned consolidation pass starting for %s/%s (trigger=%s)",
+            project_id, session_id, reason,
         )
         outcome = await run_session_end_routine(
             session=session,
@@ -211,10 +204,8 @@ class PinnedConsolidationCoordinator:
             session_uuid=session.session_uuid,
             bypass_idempotency=True,
             project_id=project_id,
-            since_index=since,
-            pinned_exchange=True,
+            list_sessions=lambda: self._agent_manager.list_sessions(project_id),
         )
-        self._last_pass_index[key] = start_count
         logger.info(
             "pinned consolidation pass done for %s/%s: %s",
             project_id, session_id, outcome,
