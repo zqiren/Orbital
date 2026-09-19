@@ -59,6 +59,10 @@ function mockApi(opts: {
   /** When set, the exit POST rejects with an ApiError of this status (bug #45
    *  non-409 surface test). */
   exitRejectStatus?: number;
+  /** `recently_closed` in the GET body (spec 089). */
+  recentlyClosed?: unknown[];
+  /** When set, the reopen POST rejects with an ApiError of this status. */
+  reopenRejectStatus?: number;
 } = {}) {
   const {
     entries = [],
@@ -68,6 +72,8 @@ function mockApi(opts: {
     newSessionId = 'sess-tap-minted',
     newSessionFails = false,
     exitRejectStatus,
+    recentlyClosed = [],
+    reopenRejectStatus,
   } = opts;
   apiMock.mockImplementation(async (path: string, init?: RequestInit) => {
     if (path.includes('/new-session')) {
@@ -75,7 +81,11 @@ function mockApi(opts: {
       return { status: 'ok', session_id: newSessionId };
     }
     if (path.startsWith('/api/v2/workbench') && (!init || init.method === undefined)) {
-      return { entries };
+      return { entries, recently_closed: recentlyClosed };
+    }
+    if (path.includes('/reopen')) {
+      if (reopenRejectStatus != null) throw new MockApiError(reopenRejectStatus, 'boom');
+      return { status: 'ok' };
     }
     if (path === '/api/v2/projects') return projects;
     if (path.startsWith('/api/v2/calendar/availability')) {
@@ -629,5 +639,51 @@ describe('WorkbenchPage — Today strip', () => {
     render(<WorkbenchPage projectId="proj-x" setRoute={vi.fn()} />);
     await waitFor(() => expect(screen.getByTestId('workbench-today')).toBeInTheDocument());
     expect(screen.getByText('Secret obligation sentence')).toBeInTheDocument();
+  });
+});
+
+
+describe('WorkbenchPage — recently closed (spec 089)', () => {
+  const CLOSED = {
+    project_id: 'proj-a',
+    id: 'c1',
+    text: 'Pick the venue',
+    due: null,
+    created: '2026-07-01',
+    closed: '2026-07-20',
+    closed_by: 'agent',
+    kind: 'done',
+    note: '"rooftop"',
+  };
+
+  it('shows the section under the open cards and reopens through the route', async () => {
+    mockApi({ entries: [entry()], recentlyClosed: [CLOSED] });
+    render(<WorkbenchPage setRoute={vi.fn()} />);
+    await waitFor(() => expect(screen.getByTestId('workbench-recently-closed')).toBeInTheDocument());
+    expect(screen.getByTestId('workbench-list')).toContainElement(
+      screen.getByTestId('workbench-recently-closed'),
+    );
+    fireEvent.click(screen.getByTestId('workbench-closed-reopen'));
+    await waitFor(() =>
+      expect(apiMock).toHaveBeenCalledWith('/api/v2/workbench/proj-a/asks/c1/reopen', {
+        method: 'POST',
+      }),
+    );
+  });
+
+  it('still shows the section when nothing is open', async () => {
+    mockApi({ entries: [], recentlyClosed: [CLOSED] });
+    render(<WorkbenchPage setRoute={vi.fn()} />);
+    await waitFor(() => expect(screen.getByTestId('workbench-empty')).toBeInTheDocument());
+    expect(screen.getByTestId('workbench-recently-closed')).toBeInTheDocument();
+  });
+
+  it('surfaces a failed reopen instead of failing silently', async () => {
+    mockApi({ entries: [], recentlyClosed: [CLOSED], reopenRejectStatus: 500 });
+    render(<WorkbenchPage setRoute={vi.fn()} />);
+    await waitFor(() => expect(screen.getByTestId('workbench-closed-reopen')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('workbench-closed-reopen'));
+    await waitFor(() => expect(screen.getByTestId('workbench-reopen-error')).toBeInTheDocument());
+    expect(screen.getByTestId('workbench-closed-row')).toBeInTheDocument();
   });
 });

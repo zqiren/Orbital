@@ -143,7 +143,7 @@ FORMAT_HEADERS: dict[str, str] = {
         "LESSONS.md.-->"
     ),
     "state": (
-        '<!--format PROJECT_STATE is what is true NOW: current focus, in-progress work, blockers, next steps. Overwrite stale lines; never append dated history. Every line must be understandable without this session\'s context: concrete names, no unexplained shorthand, no cross-references by list number. [user] flag — one judgment per line: does this need the user (their decision, their action, or something they\'d be sorry to miss — including things they assigned to themselves)? If yes, insert [user] after the list marker of the line where the fact already lives: `- [user] <text>` or `3. [user] <text>`. Flagging marks a line, never creates one: one fact = one entry, never duplicated into another section. A dated commitment needing no decision is `[due:YYYY-MM-DD]` (shows on the calendar). Machine attributes (id, created, touched, resolved) live in a daemon-managed mem-comment on the next line — never write or edit these comments; leave them exactly where they are. Never auto-decide: spending money, sending external messages as the user, or irreversible/destructive acts are always surfaced, whatever the autonomy setting. Write timeless ("due Jul 28", never "tomorrow"). A line whose mem-comment carries resolved:<date> is settled — on consolidation rewrite it as the completed fact or drop it; never re-open or re-flag it. CLOSE THE LOOP THE SAME TURN: the moment the user answers a flagged line, decides it, or does it, remove the [user] flag from that line in this turn — rewrite the line as the settled fact (`- Chose option A.`) and leave the mem-comment alone. You are the only reader who can see both the flag and the user\'s answer; consolidation runs later, sees a truncated window, and cannot do this for you. A flagged line you leave behind after it is answered keeps nagging the user for something they already gave you. Never flag a question you asked during this session — flag the decision that is still genuinely open, written so someone who was not here can act on it.-->'
+        '<!--format PROJECT_STATE is what is true NOW: current focus, in-progress work, blockers, next steps. Overwrite stale lines; never append dated history. Every line must be understandable without this session\'s context: concrete names, no unexplained shorthand, no cross-references by list number. One fact = one entry, never duplicated into another section. A dated fact is `[due:YYYY-MM-DD]` right after the list marker (shows on the calendar). Write timeless ("due Jul 28", never "tomorrow"). Things waiting on the user (their decision, their action, something they said they will do) do NOT go here: they are asks in orbital/ASKS.md (see that file\'s header); a `[user]` line written here is moved there automatically. Never auto-decide: spending money, sending external messages as the user, or irreversible/destructive acts always go to the user, whatever the autonomy setting. Machine attributes (id, created, touched) live in a daemon-managed mem-comment on the next line — never write or edit these comments; leave them exactly where they are.-->'
     ),
     "decisions": (
         "<!--format DECISIONS entries: '## <slug>' then Chose / Reason / "
@@ -1000,6 +1000,11 @@ def trim_volatile(content: str, hard_budget: int) -> str:
 
 # basename -> file_key, for detecting a memory-file write by resolved path.
 _BASENAME_TO_KEY = {v: k for k, v in MEMORY_FILENAME.items()}
+# ASKS.md (spec 089) is an append-only event log, not an injected/budgeted
+# Layer-1 file — so it is routed here without joining MEMORY_FILENAME, which
+# the budget/injection/trim code iterates.
+ASKS_KEY = "asks"
+_BASENAME_TO_KEY["ASKS.md"] = ASKS_KEY
 
 
 def memory_key_for_path(resolved_path: str, workspace: str) -> str | None:
@@ -1026,23 +1031,44 @@ def process_on_write(workspace: str, resolved_path: str, content: str, *, today:
     key = memory_key_for_path(resolved_path, workspace)
     if key is None:
         return content, []
+    if key == ASKS_KEY:
+        # Append-only event log: removed/altered lines are restored, new
+        # lines validated + stamped + appended (asks.process_write).
+        from agent_os.agent import asks
+        try:
+            with open(resolved_path, "r", encoding="utf-8") as f:
+                prev = f.read()
+        except OSError:
+            prev = None
+        return asks.process_write(prev, content, today=today or _today())
     content = ensure_format_header(content, key)
     if key == "state":
         # PROJECT_STATE runs through the flag chokepoint: preserve ids + user
         # lifecycle decisions across the agent's (comment-less) rewrite by
         # diffing against the previous on-disk content. Lazy import avoids a
         # module-load cycle.
-        from agent_os.agent import flag_chokepoint, retractions
+        from agent_os.agent import asks, flag_chokepoint
         try:
             with open(resolved_path, "r", encoding="utf-8") as f:
                 prev = f.read()
         except OSError:
             prev = None
         orbital_dir = os.path.join(workspace, "orbital")
-        retraction_titles = [r.title for r in retractions.list_retractions(orbital_dir)]
-        return flag_chokepoint.reconcile_flags(
-            prev, content, today or _today(), retraction_titles
+        # Legacy `[user]` lines (old sessions, old AGENTS.md text) become
+        # asks in ASKS.md before the chokepoint sees the file — never a
+        # rejected write.
+        content, ask_warnings = asks.convert_legacy_on_write(
+            orbital_dir, content, today=today or _today()
         )
+        merged, warnings = flag_chokepoint.reconcile_flags(
+            prev, content, today or _today(),
+            asks.dropped_texts(orbital_dir, recent=False),
+        )
+        # The chokepoint's omission lint still says "consider a [user] flag";
+        # a [user] line now becomes an ask, so that advice would turn prose
+        # into asks. Drop it (a no-op once the lint itself is retired).
+        warnings = [w for w in warnings if "[user] flag" not in w]
+        return merged, ask_warnings + warnings
     if key not in ENTRY_MARKERS:
         # Other volatile files (index): header only, no entry stamping.
         return content, []

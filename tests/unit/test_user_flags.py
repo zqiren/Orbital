@@ -170,6 +170,51 @@ class TestRenderCommentRoundTrip:
         assert "from:" not in comment
 
 
+class TestCommentLookaheadStopsAtTheNextItem:
+    """A bullet's comment lookahead must never run into the NEXT item.
+
+    It used to stop at a following bullet only when nothing had been
+    collected yet, so one indented continuation line let it swallow the next
+    bullet and adopt that bullet's mem-comment — its id and its ``resolved:``
+    stamp — while the next bullet vanished from the parse entirely.
+    """
+
+    def test_continuation_lines_do_not_steal_the_next_entrys_comment(self):
+        content = "\n".join([
+            "- [user] Decide the venue:",
+            "  - rooftop",
+            "  - basement",
+            "- [user] Already settled question.",
+            "  <!--mem id:0e0e0e created:2026-08-01 resolved:2026-08-05-->",
+            "",
+        ])
+        entries = uf.parse_entries(content)
+        assert [e.text for e in entries] == [
+            "Decide the venue:", "Already settled question."]
+        assert entries[0].id is None and entries[0].resolved is None
+        assert entries[1].id == "0e0e0e" and entries[1].resolved == "2026-08-05"
+
+    def test_heading_ends_the_lookahead(self):
+        content = "\n".join([
+            "- [user] Pick a date",
+            "  more detail",
+            "## Next",
+            "<!--mem id:abcdef created:2026-08-01-->",
+        ])
+        entries = uf.parse_entries(content)
+        assert len(entries) == 1 and entries[0].id is None
+
+    def test_wrapped_comment_after_continuation_still_attaches(self):
+        content = "\n".join([
+            "- [user] Pick a date",
+            "  more detail",
+            "  <!--mem id:abcdef",
+            "      created:2026-08-01-->",
+        ])
+        entries = uf.parse_entries(content)
+        assert entries[0].id == "abcdef" and entries[0].line_end == 3
+
+
 class TestTagLessCommentCarryingBullets:
     """A fulfilled Workbench exit rewrites a retired entry as a tag-less
     bullet + adjacent mem-comment (id + resolved:<date>, spec §5.3). The

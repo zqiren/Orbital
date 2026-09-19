@@ -174,3 +174,32 @@ def test_create_project_succeeds_when_seed_fails(client, tmp_path, monkeypatch, 
     assert any("AGENTS.md seeding failed" in m for m in error_msgs), (
         f"expected ERROR log about seeding failure, got: {error_msgs}"
     )
+
+
+def test_template_teaches_the_asks_grammar(store_and_project):
+    """Spec 089: external agents learn ASKS.md from the signpost."""
+    store, pid, workspace = store_and_project
+    seed_project_agent_md(store, pid)
+    content = (workspace / AGENT_MD_FILENAME).read_text(encoding="utf-8")
+    assert "orbital/ASKS.md" in content
+    assert "append-only" in content
+    assert "- open <text>" in content
+    assert "the user's own words" in content
+    assert "[user]" not in content
+
+
+def test_pre_asks_seed_is_recognised_and_refreshed(store_and_project):
+    """A project seeded by v0.13.0 (unedited) must pick up the asks grammar
+    at the next pin-time reseed — so the outgoing template is historical."""
+    from agent_os.daemon_v2.agent_md_seeder import (
+        _HISTORICAL_TEMPLATES, reseed_project_agent_md,
+    )
+    store, pid, workspace = store_and_project
+    old = [t for t in _HISTORICAL_TEMPLATES if "no append-only games" in t]
+    assert len(old) == 1
+    project = store.get_project(pid)
+    (workspace / AGENT_MD_FILENAME).write_text(old[0].format(
+        project_name=project["name"], agent_name=project["agent_name"],
+    ), encoding="utf-8")
+    assert reseed_project_agent_md(store, pid)["status"] == "reseeded"
+    assert "orbital/ASKS.md" in (workspace / AGENT_MD_FILENAME).read_text(encoding="utf-8")

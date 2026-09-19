@@ -305,6 +305,7 @@ class PromptBuilder:
             self._onboarding_or_directive(context),
             self._standing_rules(context),
             self._memory(context),
+            self._asks(context),
             self._sub_agents(context),
             self._sub_agent_awareness(context),
             self._browser_section(context),
@@ -707,6 +708,38 @@ class PromptBuilder:
         if content is None:
             return None
         return f"## Project Instructions\n\nProject instructions (user-defined, persistent across sessions):\n\n{content}"
+
+    def _asks(self, context: PromptContext) -> str | None:
+        """Spec 089 §3.5: when to open an ask, and how to close one.
+
+        The asks themselves (open + recently dropped) ride the per-call
+        runtime block (``context.py``); the grammar also sits in ASKS.md's
+        own format header for agents Orbital does not prompt.
+        """
+        if context.is_scratch:
+            return None
+        return (
+            "## Asks\n\n"
+            f"{context.workspace}/orbital/ASKS.md lists what is waiting on the user; the Workbench\n"
+            "shows it to them. It is an append-only log — Orbital restores any line you change or\n"
+            "delete.\n"
+            "- Questions go in chat, as always. Open an ask ONLY for something that must outlive\n"
+            "  this conversation: something with a date, something the user said they will do\n"
+            "  themselves, or a decision the user put off for later (\"I'll decide after …\") while\n"
+            "  you carry on. A TBD note in a file or in chat is not an ask — only ASKS.md reaches\n"
+            "  the user's Workbench. Test: if this session were closed now and never reopened,\n"
+            "  would something be lost or missed? If not, keep it in chat.\n"
+            "- When one comes up, open it in that same turn, before you reply: append\n"
+            "  `- open <text>` (or `- open due:YYYY-MM-DD <text>`), written so someone who was not\n"
+            "  here can act on it. Orbital stamps the id and date. If ASKS.md does not exist yet,\n"
+            "  create it with that line.\n"
+            "- When the user answers or completes an open ask in chat, append\n"
+            "  `- done <id> \"<the user's own words>\"`; when they decline it,\n"
+            "  `- dropped <id> \"<their words>\"`. Close only with the user's own words — if\n"
+            "  unsure, leave it open.\n"
+            "- Never re-propose a dropped ask. Open asks and recently dropped ones are listed in\n"
+            "  the runtime note of each turn."
+        )
 
     def _memory(self, context: PromptContext) -> str:
         if context.is_scratch:

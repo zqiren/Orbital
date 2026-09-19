@@ -10,9 +10,13 @@
  * this hook never re-sorts client-side.
  *
  * Exits are optimistic (removed from local state immediately) and revert on
- * a non-2xx response; a 409 on exit (concurrent PROJECT_STATE.md write)
- * additionally triggers a refetch and a brief conflict flag so the page can
- * show a notice. `migrate` spawns a seeded session through the migrate route
+ * a non-2xx response; a 409 on exit additionally triggers a refetch and a
+ * brief conflict flag so the page can show a notice.
+ *
+ * Recently closed (spec 089 §3.6): the fetch opts into `recently_closed=1`
+ * — asks the agent or the memory editor closed in the last 7 days — and
+ * `reopenAsk` undoes one (optimistic removal, POST, then a refetch so the
+ * card comes back). An older daemon simply omits the field (empty list). `migrate` spawns a seeded session through the migrate route
  * and returns the new session id for navigation. Card tap (the entry
  * doorway) is NOT in this hook — it's a client-side composer prefill with no
  * network call, handled entirely in WorkbenchPage (spec 2026-07-24).
@@ -30,7 +34,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, ApiError } from '../../config';
-import type { WorkbenchEntry, WorkbenchResponse } from './types';
+import type { WorkbenchClosedAsk, WorkbenchEntry, WorkbenchResponse } from './types';
 
 export interface UseWorkbenchArgs {
   /** Project lens: fetch only this project's entries (omit for the global,
@@ -42,6 +46,8 @@ export interface UseWorkbenchArgs {
    *  hook's returned field set stays stable (bug #45 — this used to revert
    *  silently). */
   onExitError?: () => void;
+  /** Fired when a reopen from "Recently closed" fails (the row is restored). */
+  onReopenError?: () => void;
 }
 
 export interface UseWorkbenchResult {
@@ -59,16 +65,25 @@ export interface UseWorkbenchResult {
   ) => Promise<void>;
   /** Returns the new session id (for navigation to the project chat). */
   migrate: (projectId: string) => Promise<string>;
+  /** Asks closed by the agent/editor in the last 7 days (undoable). */
+  recentlyClosed: WorkbenchClosedAsk[];
+  /** Undo one of `recentlyClosed` — the ask comes back as a card. */
+  reopenAsk: (projectId: string, askId: string) => Promise<void>;
 }
 
 function workbenchUrl(projectId?: string): string {
   return projectId
-    ? `/api/v2/workbench?project_id=${encodeURIComponent(projectId)}`
-    : '/api/v2/workbench';
+    ? `/api/v2/workbench?project_id=${encodeURIComponent(projectId)}&recently_closed=1`
+    : '/api/v2/workbench?recently_closed=1';
 }
 
-export function useWorkbench({ projectId, onExitError }: UseWorkbenchArgs): UseWorkbenchResult {
+export function useWorkbench({
+  projectId,
+  onExitError,
+  onReopenError,
+}: UseWorkbenchArgs): UseWorkbenchResult {
   const [entries, setEntries] = useState<WorkbenchEntry[]>([]);
+  const [recentlyClosed, setRecentlyClosed] = useState<WorkbenchClosedAsk[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [conflict, setConflict] = useState(false);
@@ -85,11 +100,13 @@ export function useWorkbench({ projectId, onExitError }: UseWorkbenchArgs): UseW
       const res = await api<WorkbenchResponse>(workbenchUrl(projectId));
       if (epochRef.current === epoch) {
         setEntries(res?.entries ?? []);
+        setRecentlyClosed(res?.recently_closed ?? []);
       }
     } catch (e) {
       if (epochRef.current === epoch) {
         setError(e instanceof Error ? e.message : 'error');
         setEntries([]);
+        setRecentlyClosed([]);
       }
     } finally {
       if (epochRef.current === epoch) setLoading(false);
@@ -136,6 +153,26 @@ export function useWorkbench({ projectId, onExitError }: UseWorkbenchArgs): UseW
     [entries, fetchAll, onExitError],
   );
 
+  const reopenAsk = useCallback(
+    async (pid: string, askId: string) => {
+      const prevClosed = recentlyClosed;
+      setRecentlyClosed((cur) => cur.filter((c) => !(c.project_id === pid && c.id === askId)));
+      try {
+        await api(
+          `/api/v2/workbench/${encodeURIComponent(pid)}/asks/${encodeURIComponent(askId)}/reopen`,
+          { method: 'POST' },
+        );
+      } catch {
+        setRecentlyClosed(prevClosed);
+        onReopenError?.();
+        return;
+      }
+      await fetchAll();
+      window.dispatchEvent(new CustomEvent('orbital:workbench-changed'));
+    },
+    [recentlyClosed, fetchAll, onReopenError],
+  );
+
   const migrate = useCallback(async (pid: string): Promise<string> => {
     const res = await api<{ session_id: string }>(
       `/api/v2/workbench/${encodeURIComponent(pid)}/migrate`,
@@ -153,5 +190,7 @@ export function useWorkbench({ projectId, onExitError }: UseWorkbenchArgs): UseW
     refetch: fetchAll,
     exitEntry,
     migrate,
+    recentlyClosed,
+    reopenAsk,
   };
 }

@@ -2,17 +2,21 @@
 # Copyright (C) 2026 Orbital Contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""REST endpoints for the Workbench surface (spec §5.3, §5.4, §8).
+"""REST endpoints for the Workbench surface (spec 089 §3.6; spec 2026-07-23 §5.3, §8).
 
-A lazy mirror of the flagged ``[user]`` entries across projects. Nothing is
-derived to disk — every GET re-parses PROJECT_STATE via the one shared
-``user_flags`` parser and computes age/overdue at render time.
+A mirror of each project's open asks — the fold of ``orbital/ASKS.md``
+(``agent/asks.py``). Nothing is derived to disk and a read never writes: every
+GET re-folds the log and computes age/overdue at render time.
 
-Two user exits mutate memory directly (fulfilled → unflag + ``resolved`` stamp;
-irrelevant → remove + a retraction record), both OCC-guarded on the state
-file's mtime. The empty-state migration CTA (``/migrate``) spawns a seeded
-project session through the same dispatch seam the chat/queue uses
-(``agent_manager.new_session`` + ``inject_message``).
+The two user exits append events instead of rewriting memory: Done →
+``done <id> <date> by:user``, Delete → ``dropped <id> <date> by:user <reason>``.
+The cards response shape is the v0.13.0 one (phones run the relay's older
+frontend build); "Recently closed" — closes by the agent or the memory editor
+in the last 7 days, each reopenable — is opt-in via ``?recently_closed=1``.
+
+The empty-state CTA (``/migrate``) spawns a seeded project session through the
+same dispatch seam the chat/queue uses (``agent_manager.new_session`` +
+``inject_message``) that reviews PROJECT_STATE into asks.
 
 Injected via ``configure`` (app factory): the project store, the agent manager
 (session spawn), and the CalendarHub (``refresh()`` after every write so its
@@ -29,14 +33,12 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
-from agent_os.agent import memory_entries, retractions, user_flags, workbench_cards
+from agent_os.agent import asks, memory_entries, workbench_cards
 from agent_os.agent.project_paths import ProjectPaths
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v2/workbench")
-
-_MAX_OCC_ATTEMPTS = 2  # initial write + one re-read-and-retry, then 409
 
 _project_store = None
 _agent_manager = None
@@ -48,7 +50,7 @@ def configure(project_store, agent_manager, calendar_hub, *, now_fn=None):
     """Called by the app factory to inject dependencies.
 
     ``now_fn`` (tz-aware ``datetime``) is overridable for deterministic tests;
-    it drives age/overdue math and the ``resolved``/retraction dates.
+    it drives age/overdue math and the dates of appended events.
     """
     global _project_store, _agent_manager, _calendar_hub, _now_fn
     _project_store = project_store
@@ -58,41 +60,21 @@ def configure(project_store, agent_manager, calendar_hub, *, now_fn=None):
 
 
 # --------------------------------------------------------------------------
-# Small I/O helpers (factored so tests can hook the OCC read seam)
+# Small I/O helpers
 # --------------------------------------------------------------------------
 
 def _now() -> datetime:
     return (_now_fn or (lambda: datetime.now(timezone.utc)))()
 
 
-def _today_iso() -> str:
-    return _now().date().isoformat()
-
-
-def _stat_mtime_ns(path: str) -> int | None:
-    try:
-        return os.stat(path).st_mtime_ns
-    except OSError:
-        return None
-
-
-def _load_state(path: str) -> tuple[int | None, str | None]:
-    """Return ``(mtime_ns, content)`` for the state file.
-
-    The OCC baseline (mtime) is captured here, alongside the read, so the exit
-    path has a single seam. Tests monkeypatch this to simulate a concurrent
-    writer between the baseline capture and the guarded write.
-
-    Decode-safe: read with ``errors="replace"`` so invalid UTF-8 bytes in a
-    project's PROJECT_STATE.md yield replacement chars instead of a
-    ``UnicodeDecodeError`` that would 500 the whole (esp. global) GET.
-    """
-    mtime = _stat_mtime_ns(path)
+def _load_state(path: str) -> str | None:
+    """PROJECT_STATE.md content, decode-safe (``errors="replace"``); ``None``
+    when missing."""
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
-            return mtime, f.read()
-    except (OSError, UnicodeDecodeError):
-        return mtime, None
+            return f.read()
+    except OSError:
+        return None
 
 
 _IS_WINDOWS = sys.platform.startswith("win")
@@ -139,114 +121,80 @@ def _require_project(project_id: str) -> dict:
     return project
 
 
-def _find_entry(content: str, mem_id: str):
-    for e in user_flags.parse_entries(content or ""):
-        if e.id == mem_id:
-            return e
-    return None
+def _project_tz(project: dict) -> str:
+    return workbench_cards.project_timezone(project, project.get("triggers", []) or [])
+
+
+def _project_today(project: dict) -> str:
+    """Event dates are the user's calendar day in the project tz, not UTC."""
+    return workbench_cards.today_in_tz(_project_tz(project), _now()).isoformat()
 
 
 # --------------------------------------------------------------------------
 # GET /api/v2/workbench
 # --------------------------------------------------------------------------
 
-def _entry_row(project_id: str, e, tz: str, now: datetime) -> dict:
+def _ask_row(project_id: str, a, tz: str, now: datetime) -> dict:
+    """One card, in the v0.13.0 wire shape exactly (``section`` stays null:
+    asks don't live under a PROJECT_STATE heading)."""
     return {
         "project_id": project_id,
-        "id": e.id,
-        "text": e.text,
-        "section": e.section,
-        "due": e.due,
-        "created": e.created,
-        "touched": e.touched,
-        "age_days": workbench_cards.age_days(e.created, tz, now),
-        "overdue": workbench_cards.is_overdue(e.due, tz, now),
+        "id": a.id,
+        "text": a.text,
+        "section": None,
+        "due": a.due,
+        "created": a.opened,
+        "touched": a.updated,
+        "age_days": workbench_cards.age_days(a.opened, tz, now),
+        "overdue": workbench_cards.is_overdue(a.due, tz, now),
         # Project-tz days-past-due (null unless overdue) — server-authoritative
         # so the frontend never recomputes "N days late" in browser tz (§7.3).
-        "days_late": workbench_cards.days_late(e.due, tz, now),
+        "days_late": workbench_cards.days_late(a.due, tz, now),
     }
 
 
-def _heal_entry_lines(entry) -> list[str]:
-    """Rebuild an id-less flagged entry's block with a freshly minted id.
-
-    Returns ``[bullet, comment]`` — the bracket tag reconstructed from the
-    parsed ``flagged``/``due`` (never a numbered marker flipped to a dash, per
-    the tag-in-place grammar) and a canonical single-line mem-comment that
-    carries the new id plus whatever fields were already present.
-    """
-    fields = _entry_comment_fields(entry)  # existing fields (id is None → absent)
-    fields["id"] = user_flags.new_entry_id()
-    tag_tokens: list[str] = []
-    if entry.flagged:
-        tag_tokens.append("user")
-    if entry.due:
-        tag_tokens.append(f"due:{entry.due}")
-    bullet = f"{entry.prefix}[{' '.join(tag_tokens)}] {entry.text}"
-    comment = "  " + user_flags.render_comment(fields)
-    return [bullet, comment]
+def _closed_row(project_id: str, a) -> dict:
+    return {
+        "project_id": project_id,
+        "id": a.id,
+        "text": a.text,
+        "due": a.due,
+        "created": a.opened,
+        "closed": a.updated,
+        "closed_by": a.closed_by,
+        "kind": a.state,
+        "note": a.note,
+    }
 
 
-def _heal_missing_ids(content: str, surfaced: list) -> str:
-    """Splice a minted id into every surfaced entry whose id is None.
-
-    Bottom-up (highest ``line_start`` first) so replacing a 1-line bullet with
-    a 2-line bullet+comment block never invalidates an earlier entry's indices.
-    """
-    lines = content.split("\n")
-    for entry in sorted(
-        (e for e in surfaced if e.id is None),
-        key=lambda e: e.line_start,
-        reverse=True,
-    ):
-        lines[entry.line_start:entry.line_end + 1] = _heal_entry_lines(entry)
-    return "\n".join(lines)
-
-
-def _collect_project(project: dict, now: datetime) -> list[dict]:
-    """Return flagged entry rows for one project."""
+def _collect_project(project: dict, now: datetime, with_closed: bool):
+    """Return ``(open card rows, recently-closed rows)`` for one project."""
     workspace = project.get("workspace", "")
     if not workspace:
-        return []
+        return [], []
     project_id = project.get("project_id", "")
-    path = _state_path(workspace)
-    _, content = _load_state(path)
-    content = content or ""
-    parsed = user_flags.parse_entries(content)
-    triggers = project.get("triggers", []) or []
-    tz = workbench_cards.project_timezone(project, triggers)
-
-    # `resolved` wins over `flagged`. The write chokepoint now unflags a
-    # resolved entry (flag_chokepoint), but a file already on disk — written
-    # before that guard, or by any writer that bypasses it — must still never
-    # resurrect a card the user closed with "Done". Read-side guarantee, so
-    # the promise holds without waiting for the next write.
-    surfaced = [e for e in parsed if e.flagged and not e.resolved]
-
-    # Bug #45 — lazy id heal. A flagged bullet written without a mem-comment
-    # (or with one that carries no id:) parses to id=None. An id-less row
-    # collapses onto a single React key on the client (duplicate-key phantom
-    # card on delete) AND can never be exited (its POST hits /entries/null/exit
-    # → 404). Mint a stable id for each such surfaced entry and persist it so
-    # both the wire shape and the exit route have a real id to key on.
-    # Idempotent: only rewrites when at least one id was actually minted, so a
-    # fully-id'd file is never touched and the next read is a no-op.
-    if any(e.id is None for e in surfaced):
-        content = _heal_missing_ids(content, surfaced)
-        _write_state(path, content)
-        parsed = user_flags.parse_entries(content)
-        surfaced = [e for e in parsed if e.flagged and not e.resolved]
-
-    return [_entry_row(project_id, e, tz, now) for e in surfaced]
+    folded = asks.read_asks(_orbital_dir(workspace))
+    tz = _project_tz(project)
+    rows = [_ask_row(project_id, a, tz, now) for a in folded if a.is_open]
+    closed = []
+    if with_closed:
+        today = workbench_cards.today_in_tz(tz, now).isoformat()
+        closed = [_closed_row(project_id, a) for a in asks.recently_closed(folded, today)]
+    return rows, closed
 
 
 @router.get("")
-async def get_workbench(project_id: str | None = Query(None)):
-    """Flagged entries. Global view respects the privacy toggle.
+async def get_workbench(
+    project_id: str | None = Query(None),
+    recently_closed: bool = Query(False),
+):
+    """Open asks. Global view respects the privacy toggle.
 
     Sort: overdue first, then oldest ``created`` first — the forgotten float
     up. ``project_id`` lenses to one project (and, unlike the global view,
     surfaces a project even when it is excluded from the global Workbench).
+    ``recently_closed`` (opt-in) adds a ``recently_closed`` list: asks closed
+    by the agent or the memory editor in the last 7 days, newest first.
     """
     now = _now()
     if project_id is not None:
@@ -258,13 +206,14 @@ async def get_workbench(project_id: str | None = Query(None)):
         ]
 
     all_entries: list[dict] = []
+    all_closed: list[dict] = []
     for project in projects:
-        # Per-project isolation: one project failing to collect (corrupt state,
+        # Per-project isolation: one project failing to collect (corrupt file,
         # I/O error) must never sink the whole global view. Failed projects are
         # skipped and logged — chosen over a degraded in-band marker to keep the
         # {entries} response contract stable for the frontend.
         try:
-            entries = _collect_project(project, now)
+            entries, closed = _collect_project(project, now, recently_closed)
         except Exception:
             logger.warning(
                 "workbench: skipping project %s — collection failed",
@@ -272,13 +221,18 @@ async def get_workbench(project_id: str | None = Query(None)):
             )
             continue
         all_entries.extend(entries)
+        all_closed.extend(closed)
 
     all_entries.sort(key=lambda e: (not e["overdue"], e.get("created") or "9999-99-99"))
-    return {"entries": all_entries}
+    body: dict = {"entries": all_entries}
+    if recently_closed:
+        all_closed.sort(key=lambda r: r.get("closed") or "", reverse=True)
+        body["recently_closed"] = all_closed
+    return body
 
 
 # --------------------------------------------------------------------------
-# Exits
+# Exits + reopen: each appends one event to ASKS.md
 # --------------------------------------------------------------------------
 
 class ExitRequest(BaseModel):
@@ -286,93 +240,38 @@ class ExitRequest(BaseModel):
     reason: str = ""
 
 
-def _entry_comment_fields(entry) -> dict:
-    """Map a parsed Entry back to its mem-comment field dict (drop None)."""
-    fields: dict[str, str] = {}
-    if entry.id:
-        fields["id"] = entry.id
-    if entry.from_session:
-        fields["from"] = entry.from_session
-    if entry.evidence:
-        fields["evidence"] = entry.evidence
-    if entry.confidence:
-        fields["confidence"] = entry.confidence
-    if entry.created:
-        fields["created"] = entry.created
-    if entry.touched:
-        fields["touched"] = entry.touched
-    if entry.resolved:
-        fields["resolved"] = entry.resolved
-    return fields
-
-
-def _apply_exit(content: str, entry, kind: str, reason: str, today: str):
-    """Rewrite ONLY the target entry's lines. Returns (new_content, retraction).
-
-    fulfilled → drop the whole bracket tag (the bullet becomes a plain fact) and
-    stamp ``resolved:<today>`` into its mem-comment. irrelevant → remove the
-    entry lines entirely and emit a Retraction to append.
-    """
-    lines = content.split("\n")
-    retraction = None
-    if kind == "fulfilled":
-        fields = _entry_comment_fields(entry)
-        fields["resolved"] = today
-        replacement = [f"{entry.prefix}{entry.text}", "  " + user_flags.render_comment(fields)]
-    else:  # irrelevant (Literal already validated by pydantic)
-        replacement = []
-        retraction = retractions.Retraction(
-            id=entry.id or user_flags.new_entry_id(),
-            title=entry.text,
-            reason=reason or "",
-            date=today,
+def _append(project: dict, kind: str, ask_id: str, note: str) -> None:
+    try:
+        asks.append_event(
+            _orbital_dir(project.get("workspace", "")), kind, ask_id, note,
+            "user", today=_project_today(project),
         )
-    new_lines = lines[:entry.line_start] + replacement + lines[entry.line_end + 1:]
-    return "\n".join(new_lines), retraction
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"No ask with id {ask_id}")
+    if _calendar_hub is not None:
+        _calendar_hub.refresh()
 
 
 @router.post("/{project_id}/entries/{mem_id}/exit")
 async def exit_entry(project_id: str, mem_id: str, req: ExitRequest):
-    """Fulfilled or irrelevant exit for a flagged entry (spec §5.3).
+    """Done (``fulfilled``) or Delete (``irrelevant``) for an open ask.
 
-    OCC on the state file's mtime: baseline captured at read, verified
-    unchanged before the write; one re-read-and-retry on conflict, then 409.
-    404 if no entry carries ``mem_id``.
+    Appends ``done``/``dropped`` by:user. 404 if the project's log never
+    opened ``mem_id``; closing an ask that is already closed is a no-op 200
+    (the list the user tapped on was simply stale).
     """
     project = _require_project(project_id)
-    workspace = project.get("workspace", "")
-    path = _state_path(workspace)
-    today = _today_iso()
+    kind = "done" if req.kind == "fulfilled" else "dropped"
+    _append(project, kind, mem_id, req.reason or "")
+    return {"status": "ok"}
 
-    retraction = None
-    committed = False
-    for _attempt in range(_MAX_OCC_ATTEMPTS):
-        baseline_mtime, content = _load_state(path)
-        if content is None:
-            raise HTTPException(status_code=404, detail="PROJECT_STATE.md not found")
-        entry = _find_entry(content, mem_id)
-        if entry is None:
-            raise HTTPException(status_code=404, detail=f"No entry with id {mem_id}")
-        new_content, retraction = _apply_exit(content, entry, req.kind, req.reason, today)
-        # Guarded write: only if nothing touched the file since the baseline.
-        if _stat_mtime_ns(path) != baseline_mtime:
-            continue  # concurrent write — re-read and retry
-        _write_state(path, new_content)
-        committed = True
-        break
 
-    if not committed:
-        raise HTTPException(
-            status_code=409,
-            detail="PROJECT_STATE.md changed concurrently; please retry",
-        )
-
-    # Append the retraction only after the state write commits (add_retraction
-    # is append-only — never run it on an attempt that will be retried).
-    if retraction is not None:
-        retractions.add_retraction(_orbital_dir(workspace), retraction)
-    if _calendar_hub is not None:
-        _calendar_hub.refresh()
+@router.post("/{project_id}/asks/{ask_id}/reopen")
+async def reopen_ask(project_id: str, ask_id: str):
+    """Undo a close from the "Recently closed" list: appends ``reopen``
+    by:user. 404 for an unknown ask; reopening an open ask is a no-op 200."""
+    project = _require_project(project_id)
+    _append(project, "reopen", ask_id, "")
     return {"status": "ok"}
 
 
@@ -383,33 +282,21 @@ async def exit_entry(project_id: str, mem_id: str, req: ExitRequest):
 # Imperative on purpose: weaker models otherwise ANALYZE the file and ask
 # for permission instead of editing (observed live, 2026-07-24 — the session
 # presented an (a)/(b)/(c) menu and stalled). This instruction IS the user's
-# confirmation; the never-auto-decide rail covers external/irreversible acts,
-# not this requested file edit.
+# confirmation. Since spec 089 the review lands in ASKS.md as open asks; it no
+# longer flags lines in place (a `[user]` line would be moved there anyway).
 _MIGRATION_MESSAGE = (
-    'Edit orbital/PROJECT_STATE.md NOW, in this turn, and bring it fully to '
-    "the format header's rails. Do not present findings first, do not ask "
-    'which option I prefer, do not wait for confirmation — this message IS '
-    'the confirmation, and this is a plain file edit (the never-auto-decide '
-    'rail is about external or irreversible acts, not this). Do ALL of the '
-    'following in one edit: (1) FLAG IN PLACE: for each line that needs the '
-    "user (their decision, their action, or something they'd be sorry to "
-    'miss), insert `[user]` right after the list marker of THAT line — `- '
-    '[user] <text>` or `3. [user] <text>`. Never move the line, never convert '
-    'a numbered item to a bullet, never copy it into another section. One '
-    'fact = one entry: if the same fact is already flagged elsewhere, keep '
-    'one and fold the other into it. (2) ONE VOICE: rewrite any line — '
-    'flagged or not — that a reader without your working memory could not '
-    'understand: expand project shorthand and abbreviations, and replace '
-    'list-number cross-references ("per Blocker #11") with the referenced '
-    "thing's name. Keep each line one concrete statement. (3) COMMENTS: "
-    'never write or edit mem-comments (<!--mem ...-->) — they are '
-    'daemon-managed; leave existing ones exactly where they are. (4) '
-    'SETTLED LINES: a line whose mem-comment '
-    'carries `resolved:<date>` is done — rewrite it from an imperative into '
-    'the completed fact (or delete it if no longer worth recording). Never '
-    're-open or re-flag it. Leave every other line untouched. After saving, '
-    'reply with one line: how many lines you flagged and how many you '
-    'normalized.'
+    'Review orbital/PROJECT_STATE.md NOW, in this turn, and record in '
+    'orbital/ASKS.md every item that is waiting on me and must outlive this '
+    'conversation: a decision I have not made, something I said I will do '
+    'myself, or something with a date. For each one append a line '
+    '`- open <text>` (or `- open due:YYYY-MM-DD <text>`) — Orbital stamps the '
+    'id and date. Write each line self-contained, for someone who was not '
+    'here: concrete names, no shorthand, no list-number references. Skip '
+    'anything already listed under Open asks, never re-propose anything '
+    'listed as dropped, and do not change PROJECT_STATE.md for this. Do not '
+    'present findings first, do not ask which items I want, do not wait for '
+    'confirmation — this message IS the confirmation. After saving, reply '
+    'with one line: how many asks you opened.'
 )
 
 
@@ -427,13 +314,11 @@ async def _spawn_seeded(project_id: str, content: str) -> str:
 @router.post("/{project_id}/migrate")
 async def migrate_project(project_id: str):
     """Empty-state day-0 flow (spec §5.4): force-refresh the PROJECT_STATE
-    format header to the current one-voice/tag-in-place rails, then spawn a
-    session that both flags unflagged content AND normalizes any file that
-    already adopted the grammar (the migration message covers both in one
-    edit — see ``_MIGRATION_MESSAGE``)."""
+    format header to the current contract, then spawn a session that reviews
+    PROJECT_STATE into open asks (see ``_MIGRATION_MESSAGE``)."""
     project = _require_project(project_id)
     path = _state_path(project.get("workspace", ""))
-    _, content = _load_state(path)
+    content = _load_state(path)
     if content is not None:
         refreshed = memory_entries.force_format_header(content, "state")
         if refreshed != content:

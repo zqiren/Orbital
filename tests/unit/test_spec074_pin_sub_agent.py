@@ -632,29 +632,55 @@ class TestPinnedSpawnPrompt:
         # The standard ban is REPLACED, not doubled.
         assert "Do NOT modify these orbital-managed files:" not in rendered
 
-    def test_pinned_prompt_includes_retraction_titles(self, tmp_path):
+    def test_pinned_prompt_includes_dropped_asks(self, tmp_path):
+        # Spec 089: the "never add entries about" list is the user's dropped
+        # asks (ASKS.md), which replaced retractions.md.
+        from agent_os.agent import asks
+        from agent_os.agent.project_paths import ProjectPaths
+
+        ws = str(tmp_path)
+        orbital = ProjectPaths(ws).orbital_dir
+        os.makedirs(orbital, exist_ok=True)
+        today = asks._today()
+        with open(os.path.join(orbital, "ASKS.md"), "w", encoding="utf-8") as f:
+            f.write("\n".join([
+                asks.FORMAT_HEADER,
+                f"- open a1b2c3 {today} the emoji rebrand",
+                f"- dropped a1b2c3 {today} by:user",
+                f"- open d4e5f6 {today} weekly digest emails",
+                f"- dropped d4e5f6 {today} by:user",
+                f"- open 0a0b0c {today} still open, not dropped",
+                "",
+            ]))
+
+        rendered = render_sub_agent_prompt(
+            ws, None, "codex", ["codex"], pinned=True)
+        assert "NEVER re-propose or add entries about" in rendered
+        assert "the emoji rebrand" in rendered
+        assert "weekly digest emails" in rendered
+        assert "still open, not dropped" not in rendered
+
+        # No dropped asks → no dangling clause.
+        rendered_plain = render_sub_agent_prompt(
+            str(tmp_path / "other"), None, "codex", ["codex"], pinned=True)
+        assert "NEVER re-propose or add entries about" not in rendered_plain
+
+    def test_pinned_prompt_carries_the_asks_grammar(self, tmp_path):
+        rendered = render_sub_agent_prompt(
+            str(tmp_path), None, "codex", ["codex"], pinned=True)
+        assert "ASKS.md" in rendered
+        assert "- open <text>" in rendered
+        assert "the user's own words" in rendered
+
+    def test_retractions_file_no_longer_feeds_the_contract(self, tmp_path):
         from agent_os.agent.project_paths import ProjectPaths
         from agent_os.agent.retractions import Retraction, add_retraction
 
         ws = str(tmp_path)
-        orbital = ProjectPaths(ws).orbital_dir
-        add_retraction(orbital, Retraction(
-            id="r1", title="the emoji rebrand", reason="user said no",
-            date="2026-08-01"))
-        add_retraction(orbital, Retraction(
-            id="r2", title="weekly digest emails", reason="retracted",
-            date="2026-08-02"))
-
-        rendered = render_sub_agent_prompt(
-            ws, None, "codex", ["codex"], pinned=True)
-        assert "NEVER add entries about" in rendered
-        assert "the emoji rebrand" in rendered
-        assert "weekly digest emails" in rendered
-
-        # No retractions → no dangling clause.
-        rendered_plain = render_sub_agent_prompt(
-            str(tmp_path / "other"), None, "codex", ["codex"], pinned=True)
-        assert "NEVER add entries about" not in rendered_plain
+        add_retraction(ProjectPaths(ws).orbital_dir, Retraction(
+            id="r1", title="legacy retraction only", reason="", date="2026-08-01"))
+        rendered = render_sub_agent_prompt(ws, None, "codex", ["codex"], pinned=True)
+        assert "legacy retraction only" not in rendered
 
 
 # ---------------------------------------------------------------------------

@@ -12,7 +12,7 @@
 
 import { renderHook, waitFor, act } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { WorkbenchEntry } from './types';
+import type { WorkbenchClosedAsk, WorkbenchEntry } from './types';
 
 const { apiMock, MockApiError } = vi.hoisted(() => {
   class MockApiError extends Error {
@@ -46,23 +46,91 @@ function entry(overrides: Partial<WorkbenchEntry> = {}): WorkbenchEntry {
   };
 }
 
+function closed(overrides: Partial<WorkbenchClosedAsk> = {}): WorkbenchClosedAsk {
+  return {
+    project_id: 'proj-a',
+    id: 'c1',
+    text: 'Pick the venue',
+    due: null,
+    created: '2026-07-01',
+    closed: '2026-07-20',
+    closed_by: 'agent',
+    kind: 'done',
+    note: '"rooftop"',
+    ...overrides,
+  };
+}
+
 beforeEach(() => {
   apiMock.mockReset();
 });
 
 describe('useWorkbench — fetch', () => {
-  it('fetches the global surface with no project_id', async () => {
+  it('fetches the global surface with no project_id, opting into recently closed', async () => {
     apiMock.mockResolvedValueOnce({ entries: [] });
     renderHook(() => useWorkbench({}));
-    await waitFor(() => expect(apiMock).toHaveBeenCalledWith('/api/v2/workbench'));
+    await waitFor(() =>
+      expect(apiMock).toHaveBeenCalledWith('/api/v2/workbench?recently_closed=1'),
+    );
   });
 
   it('appends project_id in lens mode', async () => {
     apiMock.mockResolvedValueOnce({ entries: [] });
     renderHook(() => useWorkbench({ projectId: 'proj-a' }));
     await waitFor(() =>
-      expect(apiMock).toHaveBeenCalledWith('/api/v2/workbench?project_id=proj-a'),
+      expect(apiMock).toHaveBeenCalledWith(
+        '/api/v2/workbench?project_id=proj-a&recently_closed=1',
+      ),
     );
+  });
+
+  it('exposes recently closed asks, and an empty list when the daemon omits them', async () => {
+    apiMock.mockResolvedValueOnce({ entries: [], recently_closed: [closed()] });
+    const { result } = renderHook(() => useWorkbench({}));
+    await waitFor(() => expect(result.current.recentlyClosed).toHaveLength(1));
+
+    apiMock.mockResolvedValueOnce({ entries: [] }); // an older daemon: no field
+    await act(async () => {
+      await result.current.refetch();
+    });
+    expect(result.current.recentlyClosed).toEqual([]);
+  });
+});
+
+describe('useWorkbench — reopenAsk', () => {
+  it('optimistically removes the row, POSTs reopen, refetches, and signals the badge', async () => {
+    apiMock.mockResolvedValueOnce({ entries: [], recently_closed: [closed()] });
+    const { result } = renderHook(() => useWorkbench({}));
+    await waitFor(() => expect(result.current.recentlyClosed).toHaveLength(1));
+
+    const handler = vi.fn();
+    window.addEventListener('orbital:workbench-changed', handler);
+    apiMock.mockResolvedValueOnce({ status: 'ok' }); // reopen POST
+    apiMock.mockResolvedValueOnce({ entries: [entry({ id: 'c1' })], recently_closed: [] });
+    await act(async () => {
+      await result.current.reopenAsk('proj-a', 'c1');
+    });
+    expect(apiMock).toHaveBeenCalledWith('/api/v2/workbench/proj-a/asks/c1/reopen', {
+      method: 'POST',
+    });
+    expect(result.current.recentlyClosed).toHaveLength(0);
+    expect(result.current.entries.map((e) => e.id)).toEqual(['c1']);
+    expect(handler).toHaveBeenCalledTimes(1);
+    window.removeEventListener('orbital:workbench-changed', handler);
+  });
+
+  it('reverts and reports when the reopen POST fails', async () => {
+    const onReopenError = vi.fn();
+    apiMock.mockResolvedValueOnce({ entries: [], recently_closed: [closed()] });
+    const { result } = renderHook(() => useWorkbench({ onReopenError }));
+    await waitFor(() => expect(result.current.recentlyClosed).toHaveLength(1));
+
+    apiMock.mockRejectedValueOnce(new MockApiError(500, 'boom'));
+    await act(async () => {
+      await result.current.reopenAsk('proj-a', 'c1');
+    });
+    expect(result.current.recentlyClosed).toHaveLength(1);
+    expect(onReopenError).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -122,7 +190,10 @@ describe('useWorkbench — hook surface (spec 2026-07-24 revision)', () => {
     const { result } = renderHook(() => useWorkbench({}));
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(Object.keys(result.current).sort()).toEqual(
-      ['conflict', 'entries', 'error', 'exitEntry', 'loading', 'migrate', 'refetch'].sort(),
+      [
+        'conflict', 'entries', 'error', 'exitEntry', 'loading', 'migrate', 'recentlyClosed',
+        'refetch', 'reopenAsk',
+      ].sort(),
     );
   });
 });

@@ -344,20 +344,21 @@ class ContextManager:
                 if flag:
                     soft_flags.append(flag)
 
-        # Retracted-by-user hard constraints (spec §3, §5.2): a permanent
-        # record of "the user said no to this", injected every turn so the
-        # agent never re-proposes, re-infers, or re-adds something already
-        # declined — not gated on whether PROJECT_STATE happens to mention
-        # it this turn.
-        from agent_os.agent import retractions as _retractions
-        retraction_block = _retractions.render_constraints(
-            _retractions.list_retractions(pp.orbital_dir)
+        # Asks (spec 089 §3.5): open asks plus the ones the user dropped
+        # recently ("never re-propose") ride the per-call runtime block, which
+        # _attach_runtime_block folds into the latest user turn — cache-safe,
+        # and next to what the user just said. This replaced the retraction
+        # row injected near the front of the prompt. With nothing open, a
+        # one-line "none" cue keeps the per-turn reminder (non-scratch
+        # projects with a memory dir only).
+        from agent_os.agent import asks as _asks
+        asks_block = _asks.render_runtime_block(
+            pp.orbital_dir,
+            empty_cue=not self._base_ctx.is_scratch and os.path.isdir(pp.orbital_dir),
         )
-        if retraction_block:
-            layer_messages.append({
-                "role": "system",
-                "content": retraction_block,
-            })
+        if asks_block:
+            truly_dynamic = (truly_dynamic + "\n\n" if truly_dynamic else "") + asks_block
+            dynamic_tokens += self._estimate_tokens(asks_block)
 
         # Layer 3: instructions/*.md
         instructions_dir = pp.instructions_dir
