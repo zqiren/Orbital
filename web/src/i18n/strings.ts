@@ -163,7 +163,7 @@ export const STRINGS = {
   "cards.delete.reassigned": { en: "Now on the default provider: {projects}", zh: "已改用默认模型服务：{projects}" },
   "cards.empty": { en: "No providers yet. Add one to give your agents a model to run on.", zh: "还没有模型服务。添加一个，Agent 才有可用的模型。" },
   "cards.env.readOnly": { en: "This provider comes from AGENT_OS_API_KEY and cannot be edited here.", zh: "该模型服务来自 AGENT_OS_API_KEY，无法在此编辑。" },
-  "cards.form.saving": { en: "Saving and testing…", zh: "正在保存并测试…" },
+  "cards.form.saving": { en: "Saving…", zh: "正在保存…" },
   "cards.health.error": { en: "{message} · {time}", zh: "{message} · {time}" },
   "cards.health.errorWithStatus": { en: "{status} {message} · {time}", zh: "{status} {message} · {time}" },
   "cards.health.genericError": { en: "Connection failed", zh: "连接失败" },

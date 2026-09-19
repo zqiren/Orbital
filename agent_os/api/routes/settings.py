@@ -182,11 +182,11 @@ def _validate_card_shape(provider: str, model: str, base_url: str | None) -> Non
         raise _card_error("unknown_provider", f"Unknown provider '{provider}'.")
 
 
-async def _test_and_record(card_id: str) -> dict:
+async def _test_and_record(card_id: str, *, reuse_recent: bool = False) -> dict:
     """Save-then-test-then-record — the shared tail of every card write (D9)."""
     from agent_os.api.routes.agents_v2 import _test_and_record as _impl
 
-    return await _impl(card_id)
+    return await _impl(card_id, reuse_recent=reuse_recent)
 
 
 def _masked(card_id: str) -> dict:
@@ -206,7 +206,8 @@ async def create_card(req: CreateCardRequest):
 
     The card is saved FIRST and the test runs after: a failed test still
     leaves a saved card carrying the error (D9), so a provider outage can
-    never cost the user the credential they just typed.
+    never cost the user the credential they just typed. The form's own Test
+    Connection on these inputs stands in for that test when there was one.
     """
     _validate_card_shape(req.provider, req.model, req.base_url)
     try:
@@ -219,7 +220,7 @@ async def create_card(req: CreateCardRequest):
         raise _card_error("keychain_error", str(exc), 500)
     telemetry.emit("key_set", {"provider": req.provider})
     telemetry.latch("key_set")
-    test = await _test_and_record(card.id)
+    test = await _test_and_record(card.id, reuse_recent=True)
     return {"card": _masked(card.id), "test": test}
 
 
@@ -247,7 +248,7 @@ async def update_card(card_id: str, req: UpdateCardRequest):
         _settings_store.update_card(card_id, **fields)
     except (RuntimeError, ValueError) as exc:
         raise _card_error("keychain_error", str(exc), 500)
-    test = await _test_and_record(card_id) if retest else None
+    test = await _test_and_record(card_id, reuse_recent=True) if retest else None
     return {"card": _masked(card_id), "test": test}
 
 

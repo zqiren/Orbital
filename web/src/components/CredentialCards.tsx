@@ -24,11 +24,10 @@
  * sorts TokenDance first for the zh locale. A wrong locale guess then costs a
  * scroll, not a dead end.
  *
- * "Add provider" opens the existing provider form as a modal. Its Save posts the
- * card and the daemon runs the connection test as part of that — a failed
- * test still saves, shown red on the row, so a provider outage never blocks
- * saving (D9). The modal therefore does not close itself: the verdict is the
- * thing the user opened it for.
+ * "Add provider" opens the existing provider form as a modal. Save needs Test
+ * Connection to have run on the inputs on screen, and the daemon records that
+ * verdict on the card — a failed test still saves, shown red on the row, so a
+ * provider outage never blocks saving (D9).
  */
 import { useState } from 'react';
 import { Plus } from 'lucide-react';
