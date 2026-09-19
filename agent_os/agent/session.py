@@ -291,7 +291,7 @@ class Session:
 
         # Pinned-to-top flag (BACKLOG spec 067). Rides the SAME session_start
         # meta record as ``name`` — per-session, no sidecar, and carried
-        # verbatim through compaction/stub-truncation by
+        # verbatim through stub-truncation rewrites by
         # ``_collect_meta_lines``. Display/ordering only: never an identifier,
         # never used for routing or lookup. Absent on every pre-067 log, which
         # reads as False — so there is no migration.
@@ -831,7 +831,8 @@ class Session:
 
         The JSONL is otherwise append-only; this is the one mutation of an
         existing line. Atomic via tmp-file + ``os.replace`` (same pattern as
-        ``_compact``). No-op if the file has no session_start meta line.
+        the stub-truncation rewrite). No-op if the file has no session_start
+        meta line.
         """
         with self._lock:
             with self._file_lock:
@@ -1026,7 +1027,7 @@ class Session:
         new_full, inserted = _splice_pending_cancellations(full, effective, content, _now())
         if not inserted:
             return []
-        # Atomic JSONL rewrite (same pattern as compaction / heal).
+        # Atomic JSONL rewrite (same pattern as stub truncation / heal).
         tmp_path = self._filepath + ".tmp"
         with open(tmp_path, "w", encoding="utf-8") as f:
             for msg in new_full:
@@ -1102,7 +1103,7 @@ class Session:
         """Raw ``role: meta`` JSONL lines currently on disk (file order),
         prefixed by a still-pending session_start if one exists.
 
-        Rewrite paths (stub truncation, compaction) regenerate the file from
+        Rewrite paths (stub truncation, the cancellation splice) regenerate the file from
         ``self._messages``, which deliberately excludes meta records — without
         this carry-over the first rewrite erases session identity
         (``session_start``) and the worker tag (``session_kind``), which is
@@ -1152,7 +1153,7 @@ class Session:
         if not changed:
             return
 
-        # Atomic JSONL rewrite (same pattern as _compact)
+        # Atomic JSONL rewrite (compaction itself is append-only since spec 086)
         self._prune_legacy_rows()
         tmp_path = self._filepath + ".tmp"
         with self._lock:

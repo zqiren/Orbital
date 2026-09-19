@@ -133,7 +133,13 @@ class TestAppendOnly:
                             enabled_agents=[], tool_names=[], os_type="linux",
                             datetime_now="2026-01-01T00:00")
         prompt = ContextManager(loaded, _Builder(), ctx, model_context_limit=1_000_000).prepare()
-        assert prompt[1:] == view
+        # The per-call runtime block (e.g. the asks cue, spec 089) rides its
+        # own positional user row when the history ends on a non-user turn;
+        # it is not part of the session's history.
+        history = [m for m in prompt[1:]
+                   if not (m.get("role") == "user"
+                           and str(m.get("content", "")).startswith("[runtime]"))]
+        assert history == view
         assert loaded.get_recent(10_000_000) == view
 
     @pytest.mark.asyncio
