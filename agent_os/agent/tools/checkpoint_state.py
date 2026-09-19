@@ -2,20 +2,18 @@
 # Copyright (C) 2026 Orbital Contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""CheckpointStateTool — agent-decided memory consolidation trigger.
+"""CheckpointStateTool — agent-requested memory-editor pass.
 
-When a [MEMORY HYGIENE] flag reports a Layer-1 file is over its soft budget,
-the agent calls this tool to trigger a consolidation (dedup/cleanup) pass over
-the project state files (PROJECT_STATE, DECISIONS, LESSONS, INDEX): merging
-duplicates and superseding stale entries. The incremental write/edit calls
-already persisted the content; this pass only relieves inflation. It runs via
-run_session_end_routine with bypass_idempotency=True so it serializes like any
-other write.
+Over-budget memory files (PROJECT_STATE, DECISIONS, LESSONS, INDEX) are
+tidied automatically: ContextManager.prepare() notices the file and the loop
+schedules the memory editor in the background (spec 089). This tool asks for
+a pass now, even when nothing is over budget. The editor archives stale
+entries by id and merges duplicates; it never records new facts — the agent's
+own write/edit calls do that.
 
-The actual refresh is performed asynchronously by the AgentLoop trigger
-infrastructure; this tool is only a signal. The tool stores a callback
-(set at registration time) that fires the refresh on the loop; the callback
-returns a status string immediately, the pass runs in the background (spec 013).
+The actual pass is performed asynchronously by the AgentLoop scheduler; this
+tool is only a signal. The callback returns a status string immediately, the
+pass runs in the background (spec 013).
 """
 
 import asyncio
@@ -39,21 +37,16 @@ class CheckpointStateTool(Tool):
         self._on_checkpoint = on_checkpoint
         self.name = "checkpoint_state"
         self.description = (
-            "Consolidate the project state files "
-            "(PROJECT_STATE, DECISIONS, LESSONS, INDEX): merge duplicates and "
-            "supersede stale entries to relieve content inflation. "
-            "Your incremental write/edit calls already SAVED the content — this "
-            "tool does NOT persist anything new; it only cleans up. "
-            "The pass runs in the background and can take a few MINUTES; this "
-            "tool returns immediately, and the [MEMORY HYGIENE] flag may "
-            "persist for several turns while the pass runs — that is normal, "
-            "not a failure. Do not call this tool again while a pass is in "
-            "flight (repeat calls just coalesce into it) and do not hand-edit "
-            "the file mid-pass; the flag itself will tell you when a manual "
-            "edit is the right move. "
-            "Call it ONLY when a [MEMORY HYGIENE] flag reports a file is over its "
-            "soft budget (i.e. consolidation is actually needed) — not on "
-            "task completion or progress milestones."
+            "Ask the background memory editor to tidy the project memory files "
+            "(PROJECT_STATE, DECISIONS, LESSONS, INDEX) now: it moves stale "
+            "entries to their archive by id (leaving a pointer line) and merges "
+            "duplicates. Files over their budget are tidied automatically, so "
+            "this is rarely needed. It never records new facts — your write/"
+            "edit calls do that. The pass runs in the background and can take a "
+            "few MINUTES; this tool returns immediately, and a [MEMORY HYGIENE] "
+            "flag may persist while it runs — that is normal. Do not call it "
+            "again while a pass is in flight (repeat calls just coalesce into "
+            "it) and do not trim the files by hand meanwhile."
         )
         self.parameters = {
             "type": "object",

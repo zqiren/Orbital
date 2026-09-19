@@ -1059,28 +1059,33 @@ class AgentManager:
                 utility_provider=live_utility,
                 session_uuid=session.session_uuid,
                 project_id=project_id,
+                list_sessions=lambda: self.list_sessions(project_id),
             )
 
-        # 11a. Periodic state-refresh callback (turn-count / agent-decided /
-        # token-pressure triggers). Broadcasts state_refresh.lifecycle events
-        # so the frontend can show an inline status indicator.
+        # 11a. Memory-pass callback (over-budget / agent-decided /
+        # token-pressure triggers) — runs the memory editor then the size
+        # floor. Broadcasts state_refresh.lifecycle events so the frontend can
+        # show an inline status indicator.
         async def session_end_refresh_callback(trigger_name: str) -> str | None:
             from datetime import datetime, timezone
             ts = datetime.now(timezone.utc).isoformat()
+            # Phones run an older UI whose trigger enum predates over_budget:
+            # the automatic trigger rides as the one it replaced.
+            wire_trigger = trigger_name if trigger_name in (
+                "agent_decided", "agent_decided_coalesced", "token_pressure",
+            ) else "turn_count"
             self._broadcast(project_id, {
                 "type": "state_refresh.lifecycle",
                 "project_id": project_id,
                 "status": "in_progress",
-                "trigger": trigger_name,
+                "trigger": wire_trigger,
                 "timestamp": ts,
             }, session_id=session_id)
             try:
                 live_provider, live_utility = _live_providers()
-                # The outcome ("llm_merged" / "backstop_only" / "no_delta" /
-                # "skipped_idempotent") is returned to AgentLoop._run_refresh,
-                # which surfaces it to the agent via the hygiene flag and the
-                # State-checkpoint status line. The exception paths below
-                # re-raise; the loop records those as "failed".
+                # The outcome ("edited" / "no_change" / "backstop_only" / ...)
+                # goes back to AgentLoop._run_refresh (hygiene flag + status
+                # line). Exceptions re-raise; the loop records "failed".
                 outcome = await run_session_end_routine(
                     session=session,
                     provider=live_provider,
@@ -1089,12 +1094,15 @@ class AgentManager:
                     session_uuid=session.session_uuid,
                     bypass_idempotency=True,
                     project_id=project_id,
+                    list_sessions=lambda: self.list_sessions(project_id),
+                    # An explicit checkpoint_state runs even under budget.
+                    force=trigger_name in ("agent_decided", "agent_decided_coalesced"),
                 )
                 self._broadcast(project_id, {
                     "type": "state_refresh.lifecycle",
                     "project_id": project_id,
                     "status": "done",
-                    "trigger": trigger_name,
+                    "trigger": wire_trigger,
                     "outcome": outcome,
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 }, session_id=session_id)
@@ -1108,7 +1116,7 @@ class AgentManager:
                     "type": "state_refresh.lifecycle",
                     "project_id": project_id,
                     "status": "skipped",
-                    "trigger": trigger_name,
+                    "trigger": wire_trigger,
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 }, session_id=session_id)
                 logger.warning(
@@ -1121,7 +1129,7 @@ class AgentManager:
                     "type": "state_refresh.lifecycle",
                     "project_id": project_id,
                     "status": "failed",
-                    "trigger": trigger_name,
+                    "trigger": wire_trigger,
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 }, session_id=session_id)
                 logger.exception(

@@ -2,16 +2,15 @@
 # Copyright (C) 2026 Orbital Contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Flag-aware budget/injection/overflow tests (spec §4.1, Task 3).
+"""Budget/injection tests for PROJECT_STATE's machine metadata (spec §4.1).
 
-Three resolutions under test:
 1. ``<!--mem ...-->`` comments (PROJECT_STATE's per-bullet machine metadata)
    are excluded from budget counting for the state file, and stripped
    entirely from ``inject_view`` output — the agent never sees them.
-2. Volatile overflow (``trim_volatile``) never deletes a ``[user]``-flagged
-   entry: unflagged prose is trimmed first; if flagged entries alone still
-   exceed the hard cap, the content is left completely untouched and the
-   existing soft-cap hygiene nudge keeps signalling.
+2. Spec 089 retired flag-based protection: overflow is age-based now (the
+   floor and the injected view both leave the OLDEST lines first — see
+   test_memory_floor.py). What stays here is that a ``[user]`` tag earns no
+   special treatment and a lone oversized entry is never cut.
 3. PROJECT_STATE soft cap is 1800 tokens (was 1500).
 
 DECISIONS/LESSONS carry their own, unrelated ``<!--mem id:...-->`` stamp
@@ -68,7 +67,7 @@ def test_soft_budget_still_trips_once_visible_text_itself_is_big(monkeypatch):
     content = _state_entry("x" * 400)  # visible sentence alone is over soft
     flag = M.soft_flag(content, "state")
     assert flag is not None
-    assert "checkpoint_state" in flag
+    assert "automatically" in flag
 
 
 def test_budget_text_passes_through_decisions_and_lessons_unchanged():
@@ -120,76 +119,41 @@ def test_inject_view_decisions_still_shows_its_own_mem_stamp():
 
 
 # ---------------------------------------------------------------------------
-# Resolution 2: trim_volatile never deletes a flagged entry.
+# Resolution 2 (spec 089): no flag protection; age decides.
 # ---------------------------------------------------------------------------
 
 
-def _filler_lines(n: int) -> str:
-    return "\n".join(f"- filler line {i} " + "z" * 20 for i in range(1, n + 1))
-
-
-def test_trim_volatile_protects_flagged_entry_old_behavior_would_have_dropped():
-    hard = 50  # tokens -> 200-char budget
-    flagged_text = "Send the report to the client."
-    comment = "<!--mem id:abc123 created:2026-07-01 touched:2026-07-01-->"
-    flagged_block = f"- [user] {flagged_text}\n  {comment}"
-    content = _filler_lines(7) + "\n" + flagged_block + "\n"
-
-    assert M.est_tokens(content) > hard, "fixture must exceed the hard budget"
-
-    # Prove the bug this change fixes: the legacy head-keep/tail-drop
-    # algorithm (still used for non-flagged content) would cut the tail —
-    # exactly where the flagged entry sits — right off.
-    legacy = M._head_within(content, hard)
-    assert flagged_text not in legacy
-
-    result = M.trim_volatile(content, hard)
-    assert flagged_text in result
-    assert "id:abc123" in result  # its mem-comment survives too
-    # Unflagged filler was trimmed first — not every filler line survives.
-    surviving_filler = sum(1 for i in range(1, 8) if f"filler line {i}" in result)
-    assert surviving_filler < 7
-    # The kept body (i.e. everything but the informational trim note, which
-    # — like the pre-existing _head_within note — is not itself budgeted)
-    # fits under the comment-stripped budget.
-    body = result.rsplit("\n[... older content trimmed", 1)[0]
-    assert len(user_flags.strip_mem_comments(body)) <= hard * 4
-
-
-def test_trim_volatile_flagged_only_overflow_left_completely_untouched():
-    hard = 10  # tokens -> 40-char budget; too small for the bracket tag alone
-    text = "This obligation absolutely cannot be silently dropped by any means."
-    comment = "<!--mem id:abc999 created:2026-07-01 touched:2026-07-01-->"
-    content = f"- [user] {text}\n  {comment}\n"
-
-    assert len(user_flags.strip_mem_comments(content)) > hard * 4, (
-        "fixture must exceed the budget even after excluding the comment"
+def _filler_lines(n: int, created: str) -> str:
+    return "\n".join(
+        f"- filler line {i} " + "z" * 20
+        + f"\n  <!--mem id:f{i:05d} created:{created} touched:{created}-->"
+        for i in range(1, n + 1)
     )
 
-    result = M.trim_volatile(content, hard)
-    assert result == content
+
+def test_flagged_tag_earns_no_protection_in_the_view():
+    """An OLD flagged line leaves the over-budget view before newer plain
+    lines — the [user] tag no longer means anything to the budget."""
+    hard = 50
+    content = (
+        "- [user] Old flagged question from July.\n"
+        "  <!--mem id:old001 created:2026-07-01 touched:2026-07-01-->\n"
+        + _filler_lines(7, "2026-09-10") + "\n"
+    )
+    view = M.inject_view(content, "state", hard)
+    assert "Old flagged question" not in view
+    assert "filler line 7" in view
+    assert "<!--mem" not in view
 
 
-def test_trim_volatile_untouched_overflow_still_signals_hygiene(monkeypatch):
-    monkeypatch.setitem(M.FILE_BUDGETS, "state", {"soft": 5, "hard": 10})
-    text = "This obligation absolutely cannot be silently dropped by any means."
-    comment = "<!--mem id:abc999 created:2026-07-01 touched:2026-07-01-->"
-    content = f"- [user] {text}\n  {comment}\n"
-
-    result = M.trim_volatile(content, M.FILE_BUDGETS["state"]["hard"])
-    assert result == content
-
-    flag = M.soft_flag(content, "state")
-    assert flag is not None
-    assert "checkpoint_state" in flag
-
-
-def test_trim_volatile_no_flagged_entries_falls_back_to_legacy_head_trim():
-    # INDEX.md (or a state file that hasn't adopted the grammar at all) must
-    # trim byte-identically to before this change.
+def test_trim_volatile_ignores_flags_now():
+    """INDEX-style trim: a [user] tag is just text; only *_ARCHIVE.md lines
+    are pinned."""
     hard = 20
     content = "\n".join(f"- path/to/file{i}.py — does thing {i}" for i in range(1, 15))
-    assert M.trim_volatile(content, hard) == M._head_within(content, hard)
+    content += "\n- [user] a flagged line at the tail"
+    out = M.trim_volatile(content, hard)
+    assert "a flagged line at the tail" not in out
 
 
 def test_trim_volatile_fits_already_returns_unchanged():
@@ -198,60 +162,26 @@ def test_trim_volatile_fits_already_returns_unchanged():
     assert result == content
 
 
-# ---------------------------------------------------------------------------
-# Follow-up finding: inject_view's state overflow fallback must ALSO be
-# flag-aware (memory_entries.py:493-494 previously routed straight to the
-# non-flag-aware `_head_within`) — trim_volatile only runs at the
-# session-end hard-cap pass, so a state file temporarily over hard budget
-# mid-session could still have a flagged entry tail-cut out of THIS turn's
-# agent-visible context even with trim_volatile fixed above.
-# ---------------------------------------------------------------------------
+def test_state_floor_leaves_a_lone_oversized_recent_entry_untouched():
+    text = "This obligation absolutely cannot be silently dropped by any means."
+    content = f"- [user] {text}\n  <!--mem id:abc999 created:2026-09-18 touched:2026-09-18-->\n"
+    r = M.floor_state(content, 5, "2026-09-19")
+    assert r.content is content
+    assert r.over_by > 0
 
 
-def test_inject_view_state_protects_flagged_entry_beyond_head_trim_horizon():
-    hard = 50  # tokens -> 200-char budget
-    flagged_text = "Send the report to the client."
+def test_inject_view_state_everything_fits_is_just_comment_stripped():
+    content = "- [user] short\n  <!--mem id:z created:2026-07-01 touched:2026-07-01-->\n"
+    assert M.inject_view(content, "state", 1000) == "- [user] short\n"
+
+
+def test_inject_view_state_unstamped_overflow_head_trims_deterministically():
+    hard = 10
     content = (
-        _filler_lines(7) + "\n"
-        f"- [user] {flagged_text}\n"
-        '  <!--mem id:abc123 created:2026-07-01 touched:2026-07-01-->\n'
-    )
-
-    # Prove the bug: stripping comments then handing off to the plain
-    # head-trim (the pre-fix code path) cuts the tail — where the flagged
-    # entry sits — right off.
-    stripped = user_flags.strip_mem_comments(content)
-    legacy = M._head_within(stripped, hard)
-    assert flagged_text not in legacy
-
-    view = M.inject_view(content, "state", hard)
-    assert view is not None
-    assert flagged_text in view
-    assert "<!--mem" not in view
-    # Unflagged filler was dropped first — not every filler line survives.
-    surviving_filler = sum(1 for i in range(1, 8) if f"filler line {i}" in view)
-    assert surviving_filler < 7
-
-
-def test_inject_view_state_no_flagged_entries_matches_legacy_head_trim():
-    hard = 20  # tokens -> 80-char budget
-    content = "\n".join(f"- note {i} " + "y" * 10 for i in range(1, 20))
-    view = M.inject_view(content, "state", hard)
-    assert view == M._head_within(content, hard)
-
-
-def test_inject_view_state_flagged_only_overflow_head_trims_deterministically():
-    hard = 10  # tokens -> 40-char budget; too small even for one flagged entry
-    content = (
-        "- [user] First obligation that is quite long indeed.\n"
-        "  <!--mem id:a1 created:2026-07-01 touched:2026-07-01-->\n"
-        "- [user] Second obligation that is also rather long.\n"
-        "  <!--mem id:a2 created:2026-07-02 touched:2026-07-02-->\n"
+        "- First obligation that is quite long indeed.\n"
+        "- Second obligation that is also rather long.\n"
     )
     view = M.inject_view(content, "state", hard)
     assert view is not None
-    assert "<!--mem" not in view
-    # Deterministic: same input, same output, no crash.
     assert M.inject_view(content, "state", hard) == view
-    # Bounded: the note text is the only allowed overshoot beyond budget.
     assert len(view) <= hard * 4 + 120

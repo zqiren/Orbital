@@ -8,11 +8,10 @@ Unit tests for WorkspaceFileManager and session-end routine.
 Covers:
   - File CRUD operations (ensure_dir, read, write, append, read_all, exists)
   - Cold resume context assembly (all files, minimal, truncation)
-  - Session summary extraction (_build_session_summary)
-  - Session-end routine (happy path, bad JSON, empty optionals)
+  - Session-end routine = memory editor + floor (choices by id, bad JSON,
+    whole-file replies ignored, utility provider)
 """
 
-import asyncio
 import json
 import logging
 import os
@@ -26,8 +25,6 @@ from agent_os.agent.workspace_files import (
     FILE_NAMES,
     WorkspaceFileManager,
     run_session_end_routine,
-    _build_session_summary,
-    _parse_session_end_response,
 )
 
 
@@ -221,192 +218,75 @@ def test_build_cold_resume_context_minimal(ws):
 
 
 # ---------------------------------------------------------------------------
-# 9. test_build_session_summary
+# 9-12. The session-end routine is the memory editor (spec 089 §4.2)
 # ---------------------------------------------------------------------------
 
-def test_build_session_summary():
-    """Mock session with messages including tool_calls with write/edit -- correct counts."""
-    messages = [
-        {"role": "user", "content": "Hello"},
-        {
-            "role": "assistant",
-            "content": "I'll write a file.",
-            "tool_calls": [
-                {
-                    "id": "tc_1",
-                    "function": {
-                        "name": "write",
-                        "arguments": json.dumps({"file_path": "/tmp/foo.py"}),
-                    },
-                },
-                {
-                    "id": "tc_2",
-                    "function": {
-                        "name": "edit",
-                        "arguments": json.dumps({"file_path": "/tmp/bar.py"}),
-                    },
-                },
-            ],
-        },
-        {"role": "tool", "content": "OK", "tool_call_id": "tc_1"},
-        {"role": "tool", "content": "OK", "tool_call_id": "tc_2"},
-        {"role": "user", "content": "Thanks"},
-        {
-            "role": "assistant",
-            "content": "Done.",
-            "tool_calls": [
-                {
-                    "id": "tc_3",
-                    "function": {
-                        "name": "read",
-                        "arguments": json.dumps({"file_path": "/tmp/baz.py"}),
-                    },
-                },
-            ],
-        },
-        {"role": "tool", "content": "file content", "tool_call_id": "tc_3"},
-    ]
-    session = _mock_session(messages, session_id="sess_abc")
+def _mock_editor_provider(response_text):
+    """A provider whose complete() answers once with plain text (no tools)."""
+    provider = _mock_provider(response_text)
+    provider.complete.return_value.raw_message = {"role": "assistant", "content": response_text}
+    provider.complete.return_value.tool_calls = []
+    return provider
 
-    summary = _build_session_summary(session)
-
-    assert summary["session_id"] == "sess_abc"
-    assert summary["message_count"] == 7
-    assert summary["tool_calls_count"] == 3  # tc_1, tc_2, tc_3
-    assert sorted(summary["files_modified"]) == ["/tmp/bar.py", "/tmp/foo.py"]
-    assert len(summary["recent_messages"]) > 0
-
-
-# ---------------------------------------------------------------------------
-# 10. test_session_end_routine_writes_files
-# ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_session_end_routine_writes_files(tmp_path):
-    """Mock LLM returns valid JSON -- correct Layer-1 files written.
-
-    New session-end contract: JSON keys are project_state, decisions, lessons,
-    index (no session_log_entry, no "context"). STATE/INDEX are overwritten;
-    DECISIONS/LESSONS are stamped with metadata before write, so assertions on
-    those files check substrings, not exact bytes.
-    """
+async def test_session_end_routine_applies_editor_choices_by_id(tmp_path):
     ws = WorkspaceFileManager(str(tmp_path))
+    ws.write("state", "## Now\n- Old launch plan.\n- Current focus.\n")
+    old_id = [ln for ln in ws.read("state").split("\n") if "<!--mem id:" in ln][0].split("id:")[1].split()[0]
+    provider = _mock_editor_provider(json.dumps({
+        "archive": [{"file": "PROJECT_STATE.md", "id": old_id, "pointer": "old launch plan"}],
+    }))
+    session = _mock_session([], session_id="sess_editor")
 
-    llm_response = json.dumps({
-        "project_state": "# Project State\nEverything is great.",
-        "decisions": "## 2026-02-15: Chose A\n**Chose:** A\n**Reason:** Better.\n",
-        "lessons": "1. **Bad thing.** Do the good thing instead.\n",
-        "index": "## People\n- Alice: dev lead\n",
-    })
+    out = await run_session_end_routine(
+        session, provider, ws, session_uuid=session.session_uuid, force=True)
 
-    session = _mock_session([
-        {"role": "user", "content": "Hello"},
-        {"role": "assistant", "content": "Hi there."},
-    ], session_id="sess_writes_files")
-    provider = _mock_provider(llm_response)
-
-    # Fresh workspace has no cleanup marker -> delta gate passes -> LLM runs.
-    await run_session_end_routine(session, provider, ws, session_uuid=session.session_uuid)
-
-    # state is written verbatim (overwrite scratchpad)
-    assert ws.read("state") == _hdr("state", "# Project State\nEverything is great.")
-    # decisions written (stamped) — title/body survive the metadata stamp
-    decisions = ws.read("decisions")
-    assert "Chose A" in decisions
-    assert "<!--mem id:" in decisions  # stamped by the persist path
-    # lessons written (stamped, renumbered contiguously)
-    assert "Do the good thing instead." in ws.read("lessons")
-    # index written verbatim (navigation map, overwrite) — replaces old "context"
-    assert "Alice" in ws.read("index")
-    # SESSION_LOG is gone — its key no longer exists on the roster.
+    assert out == "edited"
+    state = ws.read("state")
+    assert "- Old launch plan." not in state and "- Current focus." in state
+    assert "[archived " in state and f"id:{old_id}] old launch plan → PROJECT_STATE_ARCHIVE.md" in state
+    assert "- Old launch plan." in ws.read("state_archive")
     assert "session_log" not in FILE_NAMES
 
 
-# ---------------------------------------------------------------------------
-# 11. test_session_end_routine_bad_json
-# ---------------------------------------------------------------------------
-
 @pytest.mark.asyncio
 async def test_session_end_routine_bad_json(tmp_path, caplog):
-    """LLM returns garbage -- no LLM-derived writes, parse warning logged.
-
-    On unparseable JSON the routine logs a parse-failure warning and falls
-    through to the deterministic backstop. With a tiny pre-written state the
-    backstop trims nothing, so no Layer-1 file is touched. (SESSION_LOG no
-    longer exists, so there's nothing for it to skip writing.)
-    """
+    """Unparseable replies: nothing is edited, the floor still runs, and the
+    outcome says only the backstop ran."""
     ws = WorkspaceFileManager(str(tmp_path))
-    # Pre-write a state file (well under budget) to ensure it's not modified.
     ws.write("state", "original state")
-
     session = _mock_session([{"role": "user", "content": "Hello"}], session_id="sess_bad_json")
-    provider = _mock_provider("This is not JSON at all, sorry!")
+    provider = _mock_editor_provider("This is not JSON at all, sorry!")
 
     with caplog.at_level(logging.WARNING):
-        await run_session_end_routine(session, provider, ws, session_uuid=session.session_uuid)
+        out = await run_session_end_routine(
+            session, provider, ws, session_uuid=session.session_uuid, force=True)
 
-    # state should be unchanged (no LLM-derived overwrite happened)
+    assert out == "backstop_only"
     assert ws.read("state") == _hdr("state", "original state")
-    # No durable files created from the garbage response.
     assert ws.read("decisions") is None
     assert ws.read("lessons") is None
-    # Parse-failure warning should be logged.
-    assert "JSON parse failed" in caplog.text
+    assert "no usable JSON" in caplog.text
 
-
-# ---------------------------------------------------------------------------
-# 12. test_session_end_routine_empty_optionals
-# ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_session_end_routine_empty_optionals(tmp_path):
-    """LLM returns empty decisions/lessons/index -- only state written.
-
-    A "" (or whitespace-only) field means "preserve the existing file
-    unchanged" in the new contract, so empty optionals must not create files.
-    SESSION_LOG no longer exists, so state is the only file that gets written.
-    """
+async def test_session_end_routine_ignores_whole_file_replies(tmp_path):
+    """The old contract (complete files back) no longer means anything."""
     ws = WorkspaceFileManager(str(tmp_path))
+    ws.write("state", "# State\nDoing well.")
+    provider = _mock_editor_provider(json.dumps({
+        "project_state": "# State\nsomething else", "decisions": "## x\n", "lessons": "1. y\n",
+    }))
+    session = _mock_session([{"role": "user", "content": "Go"}], session_id="sess_whole")
 
-    llm_response = json.dumps({
-        "project_state": "# State\nDoing well.",
-        "decisions": "",
-        "lessons": "  ",
-        "index": "",
-    })
+    out = await run_session_end_routine(
+        session, provider, ws, session_uuid=session.session_uuid, force=True)
 
-    session = _mock_session([{"role": "user", "content": "Go"}], session_id="sess_empty_opt")
-    provider = _mock_provider(llm_response)
-
-    await run_session_end_routine(session, provider, ws, session_uuid=session.session_uuid)
-
-    # state written
+    assert out == "no_change"
     assert ws.read("state") == _hdr("state", "# State\nDoing well.")
-    # Empty optionals should NOT create files
     assert ws.read("decisions") is None
     assert ws.read("lessons") is None
-    assert ws.read("index") is None
-
-
-# ---------------------------------------------------------------------------
-# Extra: test_parse_session_end_response edge cases
-# ---------------------------------------------------------------------------
-
-def test_parse_response_with_markdown_fences():
-    """JSON wrapped in ```json ... ``` fences is correctly parsed."""
-    text = '```json\n{"project_state": "ok"}\n```'
-    result = _parse_session_end_response(text)
-    assert result == {"project_state": "ok"}
-
-
-def test_parse_response_none_input():
-    """None input returns None."""
-    assert _parse_session_end_response(None) is None
-
-
-def test_parse_response_empty_string():
-    """Empty string returns None."""
-    assert _parse_session_end_response("") is None
 
 
 # ---------------------------------------------------------------------------
@@ -426,30 +306,23 @@ def test_exists(ws):
 
 @pytest.mark.asyncio
 async def test_session_end_uses_utility_provider(tmp_path):
-    """When utility_provider is given, it is used instead of the main provider."""
+    """When utility_provider is given, the editor runs on it, not the main one."""
     ws = WorkspaceFileManager(str(tmp_path))
-
-    llm_response = json.dumps({
-        "project_state": "state",
-        "decisions": "",
-        "lessons": "",
-        "index": "",
-    })
+    ws.write("state", "state")
 
     session = _mock_session([{"role": "user", "content": "Hi"}], session_id="sess_util_prov")
-    main_provider = _mock_provider("should not be called")
-    utility_provider = _mock_provider(llm_response)
+    main_provider = _mock_editor_provider("should not be called")
+    utility_provider = _mock_editor_provider("{}")
 
     await run_session_end_routine(
         session, main_provider, ws,
         utility_provider=utility_provider,
         session_uuid=session.session_uuid,
+        force=True,
     )
 
-    # utility_provider should have been called, not main_provider
     utility_provider.complete.assert_called_once()
     main_provider.complete.assert_not_called()
-
     assert ws.read("state") == _hdr("state", "state")
 
 

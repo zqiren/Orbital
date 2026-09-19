@@ -2,11 +2,13 @@
 # Copyright (C) 2026 Orbital Contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Regression: turn-count trigger fires after COOLDOWN_TURNS without manual /new.
+"""Regression: there is NO turn-count memory trigger any more (spec 089).
 
-16 loop iterations with no manual /new call must result in the refresh
-callback being invoked (turn-count trigger fires at turn 15). The check
-is independent of agent_manager wiring — we test the loop directly.
+The loop used to start a consolidation pass every 50 iterations regardless
+of whether memory needed it. The memory editor now runs when a Layer-1 file
+is over budget (reported by ContextManager.prepare()) or on an explicit
+checkpoint_state. A long session with memory under budget must never start a
+pass; the turn counter still runs, because the status line reports it.
 
 We use varying tool call results to avoid repetition-detection kicks.
 """
@@ -16,7 +18,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from agent_os.agent.loop import AgentLoop, COOLDOWN_TURNS
+from agent_os.agent.loop import AgentLoop
 from agent_os.agent.providers.types import LLMResponse, TokenUsage
 from agent_os.agent.tools.base import ToolResult
 from agent_os.agent.session import persist_user_row
@@ -93,89 +95,75 @@ def _make_tool_registry():
 
 
 @pytest.mark.asyncio
-async def test_turn_count_fires_after_cooldown_turns():
-    """After COOLDOWN_TURNS iterations the turn-count trigger fires.
-
-    Spec 013: the trigger now schedules a BACKGROUND pass instead of
-    blocking the loop. Previously this test passed only incidentally via the
-    asyncio.to_thread yield in the tool-execution path (loop.py) giving the
-    inline-awaited refresh a chance to run; it is now made deterministic by
-    patching REFRESH_DEBOUNCE_S to 0 and explicitly draining after run().
-    """
+async def test_a_long_session_never_fires_a_pass_on_turn_count():
     session = _make_session()
-    context_manager = _make_context_manager()
-    tool_registry = _make_tool_registry()
+    refresh_calls = []
 
-    refresh_call_count = {"n": 0}
-
-    async def mock_refresh(trigger_name: str):
-        refresh_call_count["n"] += 1
+    async def refresh(trigger_name):
+        refresh_calls.append(trigger_name)
 
     loop = AgentLoop(
         session=session,
         provider=MagicMock(),
-        tool_registry=tool_registry,
-        context_manager=context_manager,
-        on_session_end_refresh=mock_refresh,
-        max_iterations=COOLDOWN_TURNS + 1,  # 16 iterations
+        tool_registry=_make_tool_registry(),
+        context_manager=_make_context_manager(),
+        on_session_end_refresh=refresh,
+        max_iterations=120,
     )
+    calls = {"n": 0}
 
-    call_count = {"n": 0}
-
-    async def mock_stream(context, tool_schemas):
-        call_count["n"] += 1
-        if call_count["n"] > COOLDOWN_TURNS:
-            # End loop on iteration 16
-            return _text_response("All done")
-        # Use unique tool calls to keep the loop alive across iterations
-        return _unique_tool_response(call_count["n"])
-
-    loop._stream_response = mock_stream
-
-    with patch("agent_os.agent.loop.REFRESH_DEBOUNCE_S", 0):
-        persist_user_row(loop._session, "Start task")
-        await loop.run()
-    await loop.drain_refresh()
-
-    # Refresh must have fired at least once (turn-count trigger at turn 15)
-    assert refresh_call_count["n"] >= 1, (
-        f"Expected refresh to fire after {COOLDOWN_TURNS} turns, "
-        f"but it fired {refresh_call_count['n']} times."
-    )
-
-
-@pytest.mark.asyncio
-async def test_turns_since_last_update_resets_after_refresh():
-    """After a turn-count refresh, turns_since_last_update resets to 0."""
-    session = _make_session()
-    context_manager = _make_context_manager()
-    tool_registry = _make_tool_registry()
-
-    async def mock_refresh(trigger_name: str):
-        pass  # refresh fires, resetting the counter
-
-    loop = AgentLoop(
-        session=session,
-        provider=MagicMock(),
-        tool_registry=tool_registry,
-        context_manager=context_manager,
-        on_session_end_refresh=mock_refresh,
-        max_iterations=COOLDOWN_TURNS + 1,
-    )
-
-    call_n = {"n": 0}
-
-    async def mock_stream(context, tool_schemas):
-        call_n["n"] += 1
-        if call_n["n"] > COOLDOWN_TURNS:
-            return _text_response("done")
-        return _unique_tool_response(call_n["n"])
+    async def mock_stream(ctx, schemas):
+        calls["n"] += 1
+        if calls["n"] > 110:
+            return _text_response()
+        return _unique_tool_response(calls["n"])
 
     loop._stream_response = mock_stream
     persist_user_row(loop._session, "go")
-    await loop.run()
+    await asyncio.wait_for(loop.run(), timeout=30)
+    await loop.drain_refresh()
 
-    # After refresh at iteration 15, counter resets to 0, then increments by 1 at iter 16
-    assert loop._turns_since_last_update <= COOLDOWN_TURNS, (
-        f"Counter should reset after refresh, got {loop._turns_since_last_update}"
+    assert calls["n"] > 100
+    assert refresh_calls == [], f"no pass should fire on turn count: {refresh_calls}"
+    # The counter still runs for the status line.
+    assert loop._turns_since_last_update > 100
+
+
+@pytest.mark.asyncio
+async def test_an_over_budget_report_fires_exactly_one_pass():
+    session = _make_session()
+    refresh_calls = []
+
+    async def refresh(trigger_name):
+        refresh_calls.append(trigger_name)
+
+    cm = _make_context_manager()
+
+    def _prepare():
+        cm._on_memory_over_budget(["state"])
+        return [{"role": "system", "content": "sys"}]
+
+    cm.prepare.side_effect = _prepare
+    loop = AgentLoop(
+        session=session,
+        provider=MagicMock(),
+        tool_registry=_make_tool_registry(),
+        context_manager=cm,
+        on_session_end_refresh=refresh,
+        max_iterations=30,
     )
+    calls = {"n": 0}
+
+    async def mock_stream(ctx, schemas):
+        calls["n"] += 1
+        if calls["n"] > 20:
+            return _text_response()
+        return _unique_tool_response(calls["n"])
+
+    loop._stream_response = mock_stream
+    persist_user_row(loop._session, "go")
+    await asyncio.wait_for(loop.run(), timeout=30)
+    await loop.drain_refresh()
+
+    # Reported on every prepare(), but single-flight + debounce → one pass.
+    assert refresh_calls == ["over_budget"]

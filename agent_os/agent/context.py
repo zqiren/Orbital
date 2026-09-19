@@ -130,6 +130,10 @@ class ContextManager:
         self._last_checkpoint_outcome: str | None = None
         self._refresh_in_flight: bool = False
         self._refresh_in_flight_since_turn: int | None = None
+        # Memory-editor trigger (spec 089 §4.2): callable(list[file_key]),
+        # installed by AgentLoop; prepare() calls it whenever a live Layer-1
+        # file is over its soft budget. Never raises into prepare().
+        self._on_memory_over_budget = None
         self._sub_agent_provider = sub_agent_provider  # callable() -> list[dict]
         self._scope_projects_provider = scope_projects_provider  # callable() -> list[dict]
         self._sub_agent_deployment_instructions_provider = (
@@ -329,11 +333,14 @@ class ContextManager:
             last_turn=self._last_checkpoint_turn,
         )
         soft_flags: list[str] = []
+        over_budget: list[str] = []
         if self._workspace_files is not None:
             for key, filename in _LAYER1_FILES:
                 content = self._workspace_files.read(key)
                 if not content:
                     continue
+                if _mem.over_soft_budget(content, key):
+                    over_budget.append(key)
                 view = _mem.inject_view(content, key, _budgets[key]["hard"])
                 if view:
                     layer_messages.append({
@@ -431,6 +438,17 @@ class ContextManager:
 
         # Validate tool results: ensure every tool_call has a matching result
         result = self._validate_tool_results(result)
+
+        # The Layer-1 files were measured above, so this is where an
+        # over-budget file schedules the memory editor — whoever wrote it (an
+        # external agent included). The scheduler is single-flight, debounced
+        # and gated on a change since the last pass; it only ever starts a
+        # background task.
+        if over_budget and self._on_memory_over_budget is not None:
+            try:
+                self._on_memory_over_budget(over_budget)
+            except Exception:  # noqa: BLE001 — a scheduler bug must not break a turn
+                logger.warning("memory editor scheduling failed", exc_info=True)
 
         # Soft-cap memory-hygiene nudges go in the dynamic (uncached) slot —
         # NEVER the cached prefix — so a flag that churns while a file is over

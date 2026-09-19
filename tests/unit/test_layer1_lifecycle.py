@@ -10,26 +10,22 @@ them. What survived was::
 
     - [user] **选方案 A / B / C**（默认 A）？
 
-and what was destroyed was the briefing that made it answerable — what A, B and
-C were, the 19-24h cost split, and why B was advised against. The question
-outlived its own answer, and PROJECT_STATE has no archive, so it was gone.
+and what was destroyed was the briefing that made it answerable. The fix then
+was section-level flag protection; spec 089 replaced it with something simpler
+that covers the same failure without the flag: the floor is AGE-based. It only
+ever moves a bullet older than 14 days (with its continuation lines, leaving a
+pointer), never prose or headings, and nothing recent — so a briefing written
+alongside its questions can only leave together with them, and only once all
+of it is old.
 
-Two defects, one lifecycle:
-
-  1. The protected unit was the flagged LINE. Supporting prose is by definition
-     unflagged, and here it sat in the same ``##`` section separated by blank
-     lines — so a block-level rule would not have saved it either. The unit is
-     now the SECTION: if any line in a ``##`` section is flagged, the whole
-     section survives together, in the live file.
-
-  2. Volatile files DELETED on overflow (no ``ARCHIVE_OF`` entry). Now
-     PROJECT_STATE demotes to a Layer-2 ``PROJECT_STATE_ARCHIVE.md`` — never
-     injected, never budgeted, read on demand — so nothing is destroyed.
+  1. Recent content is never cut; old bullets MOVE, never delete.
+  2. PROJECT_STATE demotes to a Layer-2 ``PROJECT_STATE_ARCHIVE.md`` — never
+     injected, never budgeted, read on demand.
 
 Plus: INDEX carries the pointers that make every archive discoverable, and its
 ``LESSONS_ARCHIVE`` pointer was the LAST line of the file — first to go under a
 tail-dropping trim, which would strand the archive on disk. Pointer lines are
-now pinned.
+pinned.
 """
 
 from __future__ import annotations
@@ -45,15 +41,6 @@ from agent_os.agent.workspace_files import FILE_NAMES, WorkspaceFileManager
 BRIEFED_SECTION = """\
 # Project State
 
-## Current Status
-Shipped v0.8.0. Nothing pending here.
-Filler line to make this section droppable and worth dropping.
-More filler so the section has real weight in the budget, well beyond the
-slack the test allows, so that dropping it is the only way to fit. Padding
-padding padding padding padding padding padding padding padding padding.
-Padding padding padding padding padding padding padding padding padding.
-DROPPABLE-TAIL-SENTINEL at the end of the unflagged section.
-
 ## Hero GIF discussion (2026-07-27)
 claude-code recommends option A: relay layout, 0-9 lines.
 
@@ -66,73 +53,35 @@ claude-code recommends option A: relay layout, 0-9 lines.
 **Decisions needed:**
 
 - [user] **pick option A / B / C** (default A)?
-  <!--mem id:4148d8 created:2026-07-27 touched:2026-07-27-->
 - [user] **video length 5 / 8 / 12 min** (default 8)?
-  <!--mem id:44191b created:2026-07-27 touched:2026-07-27-->
 """
 
 
-def _budget_forcing_trim(content: str) -> int:
-    """A budget the PROTECTED content fits inside, but the whole file does not.
-
-    Sizing matters: below the protected content's own size, ``trim_volatile``
-    hits its escape hatch and returns the file untouched — which would make
-    these tests pass without trimming anything.
-    """
-    lines = content.split("\n")
-    protected = _mem._flagged_sections(content)
-    protected_text = "\n".join(lines[i] for i in sorted(protected))
-    budget = int(_mem.est_tokens(protected_text)) + 5
-    assert budget < int(_mem.est_tokens(content)), "budget must force a trim"
-    return budget
+def _old_bullets(n: int, created: str = "2026-01-01") -> str:
+    return "".join(
+        f"- old item {i} " + "o" * 600 + f"\n  <!--mem id:o{i:05d} created:{created} touched:{created}-->\n"
+        for i in range(n)
+    )
 
 
 # ---------------------------------------------------------------------------
-# 1. A [user] question keeps its briefing, in the live file
+# 1. A recent briefing is never cut — nor is prose, whatever its age
 # ---------------------------------------------------------------------------
 
-def test_flagged_section_keeps_its_supporting_prose():
-    """The exact regression: the question must not outlive its own answer."""
-    out = _mem.trim_volatile(BRIEFED_SECTION, _budget_forcing_trim(BRIEFED_SECTION))
-    assert out != BRIEFED_SECTION, "guard: this must actually have trimmed"
-    assert "pick option A / B / C" in out                      # the question
-    assert "option B has a competitor-bashing risk" in out     # why not B
-    assert "cost: hero 7.5-9.5h" in out                        # what it costs
-    assert "claude-code recommends option A" in out            # the recommendation
+def test_recent_briefing_and_its_questions_survive_the_floor(tmp_path):
+    """The exact regression shape, written today: the floor may not touch it,
+    however far over target the file is."""
+    ws = WorkspaceFileManager(str(tmp_path))
+    ws.write("state", BRIEFED_SECTION)       # the chokepoint stamps created=today
+    content = ws.read("state")
+    r = _mem.floor_state(content, 5, _mem._today())
+    assert r.content is content
+    assert r.over_by > 0
 
 
-def test_unflagged_section_is_still_droppable():
-    """Protection must be earned by a flag, or trimming can never reclaim
-    anything and the budget stops meaning something. Dropping is tail-first,
-    so the end of the unflagged section is what goes first."""
-    out = _mem.trim_volatile(BRIEFED_SECTION, _budget_forcing_trim(BRIEFED_SECTION))
-    assert "DROPPABLE-TAIL-SENTINEL" not in out
-    assert len(out) < len(BRIEFED_SECTION)
-
-
-def test_blank_lines_do_not_split_a_section():
-    """The briefing sat two blank lines above its questions — a blank-line
-    block rule would have dropped it. The unit is the ## section."""
-    lines = BRIEFED_SECTION.split("\n")
-    hero = next(i for i, l in enumerate(lines) if l.startswith("## Hero GIF"))
-    facts = next(i for i, l in enumerate(lines) if "competitor-bashing" in l)
-    flagged = next(i for i, l in enumerate(lines) if "pick option A" in l)
-    assert "" in lines[facts:flagged]          # guard: blank line really is between
-    assert hero in _mem._flagged_sections(BRIEFED_SECTION)
-    assert facts in _mem._flagged_sections(BRIEFED_SECTION)
-
-
-def test_flagged_only_content_is_returned_unchanged():
-    """Existing escape hatch: when protected content alone busts the budget,
-    nothing is silently deleted — the soft flag keeps signalling instead."""
-    content = "## S\n- [user] a\n- [user] b\n"
-    assert _mem.trim_volatile(content, 1) == content
-
-
-def test_file_with_no_flags_still_head_trims():
-    plain = "# X\n" + "".join(f"- line {i}\n" for i in range(200))
-    out = _mem.trim_volatile(plain, 50)
-    assert len(out) < len(plain)
+def test_prose_and_headings_are_never_floor_candidates():
+    content = "# S\n\n## Old\n" + "".join(f"filler {i}\n" for i in range(400))
+    assert _mem.floor_state(content, 5, "2026-09-19").content is content
 
 
 # ---------------------------------------------------------------------------
@@ -151,27 +100,26 @@ def test_archives_are_layer2_never_injected():
         assert archive_key not in _mem.FILE_BUDGETS
 
 
-def test_state_overflow_moves_prose_to_archive_instead_of_deleting(tmp_path):
+def test_state_overflow_moves_old_bullets_to_archive_instead_of_deleting(tmp_path):
     ws = WorkspaceFileManager(str(tmp_path))
     ws.ensure_dir()
-    # Volatile trimming keeps the HEAD (current status) and drops the tail, so
-    # the sentinel goes last — that is the content actually at risk.
-    doomed = "UNIQUE-SENTINEL-PROSE-THAT-MUST-SURVIVE"
-    ws.write("state", "# S\n\n## Current\n"
-             + "".join(f"filler {i}\n" for i in range(4000))
-             + "\n## Old\n" + doomed + "\n")
+    doomed = "UNIQUE-SENTINEL-OLD-BULLET-THAT-MUST-SURVIVE " + "d" * 300
+    ws.write("state", "# S\n\n## Old\n- " + doomed
+             + "\n  <!--mem id:dm0001 created:2025-12-01 touched:2025-12-01-->\n"
+             + _old_bullets(20))
 
     from agent_os.agent import workspace_files as wsf
     wsf._apply_hard_caps(ws)
 
-    assert doomed not in (ws.read("state") or ""), "should have been trimmed out"
+    assert "- " + doomed not in (ws.read("state") or ""), "should have been moved out"
+    assert "id:dm0001" in (ws.read("state") or ""), "a pointer must be left"
     assert doomed in (ws.read("state_archive") or ""), "must be MOVED, not deleted"
 
 
 def test_state_archive_gets_an_index_pointer(tmp_path):
     ws = WorkspaceFileManager(str(tmp_path))
     ws.ensure_dir()
-    ws.write("state", "# S\n\n## Old\n" + "".join(f"filler {i}\n" for i in range(4000)))
+    ws.write("state", "# S\n\n## Old\n" + _old_bullets(20))
     from agent_os.agent import workspace_files as wsf
     wsf._apply_hard_caps(ws)
     assert "PROJECT_STATE_ARCHIVE.md" in (ws.read("index") or "")

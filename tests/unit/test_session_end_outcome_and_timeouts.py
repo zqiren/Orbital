@@ -2,22 +2,22 @@
 # Copyright (C) 2026 Orbital Contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Unit tests: run_session_end_routine outcome reporting + locked-on-reasoning
-timeout policy, and LLMProvider.reasoning_locked_on.
+"""Unit tests: run_session_end_routine outcome reporting + bounded editor
+runs, and LLMProvider.reasoning_locked_on.
 
-Incident context (orbital-marketing, 2026-07-03..09): the consolidation LLM
-call ran on MiniMax-M3 (reasoning locked-on, enable='model_only'), where
-disable_reasoning is a no-op. Every attempt blew through the 30/60/90s retry
-ladder, so every pass fell back to the deterministic backstop — and the agent
-had no way to learn any of this.
+Incident context (orbital-marketing, 2026-07-03..09 and 07-27): the old
+whole-file merge regenerated every Layer-1 file in one response, so its
+deadline had to scale with the files and still timed out; every failure fell
+back to the deterministic backstop and the agent could not tell. Spec 089
+replaced it with the memory editor, whose replies are short id lists — each
+call is bounded, and so is the whole run.
 
-New invariants:
+Invariants:
   1. run_session_end_routine RETURNS an outcome string so the loop can surface
-     it to the agent: "llm_merged" | "backstop_only" | "no_delta" |
-     "skipped_idempotent".
-  2. When the provider's reasoning is locked-on, retrying the same prompt on
-     30/60/90s cannot succeed and only burns tokens — use a single attempt
-     with one long timeout instead.
+     it to the agent: "edited" | "no_change" | "backstop_only" | "no_delta" |
+     "not_needed" | "in_flight" | "skipped_idempotent".
+  2. A hung or failing model never blocks the floor, and never marks the
+     files clean (the next pass retries).
   3. LLMProvider.reasoning_locked_on is True exactly when the model reasons
      and no request param can turn it off.
 """
@@ -26,22 +26,19 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
-from datetime import date
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from tests.testutils import streamable
 
-from agent_os.agent import memory_entries as _mem
+from agent_os.agent import memory_editor
 from agent_os.agent import workspace_files as wsf_module
 from agent_os.agent.workspace_files import (
     WorkspaceFileManager,
     run_session_end_routine,
 )
 from agent_os.agent.providers.openai_compat import LLMProvider
-from agent_os.agent.providers.types import StreamChunk
 from agent_os.config.provider_registry import ReasoningInfo
 
 
@@ -49,25 +46,36 @@ def _mock_session(session_id="sess_outcome_test"):
     session = MagicMock()
     session.session_id = session_id
     session.session_uuid = session_id
-    session.get_messages.return_value = [
-        {"role": "user", "content": "Hello"},
-        {"role": "assistant", "content": "Hi there!"},
-    ]
+    session.get_messages.return_value = []
     return session
 
 
-def _valid_llm_response(tag="x"):
-    return json.dumps({
-        "project_state": f"# State\nstate-{tag}",
-        "decisions": f"## 2026-06-18: Decision {tag}\n**Chose:** A\n\n",
-        "lessons": f"1. **Lesson {tag}.** Problem p, fix f.\n",
-        "index": f"# INDEX\n- PROJECT_STATE.md — current scratchpad ({tag}).\n",
-    })
+def _provider_answering(text):
+    provider = streamable(AsyncMock())
+    resp = MagicMock()
+    resp.text = text
+    resp.raw_message = {"role": "assistant", "content": text}
+    resp.tool_calls = []
+    provider.complete.return_value = resp
+    return provider
+
+
+def _workspace(tmp_path) -> WorkspaceFileManager:
+    ws = WorkspaceFileManager(str(tmp_path))
+    ws.write("state", "## Now\n- Launch prep.\n- Old note.\n")
+    return ws
+
+
+def _archive_first_state_line(ws) -> str:
+    eid = [ln for ln in ws.read("state").split("\n") if "<!--mem id:" in ln][0]
+    eid = eid.split("id:")[1].split()[0]
+    return json.dumps({"archive": [{"file": "PROJECT_STATE.md", "id": eid, "pointer": "p"}]})
 
 
 @pytest.fixture(autouse=True)
 def _reset_completion_set():
     wsf_module._completed_session_ends.clear()
+    memory_editor._RUNNING.clear()
     yield
     wsf_module._completed_session_ends.clear()
 
@@ -77,194 +85,128 @@ def _reset_completion_set():
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_returns_llm_merged_on_success(tmp_path):
-    ws = WorkspaceFileManager(str(tmp_path))
-    provider = streamable(AsyncMock())
-    resp = MagicMock()
-    resp.text = _valid_llm_response("ok")
-    provider.complete.return_value = resp
-
+async def test_returns_edited_on_an_applied_choice(tmp_path):
+    ws = _workspace(tmp_path)
+    provider = _provider_answering(_archive_first_state_line(ws))
     outcome = await run_session_end_routine(
-        _mock_session("s_out_ok"), provider, ws, session_uuid="s_out_ok"
-    )
-    assert outcome == "llm_merged"
+        _mock_session("s_out_ok"), provider, ws, session_uuid="s_out_ok", force=True)
+    assert outcome == "edited"
 
 
 @pytest.mark.asyncio
-async def test_returns_backstop_only_when_all_attempts_timeout(tmp_path):
-    ws = WorkspaceFileManager(str(tmp_path))
+async def test_returns_no_change_when_the_editor_chooses_nothing(tmp_path):
+    ws = _workspace(tmp_path)
+    outcome = await run_session_end_routine(
+        _mock_session("s_nc"), _provider_answering("{}"), ws,
+        session_uuid="s_nc", force=True)
+    assert outcome == "no_change"
+
+
+@pytest.mark.asyncio
+async def test_returns_backstop_only_on_timeout(tmp_path):
+    ws = _workspace(tmp_path)
     provider = streamable(AsyncMock())
     provider.complete.side_effect = asyncio.TimeoutError()
-
     outcome = await run_session_end_routine(
-        _mock_session("s_out_to"), provider, ws, session_uuid="s_out_to"
-    )
+        _mock_session("s_out_to"), provider, ws, session_uuid="s_out_to", force=True)
     assert outcome == "backstop_only"
 
 
 @pytest.mark.asyncio
 async def test_returns_backstop_only_on_non_timeout_error(tmp_path):
-    ws = WorkspaceFileManager(str(tmp_path))
+    ws = _workspace(tmp_path)
     provider = streamable(AsyncMock())
     provider.complete.side_effect = ValueError("bad input")
-
     outcome = await run_session_end_routine(
-        _mock_session("s_out_err"), provider, ws, session_uuid="s_out_err"
-    )
+        _mock_session("s_out_err"), provider, ws, session_uuid="s_out_err", force=True)
     assert outcome == "backstop_only"
 
 
 @pytest.mark.asyncio
 async def test_returns_no_delta_when_nothing_changed(tmp_path):
-    """First run consolidates and writes the cleanup marker; a second run with
-    no file changes must skip (no LLM call) and say so."""
-    ws = WorkspaceFileManager(str(tmp_path))
-    provider = streamable(AsyncMock())
-    resp = MagicMock()
-    resp.text = _valid_llm_response("nd")
-    provider.complete.return_value = resp
-
+    ws = _workspace(tmp_path)
+    provider = _provider_answering("{}")
     await run_session_end_routine(
-        _mock_session("s_nd_1"), provider, ws, session_uuid="s_nd_1"
-    )
+        _mock_session("s_nd_1"), provider, ws, session_uuid="s_nd_1", force=True)
     calls_after_first = provider.complete.call_count
-
     outcome = await run_session_end_routine(
         _mock_session("s_nd_2"), provider, ws,
-        session_uuid="s_nd_2", bypass_idempotency=True,
+        session_uuid="s_nd_2", bypass_idempotency=True, force=True,
     )
     assert outcome == "no_delta"
-    assert provider.complete.call_count == calls_after_first  # no new LLM call
+    assert provider.complete.call_count == calls_after_first
+
+
+@pytest.mark.asyncio
+async def test_returns_not_needed_when_under_budget_and_not_forced(tmp_path):
+    ws = _workspace(tmp_path)
+    provider = _provider_answering("{}")
+    outcome = await run_session_end_routine(
+        _mock_session("s_nn"), provider, ws, session_uuid="s_nn")
+    assert outcome == "not_needed"
+    provider.complete.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_returns_skipped_idempotent_on_repeat_session(tmp_path):
-    ws = WorkspaceFileManager(str(tmp_path))
-    provider = streamable(AsyncMock())
-    resp = MagicMock()
-    resp.text = _valid_llm_response("idem")
-    provider.complete.return_value = resp
-
+    ws = _workspace(tmp_path)
+    provider = _provider_answering("{}")
     await run_session_end_routine(
-        _mock_session("s_idem"), provider, ws, session_uuid="s_idem"
-    )
+        _mock_session("s_idem"), provider, ws, session_uuid="s_idem", force=True)
     outcome = await run_session_end_routine(
-        _mock_session("s_idem"), provider, ws, session_uuid="s_idem"
-    )
+        _mock_session("s_idem"), provider, ws, session_uuid="s_idem", force=True)
     assert outcome == "skipped_idempotent"
 
 
+@pytest.mark.asyncio
+async def test_returns_in_flight_while_another_pass_holds_the_project(tmp_path):
+    ws = _workspace(tmp_path)
+    memory_editor.claim(ws.workspace)
+    outcome = await run_session_end_routine(
+        _mock_session("s_if"), _provider_answering("{}"), ws,
+        session_uuid="s_if", force=True)
+    assert outcome == "in_flight"
+
+
 # ---------------------------------------------------------------------------
-# Locked-on reasoning timeout policy
+# Bounded runs
 # ---------------------------------------------------------------------------
 
-def test_dedup_timeouts_default_ladder():
-    """Providers without the property (incl. mocks, whose auto-attrs are
-    truthy MagicMocks but not True) keep the fast 30/60 retry rungs; the FINAL
-    rung carries the real generation budget (floored at 240s)."""
-    assert wsf_module._dedup_timeouts(AsyncMock()) == [30.0, 60.0, 240.0]
-    assert wsf_module._dedup_timeouts(object()) == [30.0, 60.0, 240.0]
-
-
-def test_dedup_timeouts_locked_on_single_long_attempt():
+@pytest.mark.asyncio
+async def test_a_hung_model_call_is_bounded(tmp_path, monkeypatch):
+    monkeypatch.setattr(memory_editor, "EDITOR_CALL_TIMEOUT_S", 0.05)
+    ws = _workspace(tmp_path)
     provider = MagicMock()
-    provider.reasoning_locked_on = True
-    assert wsf_module._dedup_timeouts(provider) == [240.0]
+    provider.model = "hangs"
 
+    async def _hang(messages, tools=None, **kwargs):
+        await asyncio.sleep(3600)
 
-# ---------------------------------------------------------------------------
-# Derived timeout: the merge must regenerate every Layer-1 file in ONE
-# non-streaming response, so its deadline has to scale with how much text that
-# is. A flat constant went stale twice (30/60/90 -> 240 -> timing out 5/5 on
-# orbital-marketing, 2026-07-27, once the files reached ~16k tokens).
-# ---------------------------------------------------------------------------
-
-def test_dedup_timeout_floors_at_240_for_small_workspace(tmp_path):
-    """A near-empty project must not get a shorter deadline than before."""
-    ws = WorkspaceFileManager(str(tmp_path))
-    assert wsf_module._merge_timeout_for(ws) == wsf_module._DEDUP_FLOOR_S
-
-
-def _bloated_workspace(tmp_path) -> WorkspaceFileManager:
-    """A workspace roughly the shape of orbital-marketing when it broke:
-    DECISIONS and LESSONS both well past their soft budgets."""
-    ws = WorkspaceFileManager(str(tmp_path))
-    ws.ensure_dir()
-    ws.write("decisions", "".join(
-        f"## 2026-07-{d:02d}: Decision {d}\n**Chose:** {'x' * 900}\n\n"
-        for d in range(1, 29)
-    ))
-    ws.write("lessons", "".join(
-        f"{i}. **Lesson {i}.** {'y' * 900}\n" for i in range(1, 21)
-    ))
-    return ws
-
-
-def test_dedup_timeout_scales_above_floor_for_large_workspace(tmp_path):
-    """Layer-1 content at the shape that broke must buy more than the floor."""
-    derived = wsf_module._merge_timeout_for(_bloated_workspace(tmp_path))
-    assert derived > wsf_module._DEDUP_FLOOR_S
-    assert derived <= wsf_module._DEDUP_CEILING_S
-
-
-def test_dedup_timeout_never_exceeds_ceiling(tmp_path):
-    """Even an absurd workspace stays clamped."""
-    ws = WorkspaceFileManager(str(tmp_path))
-    ws.ensure_dir()
-    for key in ("decisions", "lessons"):
-        ws.write(key, "## 2026-07-01: X\n" + ("z" * 4_000_000))
-    assert wsf_module._merge_timeout_for(ws) <= wsf_module._DEDUP_CEILING_S
-
-
-def test_ceiling_covers_the_worst_case_workspace():
-    """Bounded views cap the response at the sum of the hard budgets, so the
-    ceiling must be able to accommodate that much. Tripwire if a budget is
-    ever raised without revisiting the timeout."""
-    worst_case_tokens = sum(
-        _mem.FILE_BUDGETS[k]["hard"]
-        for k in ("state", "decisions", "lessons", "index")
-    )
-    worst_case_seconds = worst_case_tokens / wsf_module._ASSUMED_MERGE_TOK_PER_SEC
-    assert worst_case_seconds <= wsf_module._DEDUP_CEILING_S
-
-
-def test_calibration_covers_the_measured_run():
-    """Regression on the calibration itself. orbital-marketing on 2026-07-27
-    needed 844s for ~15.9k expected output tokens; the derived deadline for a
-    workspace that size must comfortably exceed that, or we have re-introduced
-    the timeout that flat constants caused twice."""
-    measured_tokens, measured_seconds = 15_935.0, 844.0
-    derived = measured_tokens / wsf_module._ASSUMED_MERGE_TOK_PER_SEC
-    assert derived > measured_seconds
-    assert derived <= wsf_module._DEDUP_CEILING_S
-
+    provider.complete = _hang
+    outcome = await run_session_end_routine(
+        _mock_session("s_hang"), provider, ws, session_uuid="s_hang", force=True)
+    assert outcome == "backstop_only"
 
 
 @pytest.mark.asyncio
-async def test_total_budget_backstops_a_stream_that_never_ends(tmp_path, monkeypatch):
-    """The idle deadline is the real one, but a stream that dribbles forever
-    would never trip it — so the derived total still caps the whole pass."""
-    monkeypatch.setattr(wsf_module, "_MERGE_IDLE_TIMEOUT_S", 60.0)
-    monkeypatch.setattr(wsf_module, "_DEDUP_FLOOR_S", 0.3)
-    monkeypatch.setattr(wsf_module, "_DEDUP_CEILING_S", 0.3)
-
-    ws = WorkspaceFileManager(str(tmp_path))
+async def test_the_whole_run_is_bounded(tmp_path, monkeypatch):
+    """A model that keeps asking for tools, slowly, still ends the run."""
+    monkeypatch.setattr(memory_editor, "EDITOR_TOTAL_TIMEOUT_S", 0.2)
+    ws = _workspace(tmp_path)
     provider = MagicMock()
-    provider.reasoning_locked_on = True
-    provider.model = "endless"
+    provider.model = "chatty"
 
-    async def _endless(messages, tools=None, **kwargs):
-        while True:
-            await asyncio.sleep(0.01)
-            yield StreamChunk(text=".")   # always progressing, never finishing
+    async def _slow_tools(messages, tools=None, **kwargs):
+        await asyncio.sleep(0.08)
+        resp = MagicMock()
+        resp.text = ""
+        resp.raw_message = {"tool_calls": [{"id": "c", "function": {"name": "grep", "arguments": "{}"}}]}
+        return resp
 
-    provider.stream = _endless
-
+    provider.complete = _slow_tools
     outcome = await run_session_end_routine(
-        _mock_session("s_endless"), provider, ws, session_uuid="s_endless"
-    )
+        _mock_session("s_slow"), provider, ws, session_uuid="s_slow", force=True)
     assert outcome == "backstop_only"
-
 
 
 # ---------------------------------------------------------------------------
@@ -272,77 +214,42 @@ async def test_total_budget_backstops_a_stream_that_never_ends(tmp_path, monkeyp
 #
 # The cleanup marker used to be written unconditionally — including on the
 # timeout path — so every failure stamped all four files "clean" and the next
-# checkpoint_state short-circuited to no_delta without trying. That is what
-# made a permanently-over-budget project look like it "checkpointed" forever
-# without ever shrinking.
+# checkpoint_state short-circuited to no_delta without trying.
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
 async def test_failed_pass_leaves_files_dirty_so_next_pass_retries(tmp_path):
-    ws = WorkspaceFileManager(str(tmp_path))
-    ws.ensure_dir()
-    ws.write("decisions", "## 2026-07-27: Something\n**Chose:** A\n")
-
+    ws = _workspace(tmp_path)
     provider = streamable(AsyncMock())
     provider.complete.side_effect = asyncio.TimeoutError()
     first = await run_session_end_routine(
         _mock_session("s_fail_1"), provider, ws,
-        session_uuid="s_fail_1", bypass_idempotency=True,
+        session_uuid="s_fail_1", bypass_idempotency=True, force=True,
     )
     assert first == "backstop_only"
 
-    # The very next pass must actually call the LLM again — NOT report no_delta.
-    provider.complete.side_effect = None
-    resp = MagicMock()
-    resp.text = _valid_llm_response("recovered")
-    provider.complete.return_value = resp
+    recovered = _provider_answering(_archive_first_state_line(ws))
     second = await run_session_end_routine(
-        _mock_session("s_fail_2"), provider, ws,
-        session_uuid="s_fail_2", bypass_idempotency=True,
+        _mock_session("s_fail_2"), recovered, ws,
+        session_uuid="s_fail_2", bypass_idempotency=True, force=True,
     )
-    assert second == "llm_merged"
+    assert second == "edited"
 
 
 @pytest.mark.asyncio
 async def test_successful_pass_still_writes_marker(tmp_path):
-    """The no-delta gate must keep working after a SUCCESSFUL pass — this is
-    what stops the agent_decided trigger firing redundantly."""
-    ws = WorkspaceFileManager(str(tmp_path))
-    ws.ensure_dir()
-    ws.write("decisions", "## 2026-07-27: Something\n**Chose:** A\n")
-
-    provider = streamable(AsyncMock())
-    resp = MagicMock()
-    resp.text = _valid_llm_response("ok")
-    provider.complete.return_value = resp
-
+    ws = _workspace(tmp_path)
+    provider = _provider_answering("{}")
     assert await run_session_end_routine(
         _mock_session("s_ok_1"), provider, ws,
-        session_uuid="s_ok_1", bypass_idempotency=True,
-    ) == "llm_merged"
+        session_uuid="s_ok_1", bypass_idempotency=True, force=True,
+    ) == "no_change"
     calls = provider.complete.call_count
-
     assert await run_session_end_routine(
         _mock_session("s_ok_2"), provider, ws,
-        session_uuid="s_ok_2", bypass_idempotency=True,
+        session_uuid="s_ok_2", bypass_idempotency=True, force=True,
     ) == "no_delta"
     assert provider.complete.call_count == calls
-
-
-@pytest.mark.asyncio
-async def test_locked_on_provider_gets_exactly_one_attempt(tmp_path):
-    """Reasoning locked-on: retrying the identical prompt cannot get faster —
-    one attempt, then straight to the backstop."""
-    ws = WorkspaceFileManager(str(tmp_path))
-    provider = streamable(AsyncMock())
-    provider.reasoning_locked_on = True
-    provider.complete.side_effect = asyncio.TimeoutError()
-
-    outcome = await run_session_end_routine(
-        _mock_session("s_locked"), provider, ws, session_uuid="s_locked"
-    )
-    assert provider.complete.call_count == 1
-    assert outcome == "backstop_only"
 
 
 # ---------------------------------------------------------------------------
@@ -375,18 +282,3 @@ def test_locked_on_false_for_non_reasoning_model():
     # doesn't reason at all.
     assert _provider(ReasoningInfo()).reasoning_locked_on is False
     assert _provider(None).reasoning_locked_on is False
-
-
-# ---------------------------------------------------------------------------
-# LLM-driven archive: the session-end pass can move entries it cannot condense
-# out of DECISIONS/LESSONS into the read-on-demand archive files, mirroring the
-# deterministic hard-cap demotion convention (DECISIONS_ARCHIVE.md /
-# LESSONS_ARCHIVE.md via _mem.ARCHIVE_OF + FILE_NAMES).
-# ---------------------------------------------------------------------------
-
-
-
-
-
-
-

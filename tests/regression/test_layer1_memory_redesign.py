@@ -112,15 +112,21 @@ def test_hard_cap_demotes_coldest_to_archive(tmp_path, monkeypatch):
     kept = wf.read("decisions")
     archive = wf.read("decisions_archive")
     index = wf.read("index") or ""
-    assert M.est_tokens(kept) <= M.FILE_BUDGETS["decisions"]["hard"]
     # oldest-3 retained in the live file
     for i in (1, 2, 3):
         assert f"Decision {i} " in kept
-    # something demoted to archive, and INDEX points to it
+    # the coldest moved to the archive (by id), each leaving a pointer
     assert archive and "Decision" in archive
+    import re
+    moved = re.findall(r"\[archived \S+ id:(\S+)\]", kept)
+    # coldest first: the 2025-touched ones all go before any warmer one
+    assert {"d4", "d5", "d6", "d7"} <= set(moved)
+    assert not {"d1", "d2", "d3"} & set(moved)
+    for eid in moved:
+        assert f"id:{eid} " in archive
     assert "DECISIONS_ARCHIVE.md" in index
     # coldest (a middle entry) went to the archive, not entry 1
-    assert "Decision 1" not in archive
+    assert "Decision 1 " not in archive
 
 
 def test_hard_cap_protects_pinned(tmp_path, monkeypatch):
@@ -159,7 +165,7 @@ def test_soft_flag_only_over_threshold(monkeypatch):
     big = _decisions(20)
     assert M.soft_flag(small, "decisions") is None
     flag = M.soft_flag(big, "decisions")
-    assert flag and "checkpoint_state" in flag and "consolidat" in flag and "tok" in flag and "entries" in flag
+    assert flag and "memory editor" in flag and "automatically" in flag and "tok" in flag and "entries" in flag
 
 
 # ---------------------------------------------------------------------------
@@ -193,7 +199,7 @@ class _FakeProvider:
         self._payload = payload
         self.calls = 0
 
-    async def complete(self, messages, disable_reasoning=False):
+    async def complete(self, messages, tools=None, disable_reasoning=False):
         self.calls += 1
         return _FakeResp(json.dumps(self._payload))
 
@@ -218,24 +224,34 @@ class _FakeSession:
 
 @pytest.mark.asyncio
 async def test_session_end_merges_supersedes(tmp_path):
+    """Spec 089: superseding is a MERGE BY ID — the contradiction pair leaves
+    the live file (both originals archived verbatim, a pointer left) and one
+    condensed entry takes its place."""
     wf = _wf(tmp_path)
     # the real contradiction pair from the reports
     wf.write("decisions",
-        "## 2026-06-15: QClaw PM Identity for Outreach\n**Chose:** Use QClaw PM identity.\n\n"
-        "## 2026-06-15: Use Orbital Name (Not QClaw) for Outreach\n**Chose:** Orbital indie builder.\n\n")
+        "## 2026-06-15: QClaw PM Identity for Outreach <!--mem id:qclaw created:2026-06-15 touched:2026-06-15-->\n"
+        "**Chose:** Use QClaw PM identity.\n\n"
+        "## 2026-06-15: Use Orbital Name (Not QClaw) for Outreach <!--mem id:orbital-name created:2026-06-15 touched:2026-06-15-->\n"
+        "**Chose:** Orbital indie builder.\n\n")
     merged = (
         "## 2026-06-15: Use Orbital Name (Not QClaw) for Outreach\n"
-        "**Chose:** Orbital indie builder.\n**Reason:** IP cleanliness.\n**Rejected:** QClaw PM identity (superseded).\n\n"
+        "**Chose:** Orbital indie builder.\n**Rejected:** QClaw PM identity (superseded).\n"
     )
-    prov = _FakeProvider({"decisions": merged, "project_state": "", "lessons": "", "index": ""})
+    prov = _FakeProvider({"merge": [{
+        "file": "DECISIONS.md", "ids": ["qclaw", "orbital-name"],
+        "text": merged, "pointer": "QClaw identity superseded by the Orbital name",
+    }]})
     await WF.run_session_end_routine(
         _FakeSession(), prov, wf, utility_provider=None,
-        session_uuid="u1", bypass_idempotency=True, project_id="p1",
+        session_uuid="u1", bypass_idempotency=True, project_id="p1", force=True,
     )
     out = wf.read("decisions")
     assert "Use Orbital Name" in out
-    assert "QClaw PM Identity for Outreach\n" not in out  # superseded entry gone
-    assert "id:" in out  # stamped by the persist path
+    assert "QClaw PM Identity for Outreach" not in out   # superseded entry left
+    assert "id:qclaw id:orbital-name]" in out            # pointer to both
+    archive = wf.read("decisions_archive")
+    assert "QClaw PM Identity for Outreach <!--mem id:qclaw" in archive
     assert prov.calls == 1
 
 
@@ -254,34 +270,28 @@ async def test_session_end_no_delta_skips_llm(tmp_path):
 
 @pytest.mark.asyncio
 async def test_session_end_survives_llm_timeout_and_still_caps(tmp_path, monkeypatch):
-    """LLM times out → deterministic hard cap still runs (no propagation)."""
+    """LLM times out → deterministic floor still runs (no propagation)."""
+    from agent_os.agent import memory_editor
     monkeypatch.setitem(M.FILE_BUDGETS, "decisions", {"soft": 120, "hard": 180})
+    monkeypatch.setattr(memory_editor, "EDITOR_CALL_TIMEOUT_S", 0.01)
     wf = _wf(tmp_path)
     wf.write("decisions", _decisions(12, body="x" * 20))
+    before = wf.read("decisions")
 
     class _Timeout:
-        async def complete(self, messages, disable_reasoning=False):
+        model = "hangs"
+
+        async def complete(self, messages, tools=None, disable_reasoning=False):
             import asyncio
             await asyncio.sleep(999)
 
-    # shrink the retry ladder so the test is fast
-    monkeypatch.setattr(WF, "asyncio", WF.asyncio)
-    import asyncio as _a
-    orig_wait_for = _a.wait_for
-
-    async def fast_wait_for(coro, timeout):
-        # close the un-awaited coroutine to avoid a warning, then raise
-        coro.close()
-        raise _a.TimeoutError()
-
-    monkeypatch.setattr(WF.asyncio, "wait_for", fast_wait_for)
-    await WF.run_session_end_routine(
+    out = await WF.run_session_end_routine(
         _FakeSession(), _Timeout(), wf, session_uuid="u3",
         bypass_idempotency=True, project_id="p1",
     )
-    monkeypatch.setattr(WF.asyncio, "wait_for", orig_wait_for)
-    # deterministic cap ran despite the timeout
-    assert M.est_tokens(wf.read("decisions")) <= M.FILE_BUDGETS["decisions"]["hard"]
+    assert out == "backstop_only"
+    # deterministic floor ran despite the timeout
+    assert M.est_tokens(wf.read("decisions")) < M.est_tokens(before)
     assert wf.read("decisions_archive")
 
 

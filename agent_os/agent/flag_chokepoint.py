@@ -2,193 +2,48 @@
 # Copyright (C) 2026 Orbital Contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""The write chokepoint: id-preserving, lifecycle-preserving merge for
-PROJECT_STATE.md (spec §5, §5.2, §5.5, §8).
+"""The PROJECT_STATE write chokepoint: every bullet carries an id and dates
+(spec 089 §4.1).
 
 Agents rewrite PROJECT_STATE freely and never see the machine ``<!--mem-->``
 comments (they are stripped from the injected view). So a raw agent rewrite
-would drop every id, every ``created`` date, and every user decision. This
-module is the seam every state write passes through: it diffs the agent's new
-content against the previous on-disk content and re-attaches what the agent
-could not have known about.
+would drop every id and every ``created`` date. This module is the seam every
+state write passes through: it diffs the new content against the previous
+on-disk content and re-attaches what the writer could not have known about.
 
 ``reconcile_flags`` is pure: the caller supplies the previous on-disk bytes.
 It is wired into both state-write paths — ``memory_entries.process_on_write``
-(the agent write/edit tools) and ``WorkspaceFileManager.write`` (daemon/system
-writes, e.g. the session-end merge) — so every PROJECT_STATE.md write is
-reconciled regardless of which writer produced it.
+(the agent write/edit tools) and ``WorkspaceFileManager.write`` (daemon and
+editor writes) — so every PROJECT_STATE.md write is reconciled.
 
-Merge rules (spec §5.2 / §5.5):
+Rules:
 
-- **id-matched** bullets keep their comment (id, created, from, evidence).
-- **comment-less rewritten** bullets re-associate by fuzzy title match
-  (normalized ratio >= 0.75) against the previous file.
-- **new flagged** bullets get a fresh id + ``created:today``.
-- a **text change** on a matched entry stamps ``touched:today``.
-- **user lifecycle fields win**: ``resolved`` and ``confidence:stated`` are
-  re-attached when the agent's (stale) rewrite drops or reverts them — a
-  resolved entry rewritten as unresolved comes back resolved.
-- an entry the user **retracted** that reappears (title-matched) is kept OUT
-  and warned about loudly.
+- EVERY top-level bullet block (see ``state_blocks``) gets a comment with
+  ``id``, ``created`` and ``touched``, directly under its bullet line.
+- id and dates carry forward ONLY on an exact, whitespace-normalised text
+  match. A reworded line is a new line — new id, today's dates. That errs
+  toward keeping it: the size floor never cuts a line younger than 14 days,
+  and the editor archives by id, so a line it has not seen cannot be cut by
+  mistake.
+- a comment the new content already carries wins field-by-field over the
+  previous file's (daemon writers such as the editor or the Workbench write
+  real metadata); an id is never emitted twice.
 
-Lint (spec §8) is folded in as warnings that never block the write: the
-grammar lint from ``user_flags.lint`` (malformed ``due``) plus the omission
-heuristic (unflagged user-directed content under a blocker/waiting/next-step
-heading, or carrying ``用户`` / "you must|need|should" phrasing).
+What used to live here and was retired by 089 v2: the fuzzy title matcher,
+the ``resolved`` lock, the retraction drop and the omission lint. Items that
+wait on the user now live in their own list, so the identity of a
+PROJECT_STATE line no longer has to be reconstructed from reworded prose.
 """
 
 from __future__ import annotations
 
-import re
 from datetime import date
-from difflib import SequenceMatcher
 
-from agent_os.agent import user_flags
-
-# Fuzzy re-association threshold (spec §5.2): normalized difflib ratio.
-_FUZZY_THRESHOLD = 0.75
-
-_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s+(?P<text>.*)$")
-# Markdown bullet markers (-*+) plus numbered items ("3." / "12)") — the
-# omission heuristic below must warn on an unflagged numbered item exactly
-# like it does on an unflagged dash bullet.
-_BULLET_LINE_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+\S")
-# Strips whatever marker `_BULLET_LINE_RE` matched, for the warning text.
-_BULLET_MARKER_STRIP_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
-# Headings that make an unflagged bullet suspicious (spec §8 omission list).
-_OMISSION_HEADING_RE = re.compile(r"blocker|waiting|needs|next\s*step", re.IGNORECASE)
-# User-directed phrasing an unflagged bullet should probably have flagged.
-_OMISSION_PHRASE_RE = re.compile(r"用户|you\s+(?:must|need|should)", re.IGNORECASE)
-# A trailing, single-line inline mem-comment on a bullet line.
-_INLINE_COMMENT_RE = re.compile(r"\s*<!--\s*mem\b.*?-->\s*$", re.DOTALL)
-
-# 2-space indent nests the machine comment under its bullet (matches spec §4).
-_COMMENT_INDENT = "  "
+from agent_os.agent import state_blocks, user_flags
 
 
 def _today() -> str:
     return date.today().isoformat()
-
-
-def _norm_for_match(text: str) -> str:
-    """Lowercase, drop punctuation/whitespace/underscore (keep letters incl.
-    CJK + digits) — the normalization used for fuzzy title re-association."""
-    return re.sub(r"[\W_]+", "", text.lower())
-
-
-def _ratio(a: str, b: str) -> float:
-    if not a and not b:
-        return 1.0
-    return SequenceMatcher(None, a, b).ratio()
-
-
-def _merge_fields(entry, match, today: str) -> dict[str, str]:
-    """Compute the reconciled ``<!--mem-->`` fields for one flagged entry.
-
-    ``match`` is the previous-file entry it re-associates to (or ``None`` for a
-    genuinely new bullet). User lifecycle fields on ``match`` win over the
-    agent's rewrite.
-    """
-    if match is not None:
-        eid = match.id or entry.id or user_flags.new_entry_id()
-        created = match.created or entry.created or today
-        text_changed = _norm_for_match(entry.text) != _norm_for_match(match.text)
-        touched = today if text_changed else (match.touched or today)
-        from_session = entry.from_session or match.from_session
-        evidence = entry.evidence or match.evidence
-        # Lifecycle-wins: a user 'stated' confidence is never reverted to
-        # 'unconfirmed' by a stale agent copy.
-        confidence = "stated" if match.confidence == "stated" else (
-            entry.confidence or match.confidence
-        )
-        # Lifecycle-wins: a resolved entry stays resolved.
-        resolved = match.resolved or entry.resolved
-    else:
-        eid = entry.id or user_flags.new_entry_id()
-        created = entry.created or today
-        touched = entry.touched or today
-        from_session = entry.from_session
-        evidence = entry.evidence
-        confidence = entry.confidence
-        resolved = entry.resolved
-
-    fields: dict[str, str] = {"id": eid}
-    if from_session:
-        fields["from"] = from_session
-    if evidence:
-        fields["evidence"] = evidence
-    if confidence:
-        fields["confidence"] = confidence
-    if created:
-        fields["created"] = created
-    if touched:
-        fields["touched"] = touched
-    if resolved:
-        fields["resolved"] = resolved
-    return fields
-
-
-def _strip_inline_comment(line: str) -> str:
-    """Remove a trailing inline ``<!--mem-->`` from a bullet line, if any."""
-    return _INLINE_COMMENT_RE.sub("", line).rstrip()
-
-
-# A top-level plain list item (dash bullet OR numbered — same grammar as
-# user_flags.LIST_MARKER, imported rather than duplicated so the two can't
-# drift) the trace pass may re-attach a comment to. Bodies starting with "["
-# are excluded: valid tags are already entries, and markdown checkboxes
-# ("- [ ]", "- [x]") must never inherit a trace.
-_PLAIN_BULLET_RE = re.compile(rf"^{user_flags.LIST_MARKER}(?!\[)(?P<text>\S.*)$")
-
-
-def _trace_fields(pe, new_text: str, today: str) -> dict[str, str]:
-    """Comment fields for a re-attached tag-less trace (prev entry ``pe``).
-
-    The sentence is the agent's (overwrite discipline); the machine metadata —
-    id, provenance, and the ``resolved`` anti-resurrection stamp — is the
-    trace's. ``touched`` bumps only when the sentence actually changed.
-    """
-    text_changed = _norm_for_match(new_text) != _norm_for_match(pe.text)
-    fields: dict[str, str] = {"id": pe.id}
-    if pe.from_session:
-        fields["from"] = pe.from_session
-    if pe.evidence:
-        fields["evidence"] = pe.evidence
-    if pe.confidence:
-        fields["confidence"] = pe.confidence
-    if pe.created:
-        fields["created"] = pe.created
-    touched = today if text_changed else (pe.touched or today)
-    if touched:
-        fields["touched"] = touched
-    if pe.resolved:
-        fields["resolved"] = pe.resolved
-    return fields
-
-
-def _omission_warnings(lines: list[str], entry_starts: set[int]) -> list[str]:
-    """Warn on unflagged bullets that read as user-facing (spec §8).
-
-    An entry-start line (a parsed flagged/dated bullet) is never flagged — only
-    genuinely untagged bullets under a suspicious heading or carrying
-    user-directed phrasing.
-    """
-    warns: list[str] = []
-    heading = ""
-    for idx, line in enumerate(lines):
-        hm = _HEADING_RE.match(line)
-        if hm:
-            heading = hm.group("text")
-            continue
-        if idx in entry_starts or not _BULLET_LINE_RE.match(line):
-            continue
-        text = _BULLET_MARKER_STRIP_RE.sub("", line).strip()
-        if _OMISSION_HEADING_RE.search(heading) or _OMISSION_PHRASE_RE.search(text):
-            warns.append(
-                f"line {idx + 1}: possible unflagged user-facing content "
-                f"(\"{text[:60]}\") — consider a [user] flag."
-            )
-    return warns
 
 
 def reconcile_flags(
@@ -197,181 +52,79 @@ def reconcile_flags(
     today: str,
     retraction_titles: list[str] | None = None,
 ) -> tuple[str, list[str]]:
-    """Reconcile an agent's PROJECT_STATE rewrite against the previous content.
+    """Stamp every PROJECT_STATE bullet, carrying ids forward by exact text.
 
     Returns ``(merged_content, warnings)``. Warnings never block the write.
+    ``retraction_titles`` is accepted for call-site compatibility and ignored.
     """
+    del retraction_titles
     today = today or _today()
-    retraction_titles = retraction_titles or []
-    warnings: list[str] = []
     if not new:
-        return new, warnings
+        return new, []
 
-    prev_entries = user_flags.parse_entries(prev) if prev else []
-    new_entries = user_flags.parse_entries(new)
-    prev_by_id = {e.id: e for e in prev_entries if e.id}
-    norm_retractions = [_norm_for_match(t) for t in retraction_titles if t]
+    prev_blocks = state_blocks.parse(prev)[1] if prev else []
+    prev_by_id = {b.id: b for b in prev_blocks if b.id}
+    # match_key -> previous blocks with that exact text, in file order.
+    prev_by_key: dict[str, list] = {}
+    for b in prev_blocks:
+        prev_by_key.setdefault(b.match_key, []).append(b)
 
-    # Classify each new entry in file order: "drop" (retracted), "keep_raw"
-    # (unstamped dated fact), or "flag" (a flagged entry that needs a match).
-    kinds: dict[int, str] = {}
-    flagged_new: list = []
-    for e in new_entries:
-        norm_title = _norm_for_match(e.text)
-        if any(nr and _ratio(norm_title, nr) >= _FUZZY_THRESHOLD for nr in norm_retractions):
-            kinds[e.line_start] = "drop"
-            warnings.append(
-                f"RETRACTED: dropped re-added entry \"{e.text[:60]}\" — the user "
-                f"retracted this; it may return only by explicit user request."
-            )
-            continue
-        if not e.flagged:
-            kinds[e.line_start] = "keep_raw"  # dated fact (spec §5.2)
-            continue
-        kinds[e.line_start] = "flag"
-        flagged_new.append(e)
-
-    # Re-associate flagged entries to previous entries. Exact-id matches take
-    # precedence; the remainder are assigned best-ratio-first GLOBALLY (not
-    # greedy by file order) so the highest-similarity bullet wins the id +
-    # lifecycle fields when several clear the threshold — a weaker decoy that
-    # happens to appear first in the file must not steal a better match.
-    match_for: dict[int, object] = {}          # id(new Entry) -> prev Entry
+    lines, blocks = state_blocks.parse(new)
+    used_ids: set[str] = set()
     claimed_prev: set[int] = set()
-    unmatched: list = []
-    for e in flagged_new:
-        pe = prev_by_id.get(e.id) if e.id else None
-        if pe is not None and id(pe) not in claimed_prev:
-            match_for[id(e)] = pe
-            claimed_prev.add(id(pe))
-        else:
-            unmatched.append(e)
+    rendered: dict[int, list[str]] = {}
 
-    candidates: list[tuple[float, int, int, object, object]] = []
-    for ni, e in enumerate(unmatched):
-        target = _norm_for_match(e.text)
-        for pi, pe in enumerate(prev_entries):
-            if id(pe) in claimed_prev:
-                continue
-            r = _ratio(target, _norm_for_match(pe.text))
-            if r >= _FUZZY_THRESHOLD:
-                candidates.append((r, ni, pi, e, pe))
-    # Highest ratio first; ties broken by file order for determinism.
-    candidates.sort(key=lambda c: (-c[0], c[1], c[2]))
-    claimed_new: set[int] = set()
-    for _r, _ni, _pi, e, pe in candidates:
-        if id(e) in claimed_new or id(pe) in claimed_prev:
-            continue
-        match_for[id(e)] = pe
-        claimed_new.add(id(e))
-        claimed_prev.add(id(pe))
+    for b in blocks:
+        key = b.match_key
+        fields: dict[str, str] | None = None
+        own = prev_by_id.get(b.id) if b.id else None
+        if own is not None and id(own) not in claimed_prev and b.id not in used_ids:
+            if own.match_key == key:
+                # Same line, comment still attached (or re-sent by a daemon
+                # writer): the writer's fields win, the old ones fill gaps.
+                fields = {**own.fields, **b.fields}
+                claimed_prev.add(id(own))
+        carries_unknown_id = bool(b.id) and b.id not in prev_by_id and b.id not in used_ids
+        if fields is None and not carries_unknown_id:
+            # The comment-stripped rewrite: the same words, anywhere in the file.
+            for cand in prev_by_key.get(key, ()):
+                if id(cand) in claimed_prev or not cand.id or cand.id in used_ids:
+                    continue
+                fields = dict(cand.fields)
+                claimed_prev.add(id(cand))
+                break
+        if fields is None and carries_unknown_id:
+            # An id the previous file never had (restore from backup, a
+            # block the editor re-inserted): keep it.
+            fields = dict(b.fields)
+        if fields is None:
+            fields = {
+                "id": _fresh_id(used_ids | set(prev_by_id)),
+                "created": today,
+                "touched": today,
+            }
+        fields.setdefault("created", today)
+        fields.setdefault("touched", fields["created"])
+        used_ids.add(fields["id"])
+        rendered[b.start] = state_blocks.render(b, fields)
 
-    # Second pass (spec §5.3 anti-resurfacing): re-attach UNCLAIMED tag-less
-    # traces — retired entries whose comment still carries id/resolved — to
-    # plain bullets the agent re-emitted from its comment-stripped view.
-    # Without this, one agent rewrite silently destroys the fulfilled trace
-    # and, with it, the anti-resurrection record. Flagged matching above runs
-    # first, so a trace already claimed by a flagged bullet is never stolen.
-    lines = new.split("\n")
-    reattach_at: dict[int, object] = {}        # line index in `new` -> prev Entry
-    trace_prev = [
-        pe for pe in prev_entries
-        if id(pe) not in claimed_prev and not pe.flagged and pe.id
-    ]
-    if trace_prev:
-        entry_lines: set[int] = set()
-        for e in new_entries:
-            entry_lines.update(range(e.line_start, e.line_end + 1))
-        plain_bullets = [
-            (i, m.group("text").strip())
-            for i, ln in enumerate(lines)
-            if i not in entry_lines and (m := _PLAIN_BULLET_RE.match(ln))
-        ]
-        t_candidates: list[tuple[float, int, int, int, object, str]] = []
-        for pi, pe in enumerate(trace_prev):
-            p_norm = _norm_for_match(pe.text)
-            for bi, (li, text) in enumerate(plain_bullets):
-                r = _ratio(_norm_for_match(text), p_norm)
-                if r >= _FUZZY_THRESHOLD:
-                    t_candidates.append((r, bi, pi, li, pe, text))
-        t_candidates.sort(key=lambda c: (-c[0], c[1], c[2]))
-        used_lines: set[int] = set()
-        for _r, _bi, _pi, li, pe, text in t_candidates:
-            if li in used_lines or id(pe) in claimed_prev:
-                continue
-            used_lines.add(li)
-            claimed_prev.add(id(pe))
-            reattach_at[li] = pe
-
-    # Build the per-entry decision (retracted entries drop, facts pass through,
-    # flagged entries emit with reconciled comment fields).
-    #
-    # `resolved` is a LOCK, not a note: an entry the user closed via the
-    # Workbench ("Done") had its tag dropped and a resolved:<date> stamp
-    # written. The agent, blind to mem-comments, re-emits the line looking
-    # open and re-adds `[user]`; _merge_fields then faithfully re-attaches
-    # `resolved`, and the result is flagged AND resolved — which the Workbench
-    # renders as a card again, silently undoing a deliberate user action. The
-    # format header's rail 6 forbids this, but a prompt rail is a request, not
-    # a guarantee. Here it is enforced: a resolved entry emits UNFLAGGED (as
-    # the settled fact it is) and warns. Re-opening is the user's call, and
-    # arrives as a new entry with a new id.
-    decisions: dict[int, tuple[str, dict[str, str] | None]] = {}
-    for e in new_entries:
-        kind = kinds[e.line_start]
-        if kind == "flag":
-            fields = _merge_fields(e, match_for.get(id(e)), today)
-            if fields.get("resolved"):
-                decisions[e.line_start] = ("emit_unflagged", fields)
-                warnings.append(
-                    f"RESOLVED: dropped the [user] flag from \"{e.text[:60]}\" — "
-                    f"the user settled this on {fields['resolved']}; a resolved "
-                    f"entry may be re-opened only by explicit user request."
-                )
-            else:
-                decisions[e.line_start] = ("emit", fields)
-        else:
-            decisions[e.line_start] = (kind, None)
-
-    # Rebuild content using `new` as the skeleton; only entry lines change.
-    entry_at = {e.line_start: e for e in new_entries}
     out: list[str] = []
+    by_start = {b.start: b for b in blocks}
     i = 0
-    n = len(lines)
-    while i < n:
-        e = entry_at.get(i)
-        if e is None:
+    while i < len(lines):
+        b = by_start.get(i)
+        if b is None:
             out.append(lines[i])
-            pe = reattach_at.get(i)
-            if pe is not None:
-                text = _PLAIN_BULLET_RE.match(lines[i]).group("text").strip()
-                out.append(
-                    _COMMENT_INDENT
-                    + user_flags.render_comment(_trace_fields(pe, text, today))
-                )
             i += 1
             continue
-        kind, fields = decisions[e.line_start]
-        end = e.line_end
-        if kind == "drop":
-            i = end + 1
-            continue
-        if kind == "keep_raw":
-            out.extend(lines[e.line_start:end + 1])
-            i = end + 1
-            continue
-        if kind == "emit_unflagged":
-            # Rebuild from the parsed prefix + text so the exact list marker
-            # ("- ", "3. ") survives — the grammar forbids converting a
-            # numbered item to a bullet. Same shape as the Workbench's own
-            # fulfilled exit (`workbench._apply_exit`).
-            out.append(f"{e.prefix}{e.text}")
-        else:
-            out.append(_strip_inline_comment(lines[e.line_start]))
-        out.append(_COMMENT_INDENT + user_flags.render_comment(fields))
-        i = end + 1
+        out.extend(rendered[b.start])
+        i = b.end + 1
     merged = "\n".join(out)
+    return merged, user_flags.lint(merged)
 
-    warnings.extend(_omission_warnings(lines, set(entry_at)))
-    warnings.extend(user_flags.lint(merged))
-    return merged, warnings
+
+def _fresh_id(taken: set[str]) -> str:
+    while True:
+        eid = user_flags.new_entry_id()
+        if eid not in taken:
+            return eid
