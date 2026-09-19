@@ -12,9 +12,10 @@ captures screenshots, and wraps results with safety.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import os
-from collections import namedtuple
+from collections import OrderedDict, namedtuple
 from dataclasses import asdict
 from urllib.parse import quote_plus as _url_encode
 
@@ -103,6 +104,46 @@ async def _get_ax_tree(page) -> dict | None:
 
     root = _build(nodes[0]["nodeId"]) if nodes else None
     return root
+
+
+# Screenshot dedup (spec 066 phase 1a). The same unchanged page is captured
+# over and over — one worker stored one image 43 times. Per screenshot folder,
+# remember the hash of each file THIS process captured (bounded like the
+# folder's own 50-file retention); a new capture with identical bytes is
+# dropped and the result points at the stored copy. Files that existed before
+# this process started are never reused or removed.
+_SEEN_SCREENSHOTS: dict[str, OrderedDict] = {}
+_SEEN_PER_DIR = 64
+
+
+def _file_bytes(path) -> bytes | None:
+    try:
+        with open(path, "rb") as f:
+            return f.read()
+    except (OSError, TypeError, ValueError):
+        return None
+
+
+def _dedup_screenshot(path: str) -> str:
+    """Return the path to keep for a just-captured screenshot at ``path``."""
+    data = _file_bytes(path)
+    if data is None:
+        return path  # nothing on disk (failed/mocked capture) — pass through
+    digest = hashlib.sha256(data).hexdigest()
+    seen = _SEEN_SCREENSHOTS.setdefault(os.path.dirname(path), OrderedDict())
+    prior = seen.get(digest)
+    if prior is not None and prior != path and _file_bytes(prior) == data:
+        try:
+            os.remove(path)
+        except OSError:
+            return path
+        seen.move_to_end(digest)
+        return prior
+    seen[digest] = path
+    seen.move_to_end(digest)
+    while len(seen) > _SEEN_PER_DIR:
+        seen.popitem(last=False)
+    return path
 
 
 BROWSER_WRITE_ACTIONS = frozenset({
@@ -335,6 +376,15 @@ class BrowserTool(Tool):
         self._vision_enabled = vision_enabled
         self._resolver = self._make_resolver(user_credential_store)
         self._action_failure_tracker: dict[str, list[str]] = {}
+
+    async def _capture(self, page) -> str:
+        """Capture a screenshot into this tool's namespace folder; an exact
+        repeat of one already captured there is stored once (see
+        ``_dedup_screenshot``)."""
+        path = await self._bm.capture_screenshot(
+            page, self._workspace, self._screenshot_namespace,
+        )
+        return _dedup_screenshot(path)
 
     def on_run_start(self) -> None:
         """Reset per-run state. Called by ToolRegistry.reset_run_state()."""
@@ -576,7 +626,7 @@ class BrowserTool(Tool):
 
         self._bm.clear_ref_map(self._project_id, id(page))
         title = await page.title()
-        screenshot_path = await self._bm.capture_screenshot(page, self._workspace, self._screenshot_namespace)
+        screenshot_path = await self._capture(page)
         signals = await self._collect_page_signals(page, url)
 
         # Blocker detection: flag pages requiring authentication or verification
@@ -603,7 +653,7 @@ class BrowserTool(Tool):
         self._bm.clear_ref_map(self._project_id, id(page))
         url = page.url
         title = await page.title()
-        screenshot_path = await self._bm.capture_screenshot(page, self._workspace, self._screenshot_namespace)
+        screenshot_path = await self._capture(page)
         return ToolResult(
             content=f"Went back to: {title} ({url})",
             meta={"url": url, "title": title, "screenshot_path": screenshot_path},
@@ -616,7 +666,7 @@ class BrowserTool(Tool):
         self._bm.clear_ref_map(self._project_id, id(page))
         url = page.url
         title = await page.title()
-        screenshot_path = await self._bm.capture_screenshot(page, self._workspace, self._screenshot_namespace)
+        screenshot_path = await self._capture(page)
         return ToolResult(
             content=f"Went forward to: {title} ({url})",
             meta={"url": url, "title": title, "screenshot_path": screenshot_path},
@@ -629,7 +679,7 @@ class BrowserTool(Tool):
         self._bm.clear_ref_map(self._project_id, id(page))
         url = page.url
         title = await page.title()
-        screenshot_path = await self._bm.capture_screenshot(page, self._workspace, self._screenshot_namespace)
+        screenshot_path = await self._capture(page)
         return ToolResult(
             content=f"Reloaded: {title} ({url})",
             meta={"url": url, "title": title, "screenshot_path": screenshot_path},
@@ -650,7 +700,7 @@ class BrowserTool(Tool):
         else:
             await locator.click()
         await self._wait_for_stable(page)
-        screenshot_path = await self._bm.capture_screenshot(page, self._workspace, self._screenshot_namespace)
+        screenshot_path = await self._capture(page)
         return ToolResult(
             content=f"Clicked element ref={args.get('ref', '')}",
             meta={"url": page.url, "title": await page.title(), "screenshot_path": screenshot_path},
@@ -668,7 +718,7 @@ class BrowserTool(Tool):
             text = substitute_secrets(text, self._resolver)
         await locator.fill(text)
         await self._wait_for_stable(page)
-        screenshot_path = await self._bm.capture_screenshot(page, self._workspace, self._screenshot_namespace)
+        screenshot_path = await self._capture(page)
         return ToolResult(
             content=f"Typed '{display_text}' into element",
             meta={"url": page.url, "title": await page.title(), "screenshot_path": screenshot_path},
@@ -724,7 +774,7 @@ class BrowserTool(Tool):
                     f"{self._translate_error_message(e, {'ref': field['ref']})}"
                 )
         await self._wait_for_stable(page)
-        screenshot_path = await self._bm.capture_screenshot(page, self._workspace, self._screenshot_namespace)
+        screenshot_path = await self._capture(page)
         return ToolResult(
             content=f"Filled {len(fields)} fields:\n" + "\n".join(results),
             meta={"url": page.url, "title": await page.title(), "screenshot_path": screenshot_path},
@@ -735,7 +785,7 @@ class BrowserTool(Tool):
         key = args.get("key", "")
         await page.keyboard.press(key)
         await self._wait_for_stable(page)
-        screenshot_path = await self._bm.capture_screenshot(page, self._workspace, self._screenshot_namespace)
+        screenshot_path = await self._capture(page)
         return ToolResult(
             content=f"Pressed key: {key}",
             meta={"url": page.url, "title": await page.title(), "screenshot_path": screenshot_path},
@@ -748,7 +798,7 @@ class BrowserTool(Tool):
             return ToolResult(content="No snapshot taken yet. Run snapshot first to see the page.")
         locator = await resolve_ref(ref_map, args.get("ref", ""), page)
         await locator.hover()
-        screenshot_path = await self._bm.capture_screenshot(page, self._workspace, self._screenshot_namespace)
+        screenshot_path = await self._capture(page)
         return ToolResult(
             content=f"Hovered over element ref={args.get('ref', '')}",
             meta={"url": page.url, "title": await page.title(), "screenshot_path": screenshot_path},
@@ -763,7 +813,7 @@ class BrowserTool(Tool):
         value = args.get("value", "")
         await locator.select_option(value)
         await self._wait_for_stable(page)
-        screenshot_path = await self._bm.capture_screenshot(page, self._workspace, self._screenshot_namespace)
+        screenshot_path = await self._capture(page)
         return ToolResult(
             content=f"Selected '{value}' in element ref={args.get('ref', '')}",
             meta={"url": page.url, "title": await page.title(), "screenshot_path": screenshot_path},
@@ -792,7 +842,7 @@ class BrowserTool(Tool):
             elif direction == "left":
                 dx = -pixels
             await page.mouse.wheel(dx, dy)
-        screenshot_path = await self._bm.capture_screenshot(page, self._workspace, self._screenshot_namespace)
+        screenshot_path = await self._capture(page)
         return ToolResult(
             content=f"Scrolled {args.get('direction', 'down')}",
             meta={"url": page.url, "title": await page.title(), "screenshot_path": screenshot_path},
@@ -807,7 +857,7 @@ class BrowserTool(Tool):
         end_locator = await resolve_ref(ref_map, args.get("end_ref", ""), page)
         await start_locator.drag_to(end_locator)
         await self._wait_for_stable(page)
-        screenshot_path = await self._bm.capture_screenshot(page, self._workspace, self._screenshot_namespace)
+        screenshot_path = await self._capture(page)
         return ToolResult(
             content=f"Dragged from ref={args.get('start_ref', '')} to ref={args.get('end_ref', '')}",
             meta={"url": page.url, "title": await page.title(), "screenshot_path": screenshot_path},
@@ -847,9 +897,7 @@ class BrowserTool(Tool):
         if chooser:
             await chooser.set_files(resolved)
             await self._wait_for_stable(page)
-            screenshot_path = await self._bm.capture_screenshot(
-                page, self._workspace, self._screenshot_namespace,
-            )
+            screenshot_path = await self._capture(page)
             return ToolResult(
                 content=f"Uploaded {os.path.basename(resolved)} via file chooser",
                 meta={"url": page.url, "title": await page.title(),
@@ -869,9 +917,7 @@ class BrowserTool(Tool):
         locator = await resolve_ref(ref_map, ref, page)
         await locator.set_input_files(resolved)
         await self._wait_for_stable(page)
-        screenshot_path = await self._bm.capture_screenshot(
-            page, self._workspace, self._screenshot_namespace,
-        )
+        screenshot_path = await self._capture(page)
         return ToolResult(
             content=f"Uploaded {os.path.basename(resolved)} to input ref={ref}",
             meta={"url": page.url, "title": await page.title(),
@@ -903,13 +949,9 @@ class BrowserTool(Tool):
         if annotate:
             screenshot_path = await self._annotate_screenshot(page)
             if not screenshot_path:
-                screenshot_path = await self._bm.capture_screenshot(
-                    page, self._workspace, self._screenshot_namespace,
-                )
+                screenshot_path = await self._capture(page)
         else:
-            screenshot_path = await self._bm.capture_screenshot(
-                page, self._workspace, self._screenshot_namespace,
-            )
+            screenshot_path = await self._capture(page)
         signals = await self._collect_page_signals(page)
         title = await page.title()
         url = page.url
@@ -1152,7 +1194,7 @@ class BrowserTool(Tool):
         javascript = args.get("javascript", "")
         result = await page.evaluate(javascript)
         await self._wait_for_stable(page)
-        screenshot_path = await self._bm.capture_screenshot(page, self._workspace, self._screenshot_namespace)
+        screenshot_path = await self._capture(page)
         content = str(result) if result is not None else "(no return value)"
         return ToolResult(
             content=f"JavaScript result: {content}",
@@ -1312,7 +1354,7 @@ class BrowserTool(Tool):
             except Exception:
                 continue
 
-        screenshot_path = await self._bm.capture_screenshot(page, self._workspace, self._screenshot_namespace)
+        screenshot_path = await self._capture(page)
 
         await page.evaluate("() => document.getElementById('__agent_os_annotation_overlay__')?.remove()")
 

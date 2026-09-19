@@ -514,3 +514,138 @@ describe('SessionSidebar — pinned sessions', () => {
     expect(screen.getByTestId('session-status-glyph').textContent).not.toBe('');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Spec 066 4b — automation sessions are grouped apart from chats
+// ---------------------------------------------------------------------------
+
+describe('SessionSidebar — automations group', () => {
+  function ids() {
+    return screen
+      .getAllByTestId(/^session-list-item-/)
+      .map((el) => el.getAttribute('data-testid'));
+  }
+
+  afterEach(() => {
+    try {
+      localStorage.clear();
+    } catch {
+      /* storage unavailable in this environment */
+    }
+  });
+
+  const mixed = () => [
+    makeSession({
+      session_id: 'cron-new', session_uuid: 'u1', trigger_type: 'schedule',
+      name: "[Triggered by schedule 'Daily'…", last_activity_at: '2026-09-10T00:00:00Z',
+    }),
+    makeSession({
+      session_id: 'chat-old', session_uuid: 'u2', origin: 'chat',
+      name: 'Plan the launch', last_activity_at: '2026-09-01T00:00:00Z',
+    }),
+    makeSession({
+      session_id: 'queue-mid', session_uuid: 'u3', origin: 'queue',
+      last_activity_at: '2026-09-05T00:00:00Z',
+    }),
+    makeSession({
+      session_id: 'chat-new', session_uuid: 'u4',
+      name: 'Fix the bug', last_activity_at: '2026-09-09T00:00:00Z',
+    }),
+  ];
+
+  it('lists chats first and automation sessions under their own header', () => {
+    resetMocks();
+    mockSessions = mixed();
+    render(<SessionSidebar projectId="p1" />);
+
+    expect(ids()).toEqual([
+      'session-list-item-chat-new',
+      'session-list-item-chat-old',
+      'session-list-item-cron-new',
+      'session-list-item-queue-mid',
+    ]);
+    const header = screen.getByTestId('session-automations-toggle');
+    expect(header).toHaveTextContent('Automations');
+    expect(header).toHaveTextContent('2');
+    expect(header).toHaveAttribute('aria-expanded', 'true');
+    // Every session is still listed and counted (no hidden bucket).
+    expect(screen.getByTestId('session-active-count')).toHaveTextContent('4');
+  });
+
+  it('recognises a renamed-away trigger session by its trigger_type', () => {
+    resetMocks();
+    mockSessions = [
+      makeSession({ session_id: 'a', session_uuid: 'ua', trigger_type: 'file_watch', name: 'Renamed' }),
+      makeSession({ session_id: 'b', session_uuid: 'ub', name: 'Chat' }),
+    ];
+    render(<SessionSidebar projectId="p1" />);
+    expect(ids()).toEqual(['session-list-item-b', 'session-list-item-a']);
+  });
+
+  it('falls back to the name prefix when the backend sends no trigger_type', () => {
+    resetMocks();
+    mockSessions = [
+      makeSession({ session_id: 'a', session_uuid: 'ua', name: "[Triggered by file_watch 'Inbox']" }),
+      makeSession({ session_id: 'b', session_uuid: 'ub', name: 'Chat' }),
+    ];
+    render(<SessionSidebar projectId="p1" />);
+    expect(ids()).toEqual(['session-list-item-b', 'session-list-item-a']);
+  });
+
+  it('renders no automations header when there are none', () => {
+    resetMocks();
+    mockSessions = [makeSession({ session_id: 'a', session_uuid: 'ua', name: 'Chat' })];
+    render(<SessionSidebar projectId="p1" />);
+    expect(screen.queryByTestId('session-automations-toggle')).toBeNull();
+  });
+
+  it('collapsing hides idle automation rows but keeps active and selected ones', async () => {
+    const user = userEvent.setup();
+    resetMocks();
+    mockSessions = [
+      ...mixed(),
+      makeSession({
+        session_id: 'cron-running', session_uuid: 'u5', trigger_type: 'schedule',
+        status: 'running', last_activity_at: '2026-08-01T00:00:00Z',
+      }),
+    ];
+    render(<SessionSidebar projectId="p1" selectedSessionId="queue-mid" />);
+
+    await user.click(screen.getByTestId('session-automations-toggle'));
+
+    expect(screen.getByTestId('session-automations-toggle')).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByTestId('session-list-item-cron-new')).toBeNull();
+    expect(screen.getByTestId('session-list-item-queue-mid')).toBeInTheDocument();
+    expect(screen.getByTestId('session-list-item-cron-running')).toBeInTheDocument();
+    expect(screen.getByTestId('session-list-item-chat-new')).toBeInTheDocument();
+
+    await user.click(screen.getByTestId('session-automations-toggle'));
+    expect(screen.getByTestId('session-list-item-cron-new')).toBeInTheDocument();
+  });
+
+  it('remembers the collapsed state across remounts', async () => {
+    const user = userEvent.setup();
+    resetMocks();
+    mockSessions = mixed();
+    const { unmount } = render(<SessionSidebar projectId="p1" />);
+    await user.click(screen.getByTestId('session-automations-toggle'));
+    unmount();
+
+    render(<SessionSidebar projectId="p1" />);
+    expect(screen.getByTestId('session-automations-toggle')).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('a pinned automation stays in the pinned block', () => {
+    resetMocks();
+    mockSessions = [
+      makeSession({ session_id: 'chat', session_uuid: 'u1', last_activity_at: '2026-09-09T00:00:00Z' }),
+      makeSession({
+        session_id: 'cron-pinned', session_uuid: 'u2', trigger_type: 'schedule',
+        pinned: true, last_activity_at: '2026-01-01T00:00:00Z',
+      }),
+    ];
+    render(<SessionSidebar projectId="p1" />);
+    expect(ids()).toEqual(['session-list-item-cron-pinned', 'session-list-item-chat']);
+    expect(screen.queryByTestId('session-automations-toggle')).toBeNull();
+  });
+});

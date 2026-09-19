@@ -6,15 +6,18 @@
  * SessionSidebar — 260px left column of the Chat tab (V1 layout).
  *
  * Header: "SESSIONS" uppercase + total session count.
- * Body: one unified list of SessionListItem rows for ALL sessions, sorted by
- *   last-activity descending (most recent first). A session's state is derived
- *   purely from its current condition (running/waiting/idle/error/
- *   pending_approval/new_session) — there is no separate bucket or grouping.
+ * Body: SessionListItem rows for ALL sessions, sorted by last-activity
+ *   descending (most recent first): pinned rows first (spec 067), then the
+ *   conversations the user started, then — under an "Automations" header —
+ *   sessions a schedule, a file watch or the queue fired (spec 066 4b), so
+ *   hundreds of identical automation runs no longer bury the chats. A
+ *   session's state is derived purely from its current condition
+ *   (running/waiting/idle/error/pending_approval/new_session).
  * Bottom: "+ new session" button — calls onNewSession prop (no implementation here).
  *
- * ALL sessions are listed regardless of origin (manual + queue-dispatched).
- * Queue-dispatched sessions get a subtle hue variation on their status dot,
- * handled by SessionListItem.
+ * ALL sessions are listed regardless of origin. The Automations group can be
+ * collapsed (remembered per device); collapsed, it still shows its active
+ * rows and the selected one, so nothing live or open is ever hidden.
  *
  * Selection is CONTROLLED: the highlighted (active) session is driven by the
  * `selectedSessionId` prop, NOT an internal hook. ChatTab owns the single
@@ -33,11 +36,36 @@
  *                       route and persists.
  */
 
-import { Fragment, useCallback, useMemo } from 'react';
+import { useCallback, useMemo, useState } from 'react';
+import { ChevronDown, ChevronRight } from 'lucide-react';
 import { useSessions } from '../hooks/useSessions';
 import type { SessionListEntry } from '../types';
 import { SessionListItem } from './SessionListItem';
+import { getStatusDisplay } from './sessionStatus';
+import { classifySessionName } from '../lib/sessionLabel';
 import { useT } from '../i18n/useT';
+
+const AUTOMATIONS_COLLAPSED_KEY = 'orbital:sessionSidebar.automationsCollapsed';
+
+/**
+ * True for sessions an automation fired rather than the user: queue items
+ * (`origin`), schedule / file-watch triggers (`trigger_type`, which survives a
+ * rename). The name-prefix classifier is the fallback for rows that carry
+ * neither (a backend that predates `trigger_type`).
+ */
+function isAutomationSession(s: SessionListEntry): boolean {
+  if (s.origin === 'queue' || s.trigger_type) return true;
+  const kind = classifySessionName(s.name, s.origin).kind;
+  return kind === 'queue' || kind === 'schedule' || kind === 'file_watch';
+}
+
+function readCollapsed(): boolean {
+  try {
+    return localStorage.getItem(AUTOMATIONS_COLLAPSED_KEY) === '1';
+  } catch {
+    return false; // storage unavailable (private/locked-down webview)
+  }
+}
 
 export interface SessionSidebarProps {
   projectId: string | null;
@@ -88,16 +116,41 @@ export function SessionSidebar({
     [sessions],
   );
 
-  // Index of the last pinned row, so a hairline can separate the pinned block
-  // from the rest — the same "pinned above a rule" pattern the nav column uses
-  // for Quick Tasks. -1 when nothing is pinned, which renders no rule at all.
-  const lastPinnedIndex = useMemo(() => {
-    let last = -1;
-    sortedSessions.forEach((s, i) => {
-      if (s.pinned) last = i;
-    });
-    return last;
+  // Three blocks, each keeping the order above: pinned rows (any kind — a pin
+  // is the user saying "keep this at the top"), then chats, then automations.
+  const { pinned, chats, automations } = useMemo(() => {
+    const groups = {
+      pinned: [] as SessionListEntry[],
+      chats: [] as SessionListEntry[],
+      automations: [] as SessionListEntry[],
+    };
+    for (const s of sortedSessions) {
+      if (s.pinned) groups.pinned.push(s);
+      else if (isAutomationSession(s)) groups.automations.push(s);
+      else groups.chats.push(s);
+    }
+    return groups;
   }, [sortedSessions]);
+
+  const [automationsCollapsed, setAutomationsCollapsed] = useState(readCollapsed);
+  const toggleAutomations = useCallback(() => {
+    setAutomationsCollapsed((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem(AUTOMATIONS_COLLAPSED_KEY, next ? '1' : '0');
+      } catch {
+        /* storage unavailable — the toggle still works for this visit */
+      }
+      return next;
+    });
+  }, []);
+  // Collapsed hides only resting rows: a running/waiting/blocked automation
+  // and the session being viewed always stay visible.
+  const visibleAutomations = automationsCollapsed
+    ? automations.filter(
+        (s) => s.session_id === selectedSessionId || !getStatusDisplay(s.status).resting,
+      )
+    : automations;
 
   const handleSelect = useCallback(
     (sessionId: string) => {
@@ -146,6 +199,20 @@ export function SessionSidebar({
     [deleteSession, onSessionDeleted, sortedSessions],
   );
 
+  function renderRow(session: SessionListEntry) {
+    return (
+      <SessionListItem
+        key={session.session_uuid ?? session.session_id}
+        session={session}
+        selected={selectedSessionId === session.session_id}
+        onSelect={handleSelect}
+        onRename={handleRename}
+        onPin={handlePin}
+        onDelete={handleDelete}
+      />
+    );
+  }
+
   return (
     <aside
       data-testid="session-sidebar"
@@ -176,7 +243,7 @@ export function SessionSidebar({
         </span>
       </div>
 
-      {/* Unified session list (all sessions, most-recent first) */}
+      {/* Session list: pinned, then chats, then automations (most-recent first in each) */}
       <div
         className="flex-1 overflow-y-auto px-1.5 py-1 flex flex-col gap-0.5"
         data-testid="session-list"
@@ -191,28 +258,39 @@ export function SessionSidebar({
             {t('sessionSidebar.empty')}
           </p>
         )}
-        {sortedSessions.map((session, index) => (
-          <Fragment key={session.session_uuid ?? session.session_id}>
-            <SessionListItem
-              session={session}
-              selected={selectedSessionId === session.session_id}
-              onSelect={handleSelect}
-              onRename={handleRename}
-              onPin={handlePin}
-              onDelete={handleDelete}
-            />
-            {/* Hairline closing the pinned block. Only rendered when there is
-                both a pin AND something under it — a rule at the very bottom
-                of the list would separate nothing. */}
-            {index === lastPinnedIndex && index < sortedSessions.length - 1 && (
-              <div
-                role="separator"
-                data-testid="session-pin-divider"
-                className="my-1 border-t border-border/60"
-              />
+        {pinned.map(renderRow)}
+        {/* Hairline closing the pinned block — the same "pinned above a rule"
+            pattern the nav column uses for Quick Tasks. Only rendered when
+            there is both a pin AND something under it — a rule at the very
+            bottom of the list would separate nothing. */}
+        {pinned.length > 0 && chats.length + automations.length > 0 && (
+          <div
+            role="separator"
+            data-testid="session-pin-divider"
+            className="my-1 border-t border-border/60"
+          />
+        )}
+        {chats.map(renderRow)}
+        {automations.length > 0 && (
+          <button
+            type="button"
+            data-testid="session-automations-toggle"
+            aria-expanded={!automationsCollapsed}
+            title={t('sessionSidebar.automationsToggle')}
+            onClick={toggleAutomations}
+            className="mt-2 mb-0.5 flex items-center gap-1 px-2 py-0.5 rounded text-secondary font-semibold hover:text-primary transition-colors"
+            style={{ fontSize: '9.5px', letterSpacing: '0.8px', textTransform: 'uppercase' }}
+          >
+            {automationsCollapsed ? (
+              <ChevronRight size={11} aria-hidden="true" />
+            ) : (
+              <ChevronDown size={11} aria-hidden="true" />
             )}
-          </Fragment>
-        ))}
+            <span>{t('sessionSidebar.automations')}</span>
+            <span className="font-mono font-normal">({automations.length})</span>
+          </button>
+        )}
+        {visibleAutomations.map(renderRow)}
       </div>
 
       {/* New session button */}

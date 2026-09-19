@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -195,6 +196,18 @@ class AgentManager:
         # immutable tuples is atomic enough under the GIL, and the worst
         # interleaving is a redundant re-parse.
         self._disk_entry_cache: dict[tuple[str, str], tuple[float, dict | None]] = {}
+
+        # ── Persistent session index (spec 066 phase 2) ────────────────────
+        # One rebuildable SQLite index per sessions dir (realpath -> index),
+        # built in the background from daemon startup
+        # (``start_session_index_builds``). Until a dir's index is ready the
+        # list is served by the scan + ``_disk_entry_cache`` above, unchanged.
+        # ``_session_index_autostart`` is set only by that startup call, so a
+        # project added later gets its index built on first listing too —
+        # and a bare AgentManager (unit tests) never grows one on its own.
+        self._session_indexes: dict[str, "SessionIndex"] = {}
+        self._session_index_lock = threading.Lock()
+        self._session_index_autostart = False
 
         # Ids currently being delivered inside ``_fire``.
         self._pending_dispatching: set[str] = set()
@@ -4016,6 +4029,9 @@ class AgentManager:
                 # Seam 3 / Phase 4: chat | queue (session switcher visual
                 # distinction; D1's persistent-chat resolver).
                 "origin": getattr(handle.session, "origin", "chat"),
+                # Automation kind (spec 066 4b): "schedule" / "file_watch"
+                # for trigger-fired sessions, else None.
+                "trigger_type": getattr(handle.session, "trigger_type", None),
                 # Display label (auto-derived from first user message or set via
                 # rename). None for headless sessions; frontend falls back to
                 # the first message / session id.
@@ -4119,7 +4135,7 @@ class AgentManager:
         materialized = self._materialized_session_ids(project_id)
         # Local import, as in ``_disk_session_entries``: the name helper is
         # private to the session module and pulled in only where it is used.
-        from agent_os.agent.session import _derive_name
+        from agent_os.agent.session import _derive_name, trigger_type_of
         entries: list[dict] = []
         for sid, p in first_by_session.items():
             if sid in materialized:
@@ -4133,6 +4149,7 @@ class AgentManager:
                 # written has no separate F1/F2 pair.
                 "session_uuid": sid,
                 "origin": "chat",
+                "trigger_type": trigger_type_of(p.content),
                 # D3: the same helper that will name the session at dispatch,
                 # so the label does not change when the row materializes.
                 "name": _derive_name(p.content),
@@ -4148,14 +4165,18 @@ class AgentManager:
             })
         return entries
 
-    def _disk_session_entries(self, project_id: str, seen_uuids: set) -> list[dict]:
-        """Enumerate the project's on-disk session JSONLs not currently hydrated
-        in memory. Each becomes an idle sidebar entry. Skips empty/meta-only
-        logs and the lock sentinels."""
-        project = self._project_store.get_project(project_id) if self._project_store else None
-        workspace = (project or {}).get("workspace", "") if project else ""
-        if not workspace:
-            return []
+    def _session_log_files(
+        self, workspace: str, project_id: str = "",
+    ) -> tuple[str, list[tuple[str, str, str]]] | None:
+        """The project's sidebar-eligible session logs: ``(sessions_dir,
+        [(fname, uuid, realpath), …])``, or None when the directory sits
+        outside the workspace boundary.
+
+        Applies every trust rule of the disk scan — the orbital/ and
+        sessions/ dirs must be real children of the workspace, a listed name
+        must resolve inside sessions/, and fanout worker threads are excluded
+        by filename — so the scan and the index build see the same files.
+        """
         paths = ProjectPaths(workspace)
         workspace_root = os.path.realpath(workspace)
         orbital_root = os.path.realpath(paths.orbital_dir)
@@ -4177,13 +4198,13 @@ class AgentManager:
                 "Ignoring session directory outside workspace boundary for project %s",
                 project_id,
             )
-            return []
+            return None
         from agent_os.daemon_v2.native_worker import is_worker_session_stem
         try:
             fnames = os.listdir(sessions_dir)
         except OSError:
-            return []
-        entries: list[dict] = []
+            return sessions_dir, []
+        files: list[tuple[str, str, str]] = []
         for fname in fnames:
             if not fname.endswith(".jsonl"):
                 continue
@@ -4192,8 +4213,6 @@ class AgentManager:
                 # Fanout worker thread whose session_kind meta was lost to a
                 # pre-fix rewrite — never a sidebar entry (spec 009 §3a).
                 continue
-            if uuid in seen_uuids:
-                continue  # already represented by a live in-memory handle
             candidate = os.path.realpath(os.path.join(sessions_dir, fname))
             try:
                 candidate_is_trusted = (
@@ -4211,117 +4230,171 @@ class AgentManager:
                 # A friendly-looking symlink must not hide a legacy worker
                 # filename that predates durable session_kind metadata.
                 continue
-            # Unchanged file → reuse the parsed result instead of re-reading
-            # the whole log (bug #48). Keyed on the LISTDIR name, not the
-            # realpath: a symlink and its target share content but carry
-            # different session ids. ``scope`` is deliberately not cached —
-            # it comes from live in-memory state that changes without
-            # touching the file.
-            cache_key = (sessions_dir, fname)
+            files.append((fname, uuid, candidate))
+        return sessions_dir, files
+
+    # ── Persistent session index (spec 066 phase 2) ──────────────────────
+
+    def start_session_index_builds(self) -> None:
+        """Build every project's session index on a background thread.
+
+        Called once at daemon startup. Returns immediately: the list keeps
+        using the scan until each project's index is ready, so startup never
+        waits on it. Also arms the lazy build for projects created later.
+        """
+        self._session_index_autostart = True
+        projects = []
+        if self._project_store is not None:
             try:
-                mtime = os.stat(candidate).st_mtime
+                projects = list(self._project_store.list_projects())
+            except Exception:
+                logger.exception("session index: failed to list projects")
+        workspaces = [p.get("workspace") for p in projects if p.get("workspace")]
+
+        def _run() -> None:
+            for workspace in workspaces:
+                try:
+                    self.build_session_index(workspace)
+                except Exception:
+                    logger.exception("session index build failed for %s", workspace)
+
+        threading.Thread(target=_run, name="session-index-build", daemon=True).start()
+
+    def build_session_index(self, workspace: str, project_id: str = ""):
+        """Open (or rebuild) one workspace's session index and bring every row
+        up to date with the logs; mark it ready. Synchronous — the startup
+        path runs it on a background thread. Returns the index, or None when
+        the workspace is not indexable."""
+        from agent_os.daemon_v2.session_index import SessionIndex, derive_disk_entry
+
+        listing = self._session_log_files(workspace, project_id)
+        if listing is None:
+            return None
+        sessions_dir, files = listing
+        if not os.path.isdir(sessions_dir):
+            return None
+        with self._session_index_lock:
+            index = self._session_indexes.get(sessions_dir)
+            if index is None:
+                index = SessionIndex(sessions_dir)
+                self._session_indexes[sessions_dir] = index
+            if index.ready or index.building:
+                return index
+            index.building = True
+        try:
+            index.load_rows()
+            pending = []
+            for fname, uuid, candidate in files:
+                try:
+                    st = os.stat(candidate)
+                except OSError:
+                    continue
+                if index.get(fname, st)[0]:
+                    continue
+                try:
+                    entry = derive_disk_entry(candidate, uuid)
+                except OSError:
+                    continue
+                except Exception:
+                    # One unreadable log must not cost every other project
+                    # session its row; this one is left to the list path.
+                    logger.warning("session index: skipping %s", candidate, exc_info=True)
+                    continue
+                pending.append((fname, st, entry))
+                if len(pending) >= 100:
+                    index.put_many(pending)
+                    pending = []
+            index.put_many(pending)
+            index.prune({fname for fname, _uuid, _cand in files})
+            index.ready = True
+            logger.info("Session index ready for %s (%d logs)", sessions_dir, len(files))
+        finally:
+            index.building = False
+        return index
+
+    def session_index_ready(self, workspace: str) -> bool:
+        index = self._session_indexes.get(
+            os.path.realpath(ProjectPaths(workspace).sessions_dir))
+        return bool(index is not None and index.ready)
+
+    def _ready_session_index(self, sessions_dir: str, workspace: str, project_id: str):
+        """The dir's index when ready, else None (and, once startup armed it,
+        kick a background build for a dir that has none yet)."""
+        index = self._session_indexes.get(sessions_dir)
+        if index is not None:
+            # Building, ready, or a build that failed — one attempt per dir;
+            # a failed one leaves the scan serving the list, as before.
+            return index if index.ready else None
+        if self._session_index_autostart and os.path.isdir(sessions_dir):
+            threading.Thread(
+                target=self.build_session_index, args=(workspace, project_id),
+                name="session-index-build", daemon=True,
+            ).start()
+        return None
+
+    def _disk_session_entries(self, project_id: str, seen_uuids: set) -> list[dict]:
+        """Enumerate the project's on-disk session JSONLs not currently hydrated
+        in memory. Each becomes an idle sidebar entry. Skips empty/meta-only
+        logs and the lock sentinels.
+
+        Rows come from the persistent session index once it is ready (spec 066
+        phase 2): an unchanged log is not opened at all, a changed one is
+        re-derived and written through. Before that, the scan below with its
+        in-memory mtime cache (bug #48) serves the list exactly as before.
+        """
+        project = self._project_store.get_project(project_id) if self._project_store else None
+        workspace = (project or {}).get("workspace", "") if project else ""
+        if not workspace:
+            return []
+        from agent_os.daemon_v2.session_index import derive_disk_entry
+        listing = self._session_log_files(workspace, project_id)
+        if listing is None:
+            return []
+        sessions_dir, files = listing
+        index = self._ready_session_index(sessions_dir, workspace, project_id)
+        entries: list[dict] = []
+        for fname, uuid, candidate in files:
+            if uuid in seen_uuids:
+                continue  # already represented by a live in-memory handle
+            try:
+                st = os.stat(candidate)
             except OSError:
                 continue  # deleted between listdir and stat
-            cached = self._disk_entry_cache.get(cache_key)
-            if cached is not None and cached[0] == mtime:
-                cached_entry = cached[1]
-                if cached_entry is None:
-                    continue  # remembered skip verdict (meta-only / worker log)
-                entries.append({
-                    **cached_entry,
-                    "scope": self.get_session_scope(project_id, uuid),
-                })
-                continue
-            last_activity_at = None
-            stored_name = None  # name on the session_start meta, if present
-            stored_pinned = False  # `pinned` on the same meta (spec 067)
-            stored_pinned_target = None  # `pinned_target` (spec 074)
-            origin = "chat"  # session_start meta origin; legacy logs → chat
-            first_user_content = None  # for name backfill
-            is_worker = False  # session_kind:"worker" meta (spec 009 fanout)
-            try:
-                with open(candidate, "r", encoding="utf-8") as fh:
-                    first_real = None  # first non-meta (conversation) record
-                    last_real = None
-                    for raw in fh:
-                        raw = raw.strip()
-                        if not raw:
-                            continue
-                        try:
-                            rec = json.loads(raw)
-                        except json.JSONDecodeError:
-                            continue
-                        # Skip identity metadata (session_start, model_swap, …)
-                        # — a log with only meta records is not a real session.
-                        if rec.get("role") == "meta":
-                            if rec.get("event") == "session_start":
-                                if rec.get("name") is not None:
-                                    stored_name = rec["name"]
-                                if rec.get("origin"):
-                                    origin = rec["origin"]
-                                if rec.get("pinned") is not None:
-                                    stored_pinned = bool(rec["pinned"])
-                                if rec.get("pinned_target"):
-                                    stored_pinned_target = rec["pinned_target"]
-                            elif (rec.get("event") == "session_kind"
-                                  and rec.get("kind") == "worker"):
-                                # Fanout native-worker session (spec 009 §3a):
-                                # a one-shot, anonymous sub-task thread tagged
-                                # immediately at construction. Never a sidebar
-                                # entry — reachable only via transcript links
-                                # in the fanout join summary / drill-in.
-                                is_worker = True
-                            continue
-                        if first_real is None:
-                            first_real = rec
-                        if first_user_content is None and rec.get("role") == "user":
-                            first_user_content = rec.get("content")
-                        last_real = rec
-            except OSError:
-                continue
-            if first_real is None:
-                # empty / meta-only log — not a materialized session
-                self._disk_entry_cache[cache_key] = (mtime, None)
-                continue
-            if is_worker:
-                # worker thread — excluded from the session sidebar
-                self._disk_entry_cache[cache_key] = (mtime, None)
-                continue
-            if last_real is not None:
-                last_activity_at = last_real.get("timestamp")
-            # Name: stored meta name wins — unless it is machine markup from
-            # the pre-strip auto-namer ("[QUEUE ITEM…", "<attached_files>…"),
-            # which is ignored so legacy sessions heal (mirrors Session.load);
-            # else derive from first user message (lazy backfill, in-memory
-            # only — no file rewrite); else None.
-            from agent_os.agent.session import _derive_name, is_machine_derived_name
-            if stored_name is not None and not is_machine_derived_name(stored_name):
-                name = stored_name
+            if index is not None:
+                hit, derived = index.get(fname, st)
+                if not hit:
+                    try:
+                        derived = derive_disk_entry(candidate, uuid)
+                    except OSError:
+                        continue
+                    index.put(fname, st, derived)
             else:
-                name = _derive_name(first_user_content)
-            # Address a disk-only session by its unique session_uuid: the F1
-            # session_id on disk is often "default" and not unique across many
-            # prior logs, which would shadow the active session and break the
-            # chat endpoint's F1→F2 fast-path mapping. The uuid is unique and is
-            # what callers use to load/act on (hydrate) the disk-only session.
-            derived = {
-                "session_id": uuid,
-                "status": "idle",
-                "session_uuid": uuid,
-                "origin": origin,
-                "name": name,
-                "pinned": stored_pinned,
-                "pinned_target": stored_pinned_target,
-                "last_terminal_event": None,
-                "last_activity_at": last_activity_at,
-            }
-            self._disk_entry_cache[cache_key] = (mtime, derived)
+                # Unchanged file → reuse the parsed result instead of
+                # re-reading the whole log (bug #48). Keyed on the LISTDIR
+                # name, not the realpath: a symlink and its target share
+                # content but carry different session ids.
+                cache_key = (sessions_dir, fname)
+                cached = self._disk_entry_cache.get(cache_key)
+                if cached is not None and cached[0] == st.st_mtime:
+                    derived = cached[1]
+                else:
+                    try:
+                        derived = derive_disk_entry(candidate, uuid)
+                    except OSError:
+                        continue
+                    self._disk_entry_cache[cache_key] = (st.st_mtime, derived)
+            if derived is None:
+                continue  # meta-only log or a worker thread
             # Fresh dict per call: the cached one must never be handed to a
-            # caller that could mutate it.
+            # caller that could mutate it. ``scope`` is deliberately not
+            # cached — it comes from live in-memory state that changes
+            # without touching the file.
             entries.append({
                 **derived,
                 "scope": self.get_session_scope(project_id, uuid),
             })
+        if index is not None:
+            index.prune({fname for fname, _uuid, _cand in files})
         return entries
 
     def list_blocked_sessions(self) -> list[dict]:

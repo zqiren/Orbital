@@ -205,11 +205,16 @@ def test_tool_result_lifecycle_writes_to_orbital(ws):
     msg = {"tool_call_id": "call_abc", "content": "x" * 1000}
     disk_path = _export_to_disk(FakeSession(), msg, "shell", "ls -la", 1)
 
+    # Spec 066 phase 1a: the session dir holds the archive manifest; the
+    # content itself is content-addressed under tool-results/blobs/.
     expected_dir = Path(ws) / "orbital" / "tool-results" / sid
     assert expected_dir.is_dir(), f"tool-results dir not at {expected_dir}"
-    assert Path(disk_path).parent == expected_dir, (
+    assert (expected_dir / "archive.jsonl").is_file()
+    blobs_root = Path(ws) / "orbital" / "tool-results" / "blobs"
+    assert blobs_root in Path(disk_path).parents, (
         f"tool result written to wrong location: {disk_path}"
     )
+    assert Path(disk_path).read_text(encoding="utf-8") == "x" * 1000
 
 
 # ---------------------------------------------------------------------------

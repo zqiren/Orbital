@@ -423,6 +423,13 @@ export interface SessionListEntry {
    * name prefix instead (lib/sessionLabel.ts).
    */
   origin?: 'chat' | 'queue' | 'cold_start';
+  /**
+   * Automation kind (spec 066 4b): 'schedule' / 'file_watch' when a trigger
+   * fired this session, else null. Stamped on the session_start meta from the
+   * trigger header, so it survives a rename (the name prefix does not). Absent
+   * from older backends — the sidebar then falls back to the name prefix.
+   */
+  trigger_type?: 'schedule' | 'file_watch' | null;
 }
 
 export interface AgentStatusEvent {

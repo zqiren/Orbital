@@ -17,6 +17,7 @@ import re
 import threading
 from datetime import datetime, timezone
 
+from agent_os.agent import blob_store
 from agent_os.agent.token_utils import estimate_message_tokens
 from agent_os.utils.file_lock import session_lock
 
@@ -103,6 +104,21 @@ def is_machine_derived_name(name) -> bool:
 # QUOTES_HEADING byte for byte. Stripped from derived session names so a
 # session reads as the user's own words, not the quoted file.
 _QUOTES_HEADING = "Annotations - the user is pointing at these, answer about them:"
+
+
+# Automation-fired sessions open with the trigger header stamped by
+# agent_os/daemon_v2/trigger_manager.py (``_fire_trigger``) — keep in sync.
+# The frontend classifier reads the same prefix (web/src/lib/sessionLabel.ts).
+_TRIGGER_RE = re.compile(r"^\[Triggered by (schedule|file_watch) '")
+
+
+def trigger_type_of(content) -> str | None:
+    """``"schedule"`` / ``"file_watch"`` when a first user message is an
+    automation's trigger header, else None (spec 066 §8, 4b)."""
+    if not isinstance(content, str):
+        return None
+    m = _TRIGGER_RE.match(content)
+    return m.group(1) if m else None
 
 
 def _derive_name(content) -> str | None:
@@ -288,6 +304,22 @@ class Session:
         # every pre-074 log, which reads as unpinned — no migration.
         self.pinned_target: str | None = None
 
+        # Automation kind (spec 066 §8, 4b): "schedule" / "file_watch" when the
+        # session was fired by a trigger, else None. Stamped on the
+        # session_start meta from the FIRST user message (the trigger header),
+        # so it survives renames and compaction; legacy logs without the field
+        # derive it from their first user message on load (no rewrite).
+        # Display-only, like ``name``.
+        self.trigger_type: str | None = None
+        self._first_user_seen: bool = False
+
+        # Rows loaded from disk with base64 images still inline (logs written
+        # before the blob store, spec 066 phase 1b), by ``id()``. Whole-file
+        # rewrites write these back exactly as they were — existing data is
+        # never converted — while every other row stores its images as blob
+        # references. Pruned to the live rows on each rewrite.
+        self._legacy_inline_ids: set[int] = set()
+
         # Sub-agent thread registry (TASK-resume-persistence, piece 2).
         # handle -> {"session_id", "model", "last_used_at"}: the resume
         # identity of each sub-agent thread this session owns. The composite
@@ -405,6 +437,8 @@ class Session:
                             # no-migration default: absent/null reads as None.
                             if msg.get("pinned_target"):
                                 session.pinned_target = msg["pinned_target"]
+                            if msg.get("trigger_type"):
+                                session.trigger_type = msg["trigger_type"]
                         elif msg.get("event") == "sub_agent_thread":
                             # Resume identity rows: append-only, last row per
                             # handle wins (TASK-resume-persistence).
@@ -414,7 +448,7 @@ class Session:
                                     dict(msg["thread"])
                                 )
                         continue
-                    session._messages.append(msg)
+                    session._messages.append(session._hydrate_loaded_row(msg))
 
             if skipped > 0:
                 logger.warning("Skipped %d corrupted lines during session load", skipped)
@@ -439,6 +473,17 @@ class Session:
                         if derived is not None:
                             session.name = derived
                         break
+
+            # Automation kind: the stored stamp wins; legacy logs derive it
+            # from their first user message, in memory only (same rule as
+            # the name backfill above).
+            first_user = next(
+                (m for m in session._messages if m.get("role") == "user"), None,
+            )
+            if first_user is not None:
+                session._first_user_seen = True
+                if session.trigger_type is None:
+                    session.trigger_type = trigger_type_of(first_user.get("content"))
 
             # Rebuild pending_tool_calls
             all_tool_call_ids: set[str] = set()
@@ -483,11 +528,23 @@ class Session:
         # derived by truncation (see ``_derive_name``); it is stored on the
         # session_start meta record so it persists with the JSONL. Only the
         # first user message sets it — later messages and renames don't.
+        meta_fields: dict = {}
         if self.name is None and message.get("role") == "user":
             derived = _derive_name(message.get("content"))
             if derived is not None:
                 self.name = derived
-                self._apply_meta_fields(name=derived)
+                meta_fields["name"] = derived
+        # The first user message also tells whether an automation fired this
+        # session (spec 066 4b). Only the first one — a trigger header later
+        # in a chat does not make it an automation session.
+        if not self._first_user_seen and message.get("role") == "user":
+            self._first_user_seen = True
+            trigger_type = trigger_type_of(message.get("content"))
+            if trigger_type is not None:
+                self.trigger_type = trigger_type
+                meta_fields["trigger_type"] = trigger_type
+        if meta_fields:
+            self._apply_meta_fields(**meta_fields)
 
         # Track tool_call IDs from assistant messages
         if message.get("role") == "assistant" and "tool_calls" in message:
@@ -503,9 +560,46 @@ class Session:
             except Exception:
                 logger.exception("on_append callback failed")
 
-        # Thread-safe + cross-process JSONL write (now includes any fields added by observer)
-        line_bytes = (json.dumps(message, ensure_ascii=False) + "\n").encode("utf-8")
-        self._write_line(line_bytes)
+        # Thread-safe + cross-process JSONL write (now includes any fields added by observer).
+        # Images go to the blob store; the in-memory message keeps its data URL.
+        self._write_line(self._row_line(message).encode("utf-8"))
+
+    # ------------------------------------------------------------------
+    # On-disk row form (spec 066 phase 1b)
+    # ------------------------------------------------------------------
+
+    def _orbital_dir(self) -> str:
+        """``{workspace}/orbital`` — the sessions dir's parent."""
+        return os.path.dirname(os.path.dirname(self._filepath))
+
+    def _row_line(self, msg: dict) -> str:
+        """One JSONL line for ``msg`` as it is stored on disk.
+
+        Base64 images are written to the blob store and replaced by
+        references (``blob_store.deinline_row_images``) — except rows that
+        were loaded with their images inline, which are written back exactly
+        as they were read. The in-memory ``msg`` is never modified.
+        """
+        if id(msg) not in self._legacy_inline_ids:
+            msg = blob_store.deinline_row_images(msg, self._orbital_dir())
+        return json.dumps(msg, ensure_ascii=False) + "\n"
+
+    def _hydrate_loaded_row(self, msg: dict) -> dict:
+        """In-memory form of a row read from disk: blob references become
+        data URLs again (so the model sees what it saw when the row was
+        written), and rows still carrying inline images are remembered as
+        legacy so a rewrite leaves them untouched."""
+        legacy = blob_store.has_inline_images(msg)
+        msg = blob_store.rehydrate_row_images(msg, self._orbital_dir())
+        if legacy:
+            self._legacy_inline_ids.add(id(msg))
+        return msg
+
+    def _prune_legacy_ids(self, messages: list[dict]) -> None:
+        """Forget ids of rows that are no longer in the conversation (an id
+        can be reused by a new object once the old one is gone)."""
+        live = {id(m) for m in messages}
+        self._legacy_inline_ids &= live
 
     def _write_line(self, line_bytes: bytes) -> None:
         """Append one physical JSONL line under both locks.
@@ -925,7 +1019,12 @@ class Session:
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp_path, self._filepath)
-        self._messages = [m for m in new_full if m.get("role") != "meta"]
+        # Rows were re-read from disk, so they carry blob references where
+        # images were stored out of line — hydrate them like load() does.
+        self._legacy_inline_ids.clear()
+        self._messages = [
+            self._hydrate_loaded_row(m) for m in new_full if m.get("role") != "meta"
+        ]
         self.pending_tool_calls -= {m["tool_call_id"] for m in inserted}
         return inserted
 
@@ -1047,11 +1146,12 @@ class Session:
                     for line in meta_lines:
                         f.write(line)
                     for msg in self._messages:
-                        f.write(json.dumps(msg, ensure_ascii=False) + "\n")
+                        f.write(self._row_line(msg))
                     f.flush()
                     os.fsync(f.fileno())
                 os.replace(tmp_path, self._filepath)
                 self._pending_meta = None
+        self._prune_legacy_ids(self._messages)
 
     # ------------------------------------------------------------------
     # Compaction support (PRIVATE)
@@ -1071,12 +1171,13 @@ class Session:
                     for line in meta_lines:
                         f.write(line)
                     for msg in new_messages:
-                        f.write(json.dumps(msg, ensure_ascii=False) + "\n")
+                        f.write(self._row_line(msg))
                     f.flush()
                     os.fsync(f.fileno())
                 os.replace(tmp_path, self._filepath)
                 self._pending_meta = None
         self._messages = new_messages
+        self._prune_legacy_ids(self._messages)
 
 
 def persist_user_row(session: Session, content: str,

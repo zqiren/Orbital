@@ -4,7 +4,10 @@
 
 """Regression: full tool results are archived to disk, unconditionally.
 
-Files are stored at orbital/tool-results/{session_uuid}/. The archive is
+Since spec 066 (phase 1a) the archive is content-addressed: each session's
+orbital/tool-results/{session_uuid}/archive.jsonl manifest has one line per
+archived call (turn, call id, tool, target, hash) and the content itself lives
+once per distinct bytes in orbital/tool-results/blobs/. The archive is
 DECOUPLED from history rewriting: it happens for every result over the size
 threshold whether or not that result is ever stubbed. It is load-bearing
 observability (the corpus behind the tool-result lifecycle investigation) and
@@ -16,9 +19,11 @@ import os
 
 import pytest
 
+from agent_os.agent import blob_store
 from agent_os.agent.session import Session
 from agent_os.agent.tool_result_lifecycle import (
     archive_and_supersede_tool_results,
+    read_archive_manifest,
 )
 
 
@@ -49,6 +54,18 @@ def _add_tool_call_and_result(session, call_id, tool_name, arguments, content):
     session.append_tool_result(call_id, content)
 
 
+def _archive(session, workspace, call_id):
+    """(manifest entry, archived content) for one call, or (None, None)."""
+    for entry in read_archive_manifest(session):
+        if entry["call_id"] == call_id:
+            path = blob_store.blob_path(
+                os.path.join(workspace, "orbital"), entry["sha256"], entry["ext"],
+            )
+            with open(path, "r", encoding="utf-8") as f:
+                return entry, f.read()
+    return None, None
+
+
 class TestToolResultDiskBackup:
     """Verify full tool results are saved to disk."""
 
@@ -66,11 +83,10 @@ class TestToolResultDiskBackup:
         tool_msg = [m for m in session.get_messages() if m.get("role") == "tool"][0]
         assert not tool_msg.get("_stubbed")
 
-        tool_results_dir = os.path.join(
-            workspace, "orbital", "tool-results", "disk-backup-test",
-        )
-        expected_file = os.path.join(tool_results_dir, "turn_3_call_tc_disk1.json")
-        assert os.path.exists(expected_file), f"Expected disk backup at {expected_file}"
+        entry, content = _archive(session, workspace, "tc_disk1")
+        assert entry is not None, "Expected a disk archive for tc_disk1"
+        assert entry["turn"] == 3
+        assert content == "D" * 5_000
 
     def test_disk_file_valid_json_schema(self, session, workspace):
         """Disk backup file contains valid JSON with the correct schema."""
@@ -83,22 +99,16 @@ class TestToolResultDiskBackup:
 
         archive_and_supersede_tool_results(session, iteration=1)
 
-        tool_results_dir = os.path.join(
-            workspace, "orbital", "tool-results", "disk-backup-test",
-        )
-        backup_file = os.path.join(tool_results_dir, "turn_1_call_tc_schema.json")
+        record, content = _archive(session, workspace, "tc_schema")
 
-        with open(backup_file, "r", encoding="utf-8") as f:
-            record = json.load(f)
-
-        # Verify schema fields
+        # Verify schema fields (manifest line) and the archived content (blob)
         assert record["turn"] == 1
         assert record["call_id"] == "tc_schema"
         assert record["tool_name"] == "shell"
         assert record["key_param"] == "cat large.log"
         assert "timestamp" in record
         assert record["pre_filter_tokens"] == int(len(original_content) / 4)
-        assert record["content"] == original_content
+        assert content == original_content
 
     def test_disk_content_matches_original(self, session, workspace):
         """Content field in disk backup matches the original pre-filtered content."""
@@ -111,15 +121,8 @@ class TestToolResultDiskBackup:
 
         archive_and_supersede_tool_results(session, iteration=2)
 
-        tool_results_dir = os.path.join(
-            workspace, "orbital", "tool-results", "disk-backup-test",
-        )
-        backup_file = os.path.join(tool_results_dir, "turn_2_call_tc_match.json")
-
-        with open(backup_file, "r", encoding="utf-8") as f:
-            record = json.load(f)
-
-        assert record["content"] == original
+        _entry, content = _archive(session, workspace, "tc_match")
+        assert content == original
 
     def test_multiple_backups_for_multiple_tools(self, session, workspace):
         """Each tool result gets its own disk backup file."""
@@ -137,12 +140,10 @@ class TestToolResultDiskBackup:
 
         archive_and_supersede_tool_results(session, iteration=5)
 
-        tool_results_dir = os.path.join(
-            workspace, "orbital", "tool-results", "disk-backup-test",
-        )
         for i in range(3):
-            path = os.path.join(tool_results_dir, f"turn_5_call_tc_multi_{i}.json")
-            assert os.path.exists(path), f"Missing backup for tc_multi_{i}"
+            entry, _content = _archive(session, workspace, f"tc_multi_{i}")
+            assert entry is not None, f"Missing backup for tc_multi_{i}"
+            assert entry["turn"] == 5
 
     def test_superseded_stub_contains_disk_path(self, session, workspace):
         """The one stub that exists carries the path to the archived content."""
@@ -166,12 +167,12 @@ class TestToolResultDiskBackup:
         ][0]["content"]
 
         assert "Full result:" in stub
-        assert "turn_4_call_tc_path.json" in stub
+        assert "tool-results/blobs/" in stub
         # The path in the stub actually resolves to the archived content.
         marker = "Full result: "
         disk_path = stub[stub.index(marker) + len(marker):].rstrip("]")
         with open(disk_path, "r", encoding="utf-8") as f:
-            assert json.load(f)["content"] == "F" * 5_000
+            assert f.read() == "F" * 5_000
 
     def test_archive_is_written_once_per_call_id(self, session, workspace):
         """Repeated invocations must not duplicate a result under a new turn_N."""
@@ -182,10 +183,8 @@ class TestToolResultDiskBackup:
         archive_and_supersede_tool_results(session, iteration=1)
         archive_and_supersede_tool_results(session, iteration=2)
 
-        tool_results_dir = os.path.join(
-            workspace, "orbital", "tool-results", "disk-backup-test",
-        )
-        assert sorted(os.listdir(tool_results_dir)) == ["turn_1_call_tc_dedupe.json"]
+        entries = read_archive_manifest(session)
+        assert [(e["call_id"], e["turn"]) for e in entries] == [("tc_dedupe", 1)]
 
     def test_disk_file_readable_after_session_reload(self, session, workspace):
         """Disk backup is independently readable even after session reload."""
@@ -203,10 +202,5 @@ class TestToolResultDiskBackup:
         assert reloaded is not None
 
         # Disk backup still readable independently
-        tool_results_dir = os.path.join(
-            workspace, "orbital", "tool-results", "disk-backup-test",
-        )
-        backup_file = os.path.join(tool_results_dir, "turn_1_call_tc_reload.json")
-        with open(backup_file, "r", encoding="utf-8") as f:
-            record = json.load(f)
-        assert record["content"] == content
+        _entry, archived = _archive(reloaded, workspace, "tc_reload")
+        assert archived == content

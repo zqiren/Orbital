@@ -611,6 +611,18 @@ def create_app(data_dir: str | None = None) -> FastAPI:
                 "Failed to start idle-eviction sweep on startup"
             )
 
+    # Session-list index (spec 066 phase 2): built on a background thread so
+    # startup never waits on it; the list falls back to the scan until ready.
+    @app.on_event("startup")
+    async def _start_session_index():
+        try:
+            agent_manager.start_session_index_builds()
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception(
+                "Failed to start the session index build on startup"
+            )
+
     # 7f. Pairing routes
     pairing_routes.configure(getattr(app.state, "relay_client", None))
     app.include_router(pairing_routes.router)

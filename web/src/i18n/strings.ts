@@ -784,6 +784,8 @@ export const STRINGS = {
   "sessionItem.relTime.seconds": { en: "{n}s ago", zh: "{n} 秒前" },
   "sessionItem.rename": { en: "Rename", zh: "重命名" },
   "sessionItem.unpin": { en: "Unpin", zh: "取消置顶" },
+  "sessionSidebar.automations": { en: "Automations", zh: "自动任务" },
+  "sessionSidebar.automationsToggle": { en: "Show or hide automation sessions", zh: "显示或隐藏自动任务会话" },
   "sessionSidebar.empty": { en: "No sessions", zh: "暂无会话" },
   "sessionSidebar.header": { en: "Sessions", zh: "会话" },
   "sessionSidebar.loading": { en: "Loading…", zh: "加载中…" },

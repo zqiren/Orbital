@@ -6,11 +6,16 @@
 
 Two responsibilities, deliberately decoupled:
 
-1. **Archive.** Every tool result above :data:`SIZE_THRESHOLD` is written to
-   ``{workspace}/orbital/tool-results/{session_uuid}/turn_{n}_call_{id}.json``.
+1. **Archive.** Every tool result above :data:`SIZE_THRESHOLD` is archived.
    This is observability, not context management: the archive is written
    whether or not session history is ever rewritten, and each ``tool_call_id``
-   is archived exactly once.
+   is archived exactly once. The content is content-addressed (spec 066
+   phase 1a): it lands in the blob store once per distinct bytes
+   (``{workspace}/orbital/tool-results/blobs/<ab>/<sha256>.txt``), and the
+   session's ``{workspace}/orbital/tool-results/{session_uuid}/archive.jsonl``
+   manifest records one line per call (turn, call id, tool, target, hash).
+   Archives written before this (one ``turn_{n}_call_{id}.json`` record per
+   call) are still recognised and never rewritten.
 
 2. **Supersession.** History is rewritten in exactly one case — a tool result
    whose target was fetched *again* later in the same session. The older copy
@@ -40,7 +45,13 @@ import logging
 import os
 from datetime import datetime, timezone
 
+from agent_os.agent import blob_store
+
 logger = logging.getLogger(__name__)
+
+# Per-session archive manifest (append-only JSONL), inside the session's
+# tool-results directory.
+ARCHIVE_MANIFEST = "archive.jsonl"
 
 # Results below this are left completely alone — not archived, not superseded.
 SIZE_THRESHOLD = 500
@@ -286,12 +297,42 @@ def _tool_results_dir(session) -> str:
     return os.path.join(parent, "tool-results", session.session_uuid)
 
 
+def _orbital_dir(session) -> str:
+    return os.path.dirname(os.path.dirname(session._filepath))
+
+
+def read_archive_manifest(session) -> list[dict]:
+    """The session's archive manifest entries, in write order.
+
+    A torn or unparseable line (a crash mid-append) is skipped, never fatal.
+    """
+    path = os.path.join(_tool_results_dir(session), ARCHIVE_MANIFEST)
+    entries: list[dict] = []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(entry, dict) and entry.get("call_id") and entry.get("sha256"):
+                    entries.append(entry)
+    except OSError:
+        pass
+    return entries
+
+
 def _archived_call_ids(session) -> dict[str, str]:
-    """Map already-archived tool_call_id -> its file path (one listdir).
+    """Map already-archived tool_call_id -> the file holding its content.
 
     Archiving is idempotent per call id: the loop calls the entry point after
     every LLM response, and without this the same result would be rewritten
-    once per iteration under a new turn_N name.
+    once per iteration under a new turn_N name. Two sources, oldest first:
+    per-call ``turn_N_call_<id>.json`` records written before the blob store
+    (one listdir), then the manifest (content lives in the blob store).
     """
     directory = _tool_results_dir(session)
     out: dict[str, str] = {}
@@ -308,15 +349,42 @@ def _archived_call_ids(session) -> dict[str, str]:
             continue
         call_id = name[idx + len(marker):-len(".json")]
         out.setdefault(call_id, os.path.join(directory, name))
+    if ARCHIVE_MANIFEST in names:
+        orbital_dir = _orbital_dir(session)
+        for entry in read_archive_manifest(session):
+            out.setdefault(
+                entry["call_id"],
+                blob_store.blob_path(orbital_dir, entry["sha256"], entry.get("ext") or "txt"),
+            )
     return out
+
+
+def _append_manifest_line(path: str, entry: dict) -> None:
+    """Append one manifest line, starting a fresh line if the previous
+    append was torn (so a crash can never glue two entries together)."""
+    line = json.dumps(entry, ensure_ascii=False) + "\n"
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            if f.tell() > 0:
+                f.seek(-1, os.SEEK_END)
+                if f.read(1) != b"\n":
+                    line = "\n" + line
+    except OSError:
+        pass
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(line)
 
 
 def _export_to_disk(
     session, msg: dict, tool_name: str, key_param: str, iteration: int
 ) -> str:
-    """Save the full tool result content to disk.
+    """Archive the full tool result content (content-addressed).
 
-    Returns the absolute path to the written file.
+    The content goes to the blob store — once per distinct bytes, so a
+    re-read of an unchanged file costs no extra space — and one manifest line
+    records this call. Returns the absolute path of the file holding the
+    content, which is what a superseded stub points the agent at.
     """
     tool_call_id = msg.get("tool_call_id", "unknown")
     content = msg.get("content", "")
@@ -324,20 +392,17 @@ def _export_to_disk(
     tool_results_dir = _tool_results_dir(session)
     os.makedirs(tool_results_dir, exist_ok=True)
 
-    filename = f"turn_{iteration}_call_{tool_call_id}.json"
-    disk_path = os.path.join(tool_results_dir, filename)
-
-    record = {
+    sha256, disk_path = blob_store.put_bytes(
+        _orbital_dir(session), content.encode("utf-8", errors="replace"), "txt",
+    )
+    _append_manifest_line(os.path.join(tool_results_dir, ARCHIVE_MANIFEST), {
         "turn": iteration,
         "call_id": tool_call_id,
         "tool_name": tool_name,
         "key_param": key_param,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "pre_filter_tokens": int(len(content) / 4),
-        "content": content,
-    }
-
-    with open(disk_path, "w", encoding="utf-8") as f:
-        json.dump(record, f, ensure_ascii=False)
-
+        "sha256": sha256,
+        "ext": "txt",
+    })
     return disk_path
