@@ -3,7 +3,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """Unit tests for the standalone-calendar native sources (Task 6): the
-``memory`` source (PROJECT_STATE ``due:`` entries), the ``automation`` source
+``memory`` source (open asks with ``due:`` + PROJECT_STATE ``[due:]`` facts —
+spec 089 §3.6), the ``automation`` source
 (future cron occurrences of enabled schedule triggers), and the read-only
 ``calendar_read`` agent tool. All logic is exercised against tmp workspaces —
 no real daemon, no real cron clock.
@@ -49,6 +50,14 @@ def _project(project_id, workspace, *, timezone_name=None, triggers=None):
 
 # ---- MemorySource: timezone-sensitive due parsing ---------------------------
 
+def _write_asks(workspace: str, lines: list[str]) -> None:
+    from agent_os.agent import asks
+    path = os.path.join(ProjectPaths(workspace).orbital_dir, "ASKS.md")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(asks.FORMAT_HEADER + "\n" + "\n".join(lines) + "\n")
+
+
 async def test_memory_source_date_only_due_is_all_day_in_project_tz(tmp_path, monkeypatch):
     """A date-only ``due:`` must be resolved as project-tz midnight, not UTC
     midnight — even though the daemon process itself runs UTC. The query
@@ -58,10 +67,7 @@ async def test_memory_source_date_only_due_is_all_day_in_project_tz(tmp_path, mo
     """
     monkeypatch.setenv("TZ", "UTC")
     ws = tmp_path / "proj-a"
-    _write_state(str(ws), (
-        "- [user due:2026-07-28] Send the draft.\n"
-        '<!--mem id:x7f3a2 from:sess evidence:"quote" confidence:unconfirmed created:2026-07-19-->\n'
-    ))
+    _write_asks(str(ws), ["- open a7f3a2 2026-07-19 due:2026-07-28 Send the draft."])
     src = MemorySource(FakeProjectStore([
         _project("proj-a", ws, timezone_name="Asia/Shanghai"),
     ]))
@@ -75,14 +81,12 @@ async def test_memory_source_date_only_due_is_all_day_in_project_tz(tmp_path, mo
     assert ev.end == "2026-07-28"
     assert ev.timezone == "Asia/Shanghai"
     assert ev.title == "Send the draft."
+    assert ev.id == "memory:proj-a/a7f3a2"      # event id = the ask id
 
 
 async def test_memory_source_timed_due_is_tz_aware_instant(tmp_path):
     ws = tmp_path / "proj-a"
-    _write_state(str(ws), (
-        "- [user due:2026-07-28T20:00] Call the vendor.\n"
-        '<!--mem id:t1me3v from:sess evidence:"call them" confidence:stated created:2026-07-20-->\n'
-    ))
+    _write_asks(str(ws), ["- open 71e3aa 2026-07-20 due:2026-07-28T20:00 Call the vendor."])
     src = MemorySource(FakeProjectStore([
         _project("proj-a", ws, timezone_name="Asia/Shanghai"),
     ]))
@@ -96,7 +100,37 @@ async def test_memory_source_timed_due_is_tz_aware_instant(tmp_path):
     assert ev.timezone == "Asia/Shanghai"
 
 
-async def test_memory_source_resolved_dated_fact_emits_no_event(tmp_path):
+async def test_memory_source_closed_asks_emit_nothing(tmp_path):
+    ws = tmp_path / "proj-a"
+    _write_asks(str(ws), [
+        "- open 00000a 2026-07-01 due:2026-07-20 Done already",
+        "- done 00000a 2026-07-02 by:user",
+        "- open 00000b 2026-07-01 due:2026-07-21 Dropped",
+        "- dropped 00000b 2026-07-02 by:user",
+        "- open 00000c 2026-07-01 Open but undated",
+    ])
+    src = MemorySource(FakeProjectStore([_project("proj-a", ws, timezone_name="UTC")]))
+
+    events = await src.list_events("2026-07-01T00:00:00+00:00", "2026-07-31T00:00:00+00:00")
+
+    assert events == []
+
+
+async def test_memory_source_reopened_ask_emits_again(tmp_path):
+    ws = tmp_path / "proj-a"
+    _write_asks(str(ws), [
+        "- open 00000a 2026-07-01 due:2026-07-20 Back on the list",
+        "- done 00000a 2026-07-02 by:agent \"done\"",
+        "- reopen 00000a 2026-07-03 by:user",
+    ])
+    src = MemorySource(FakeProjectStore([_project("proj-a", ws, timezone_name="UTC")]))
+    events = await src.list_events("2026-07-01T00:00:00+00:00", "2026-07-31T00:00:00+00:00")
+    assert [e.title for e in events] == ["Back on the list"]
+
+
+async def test_memory_source_dated_fact_ignores_legacy_resolved_stamp(tmp_path):
+    """Spec 089 removed the ``resolved:`` logic: a dated line's event lasts
+    exactly as long as the line does."""
     ws = tmp_path / "proj-a"
     _write_state(str(ws), (
         "- [due:2026-07-15] Renew the old domain.\n"
@@ -108,12 +142,21 @@ async def test_memory_source_resolved_dated_fact_emits_no_event(tmp_path):
 
     events = await src.list_events("2026-07-01T00:00:00+00:00", "2026-07-31T00:00:00+00:00")
 
-    assert events == []
+    assert [e.title for e in events] == ["Renew the old domain."]
+
+
+async def test_memory_source_merges_asks_and_dated_facts(tmp_path):
+    ws = tmp_path / "proj-a"
+    _write_state(str(ws), "- [due:2026-07-30] Renew the domain.\n")
+    _write_asks(str(ws), ["- open 00000a 2026-07-01 due:2026-07-29 Approve the budget"])
+    src = MemorySource(FakeProjectStore([_project("proj-a", ws, timezone_name="UTC")]))
+    events = await src.list_events("2026-07-01T00:00:00+00:00", "2026-08-01T00:00:00+00:00")
+    assert sorted(e.title for e in events) == ["Approve the budget", "Renew the domain."]
 
 
 async def test_memory_source_unflagged_dated_fact_still_emits(tmp_path):
-    """A dated fact (no ``user`` token) still projects onto the calendar —
-    only its resolved state, not its flagged state, gates the event."""
+    """A dated fact (no ``user`` token) in PROJECT_STATE projects onto the
+    calendar."""
     ws = tmp_path / "proj-a"
     _write_state(str(ws), "- [due:2026-07-30] Renew the domain.\n")
     src = MemorySource(FakeProjectStore([

@@ -488,13 +488,15 @@ class TestWiring:
         orbital = tmp_path / "orbital"
         orbital.mkdir()
         state_path = orbital / "PROJECT_STATE.md"
+        # No [user] tag: since spec 089 a flagged line leaves PROJECT_STATE
+        # for ASKS.md before the chokepoint runs (tests/unit/test_asks.py).
         state_path.write_text(
-            "- [user] Send drafts to the client.\n"
+            "- Send drafts to the client.\n"
             "  <!--mem id:abc123 from:s1 evidence:\"send it\" "
             "created:2026-07-19 touched:2026-07-19-->\n",
             encoding="utf-8",
         )
-        new = "- [user] Send drafts to the client.\n"
+        new = "- Send drafts to the client.\n"
         out, warns = memory_entries.process_on_write(
             str(tmp_path), str(state_path), new, today=TODAY
         )

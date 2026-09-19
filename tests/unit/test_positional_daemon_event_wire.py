@@ -43,6 +43,16 @@ from agent_os.agent.providers.openai_compat import LLMProvider
 from agent_os.agent.session import Session
 
 
+@pytest.fixture(autouse=True)
+def _no_asks_section(monkeypatch):
+    """These tests pin the runtime block's exact bytes from `_StubBuilder`.
+    Spec 089 appends an asks section inside that same block (an "Open asks:
+    none" cue even when empty); where it lands is covered by
+    tests/unit/test_asks.py::TestRuntimeInjection, so it is left out here."""
+    from agent_os.agent import asks
+    monkeypatch.setattr(asks, "render_runtime_block", lambda *a, **k: "")
+
+
 # ── helpers ──────────────────────────────────────────────────────────────
 
 _DYNAMIC = (

@@ -2,51 +2,39 @@
 # Copyright (C) 2026 Orbital Contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Native ``memory`` calendar source (spec §7.2, §7.3; Task 6).
+"""Native ``memory`` calendar source (spec §7.2, §7.3; spec 089 §3.6).
 
-Every project's ``orbital/PROJECT_STATE.md`` already carries dated
-commitments — flagged ``[user due:...]`` entries and unflagged dated facts
-(``[due:...]``) — via the shared ``user_flags`` grammar (Task 1). This source
-re-parses those files at request time (no derived file, no cache of its own —
-the hub's own TTL cache covers repeated views) and projects every entry that
-still has an open ``due:`` into the calendar.
+Two kinds of dated project memory project onto the calendar, re-read at
+request time (no derived file, no cache of its own — the hub's TTL cache
+covers repeated views):
 
-A ``resolved:`` stamp closes an entry (spec §5.3 — the fulfilled exit sets it,
-and the Workbench read path already treats a resolved dated fact as closed);
-such an entry never emits an event even when its ``due:`` date falls inside
-the requested range.
+- **open asks with a ``due:``** from ``orbital/ASKS.md`` (``agent/asks.py``).
+  Event identity is the ask id — ``memory/{project_id}/{ask_id}`` — which for
+  a migrated ``[user due:]`` entry is the id it already had, so the event
+  keeps its id across the upgrade. An ask's event disappears the moment the
+  ask is closed and comes back if it is reopened.
+- **dated facts** — PROJECT_STATE bullets carrying a ``[due:…]`` tag, via the
+  shared ``user_flags`` grammar. Identity is the entry's stamped id when it
+  has one, else a stable hash of project id + text (content-dependent, not
+  random, so re-parsing an unchanged line always yields the same event id).
+  There is no "resolved" state any more: a dated line's event lasts exactly
+  as long as the line does. A leftover ``[user due:]`` line (written outside
+  the tools, not yet moved into ASKS.md) still shows, so nothing dated
+  disappears in the window before it moves.
 
-Event identity mirrors ``memory/{project_id}/{mem_id}`` (``source="memory"``,
-``source_id="{project_id}/{mem_id}"``). ``mem_id`` is the entry's stamped id
-when present; a dated fact that predates id-stamping (the write chokepoint
-only stamps NEW *flagged* bullets — spec §5.2) has no id, so a stable
-fallback key is derived from a hash of the project id + entry text —
-content-dependent, not random, so re-parsing the same unchanged entry always
-yields the same event id across requests (it only changes if the entry text
-itself is edited, which is acceptable: nothing external references this
-fallback id, unlike a real stamped one).
-
-Every entry is pre-linked to its project (``NormalizedEvent.project_id`` set
+Every event is pre-linked to its project (``NormalizedEvent.project_id`` set
 directly here) — these events exist BECAUSE they belong to a project, unlike
 an externally-sourced calendar item a user manually links, so they must not
 depend on the ``Linkage`` store. This class declares ``linked_by_hub = False``
-(see ``CalendarHub.list_events``, Task 6) so the hub leaves its stamped
+(see ``CalendarHub.list_events``) so the hub leaves its stamped
 ``project_id`` alone instead of overwriting it from the — necessarily empty —
 linkage map; without that, the read-only agent tool's project lens would
 never see these events at all.
 
-This source never raises: a project with an unreadable/missing state file, a
-decode error, or a parse failure contributes zero events for that project and
-is skipped — the same degrade-gracefully rule every source in this package
+This source never raises: a project with an unreadable/missing file, a decode
+error, or a parse failure contributes zero events for that part and is
+skipped — the same degrade-gracefully rule every source in this package
 follows.
-
-Note (scope decision — see Task 6 report): the spec's "kind = user-flagged /
-dated-fact" per-event distinction has no home on the currently shipped
-``NormalizedEvent`` — its ``to_dict()`` field set is locked by an existing
-test (``test_calendar_hub.py::test_normalized_event_id_and_dict``) outside
-this task's file scope, so no field was added for it here. Flagged vs
-dated-fact is still recoverable downstream by re-parsing the same
-PROJECT_STATE file if a future surface needs to render the distinction.
 """
 
 from __future__ import annotations
@@ -55,7 +43,7 @@ import hashlib
 import logging
 from datetime import datetime, timezone
 
-from agent_os.agent import user_flags
+from agent_os.agent import asks, user_flags
 from agent_os.agent.project_paths import ProjectPaths
 from agent_os.agent.workbench_cards import project_timezone
 
@@ -100,12 +88,11 @@ def _parse_range_iso(value: str) -> datetime | None:
 def _parse_due(due: str, tz) -> tuple[datetime, bool]:
     """Return ``(tz-aware instant, all_day)`` for a raw ``due:`` value.
 
-    Grammar (``user_flags._DUE_RE``): ``YYYY-MM-DD`` or ``YYYY-MM-DDTHH:MM`` —
-    always exactly one of those two shapes when not ``None``, and always
-    valid (``parse_entries`` already discards malformed ``due:`` values, so a
-    non-None ``entry.due`` here is guaranteed well-formed). Parsed by hand
-    instead of ``datetime.fromisoformat`` so behavior does not depend on the
-    running Python version's leniency toward a missing ``:SS``.
+    Grammar: ``YYYY-MM-DD`` or ``YYYY-MM-DDTHH:MM`` — both parsers
+    (``user_flags`` and ``asks``) only ever return one of those two shapes.
+    Parsed by hand instead of ``datetime.fromisoformat`` so behavior does not
+    depend on the running Python version's leniency toward a missing ``:SS``.
+    Raises ``ValueError`` on anything else (e.g. an impossible date).
     """
     date_part, _, time_part = due.partition("T")
     year, month, day = (int(x) for x in date_part.split("-"))
@@ -124,7 +111,7 @@ def _mem_id(project_id: str, entry) -> str:
 
 
 class MemorySource:
-    """Projects every project's open ``due:`` entries onto the calendar."""
+    """Projects every project's open dated asks and dated facts onto the calendar."""
 
     id = "memory"
     kind = "memory"
@@ -156,38 +143,50 @@ class MemorySource:
         project_id = project.get("project_id", "")
         if not workspace or not project_id:
             return []
+        tz_name = project_timezone(project, project.get("triggers", []) or [])
+        tz = _resolve_tz(tz_name)
+        paths = ProjectPaths(workspace)
+
+        dated: list[tuple[str, str, str]] = []   # (event key, title, due)
         try:
-            with open(
-                ProjectPaths(workspace).project_state, "r",
-                encoding="utf-8", errors="replace",
-            ) as f:
+            for a in asks.read_asks(paths.orbital_dir):
+                if a.is_open and a.due:
+                    dated.append((a.id, a.text, a.due))
+        except Exception:
+            logger.warning(
+                "memory source: reading asks failed for %s", project_id, exc_info=True
+            )
+        try:
+            with open(paths.project_state, "r", encoding="utf-8", errors="replace") as f:
                 content = f.read()
         except OSError:
-            return []
+            content = ""
         try:
-            entries = user_flags.parse_entries(content)
+            for entry in user_flags.parse_entries(content):
+                if entry.due:
+                    dated.append((_mem_id(project_id, entry), entry.text, entry.due))
         except Exception:
             logger.warning(
                 "memory source: parse_entries failed for %s", project_id, exc_info=True
             )
-            return []
-
-        tz_name = project_timezone(project, project.get("triggers", []) or [])
-        tz = _resolve_tz(tz_name)
 
         out: list[NormalizedEvent] = []
-        for entry in entries:
-            if not entry.due or entry.resolved:
+        seen: set[str] = set()
+        for key, title, due in dated:
+            if key in seen:
                 continue
-            instant, all_day = _parse_due(entry.due, tz)
+            seen.add(key)
+            try:
+                instant, all_day = _parse_due(due, tz)
+            except ValueError:
+                continue
             if not (start_dt <= instant < end_dt):
                 continue
             iso = instant.date().isoformat() if all_day else instant.isoformat()
-            mem_id = _mem_id(project_id, entry)
             out.append(NormalizedEvent(
                 source=self.id,
-                source_id=f"{project_id}/{mem_id}",
-                title=entry.text,
+                source_id=f"{project_id}/{key}",
+                title=title,
                 start=iso,
                 end=iso,
                 all_day=all_day,

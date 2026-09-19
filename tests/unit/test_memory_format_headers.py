@@ -215,24 +215,26 @@ class TestShapeReportFilenameDates:
         assert report is not None and "dated" in report
 
 
-class TestUserAnswerUnflagRail:
-    """Fix 1: the agent must drop the [user] tag the turn you answer it.
+class TestStateHeaderRoutesAsksOut:
+    """Spec 089: things waiting on the user live in orbital/ASKS.md.
 
-    The agent is IN the conversation when the user answers a flagged line — it
-    has the evidence at full fidelity. The background consolidation model does
-    not (it sees a bounded, truncated window, minutes to many turns later, and
-    on this project it timed out on every attempt for a full day). So the
-    unflagging duty belongs to the agent, and the contract has to say so.
+    The PROJECT_STATE contract used to carry the whole ``[user]`` flag grammar
+    (flag in place, unflag the turn the user answers, never re-flag a resolved
+    line). That grammar is gone from the file: the header must point waiting
+    items at ASKS.md instead, while KEEPING the ``[due:]`` tag for dated facts
+    (the calendar still reads them from PROJECT_STATE).
     """
 
-    def test_state_header_instructs_unflagging_when_the_user_answers(self):
+    def test_state_header_points_waiting_items_at_asks(self):
         header = mem.FORMAT_HEADERS["state"]
+        assert "ASKS.md" in header
         low = header.lower()
-        assert "answers" in low or "answered" in low, (
-            "the state contract never tells the agent what to do when the user "
-            "actually answers a flagged line"
-        )
-        assert "remove the [user] flag" in low or "drop the [user] flag" in low
+        assert "insert [user]" not in low
+        assert "remove the [user] flag" not in low
+        assert "close the loop" not in low
+
+    def test_state_header_keeps_the_due_tag_for_dated_facts(self):
+        assert "[due:YYYY-MM-DD]" in mem.FORMAT_HEADERS["state"]
 
 
 class TestStaleHeaderUpgrade:

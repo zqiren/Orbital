@@ -40,21 +40,21 @@ def _memory_md_path(workspace: str, agent_slug: str) -> str:
     )
 
 
-def _pinned_retraction_titles(workspace: str) -> list[str]:
-    """Titles of every user retraction, for the pinned-mode contract.
+def _pinned_dropped_asks(workspace: str) -> list[str]:
+    """Texts of the user's recently dropped asks, for the pinned contract.
 
     Closes the append-resurrection window (spec 074 §3.5): a pinned worker
-    writes Layer-1 directly, outside the chokepoint that reconciles
-    retractions, so the prompt itself must carry the "never add entries
-    about" list until the next consolidation pass. Best-effort: an unreadable
-    file yields an empty list, never a render failure.
+    writes Layer-1 directly and never sees the management agent's runtime
+    block, so the prompt itself carries the "never re-propose" list. Since
+    spec 089 that list is the user's dropped asks in ASKS.md (same selection
+    as the runtime block) instead of retractions.md. Best-effort: an
+    unreadable file yields an empty list, never a render failure.
     """
     try:
-        from agent_os.agent.retractions import list_retractions
-        rs = list_retractions(ProjectPaths(workspace).orbital_dir)
+        from agent_os.agent.asks import dropped_texts
+        return dropped_texts(ProjectPaths(workspace).orbital_dir)
     except Exception:
         return []
-    return [r.title for r in rs if r.title]
 
 
 def _list_skill_files(skills_dir: str) -> list[str]:
@@ -102,8 +102,7 @@ def render_sub_agent_prompt(
         pinned: Spec 074 — this spawn serves a chat session pinned directly
             to this worker (no management agent mediates). The Layer-1 ban is
             REPLACED by the narrow append/targeted-edit write contract plus
-            the current retraction titles. Non-pinned output is byte-identical
-            to before the flag existed.
+            the user's recently dropped asks.
 
     Returns:
         The full rendered system prompt string. Callers must not cache it.
@@ -215,12 +214,22 @@ def render_sub_agent_prompt(
             f"wholesale, and NEVER touch {paths.index} — cleanup and project "
             "chores stay with the system. Workers add, the system tidies."
         )
-        retraction_titles = _pinned_retraction_titles(workspace)
-        if retraction_titles:
+        asks_file = os.path.join(orbital, "ASKS.md")
+        lines.append(
+            f"- Things waiting on the user that must outlive this "
+            f"conversation (a date, something they will do themselves, a "
+            f"decision they put off for later — a TBD note in a file is not "
+            f"an ask) go in {asks_file} — append-only: add "
+            f"`- open <text>`; when the user answers one, add "
+            f"`- done <id> \"<the user's own words>\"`. Never edit or delete "
+            f"its lines."
+        )
+        dropped = _pinned_dropped_asks(workspace)
+        if dropped:
             lines.append(
-                "- The user retracted these topics — NEVER add entries "
-                "about: " + "; ".join(retraction_titles) + ". They may only "
-                "return by explicit user request."
+                "- The user dropped these — NEVER re-propose or add entries "
+                "about: " + "; ".join(dropped) + ". They may only return by "
+                "explicit user request."
             )
         lines.append(
             "Do not modify the other orbital-managed files (instructions/, "
@@ -231,7 +240,7 @@ def render_sub_agent_prompt(
         lines.append("")
         lines.append("Do NOT modify these orbital-managed files:")
         lines.append(
-            "PROJECT_STATE.md, DECISIONS.md, LESSONS.md, INDEX.md,"
+            "PROJECT_STATE.md, DECISIONS.md, LESSONS.md, INDEX.md, ASKS.md,"
         )
         lines.append(
             "instructions/, sub_agents/ (other than your own MEMORY.md)."
@@ -249,7 +258,6 @@ def render_sub_agent_prompt(
     # Suppress lint about unused arg without changing the public signature;
     # `namespace` is reserved for future per-namespace overrides.
     _ = namespace
-    _ = orbital
 
     rendered = "\n".join(lines)
 

@@ -250,10 +250,12 @@ def test_format_header_does_not_consume_the_files_budget(key):
 
 def test_header_exclusion_is_worth_a_real_headroom_gain():
     """Concretely: PROJECT_STATE gets its whole target back for content."""
+    # Guards re-pinned when spec 089 moved the [user] grammar out of the
+    # header (~500 -> ~260 tok): still a fifth of the target.
     header_tokens = _mem.est_tokens(_mem.FORMAT_HEADERS["state"])
-    assert header_tokens > 300, "guard: the header is genuinely large"
+    assert header_tokens > 200, "guard: the header is genuinely large"
     target = _mem.consolidation_target("state")
-    assert header_tokens / target > 0.25, "guard: it was a large share of the target"
+    assert header_tokens / target > 0.2, "guard: it was a large share of the target"
 
     padded = _mem.FORMAT_HEADERS["state"] + "\n" + ("- content line\n" * 50)
     counted = _mem.est_tokens(_mem._budget_text(padded, "state"))

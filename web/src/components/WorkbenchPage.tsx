@@ -41,6 +41,7 @@ import { useWorkbench } from './workbench/useWorkbench';
 import { useCalendar } from './calendar/useCalendar';
 import { formatTime } from './calendar/range';
 import WorkbenchCard from './WorkbenchCard';
+import RecentlyClosed from './workbench/RecentlyClosed';
 import type { WorkbenchEntry } from './workbench/types';
 import Select from './Select';
 
@@ -94,9 +95,13 @@ export default function WorkbenchPage({ projectId, setRoute }: WorkbenchPageProp
   // silent no-op. Kept as page state so the hook's returned surface is stable.
   const [deleteError, setDeleteError] = useState(false);
   const handleExitError = useCallback(() => setDeleteError(true), []);
+  // Reopen failure from "Recently closed" (spec 089) — same banner pattern.
+  const [reopenError, setReopenError] = useState(false);
+  const handleReopenError = useCallback(() => setReopenError(true), []);
 
-  const { entries, loading, error, conflict, refetch, exitEntry, migrate } =
-    useWorkbench({ projectId, onExitError: handleExitError });
+  const {
+    entries, loading, error, conflict, refetch, exitEntry, migrate, recentlyClosed, reopenAsk,
+  } = useWorkbench({ projectId, onExitError: handleExitError, onReopenError: handleReopenError });
   const { newSession } = useAgent();
 
   const { start, end } = useMemo(() => todayRangeISO(), []);
@@ -146,6 +151,20 @@ export default function WorkbenchPage({ projectId, setRoute }: WorkbenchPageProp
   const filteredEntries = filterProjectId
     ? entries.filter((e) => e.project_id === filterProjectId)
     : entries;
+  const filteredClosed = filterProjectId
+    ? recentlyClosed.filter((c) => c.project_id === filterProjectId)
+    : recentlyClosed;
+  const recentlyClosedSection = (
+    <RecentlyClosed
+      items={filteredClosed}
+      showProjectChip={showProjectChip}
+      projectName={projectName}
+      onReopen={(c) => {
+        setReopenError(false);
+        reopenAsk(c.project_id, c.id);
+      }}
+    />
+  );
 
   function navigateToChat(pid: string, sessionId?: string) {
     setRoute({ name: 'project', projectId: pid, tab: 'chat', sessionId });
@@ -257,6 +276,7 @@ export default function WorkbenchPage({ projectId, setRoute }: WorkbenchPageProp
           type="button"
           onClick={() => {
             setDeleteError(false);
+            setReopenError(false);
             refetch();
           }}
           aria-label={t('workbench.retry')}
@@ -286,6 +306,14 @@ export default function WorkbenchPage({ projectId, setRoute }: WorkbenchPageProp
           className="border-b border-error/20 bg-error/10 px-3 py-1.5 text-xs text-error"
         >
           {t('workbench.exit.error')}
+        </div>
+      )}
+      {reopenError && (
+        <div
+          data-testid="workbench-reopen-error"
+          className="border-b border-error/20 bg-error/10 px-3 py-1.5 text-xs text-error"
+        >
+          {t('workbench.closed.reopenError')}
         </div>
       )}
 
@@ -427,7 +455,11 @@ export default function WorkbenchPage({ projectId, setRoute }: WorkbenchPageProp
               </li>
             ))}
           </ul>
+          {recentlyClosedSection}
         </div>
+      )}
+      {isEmpty && filteredClosed.length > 0 && (
+        <div className="px-4 pb-4">{recentlyClosedSection}</div>
       )}
     </div>
   );

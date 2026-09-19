@@ -12,8 +12,10 @@ date and projects to the calendar without being addressed to the user.
 Anything without a bracket tag at all is a plain entry — not surfaced here.
 
 This module is consumed by the write chokepoint (lint + id-preserving
-merge, Task 2), the Workbench read path (Task 5), and the calendar
-`memory` source (Task 6) — one grammar, one place it is understood.
+merge, Task 2) and the calendar `memory` source (Task 6, `[due:]` facts) —
+one grammar, one place it is understood. Since spec 089 the Workbench reads
+asks from ``orbital/ASKS.md`` instead; ``asks.extract_legacy_flags`` uses
+this parser to move old ``[user]`` lines there.
 
 Grammar (spec §4, verbatim example)::
 
@@ -68,6 +70,7 @@ _BULLET_RE = re.compile(rf"^(?P<prefix>{LIST_MARKER})(?P<text>.*)$")
 # as section provenance). Entry.section is the nearest preceding one of these,
 # or None above any heading.
 _SECTION_HEADING_RE = re.compile(r"^##\s+(?P<text>.*)$")
+_ANY_HEADING_RE = re.compile(r"^#{1,6}\s")
 
 
 def _clean_heading(raw: str) -> str:
@@ -207,8 +210,14 @@ def parse_entries(content: str) -> list[Entry]:
                 cand = lines[j]
                 if cand.strip() == "":
                     break
-                if not collected and _BULLET_RE.match(cand):
-                    break  # next bullet starts immediately — no comment here
+                # The next item or heading ends this bullet — unless a comment
+                # is already open and still wrapping. Stopping only when
+                # nothing had been collected let one continuation line carry
+                # the lookahead into the NEXT bullet and adopt its comment.
+                if not any("<!--" in c for c in collected) and (
+                    _BULLET_RE.match(cand) or _ANY_HEADING_RE.match(cand)
+                ):
+                    break
                 collected.append(cand)
                 joined = "\n".join(collected)
                 cm = _COMMENT_RE.search(joined)

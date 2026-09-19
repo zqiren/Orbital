@@ -216,6 +216,13 @@ def create_app(data_dir: str | None = None) -> FastAPI:
     except Exception:
         logger.exception("Orphaned session sentinel cleanup failed (non-fatal)")
 
+    # Spec 089: move each project's asks into orbital/ASKS.md (one-time per
+    # project: backup, marker, resumable; later starts only sweep stray
+    # `[user]` lines). Before any route serves, so no surface sees a half
+    # state. Never raises — a failing project is logged and retried next start.
+    from agent_os.agent.asks import migrate_all
+    migrate_all(project_store)
+
     # 2. WebSocket manager
     ws_manager = WebSocketManager()
 

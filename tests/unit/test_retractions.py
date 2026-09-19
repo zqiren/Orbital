@@ -191,67 +191,11 @@ class TestNormalizedTitleMatch:
         assert normalized_title_match("", rs) is None
 
 
+# Injection into session context: retired by spec 089. Dropped asks replaced
+# the front-of-prompt retraction row; see tests/unit/test_asks.py
+# (TestRuntimeInjection), which also proves retractions.md is no longer
+# injected.
 # ---------------------------------------------------------------------------
-# Injection into session context (same seam as test_cold_resume.py)
-# ---------------------------------------------------------------------------
-
-class TestContextInjection:
-    def _make_context_manager(self, tmp_path, workspace_files=None):
-        from agent_os.agent.context import ContextManager
-        from agent_os.agent.prompt_builder import PromptContext, Autonomy
-        from agent_os.agent.session import Session
-
-        class MockPromptBuilder:
-            def build(self, context):
-                return ("cached-system-prefix", "semi-stable-suffix", "dynamic-runtime")
-
-        ctx = PromptContext(
-            workspace=str(tmp_path),
-            model="test-model",
-            autonomy=Autonomy.HANDS_OFF,
-            enabled_agents=[],
-            tool_names=["read", "write", "shell"],
-            os_type="linux",
-            datetime_now="2026-01-01T00:00:00",
-            context_usage_pct=0.0,
-        )
-        session = Session.new("retraction-ctx", str(tmp_path))
-        return ContextManager(session, MockPromptBuilder(), ctx, workspace_files=workspace_files)
-
-    def test_constraint_block_injected_when_retractions_exist(self, tmp_path):
-        from agent_os.agent.workspace_files import WorkspaceFileManager
-
-        wfm = WorkspaceFileManager(str(tmp_path))
-        wfm.ensure_dir()
-        add_retraction(
-            tmp_path / "orbital",
-            Retraction(id="x7f3a2", title="Send DM drafts", reason="changed my mind", date="2026-07-24"),
-        )
-
-        cm = self._make_context_manager(tmp_path, workspace_files=wfm)
-        messages = cm.prepare()
-
-        constraint_msgs = [
-            m for m in messages
-            if "Retracted by user" in m.get("content", "")
-        ]
-        assert len(constraint_msgs) == 1
-        assert "Send DM drafts" in constraint_msgs[0]["content"]
-
-    def test_no_constraint_block_when_no_retractions(self, tmp_path):
-        from agent_os.agent.workspace_files import WorkspaceFileManager
-
-        wfm = WorkspaceFileManager(str(tmp_path))
-        wfm.ensure_dir()
-
-        cm = self._make_context_manager(tmp_path, workspace_files=wfm)
-        messages = cm.prepare()
-
-        constraint_msgs = [
-            m for m in messages
-            if "Retracted by user" in m.get("content", "")
-        ]
-        assert len(constraint_msgs) == 0
 
 
 # ---------------------------------------------------------------------------
