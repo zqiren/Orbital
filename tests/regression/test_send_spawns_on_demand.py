@@ -65,7 +65,7 @@ def _manager_with_spawnable(handle="claude-code", start_result=None):
     adapter = _IdleAdapter()
 
     async def _spawn(project_id, h, depth=0, *, session_id=None, announce=True,
-                     fresh=False):
+                     fresh=False, pinned=False):
         sk = make_session_key(project_id, mgr._resolve_session_id(session_id))
         mgr._adapters.setdefault(sk, {})[h] = adapter
         return start_result or f"Started Claude Code (fresh session — first spawn)"
