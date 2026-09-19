@@ -158,17 +158,22 @@ def test_legacy_inline_session_loads_and_is_not_rewritten(workspace):
     assert _blob_count(workspace) == 1  # only the NEW image went to the store
 
 
-def test_compaction_rewrite_keeps_new_images_as_references(session, workspace):
+def test_whole_file_rewrite_keeps_new_images_as_references(session, workspace):
+    """A stub-supersession rewrite regenerates the file from memory, where
+    the images are data URLs — they must go back out as references."""
     _add_screenshot(session, "call_1", PNG_A)
     _add_screenshot(session, "call_2", PNG_B)
-    summary = {"role": "user", "content": "[summary]", "source": "management"}
-    session._compact(summary, 2)
+    session.append({"role": "assistant", "source": "management", "tool_calls": [
+        {"id": "call_3", "type": "function", "function": {"name": "read", "arguments": "{}"}}]})
+    session.append_tool_result("call_3", "T" * 2000)
+    session.replace_tool_results_with_stubs({"call_3": "[stub]"})
 
     raw = open(session._filepath, encoding="utf-8").read()
     assert "base64," not in raw
     loaded = Session.load(session._filepath)
     tools = [m for m in loaded.get_messages() if m.get("role") == "tool"]
-    assert tools[-1]["content"][1]["image_url"]["url"] == _data_url(PNG_B)
+    assert tools[0]["content"][1]["image_url"]["url"] == _data_url(PNG_A)
+    assert tools[1]["content"][1]["image_url"]["url"] == _data_url(PNG_B)
 
 
 def test_cancellation_splice_keeps_memory_rehydrated(session):
