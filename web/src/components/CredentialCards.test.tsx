@@ -25,6 +25,7 @@ const apiMock = vi.hoisted(() => vi.fn());
 vi.mock('../config', () => ({ api: apiMock }));
 
 import CredentialCards from './CredentialCards';
+import CardList from './CardList';
 
 afterEach(() => cleanup());
 
@@ -363,5 +364,59 @@ describe('CredentialCards — Add card', () => {
     await screen.findByTestId('cards-add');
     expect(screen.queryByTestId('cards-tokendance')).toBeNull();
     expect(screen.queryByTestId('cards-tokendance-msg')).toBeNull();
+  });
+});
+
+// 2026-09-19: in Project settings the whole page is one <form>, and CardList
+// rendered the Add dialog — itself a <form> — inside it. WebKit and Chromium
+// stop a nested form's submit event at the ancestor form, so React never saw
+// it: no preventDefault, a native GET submit, a full reload to "Select a
+// project", and the card POST never sent. The dialog must live outside any
+// host form, and its submit must not reach the host's onSubmit.
+describe('CardList — the Add dialog inside a host form (project settings)', () => {
+  it('saves the card without submitting the host form', async () => {
+    const created = makeCard({ id: 'card_new', name: 'OpenCode Go · glm-5.3', provider: 'opencode-go', model: 'glm-5.3' });
+    mockCards([DEFAULT_CARD], (path, opts) => {
+      if (path === '/api/v2/settings/cards' && opts?.method === 'POST') {
+        return { card: created, test: { ok: true, status: 200, code: null, message: 'Connected' } };
+      }
+      if (path === '/api/v2/providers/test') return { status: 'ok' };
+      return undefined;
+    });
+    const hostSubmit = vi.fn((e: React.FormEvent) => e.preventDefault());
+    const onChange = vi.fn();
+    render(
+      <form data-testid="host-form" onSubmit={hostSubmit}>
+        <CardList
+          mode="project"
+          value={null}
+          onChange={onChange}
+          cards={[DEFAULT_CARD]}
+          defaultCardId={DEFAULT_CARD.id}
+          providers={PROVIDERS}
+          onRefresh={vi.fn()}
+          onCardUpdated={vi.fn()}
+          showAdd
+        />
+      </form>,
+    );
+    fireEvent.click(screen.getByTestId('card-list-add'));
+    const modal = await screen.findByTestId('card-modal');
+    // Not a DOM descendant of the host form: the browser must deliver the
+    // dialog's own submit event instead of swallowing it.
+    expect(screen.getByTestId('host-form').contains(modal)).toBe(false);
+
+    fireEvent.change(await screen.findByPlaceholderText(/sk-/), { target: { value: 'sk-same-key' } });
+    fireEvent.change(await screen.findByPlaceholderText(/model name/), { target: { value: 'glm-5.3' } });
+    fireEvent.click(screen.getByTestId('card-test'));
+    await waitFor(() =>
+      expect((screen.getByTestId('card-save') as HTMLButtonElement).disabled).toBe(false),
+    );
+    fireEvent.click(screen.getByTestId('card-save'));
+
+    await waitFor(() => expect(screen.queryByTestId('card-modal')).toBeNull());
+    expect(apiMock).toHaveBeenCalledWith('/api/v2/settings/cards', expect.objectContaining({ method: 'POST' }));
+    expect(onChange).toHaveBeenCalledWith('card_new');
+    expect(hostSubmit).not.toHaveBeenCalled();
   });
 });

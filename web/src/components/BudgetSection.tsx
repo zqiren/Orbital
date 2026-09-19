@@ -22,7 +22,7 @@ type BudgetPeriod = 'daily' | 'weekly' | 'monthly' | 'total';
 
 interface BudgetSectionProps {
   project: Project;
-  /** Live limit string (parent owns it so Save can read it). */
+  /** Live limit string (the parent owns it and saves it as it changes). */
   limit: string;
   onLimitChange: (next: string) => void;
   currency: string;

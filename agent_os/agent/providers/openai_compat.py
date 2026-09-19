@@ -12,6 +12,7 @@ Routing logic:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import uuid
 import re
@@ -337,6 +338,37 @@ def _ensure_chat_content(messages: list) -> list:
     return repaired
 
 
+def _ensure_tool_call_arguments_json(messages: list) -> list:
+    """Replace unparseable assistant tool-call ``arguments`` with ``"{}"``.
+
+    A stream that dies mid tool call persists the half-written arguments
+    string. The tool already failed on it and its result says so, but strict
+    upstreams reject the replay outright — DeepSeek via OpenCode Go answers
+    400 "Assistant tool call function.arguments must be valid JSON" on every
+    later turn. ``"{}"`` is the Anthropic adapter's fallback for the same case.
+    Wire boundary only: the persisted session is never mutated.
+    """
+    repaired: list = []
+    for msg in messages:
+        tool_calls = msg.get("role") == "assistant" and msg.get("tool_calls")
+        if tool_calls:
+            fixed_calls = []
+            changed = False
+            for tc in tool_calls:
+                fn = tc.get("function") if isinstance(tc, dict) else None
+                if isinstance(fn, dict):
+                    try:
+                        json.loads(fn.get("arguments"))
+                    except (TypeError, ValueError):
+                        tc = {**tc, "function": {**fn, "arguments": "{}"}}
+                        changed = True
+                fixed_calls.append(tc)
+            if changed:
+                msg = {**msg, "tool_calls": fixed_calls}
+        repaired.append(msg)
+    return repaired
+
+
 def _ensure_tool_result_contiguity(messages: list) -> list:
     """Guarantee every tool-result block is contiguous for strict providers.
 
@@ -604,6 +636,9 @@ class LLMProvider:
         # message with empty content and reject system-only requests. Repair
         # both here, at the wire boundary, so the persisted session is untouched.
         repaired = _ensure_chat_content(result)
+        # A tool call cut off mid-stream must not wedge the session on strict
+        # upstreams (DeepSeek via OpenCode Go 400s on unparseable arguments).
+        repaired = _ensure_tool_call_arguments_json(repaired)
         # Then guarantee every tool-result block is contiguous (strict providers
         # 400 on a tool result that does not immediately follow its tool_calls).
         return _ensure_tool_result_contiguity(repaired)

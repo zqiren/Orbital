@@ -25,7 +25,15 @@ vi.mock('./SettingsRail', () => ({
 }));
 vi.mock('./LLMProviderSettings', () => ({ default: () => null }));
 vi.mock('./FallbackModelsEditor', () => ({ default: () => null }));
-vi.mock('./BudgetSection', () => ({ default: () => null }));
+vi.mock('./BudgetSection', () => ({
+  default: (p: { limit: string; onLimitChange: (v: string) => void }) => (
+    <input
+      aria-label="Budget Limit (USD)"
+      value={p.limit}
+      onChange={(e) => p.onLimitChange(e.target.value)}
+    />
+  ),
+}));
 vi.mock('./ProjectConnectorToggles', () => ({ default: () => null }));
 vi.mock('./NetworkAccessSection', () => ({ NetworkAccessSection: () => null }));
 vi.mock('./SubAgentCard', () => ({ default: () => null }));
@@ -58,8 +66,8 @@ describe('SettingsView sub-agent deployment instructions', () => {
     });
   });
 
-  it('hydrates from project detail and saves both populated and cleared values', async () => {
-    const onSave = vi.fn();
+  it('hydrates from project detail, then saves what is typed — cleared included', async () => {
+    const onSave = vi.fn(() => Promise.resolve());
     render(<SettingsView project={project} onSave={onSave} onDelete={vi.fn()} />);
 
     const textarea = screen.getByRole('textbox', {
@@ -71,18 +79,21 @@ describe('SettingsView sub-agent deployment instructions', () => {
     await waitFor(() => {
       expect(textarea).toHaveValue('Use Codex for implementation.');
     });
+    // Loading the page is not an edit.
+    expect(onSave).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-    expect(onSave).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        sub_agent_deployment_instructions: 'Use Codex for implementation.',
+    fireEvent.change(textarea, { target: { value: 'Use Gemini for research.' } });
+    fireEvent.blur(textarea);
+    await waitFor(() =>
+      expect(onSave).toHaveBeenLastCalledWith({
+        sub_agent_deployment_instructions: 'Use Gemini for research.',
       }),
     );
 
     fireEvent.change(textarea, { target: { value: '' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-    expect(onSave).toHaveBeenLastCalledWith(
-      expect.objectContaining({ sub_agent_deployment_instructions: '' }),
+    fireEvent.blur(textarea);
+    await waitFor(() =>
+      expect(onSave).toHaveBeenLastCalledWith({ sub_agent_deployment_instructions: '' }),
     );
   });
 
@@ -175,6 +186,114 @@ describe('SettingsView sub-agents loading state', () => {
     });
 
     await waitFor(() => expect(screen.queryByText(CHECKING)).toBeNull());
-    expect(screen.getByText(/Remember to Save enablement/)).toBeInTheDocument();
+    // Toggles save themselves now; there is no Save below to remind about.
+    expect(screen.queryByText(/Remember to Save/)).toBeNull();
+  });
+});
+
+// 2026-09-19: the page had one Save button at the bottom, so picking a model
+// card (or anything else) looked applied and was not — the user re-picked a
+// card several times. Every edit now saves itself.
+describe('SettingsView autosave', () => {
+  const CARD = {
+    id: 'card_glm',
+    name: 'OpenCode Go · glm-5.3-flash',
+    provider: 'opencode-go',
+    region: 'global',
+    base_url: null,
+    sdk: null,
+    model: 'glm-5.3-flash',
+    created_at: '2026-09-19T00:00:00+00:00',
+    verified_at: null,
+    last_used_at: null,
+    last_error: null,
+    key_set: true,
+    key_masked: 'sk-o...wxyz',
+    key_source: 'keychain',
+    is_default: false,
+    read_only: false,
+  };
+  const DEFAULT = { ...CARD, id: 'card_default', name: 'OpenCode Go · deepseek-v4-flash', model: 'deepseek-v4-flash', is_default: true };
+
+  beforeEach(() => {
+    localStorage.clear();
+    mockApi.mockReset();
+    mockApi.mockImplementation((path: string) => {
+      if (path === '/api/v2/providers') return Promise.resolve({});
+      if (path === '/api/v2/projects/project-1') return Promise.resolve({ ...project });
+      if (path === '/api/v2/settings') {
+        return Promise.resolve({ credential_cards: [DEFAULT, CARD], default_card_id: 'card_default' });
+      }
+      return Promise.resolve([]);
+    });
+  });
+
+  it('has no Save button and says changes save automatically', () => {
+    render(<SettingsView project={project} onSave={vi.fn()} onDelete={vi.fn()} />);
+    expect(screen.queryByRole('button', { name: 'Save' })).toBeNull();
+    expect(screen.getByTestId('settings-autosave-hint')).toHaveTextContent(
+      'Changes save automatically.',
+    );
+  });
+
+  it('picking a model card saves card_id at once, and "Global default" saves null', async () => {
+    const onSave = vi.fn(() => Promise.resolve());
+    render(<SettingsView project={project} onSave={onSave} onDelete={vi.fn()} />);
+
+    fireEvent.click(await screen.findByTestId('card-select-card_glm'));
+    expect(onSave).toHaveBeenCalledWith({ card_id: 'card_glm' });
+    expect(screen.getByTestId('card-selected-card_glm')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('project-card-picker-global-default'));
+    await waitFor(() => expect(onSave).toHaveBeenLastCalledWith({ card_id: null }));
+    expect(await screen.findByTestId('settings-autosave-status')).toHaveTextContent('Saved');
+  });
+
+  it('an autonomy click saves at once', () => {
+    const onSave = vi.fn(() => Promise.resolve());
+    render(<SettingsView project={project} onSave={onSave} onDelete={vi.fn()} />);
+    fireEvent.click(screen.getByText('Supervised'));
+    expect(onSave).toHaveBeenCalledWith({ autonomy: 'supervised' });
+  });
+
+  it('typing saves by itself once the user pauses', async () => {
+    const onSave = vi.fn(() => Promise.resolve());
+    render(<SettingsView project={project} onSave={onSave} onDelete={vi.fn()} />);
+    const name = screen.getByPlaceholderText('Display name for this agent');
+    fireEvent.change(name, { target: { value: 'Scout' } });
+    expect(onSave).not.toHaveBeenCalled();
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith({ agent_name: 'Scout' }), {
+      timeout: 2000,
+    });
+  });
+
+  it('a budget limit is saved with the currency the form shows', async () => {
+    const onSave = vi.fn(() => Promise.resolve());
+    render(<SettingsView project={project} onSave={onSave} onDelete={vi.fn()} />);
+    const limit = screen.getByLabelText('Budget Limit (USD)');
+    fireEvent.change(limit, { target: { value: '12.5' } });
+    fireEvent.blur(limit);
+    await waitFor(() =>
+      expect(onSave).toHaveBeenLastCalledWith({ budget_limit_usd: 12.5, budget_currency: 'USD' }),
+    );
+  });
+
+  it('a failed save says so and Retry sends it again', async () => {
+    const onSave = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('Project not found'))
+      .mockResolvedValue(undefined);
+    render(<SettingsView project={project} onSave={onSave} onDelete={vi.fn()} />);
+
+    fireEvent.click(screen.getByText('Supervised'));
+    expect(await screen.findByTestId('settings-autosave-status')).toHaveTextContent(
+      "Couldn't save: Project not found",
+    );
+    fireEvent.click(screen.getByTestId('settings-autosave-retry'));
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(2));
+    expect(onSave).toHaveBeenLastCalledWith({ autonomy: 'supervised' });
+    await waitFor(() =>
+      expect(screen.getByTestId('settings-autosave-status')).toHaveTextContent('Saved'),
+    );
   });
 });

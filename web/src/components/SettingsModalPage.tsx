@@ -13,7 +13,7 @@ interface SettingsModalPageProps {
   project: Project;
   route: Extract<Route, { name: 'project' }>;
   setRoute: Dispatch<SetStateAction<Route>>;
-  onSave: (data: ProjectUpdateRequest) => void;
+  onSave: (data: ProjectUpdateRequest) => Promise<unknown> | void;
   onDelete: () => void;
   /** Open the pricing-table editor overlay (P3-I). */
   onEditPricing?: () => void;
@@ -78,7 +78,10 @@ export default function SettingsModalPage({
 
       {/* Scrollable body */}
       <div className="flex-1 overflow-y-auto min-h-0">
+        {/* Keyed per project: a switch remounts it, so edits still pending
+            from the previous project flush to that project, not this one. */}
         <SettingsView
+          key={project.project_id}
           project={project}
           onSave={onSave}
           onDelete={onDelete}

@@ -18,7 +18,6 @@ import type {
   DeviceStatusEvent,
   StatusSummaryEvent,
   ProjectCreateRequest,
-  ProjectUpdateRequest,
   WebSocketEvent,
 } from './types';
 import type { Route } from './route';
@@ -484,11 +483,6 @@ export default function App() {
     setRoute({ name: 'project', projectId: created.project_id, tab: 'chat', sessionId: undefined });
   }
 
-  async function handleUpdateProject(data: ProjectUpdateRequest) {
-    if (!selectedProjectId) return;
-    await updateProject(selectedProjectId, data);
-  }
-
   async function handleDeleteProject() {
     if (!selectedProjectId) return;
     await deleteProject(selectedProjectId);
@@ -667,7 +661,10 @@ export default function App() {
                 project={selectedProject}
                 route={route}
                 setRoute={setRoute}
-                onSave={handleUpdateProject}
+                // Bound to THIS project, not "whatever is selected when the
+                // request fires": settings autosave, and a pause-then-save can
+                // outlive a switch to another project.
+                onSave={(data) => updateProject(selectedProject.project_id, data)}
                 onDelete={handleDeleteProject}
                 onEditPricing={() =>
                   setRoute({ ...route, settings: false, pricing: true })

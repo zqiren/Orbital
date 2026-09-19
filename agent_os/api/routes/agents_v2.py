@@ -8,6 +8,7 @@ All endpoints use /api/v2/ prefix. No v1 routes. snake_case in request/response.
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -3032,11 +3033,16 @@ async def tokendance_signin(req: TokenDanceSigninRequest | None = None):
     }
 
 
-async def _test_and_record(card_id: str) -> dict:
+async def _test_and_record(card_id: str, *, reuse_recent: bool = False) -> dict:
     """Run the connection test for a saved card and write its health.
 
     The shared tail of every card write: save first, then test, then record —
     so a provider outage produces a red card, never a lost one (D9).
+
+    ``reuse_recent`` (card create/update): record the verdict Test Connection
+    just produced for these exact inputs instead of calling the provider a
+    second time. The form cannot save before that test has run, so re-testing
+    only made Save slow. No remembered verdict ⇒ a real test, as before.
     """
     from agent_os.daemon_v2.settings_store import resolve_card_endpoint
 
@@ -3045,9 +3051,11 @@ async def _test_and_record(card_id: str) -> dict:
         return {"ok": False, "status": None, "code": "card_not_found",
                 "message": "That credential card no longer exists."}
     base_url, sdk = resolve_card_endpoint(card)
-    result = await run_connection_test(
-        card.provider, card.model, _settings_store.key_for(card.id), base_url, sdk,
-    )
+    inputs = (card.provider, card.model, _settings_store.key_for(card.id),
+              base_url, sdk)
+    result = _take_recent_test(_test_fingerprint(*inputs)) if reuse_recent else None
+    if result is None:
+        result = await run_connection_test(*inputs)
     if result["ok"]:
         _settings_store.record_card_health(card.id, verified=True)
     else:
@@ -3229,6 +3237,58 @@ class TestConnectionRequest(BaseModel):
     card_id: str | None = None
 
 
+def _resolve_test_endpoint(provider: str, model: str, base_url: str | None,
+                           sdk: str | None) -> tuple:
+    """``(provider_info, base_url, sdk)`` exactly as the connection test calls."""
+    provider_info = (
+        _provider_registry.get_provider_data(provider) if _provider_registry else None
+    )
+    if not base_url:
+        base_url = provider_info["base_url"] if provider_info else None
+    if not sdk:
+        sdk = provider_info.get("sdk", "openai") if provider_info else "openai"
+
+    # Per-model endpoint override wins over both: the frontend can only send
+    # the PROVIDER-level sdk, so on a mixed-protocol aggregator (OpenCode
+    # Zen/Go) Test Connection would otherwise fail on a model that works in a
+    # real turn. Models without an override leave the user's choice intact —
+    # that is every Custom / self-hosted endpoint.
+    if _provider_registry is not None:
+        _mi = _provider_registry.get_model_info(provider, model)
+        sdk = _mi.sdk or sdk
+        base_url = _mi.base_url or base_url
+    return provider_info, base_url, sdk
+
+
+# Test Connection verdicts, kept briefly so the card Save that follows records
+# them instead of spending a second completion on the same inputs. Keyed by a
+# hash of the effective inputs (the raw key is never held); single use.
+_RECENT_TESTS: dict[str, tuple[float, dict]] = {}
+_RECENT_TEST_TTL_S = 15 * 60
+
+
+def _test_fingerprint(provider: str, model: str, api_key: str,
+                      base_url: str | None, sdk: str | None) -> str:
+    _, base_url, sdk = _resolve_test_endpoint(provider, model, base_url, sdk)
+    raw = json.dumps([provider, (model or "").strip(), api_key or "", base_url, sdk])
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _remember_test(fingerprint: str, result: dict) -> None:
+    now = time.monotonic()
+    for fp, (at, _) in list(_RECENT_TESTS.items()):
+        if now - at > _RECENT_TEST_TTL_S:
+            del _RECENT_TESTS[fp]
+    _RECENT_TESTS[fingerprint] = (now, dict(result))
+
+
+def _take_recent_test(fingerprint: str) -> dict | None:
+    entry = _RECENT_TESTS.pop(fingerprint, None)
+    if entry is None or time.monotonic() - entry[0] > _RECENT_TEST_TTL_S:
+        return None
+    return entry[1]
+
+
 async def run_connection_test(provider: str, model: str, api_key: str,
                               base_url: str | None, sdk: str) -> dict:
     """Send one minimal completion and classify the outcome.
@@ -3247,23 +3307,7 @@ async def run_connection_test(provider: str, model: str, api_key: str,
     from agent_os.agent.providers.openai_compat import LLMProvider
     from agent_os.agent.providers.types import LLMError, ContextOverflowError
 
-    provider_info = (
-        _provider_registry.get_provider_data(provider) if _provider_registry else None
-    )
-    if not base_url:
-        base_url = provider_info["base_url"] if provider_info else None
-    if not sdk:
-        sdk = provider_info.get("sdk", "openai") if provider_info else "openai"
-
-    # Per-model endpoint override wins over both: the frontend can only send
-    # the PROVIDER-level sdk, so on a mixed-protocol aggregator (OpenCode
-    # Zen/Go) Test Connection would otherwise fail on a model that works in a
-    # real turn. Models without an override leave the user's choice intact —
-    # that is every Custom / self-hosted endpoint.
-    if _provider_registry is not None:
-        _mi = _provider_registry.get_model_info(provider, model)
-        sdk = _mi.sdk or sdk
-        base_url = _mi.base_url or base_url
+    provider_info, base_url, sdk = _resolve_test_endpoint(provider, model, base_url, sdk)
 
     if not model:
         return {"ok": False, "status": None, "code": "missing_model",
@@ -3340,6 +3384,7 @@ async def test_connection(req: TestConnectionRequest):
         api_key=req.api_key, base_url=req.base_url, sdk=req.sdk,
     )
     result = await run_connection_test(provider, model, api_key, base_url, sdk)
+    _remember_test(_test_fingerprint(provider, model, api_key, base_url, sdk), result)
     if result["ok"]:
         return {"status": "ok", "message": result["message"]}
     raise HTTPException(status_code=result["status"] or 500,

@@ -769,6 +769,10 @@ export default function LLMProviderSettings({
   // Global mode: save to /api/v2/settings (and dedicated api-key endpoint)
   async function handleGlobalSave(ev: React.FormEvent) {
     ev.preventDefault();
+    // React bubbles submit along the component tree, portals included: from
+    // project settings this form sits under the page's own <form>, whose
+    // onSubmit would otherwise save the project too.
+    ev.stopPropagation();
     await doSave();
   }
 
@@ -1225,7 +1229,8 @@ export default function LLMProviderSettings({
         </div>
       )}
 
-      {/* Save = create/update the card, with the connection test (spec 082 §3.2) */}
+      {/* Save = create/update the card. The daemon records the Test Connection
+          verdict for these inputs rather than testing a second time. */}
       {!hideSaveButton && (
         <div className="pt-2">
           <div className="flex items-center gap-3">
