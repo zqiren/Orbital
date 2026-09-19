@@ -226,24 +226,6 @@ class ContextManager:
         added = sum(estimate_message_tokens(m) for m in rows)
         return self._last_used_tokens + added / self._estimate_ratio
 
-    def _recent_history(self, max_tokens: int) -> list[dict]:
-        """The newest rows of the model-facing history that fit ``max_tokens``.
-
-        The walk ``Session.get_recent`` does, over ``get_model_messages()``:
-        after a compaction the model resumes from the latest summary while the
-        session keeps every row on disk (spec 086).
-        """
-        result: list[dict] = []
-        used = 0.0
-        for msg in reversed(self._session.get_model_messages()):
-            est = estimate_message_tokens(msg)
-            if used + est > max_tokens:
-                break
-            result.append(msg)
-            used += est
-        result.reverse()
-        return result
-
     def record_prompt_tokens(self, tokens: int, overhead_estimate: float = 0.0) -> None:
         """Measure the last prompt by what the provider billed for it.
 
@@ -513,8 +495,8 @@ class ContextManager:
         remaining = calibrated_budget - system_tokens - semi_stable_tokens - dynamic_tokens - layer_tokens - cold_resume_tokens
         remaining = max(0, int(remaining * self._window_factor))
 
-        # Get sliding window from the model-facing history
-        sliding_window = self._recent_history(remaining)
+        # Get sliding window from session
+        sliding_window = self._session.get_recent(remaining)
 
         # Remap non-standard roles for LLM compatibility
         sliding_window = self._sanitize_roles(sliding_window)
