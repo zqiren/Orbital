@@ -129,7 +129,7 @@ class TestFlushTurnInLoop:
         loop._stream_response = mock_stream
 
         # Patch compaction.run at the module level
-        async def mock_compact_run(sess, prov, utility_provider=None):
+        async def mock_compact_run(sess, prov, utility_provider=None, **kwargs):
             call_order.append("compaction")
 
         with patch("agent_os.agent.compaction.run", new=mock_compact_run):

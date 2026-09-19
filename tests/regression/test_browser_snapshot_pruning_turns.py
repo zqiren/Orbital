@@ -9,8 +9,8 @@ The old _prune_old_tool_results used raw message index distance
 the message count grows fast (2+ messages per LLM call), so browser
 snapshots were pruned after just a few browser calls even within the same
 logical turn.  The fix counts actual assistant messages (LLM turns) so that
-the 2-turn TTL for snapshots and 5-turn TTL for general results correspond
-to real LLM turns.
+the 2-turn TTL for snapshots corresponds to real LLM turns. (The 5-turn TTL
+for general results is gone since spec 086: text results are never pruned.)
 """
 
 import pytest
@@ -113,21 +113,22 @@ class TestBrowserSnapshotPruningUsesLLMTurns:
         for tr in tool_results[:5]:
             assert "X" * 2000 in tr["content"], "1-turn-ago results should not be pruned"
 
-    def test_general_pruning_uses_turn_count(self):
-        """Non-browser tool results older than 5 LLM turns should be pruned."""
-        msgs = _make_messages(assistant_count=8, tool_per_assistant=1,
+    def test_non_browser_results_never_pruned(self):
+        """Non-browser text tool results are never rewritten, however old.
+
+        Spec 086: the old 5-turn / 500-char rule rewrote one mid-history
+        message per call and broke the provider's prompt cache from there on.
+        Text results are bounded at ingest and evicted only by compaction.
+        """
+        msgs = _make_messages(assistant_count=12, tool_per_assistant=1,
                               browser_snapshot=False)
         result = ContextManager._prune_old_tool_results(None, msgs)
         tool_results = [m for m in result if m.get("role") == "tool"]
 
-        # Turn 0 is 7 turns ago → pruned (>5)
-        assert "[Truncated]" in tool_results[0]["content"]
-        # Turn 1 is 6 turns ago → pruned (>5)
-        assert "[Truncated]" in tool_results[1]["content"]
-        # Turn 2 is 5 turns ago → borderline, NOT pruned (5 is not >5)
-        assert "X" * 2000 in tool_results[2]["content"]
-        # Turn 3 is 4 turns ago → preserved
-        assert "X" * 2000 in tool_results[3]["content"]
+        assert len(tool_results) == 12
+        # Turn 0 is 11 turns ago and still byte-identical.
+        for tr in tool_results:
+            assert tr["content"] == "X" * 2000
 
     def test_old_message_index_would_over_prune(self):
         """Demonstrate the specific scenario that caused P-06.

@@ -505,6 +505,43 @@ class AgentLoop:
         # transports' appends fire it too. The append above lands in that same
         # chokepoint, so this path is unchanged in effect.
 
+    def _record_prompt_tokens(self, active_provider, usage, tool_schemas=None) -> None:
+        """Hand the provider-reported prompt size to the context manager.
+
+        should_compact() then measures the prompt by what the provider billed
+        rather than by the ``len/4`` estimate (spec 086 §8.1). The prompt is
+        the three disjoint input fields of the normalized usage — the same sum
+        the composer's context meter reads from the ledger
+        (``budget.ledger.last_context_usage``) — so the compaction mark the UI
+        draws and the trigger it predicts share one measure.
+
+        No usage, a zero count, or an sdk without known usage semantics leaves
+        prepare()'s estimate in place. Stand-in context managers without the
+        hook are skipped. ``tool_schemas`` rode the request outside the
+        messages; the provider counted them, so their estimate goes along for
+        the context manager's estimate/real ratio.
+        """
+        record = getattr(self._context_manager, "record_prompt_tokens", None)
+        if record is None or not usage:
+            return
+        # Lazy for the same circular-import reason as _emit_ledger_event.
+        from agent_os.budget.normalize import ProviderSemantics, normalize_usage
+
+        try:
+            n = normalize_usage(
+                usage,
+                ProviderSemantics.from_sdk(getattr(active_provider, "sdk", None)),
+            )
+        except (TypeError, ValueError):
+            return
+        prompt = n.uncached_input + n.cache_read + n.cache_write
+        if prompt > 0:
+            try:
+                overhead = len(json.dumps(tool_schemas)) / 4 if tool_schemas else 0.0
+            except (TypeError, ValueError):
+                overhead = 0.0
+            record(prompt, overhead_estimate=overhead)
+
     def _on_ledger_append(self, project_dir: str, event) -> None:
         """Post-append hook registered in ``budget.ledger`` for this workspace.
 
@@ -1209,6 +1246,11 @@ class AgentLoop:
                 if response.usage:
                     self._emit_ledger_event(active_provider, response.usage)
 
+                # Compaction measures this prompt by what the provider billed.
+                self._record_prompt_tokens(
+                    active_provider, response.usage, tool_schemas,
+                )
+
                 # Text-only response: append and exit — but only when the
                 # model actually said something. A turn may end in exactly
                 # three states: a user-visible message, a tool handoff, or a
@@ -1687,7 +1729,8 @@ class AgentLoop:
                     self._note_exit("paused", iteration)
                     break
 
-                # Check compaction
+                # Check compaction (on the prompt size the provider reported
+                # for this iteration's call; see _record_prompt_tokens)
                 if self._context_manager.should_compact():
                     from agent_os.agent import compaction as compaction_mod
 
@@ -1703,43 +1746,19 @@ class AgentLoop:
                         self._trip_budget(_flush_budget, iteration)
                         break
 
-                    # Token-pressure trigger: fire refresh BEFORE compaction.
-                    # Exempt from cooldown — data preservation trumps redundancy.
-                    if self._on_session_end_refresh is not None:
-                        # Spec 013: never two consolidations at once — finish
-                        # any background pass before the blocking pre-compaction one.
-                        await self.drain_refresh()
-                        logger.info(
-                            "State refresh: token-pressure trigger at iteration %d "
-                            "(context at %.0f%%)",
-                            iteration,
-                            self._context_manager.usage_percentage * 100,
-                        )
-                        _tp_task = asyncio.create_task(
-                            self._run_refresh("token_pressure", iteration),
-                            name=f"refresh-tp-{self._session.session_uuid}-{iteration}",
-                        )
-                        self._refresh_task = _tp_task
-                        # Publish to the project gate too: this path bypasses
-                        # _spawn_refresh, and an unpublished pass is invisible
-                        # to a sibling session's scheduler, which would then
-                        # spawn straight into it.
-                        self._register_refresh_task(_tp_task)
-                        try:
-                            await self._refresh_task
-                        except asyncio.CancelledError:
-                            logger.info(
-                                "Token-pressure refresh cancelled at iteration %d",
-                                iteration,
-                            )
-                            if self._session.is_stopped():
-                                raise
-                        finally:
-                            self._refresh_task = None
-                            self._clear_refresh_task(_tp_task)
+                    # No memory consolidation here (the old blocking
+                    # token_pressure refresh is gone): consolidation is
+                    # scheduled by memory-file budget, and the flush turn below
+                    # is the agent's chance to save working state first.
 
                     # Pre-compaction memory flush: give agent one turn to save state
+                    _fits = getattr(self._context_manager, "flush_fits", None)
                     try:
+                        if callable(_fits) and not _fits():
+                            # The step that crossed the threshold also overflows
+                            # the window: the flush prompt would lose its oldest
+                            # rows. Same outcome as a flush that overflows.
+                            raise ContextOverflowError("flush prompt would be trimmed")
                         self._session.append_system(compaction_mod.MEMORY_FLUSH_PROMPT)
                         flush_llm = self._utility_provider or self._provider
                         flush_context = self._context_manager.prepare()
@@ -1817,11 +1836,18 @@ class AgentLoop:
                         # Any other error during flush — don't crash, just compact
                         logger.warning("Pre-compaction flush failed, proceeding to compaction")
 
+                    # Append-only: the summary lands as a marker row and the
+                    # kept tail is sized to the window (compaction.run).
+                    _keep = getattr(self._context_manager, "compaction_keep_tokens", None)
                     await compaction_mod.run(
                         self._session,
                         self._provider,
                         utility_provider=self._utility_provider,
+                        keep_tokens=_keep() if callable(_keep) else None,
                     )
+                    _note = getattr(self._context_manager, "note_compacted", None)
+                    if callable(_note):
+                        _note()
 
                     # Post-compaction reorientation
                     workspace = getattr(
