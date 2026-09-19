@@ -62,9 +62,44 @@ _BROWSER_ACTIVITY_MAP = {
 
 _TOOL_CATEGORY_MAP["request_credential"] = "credential_request"
 
+# The chat capsule shows at most this much of a tool result (the frontend's
+# `truncateResult` bounds in web/src/utils/chatTransform.ts). The live
+# tool_result event carries only that part, so a huge result costs the relay
+# and phones nothing extra.
+_RESULT_CHAR_BOUND = 500
+_RESULT_LINE_BOUND = 12
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _result_preview(content) -> dict:
+    """The live-event slice of a tool result: exactly what the capsule shows.
+
+    Mirrors `truncateResult`'s cut, so the frontend renders the preview the
+    same way it renders the full result after a reload. When the result is
+    cut, the full result's totals ride along for the capsule footer — chars
+    counted in UTF-16 units, as the browser counts them. Non-text results
+    (multimodal lists) render as empty after a reload, so they are empty here.
+    """
+    if not isinstance(content, str):
+        return {"result_preview": ""}
+    lines = content.split("\n")
+    if len(content) <= _RESULT_CHAR_BOUND and len(lines) <= _RESULT_LINE_BOUND:
+        return {"result_preview": content}
+    first_lines = "\n".join(lines[:_RESULT_LINE_BOUND])
+    char_bound_fires = len(content) > _RESULT_CHAR_BOUND
+    line_bound_fires = len(lines) > _RESULT_LINE_BOUND
+    if char_bound_fires and (not line_bound_fires or _RESULT_CHAR_BOUND <= len(first_lines)):
+        preview = content[:_RESULT_CHAR_BOUND]
+    else:
+        preview = first_lines
+    return {
+        "result_preview": preview,
+        "result_total_chars": len(content.encode("utf-16-le", "surrogatepass")) // 2,
+        "result_total_lines": len(lines),
+    }
 
 
 def _describe_tool(tool_name: str, args: dict) -> str:
@@ -183,6 +218,9 @@ class ActivityTranslator:
                     # Parsed args let the frontend render a localized
                     # description; `description` stays for old frontends.
                     "arguments": args,
+                    # Lets the frontend pair this row with its tool_result
+                    # event by id instead of by position.
+                    "tool_call_id": tc_id,
                     "source": source,
                     "timestamp": _now(),
                 })
@@ -199,7 +237,12 @@ class ActivityTranslator:
                 "id": uuid4().hex,
                 "category": "tool_result",
                 "description": "Tool result received",
+                # Old frontends read the tool_call_id from here; keep it.
                 "tool_name": message.get("tool_call_id", "unknown"),
+                "tool_call_id": message.get("tool_call_id", ""),
+                # Additive: the capped result, so a row expanded mid-turn
+                # shows content instead of waiting for a reload.
+                **_result_preview(message.get("content")),
                 "source": source,
                 "timestamp": _now(),
             })

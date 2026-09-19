@@ -8,11 +8,13 @@ import {
   truncateResult,
   mergeRecoveredAssistantMessage,
   describeLiveActivity,
+  dispatchFromToolCall,
 } from './chatTransform';
 import { translate } from '../i18n/useT';
 import type { ActivityTranslate } from './chatTransform';
 import type { ChatMessage } from '../types';
 import subAgentMarkerFixturesData from './subAgentMarkerFixtures.json';
+import toolResultPreviewFixturesData from './toolResultPreviewFixtures.json';
 
 const TS = '2026-05-08T10:00:00Z';
 const TS2 = '2026-05-08T10:00:01Z';
@@ -665,6 +667,113 @@ describe('truncateResult', () => {
     const r = truncateResult(content);
     expect(r.text).toBe(content);
     expect(r.footer).toBeNull();
+  });
+
+  it('a pre-cut preview with the full totals: marks the cut and reports the full size', () => {
+    const r = truncateResult('x'.repeat(500), undefined, { chars: 9000, lines: 1 });
+    expect(r.text).toBe('x'.repeat(500) + '…');
+    expect(r.footer).toBe('first 500 chars · result is 9000 chars total');
+  });
+});
+
+// --------------------------------------------------------------------------
+// Live tool-result preview parity. The daemon's live tool_result event
+// carries only the part of a result the capsule shows (plus the full totals
+// when it cut it). The shared fixture's rows are asserted on the producer
+// side by tests/unit/test_activity_tool_result_preview.py; here, rendering
+// each preview with its totals must equal rendering the full result the way
+// a reload does — so a row expanded mid-turn looks exactly like it will
+// after the session is reopened.
+// --------------------------------------------------------------------------
+
+interface ToolResultPreviewFixture {
+  name: string;
+  full: string;
+  preview: string;
+  total_chars?: number;
+  total_lines?: number;
+}
+
+describe('truncateResult — live preview renders like the reloaded full result', () => {
+  const rows = toolResultPreviewFixturesData as ToolResultPreviewFixture[];
+  it.each(rows.map((r) => [r.name, r] as const))('%s', (_name, row) => {
+    const totals =
+      row.total_chars !== undefined && row.total_lines !== undefined
+        ? { chars: row.total_chars, lines: row.total_lines }
+        : undefined;
+    expect(truncateResult(row.preview, undefined, totals)).toEqual(truncateResult(row.full));
+  });
+});
+
+describe('agent_message rows carry the dispatched message', () => {
+  const brief = 'Refactor the parser.\n\nConstraints:\n- keep the public API\n- add tests\n' + 'detail '.repeat(300);
+
+  function onlyRow(messages: ChatMessage[]) {
+    const capsule = transformChatHistory(messages).find((i) => i.type === 'agent_run');
+    if (capsule?.type !== 'agent_run') throw new Error('expected agent_run');
+    const row = capsule.items.find((x) => x.type === 'tool_call_row');
+    if (row?.type !== 'tool_call_row') throw new Error('expected tool_call_row');
+    return row;
+  }
+
+  it('threads the target agent and the FULL message onto the row, alongside the paired ack', () => {
+    const row = onlyRow([
+      user('delegate it', TS),
+      asst({
+        tool_calls: [tc('c1', 'agent_message', JSON.stringify({ action: 'send', agent: 'claude-code', message: brief }))],
+        timestamp: TS2,
+      }),
+      tool('c1', 'Dispatched to claude-code. Awaiting completion.', TS3),
+    ]);
+    expect(row.target_description).toBe('Messaged: @claude-code');
+    expect(row.dispatch).toEqual({ agent: 'claude-code', message: brief });
+    expect(row.result_content).toBe('Dispatched to claude-code. Awaiting completion.');
+  });
+
+  it('a respond carries its message too', () => {
+    const row = onlyRow([
+      asst({
+        tool_calls: [tc('c1', 'agent_message', JSON.stringify({
+          action: 'respond', agent: 'codex', interaction_id: 'i1', message: 'Yes, overwrite it.',
+        }))],
+      }),
+      tool('c1', 'Response delivered to codex.', TS2),
+    ]);
+    expect(row.dispatch).toEqual({ agent: 'codex', message: 'Yes, overwrite it.' });
+  });
+
+  it('list / status / stop send no message, so the row has no dispatch', () => {
+    const row = onlyRow([
+      asst({ tool_calls: [tc('c1', 'agent_message', '{"action":"list","agent":"claude-code"}')] }),
+      tool('c1', '[]', TS2),
+    ]);
+    expect(row.dispatch).toBeUndefined();
+    expect(row.target_description).toBe('Messaged: @claude-code');
+  });
+
+  it('older argument shapes (handle) still name the agent', () => {
+    const row = onlyRow([
+      asst({ tool_calls: [tc('c1', 'agent_message', '{"handle":"claude-code","action":"send","message":"hi"}')] }),
+      tool('c1', 'ok', TS2),
+    ]);
+    expect(row.target_description).toBe('Messaged: @claude-code');
+    expect(row.dispatch).toEqual({ agent: 'claude-code', message: 'hi' });
+  });
+
+  it('other tools never get a dispatch', () => {
+    const row = onlyRow([
+      asst({ tool_calls: [tc('c1', 'shell', '{"command":"ls","message":"not a dispatch"}')] }),
+      tool('c1', 'a.txt', TS2),
+    ]);
+    expect(row.dispatch).toBeUndefined();
+  });
+
+  it('dispatchFromToolCall reads live event arguments the same way', () => {
+    expect(dispatchFromToolCall('agent_message', { action: 'send', agent: 'pi', message: brief }))
+      .toEqual({ agent: 'pi', message: brief });
+    expect(dispatchFromToolCall('agent_message', { action: 'stop', agent: 'pi' })).toBeUndefined();
+    expect(dispatchFromToolCall('agent_message', undefined)).toBeUndefined();
+    expect(dispatchFromToolCall('read', { message: 'x' })).toBeUndefined();
   });
 });
 

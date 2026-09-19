@@ -486,6 +486,16 @@ export interface ActivityEvent {
   /** Parsed tool arguments (newer daemons) — lets the frontend render a
    * localized description instead of the English `description`. */
   arguments?: Record<string, unknown>;
+  /** The tool call this event belongs to (newer daemons), on both the
+   * tool-use and the tool_result event — pairs a result with its row. */
+  tool_call_id?: string;
+  /** tool_result only (newer daemons): the part of the result the capsule
+   * shows (500 chars / 12 lines at most). */
+  result_preview?: string;
+  /** tool_result only, present when result_preview was cut: the full
+   * result's size (chars in UTF-16 units) for the truncation footer. */
+  result_total_chars?: number;
+  result_total_lines?: number;
   source: string;
   timestamp: string;
 }
