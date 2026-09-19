@@ -31,6 +31,7 @@
  * rather than showing three dead controls.
  */
 import { useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Activity,
   Check,
@@ -605,6 +606,12 @@ function IconAction({
  * the card appears in the list. It stays open only when the save-time test
  * failed (the provider went away between Test and Save), so the red verdict
  * the form renders is readable; the user closes it when they have read it.
+ *
+ * Portaled to <body>: project settings is one big <form>, and a <form>
+ * nested inside another never reaches React — WebKit and Chromium stop a
+ * nested form's submit event at the ancestor form, so nothing called
+ * preventDefault, the browser did a native GET submit and reloaded the app
+ * to "Select a project" with the card never POSTed (2026-09-19).
  */
 export function CardFormModal({
   card,
@@ -618,7 +625,7 @@ export function CardFormModal({
   const t = useT();
   const [savedOnce, setSavedOnce] = useState(false);
 
-  return (
+  return createPortal(
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
       onClick={(e) => {
@@ -679,6 +686,7 @@ export function CardFormModal({
           </div>
         )}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
