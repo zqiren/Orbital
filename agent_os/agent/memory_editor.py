@@ -66,6 +66,11 @@ WATERMARK_KEY = "editor_last_run"
 _MARKER_FILE = ".memory_cleanup.json"
 _SESSIONS_FALLBACK_DAYS = 7
 _MAX_SESSIONS_LISTED = 30
+# Quote-backed ask closes (spec 089 v2 §6): the quote must be the user's own
+# words, verbatim in a user message of the session the editor cites.
+_MAX_QUOTE_CHARS = 500
+_MAX_ASKS_LISTED = 30
+_SESSION_STEM_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 
 FILE_BY_KEY = {
     "state": "PROJECT_STATE.md",
@@ -333,6 +338,7 @@ def build_prompt(
     today: str,
     since: datetime | None,
     sessions: list[dict],
+    open_asks: list | None = None,
 ) -> str:
     since_txt = since.isoformat(timespec="minutes") if since else "never"
     if sessions:
@@ -362,6 +368,22 @@ def build_prompt(
         f"\nINDEX FORMATTING TO FIX (if you rewrite INDEX): {drift}\n"
         f"  Contract: {_mem.FORMAT_HEADERS['index']}\n"
     ) if drift else ""
+
+    asks_block = ""
+    if open_asks:
+        ask_lines = "\n".join(
+            f"- [{a.id}] {' '.join(str(a.text).split())[:200]}"
+            for a in open_asks[:_MAX_ASKS_LISTED]
+        )
+        asks_block = f"""
+OPEN ASKS (waiting on the user, in orbital/ASKS.md — never edit that file):
+{ask_lines}
+If a session below shows the USER answering or completing one of these, you
+may close it in "close_asks": the ask id, the session_uuid, and the user's own
+words copied exactly from their message as "quote". Only the user's words
+count, never the assistant's. The daemon checks the quote against that
+session and ignores the close if it is not there. If unsure, leave it open.
+"""
 
     return f"""Today is {today}. Tidy this project's memory so each file gets back toward its target.
 
@@ -401,6 +423,7 @@ RULES
    *_ARCHIVE.md line.
 8. If nothing needs to change, return {{}}.
 
+{asks_block}
 TOOLS (read-only; at most {EDITOR_MAX_CALLS - 1} tool rounds): read, grep,
 list_sessions, read_session. The four live files are already below in full,
 with their ids — do not read them again. Use the tools for evidence: the
@@ -416,6 +439,7 @@ SESSIONS ACTIVE SINCE THEN (newest first):
 OUTPUT — ONLY this JSON (omit keys you do not use):
 {{"archive": [{{"file": "PROJECT_STATE.md", "id": "…", "pointer": "…"}}],
  "merge": [{{"file": "DECISIONS.md", "ids": ["…", "…"], "text": "…", "pointer": "…"}}],
+ "close_asks": [{{"id": "…", "session": "…", "quote": "…"}}],
  "index": "<complete INDEX.md>"}}
 
 --- THE LIVE FILES, IN FULL ---
@@ -910,6 +934,92 @@ def apply_choices(
     return result
 
 
+def _norm_ws(text) -> str:
+    return " ".join(str(text or "").split())
+
+
+def _user_texts(session_path: str) -> list[str]:
+    """The user's own messages in a session log (not injected/system rows)."""
+    texts: list[str] = []
+    try:
+        with open(session_path, encoding="utf-8") as f:
+            for line in f:
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(row, dict) or row.get("role") != "user":
+                    continue
+                if row.get("source") not in (None, "user"):
+                    continue
+                content = row.get("content")
+                if isinstance(content, list):
+                    content = " ".join(
+                        b.get("text", "") for b in content
+                        if isinstance(b, dict) and b.get("type") == "text"
+                    )
+                if isinstance(content, str) and content:
+                    texts.append(_norm_ws(content))
+    except OSError:
+        return []
+    return texts
+
+
+def apply_ask_closes(
+    workspace: str, orbital_dir: str, items, *, today: str,
+) -> tuple[list[dict], list[str]]:
+    """Close asks the editor can quote the user answering (spec 089 v2 §6).
+
+    Each item is ``{"id", "session", "quote"}``. The close is appended as
+    ``done <id> <today> by:editor "<quote>"`` only when the quote is verbatim
+    (whitespace-normalised) in a USER message of that session; otherwise it is
+    rejected and the ask stays open. Returns ``(applied, rejected)``.
+    """
+    from agent_os.agent import asks as _asks
+    from agent_os.agent.project_paths import ProjectPaths
+
+    applied: list[dict] = []
+    rejected: list[str] = []
+    items = _as_list(items)
+    if not items:
+        return applied, rejected
+    try:
+        open_ids = {a.id for a in _asks.read_asks(orbital_dir) if a.is_open}
+    except Exception:  # noqa: BLE001 — an unreadable log closes nothing
+        return applied, ["close_asks: ASKS.md unreadable"]
+    sessions_dir = ProjectPaths(workspace).sessions_dir
+    for item in items:
+        if not isinstance(item, dict):
+            rejected.append("close_asks: not an object")
+            continue
+        ask_id = str(item.get("id") or "").strip().lower()
+        session = str(item.get("session") or "").strip()
+        quote = _norm_ws(item.get("quote"))
+        if ask_id not in open_ids:
+            rejected.append(f"close_asks {ask_id or '?'}: not an open ask")
+            continue
+        if not quote or len(quote) > _MAX_QUOTE_CHARS:
+            rejected.append(f"close_asks {ask_id}: missing or oversized quote")
+            continue
+        if not _SESSION_STEM_RE.match(session):
+            rejected.append(f"close_asks {ask_id}: bad session {session!r}")
+            continue
+        if not any(quote in t for t in _user_texts(os.path.join(sessions_dir, session + ".jsonl"))):
+            rejected.append(f"close_asks {ask_id}: quote not in the user's messages of {session}")
+            continue
+        try:
+            line = _asks.append_event(orbital_dir, "done", ask_id, f'"{quote}"', "editor",
+                                      today=today)
+        except (KeyError, ValueError, OSError) as e:
+            rejected.append(f"close_asks {ask_id}: {e}")
+            continue
+        if line is None:
+            continue  # closed meanwhile
+        open_ids.discard(ask_id)
+        applied.append({"kind": "close_ask", "id": ask_id, "session": session})
+    return applied, rejected
+
+
 # ---------------------------------------------------------------------------
 # The run
 # ---------------------------------------------------------------------------
@@ -963,11 +1073,17 @@ async def run_editor(
     sessions = sessions_since(list_sessions, workspace_files.workspace, since)
     tools = build_tools(workspace_files.workspace, list_sessions)
     schemas = [t.schema() for t in tools.values()]
+    try:
+        from agent_os.agent import asks as _asks
+        open_asks = [a for a in _asks.read_asks(orbital_dir) if a.is_open]
+    except Exception:  # noqa: BLE001 — asks are optional input
+        open_asks = []
 
     messages: list[dict] = [
         {"role": "system", "content": _SYSTEM},
         {"role": "user", "content": build_prompt(
-            snapshot, today=today, since=since, sessions=sessions)},
+            snapshot, today=today, since=since, sessions=sessions,
+            open_asks=open_asks)},
     ]
     calls = 0
     choices: dict | None = None
@@ -1025,6 +1141,12 @@ async def run_editor(
 
     result = apply_choices(workspace_files, choices, baselines=baselines,
                            snapshot=snapshot, today=today, project_id=project_id)
+    closes, close_rejects = apply_ask_closes(
+        workspace_files.workspace, orbital_dir, choices.get("close_asks"), today=today)
+    result.applied.extend(closes)
+    result.rejected.extend(close_rejects)
+    if closes and result.outcome == "no_change":
+        result.outcome = "edited"
     result.calls = calls
     result.backup_dir = backup_dir
     logger.info(
