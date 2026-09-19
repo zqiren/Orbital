@@ -19,6 +19,24 @@ SCHEMA_VERSION = 1
 # Milestone names carried in every ping (lifetime booleans, §5).
 MILESTONES = ("key_set", "first_project", "first_session", "first_turn")
 
+# Sub-agent slugs allowed to leave the machine. A dispatch handle is chosen by
+# the model, so a hallucinated name reaches the spawn and fails — anything not
+# built in is reported as ``other``; fanout workers (``worker:<id>-<i>``) as
+# ``native``. A parity test fails when a manifest is added without a row here.
+SUBAGENT_SLUGS = (
+    "aider", "claude-code", "cline", "codebuddy", "codex", "continue-cli",
+    "copilot-cli", "cursor", "dsh", "gemini-cli", "goose", "pi",
+)
+
+
+def _subagent_bucket(agent: object) -> str:
+    if isinstance(agent, str):
+        if agent in SUBAGENT_SLUGS:
+            return agent
+        if agent.startswith("worker:"):
+            return "native"
+    return "other"
+
 
 def build_ping(
     identity: InstallIdentity,
@@ -44,6 +62,12 @@ def build_ping(
         # invisible between "key set" and "first turn".
         "login_attempted": 0,
         "login_failed": 0,
+        # Delegation: does anyone hand work to a sub-agent, and does it land?
+        # ``failed`` covers a spawn that never started, so it is not a subset
+        # of ``dispatches``.
+        "subagent_dispatches": 0,
+        "subagent_failed": 0,
+        "subagent_by_agent": {},
     }
     for row in spool.read_day(day):
         event = row.get("event")
@@ -78,6 +102,12 @@ def build_ping(
             counters["login_attempted"] += 1
         elif event == "login_failed":
             counters["login_failed"] += 1
+        elif event in ("subagent_dispatched", "subagent_failed"):
+            dispatched = event == "subagent_dispatched"
+            counters["subagent_dispatches" if dispatched else "subagent_failed"] += 1
+            by_agent = counters["subagent_by_agent"].setdefault(
+                _subagent_bucket(row.get("agent")), {"dispatched": 0, "failed": 0})
+            by_agent["dispatched" if dispatched else "failed"] += 1
 
     milestones = identity.milestones
     return {

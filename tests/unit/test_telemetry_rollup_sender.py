@@ -125,6 +125,71 @@ class TestRollup:
         assert c["login_failed"] == 1
         assert isinstance(c["login_attempted"], int)
 
+    def test_subagent_dispatch_counters_aggregate_per_agent(self, tmp_path):
+        """Whether anyone delegates at all was invisible: nothing counted a
+        dispatch. Totals plus a per-agent split; a failure need not follow a
+        dispatch (a spawn that never started still counts as failed)."""
+        spool = seed_spool(tmp_path, [
+            ev("subagent_dispatched", agent="claude-code"),
+            ev("subagent_dispatched", agent="claude-code"),
+            ev("subagent_dispatched", agent="worker:fan1-0"),
+            ev("subagent_failed", agent="claude-code"),
+            ev("subagent_failed", agent="codex"),
+            {"event": "subagent_dispatched", "ts": "2026-08-07T10:00:00+00:00",
+             "agent": "claude-code"},
+        ])
+        c = build_ping(
+            InstallIdentity(tmp_path), spool, DAY, version="0.13.1", os_name="darwin",
+        )["counters"]
+        assert c["subagent_dispatches"] == 3
+        assert c["subagent_failed"] == 2
+        assert c["subagent_by_agent"] == {
+            "claude-code": {"dispatched": 2, "failed": 1},
+            "native": {"dispatched": 1, "failed": 0},
+            "codex": {"dispatched": 0, "failed": 1},
+        }
+
+    def test_subagent_agent_outside_builtin_set_is_bucketed(self, tmp_path):
+        """A handle is model-chosen text (a hallucinated agent name reaches the
+        spawn and fails). Only built-in slugs may leave the machine."""
+        spool = seed_spool(tmp_path, [
+            ev("subagent_failed", agent="my-secret-project-helper"),
+            ev("subagent_dispatched"),
+        ])
+        c = build_ping(
+            InstallIdentity(tmp_path), spool, DAY, version="0.13.1", os_name="darwin",
+        )["counters"]
+        assert c["subagent_by_agent"] == {
+            "other": {"dispatched": 1, "failed": 1},
+        }
+
+    def test_empty_day_has_zero_subagent_counters(self, tmp_path):
+        c = build_ping(
+            InstallIdentity(tmp_path), seed_spool(tmp_path, []), DAY,
+            version="0.13.1", os_name="darwin",
+        )["counters"]
+        assert c["subagent_dispatches"] == 0
+        assert c["subagent_failed"] == 0
+        assert c["subagent_by_agent"] == {}
+
+    def test_every_subagent_manifest_slug_is_transmittable(self):
+        """Parity guard: a new sub-agent manifest must be added to the
+        allowlist, or its usage silently collapses into ``other``."""
+        from pathlib import Path
+
+        import yaml
+
+        from agent_os.telemetry.rollup import SUBAGENT_SLUGS
+
+        manifests = Path(__file__).resolve().parents[2] / "agent_os" / "agents" / "manifests"
+        slugs = set()
+        for path in manifests.glob("*.yaml"):
+            data = yaml.safe_load(path.read_text(encoding="utf-8"))
+            if data["runtime"]["adapter"] != "built_in":
+                slugs.add(data["slug"])
+        assert slugs, "no manifests found"
+        assert slugs <= set(SUBAGENT_SLUGS), sorted(slugs - set(SUBAGENT_SLUGS))
+
 
 class FakePost:
     def __init__(self, status=200, exc: Exception | None = None):

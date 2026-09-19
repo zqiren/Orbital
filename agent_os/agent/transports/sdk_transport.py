@@ -78,6 +78,9 @@ class SDKTransport(AgentTransport):
         # Last model observed on an AssistantMessage this turn — captured so
         # the thread record can persist it (turn_complete carries it).
         self._last_model: str | None = model
+        # The CLI process's running ``total_cost_usd`` as of the last result
+        # message; each turn records only the increase. Zeroed per client.
+        self._session_cost_seen: float = 0.0
         self._alive: bool = False
         self._workspace: str = ""
         # Pending permission requests: request_id -> asyncio.Future
@@ -170,6 +173,7 @@ class SDKTransport(AgentTransport):
             options_kwargs["model"] = self._model
         options = ClaudeAgentOptions(**options_kwargs)
         self._client = ClaudeSDKClient(options=options)
+        self._session_cost_seen = 0.0
         await self._client.connect()
         self._alive = True
         self._capture_process_handle()
@@ -617,7 +621,11 @@ class SDKTransport(AgentTransport):
         if isinstance(msg, AssistantMessage):
             # Thread-identity capture: the model actually serving this thread
             # (persisted with the resume record; must match on resume).
-            self._last_model = getattr(msg, "model", None) or self._last_model
+            # ``<synthetic>`` marks CLI-generated messages (interrupts, API
+            # errors), not a model that served the thread.
+            model = getattr(msg, "model", None)
+            if model and model != "<synthetic>":
+                self._last_model = model
             for block in msg.content:
                 if isinstance(block, TextBlock):
                     events.append(TransportEvent(
@@ -690,10 +698,12 @@ class SDKTransport(AgentTransport):
 
         The SDK ``ResultMessage.usage`` dict follows Anthropic's additive usage
         semantics (``input_tokens`` excludes the cache fields), so we normalize
-        with ``ProviderSemantics.ANTHROPIC``. ``total_cost_usd`` — when present
-        AND > 0 — is recorded as the provider-reported cost, displayed VERBATIM
-        (never recomputed from our rates). Absent/zero (subscription auth) →
-        tokens only, no reported_cost.
+        with ``ProviderSemantics.ANTHROPIC``. ``total_cost_usd`` is the CLI
+        process's RUNNING total for the session, not this turn's cost, so the
+        recorded ``reported_cost`` is its increase since the previous result
+        (never recomputed from our rates). A total below the last one means a
+        process we did not see restart, counted from zero. No increase, or
+        absent/zero (subscription auth) → tokens only, no reported_cost.
         """
         try:
             usage = getattr(msg, "usage", None)
@@ -722,14 +732,18 @@ class SDKTransport(AgentTransport):
             )
             normalized = normalize_usage(token_usage, ProviderSemantics.ANTHROPIC)
 
-            # total_cost_usd is provider-reported; record it VERBATIM only when
-            # present AND > 0. Subscription auth reports 0/absent → tokens only.
+            # Summing the running total verbatim overstated a long session
+            # ~5x (spend() adds reported_cost across rows).
             reported_cost = None
             reported_cost_currency = None
             cost = getattr(msg, "total_cost_usd", None)
             if isinstance(cost, (int, float)) and cost > 0:
-                reported_cost = float(cost)
-                reported_cost_currency = "USD"
+                increase = (cost - self._session_cost_seen
+                            if cost >= self._session_cost_seen else cost)
+                self._session_cost_seen = float(cost)
+                if increase > 0:
+                    reported_cost = float(increase)
+                    reported_cost_currency = "USD"
 
             # ResultMessage carries no model attribute; attribution comes from
             # the last AssistantMessage's model, then a sentinel.
