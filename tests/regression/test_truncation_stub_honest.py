@@ -124,7 +124,8 @@ def test_stub_preserves_metadata_header(session):
     assert "Target: content-bank/index.md" in stub
     assert "Original: 1000 tokens" in stub
     assert "Full result:" in stub
-    assert ".json" in stub
+    # Content-addressed archive (spec 066 phase 1a): the path is a blob.
+    assert "tool-results/blobs/" in stub
 
 
 def test_threshold_unchanged(session):

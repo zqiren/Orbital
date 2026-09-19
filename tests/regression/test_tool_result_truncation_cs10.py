@@ -125,7 +125,8 @@ class TestToolResultTruncationCS10:
         assert "Target: https://figma.com/design" in stub
         assert "Original: 2500 tokens" in stub
         assert "Full result:" in stub
-        assert ".json" in stub
+        # Content-addressed archive (spec 066 phase 1a): the path is a blob.
+        assert "tool-results/blobs/" in stub
 
     def test_stubs_do_not_embed_narration(self, session):
         """Stubs must NOT embed the agent's narration as a faux content summary."""
@@ -283,10 +284,14 @@ class TestToolResultTruncationCS10:
 
         archive_and_supersede_tool_results(session, iteration=3)
 
-        path = os.path.join(
-            workspace, "orbital", "tool-results", "cs10-test",
-            "turn_3_call_tc_archive.json",
+        # Content-addressed archive (spec 066 phase 1a): manifest line +
+        # blob holding the content.
+        from agent_os.agent import blob_store
+        from agent_os.agent.tool_result_lifecycle import read_archive_manifest
+        (entry,) = read_archive_manifest(session)
+        assert (entry["call_id"], entry["turn"]) == ("tc_archive", 3)
+        path = blob_store.blob_path(
+            os.path.join(workspace, "orbital"), entry["sha256"], entry["ext"],
         )
-        assert os.path.exists(path)
         with open(path, "r", encoding="utf-8") as f:
-            assert json.load(f)["content"] == "C" * 9_000
+            assert f.read() == "C" * 9_000

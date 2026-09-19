@@ -2462,6 +2462,15 @@ async def dismiss_claudemd_warning(project_id: str, body: dict):
     return {"status": "dismissed"}
 
 
+def _with_images(messages: list[dict], orbital_dir: str) -> list[dict]:
+    """Rows as the API has always returned them: images that a session now
+    stores in the blob store (spec 066 phase 1b) are put back as base64 data
+    URLs — same JSON shape, no binary bodies (the relay tunnel mangles them).
+    Rows without references are returned untouched."""
+    from agent_os.agent.blob_store import rehydrate_row_images
+    return [rehydrate_row_images(m, orbital_dir) for m in messages]
+
+
 def _read_chat_messages(sessions_dir: str, limit: int, offset: int) -> tuple[list[dict], int]:
     """Read chat messages from session JSONL files. Runs in a thread.
 
@@ -2470,6 +2479,7 @@ def _read_chat_messages(sessions_dir: str, limit: int, offset: int) -> tuple[lis
     """
     if not os.path.isdir(sessions_dir):
         return [], 0
+    orbital_dir = os.path.dirname(os.path.normpath(sessions_dir))
 
     from agent_os.daemon_v2.native_worker import is_worker_session_stem
     # List and sort session files by mtime (oldest first)
@@ -2500,7 +2510,7 @@ def _read_chat_messages(sessions_dir: str, limit: int, offset: int) -> tuple[lis
                     all_messages.append(json.loads(line))
                 except json.JSONDecodeError:
                     pass
-        return all_messages, total
+        return _with_images(all_messages, orbital_dir), total
 
     # True tail pagination: only parse the lines we need
     end = total - offset
@@ -2532,7 +2542,7 @@ def _read_chat_messages(sessions_dir: str, limit: int, offset: int) -> tuple[lis
             except json.JSONDecodeError:
                 pass
 
-    return result, total
+    return _with_images(result, orbital_dir), total
 
 
 def _read_chat_messages_single(jsonl_path: str, limit: int, offset: int) -> tuple[list[dict], int]:
@@ -2543,6 +2553,7 @@ def _read_chat_messages_single(jsonl_path: str, limit: int, offset: int) -> tupl
     """
     if not os.path.isfile(jsonl_path):
         return [], 0
+    orbital_dir = os.path.dirname(os.path.dirname(os.path.abspath(jsonl_path)))
 
     with open(jsonl_path, "r", encoding="utf-8") as f:
         lines = [l for l in f if l.strip()]
@@ -2556,7 +2567,7 @@ def _read_chat_messages_single(jsonl_path: str, limit: int, offset: int) -> tupl
                 messages.append(json.loads(line))
             except json.JSONDecodeError:
                 pass
-        return messages, total
+        return _with_images(messages, orbital_dir), total
 
     end = total - offset
     start = max(0, end - limit)
@@ -2569,7 +2580,7 @@ def _read_chat_messages_single(jsonl_path: str, limit: int, offset: int) -> tupl
             result.append(json.loads(line))
         except json.JSONDecodeError:
             pass
-    return result, total
+    return _with_images(result, orbital_dir), total
 
 
 # Matches the per-dispatch "message_routed" marker's PROSE — either

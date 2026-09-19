@@ -19,10 +19,12 @@ import os
 
 import pytest
 
+from agent_os.agent import blob_store
 from agent_os.agent.session import Session
 from agent_os.agent.tool_result_lifecycle import (
     SIZE_THRESHOLD,
     archive_and_supersede_tool_results,
+    read_archive_manifest,
 )
 
 
@@ -64,6 +66,19 @@ def _archive_dir(workspace):
     return os.path.join(
         workspace, "orbital", "tool-results", "supersession-test",
     )
+
+
+def _archived(session, workspace) -> dict:
+    """call_id -> (turn, archived content), from the content-addressed archive
+    (spec 066 phase 1a: manifest + blob store)."""
+    out = {}
+    for entry in read_archive_manifest(session):
+        path = blob_store.blob_path(
+            os.path.join(workspace, "orbital"), entry["sha256"], entry["ext"],
+        )
+        with open(path, "r", encoding="utf-8") as f:
+            out[entry["call_id"]] = (entry["turn"], f.read())
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -239,9 +254,7 @@ def test_multimodal_results_untouched(session, workspace):
     assert msgs["tc_m2"]["content"] == blocks
     assert not msgs["tc_m2"].get("_stubbed")
     assert not msgs["tc_m1"].get("_stubbed")
-    assert not os.path.exists(
-        os.path.join(_archive_dir(workspace), "turn_1_call_tc_m2.json"),
-    )
+    assert "tc_m2" not in _archived(session, workspace)
 
 
 def test_untargeted_tool_never_supersedes(session):
@@ -313,9 +326,10 @@ def test_all_large_results_archived_even_when_not_stubbed(session, workspace):
 
     msgs = _tool_msgs(session)
     assert not any(m.get("_stubbed") for m in msgs.values())
+    archived = _archived(session, workspace)
     for call_id in ("tc_d1", "tc_d2"):
-        path = os.path.join(_archive_dir(workspace), f"turn_4_call_{call_id}.json")
-        assert os.path.exists(path), f"missing archive for {call_id}"
+        assert call_id in archived, f"missing archive for {call_id}"
+        assert archived[call_id][0] == 4
 
 
 def test_every_superseded_copy_is_archived_before_it_is_stubbed(session, workspace):
@@ -327,11 +341,9 @@ def test_every_superseded_copy_is_archived_before_it_is_stubbed(session, workspa
 
     archive_and_supersede_tool_results(session, iteration=2)
 
+    archived = _archived(session, workspace)
     for i in range(3):
-        path = os.path.join(_archive_dir(workspace), f"turn_2_call_tc_h{i}.json")
-        with open(path, "r", encoding="utf-8") as f:
-            record = json.load(f)
-        assert record["content"].startswith(f"SNAPSHOT_{i}_")
+        assert archived[f"tc_h{i}"][1].startswith(f"SNAPSHOT_{i}_")
 
 
 def test_archive_written_once_per_call_id(session, workspace):
@@ -342,8 +354,8 @@ def test_archive_written_once_per_call_id(session, workspace):
     archive_and_supersede_tool_results(session, iteration=2)
     archive_and_supersede_tool_results(session, iteration=3)
 
-    files = sorted(os.listdir(_archive_dir(workspace)))
-    assert files == ["turn_1_call_tc_once.json"]
+    entries = read_archive_manifest(session)
+    assert [(e["call_id"], e["turn"]) for e in entries] == [("tc_once", 1)]
 
 
 def test_superseded_stub_points_at_the_archived_copy(session, workspace):
@@ -358,8 +370,7 @@ def test_superseded_stub_points_at_the_archived_copy(session, workspace):
     disk_path = stub[stub.index(marker) + len(marker):].rstrip("]")
     assert os.path.exists(disk_path)
     with open(disk_path, "r", encoding="utf-8") as f:
-        record = json.load(f)
-    assert record["content"].startswith("OLDBYTES_")
+        assert f.read().startswith("OLDBYTES_")
 
 
 # ---------------------------------------------------------------------------
