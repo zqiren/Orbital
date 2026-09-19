@@ -134,6 +134,7 @@ class TestAppendOnly:
                             datetime_now="2026-01-01T00:00")
         prompt = ContextManager(loaded, _Builder(), ctx, model_context_limit=1_000_000).prepare()
         assert prompt[1:] == view
+        assert loaded.get_recent(10_000_000) == view
 
     @pytest.mark.asyncio
     async def test_two_compactions_chain(self, tmp_path):

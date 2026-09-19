@@ -767,7 +767,7 @@ class Session:
         """
         result = []
         used_tokens = 0
-        for msg in reversed(self._messages):
+        for msg in reversed(self.get_model_messages()):
             est = estimate_message_tokens(msg)
             if used_tokens + est > max_tokens:
                 break
