@@ -1326,6 +1326,120 @@ describe('Spec 074: send serializes behind the in-flight pin PATCH', () => {
   });
 });
 
+// Spec 096: ChatView is mounted once per PROJECT, so its spinner state
+// outlives a session switch. "Thinking..." and the pinned-send dots belong to
+// the session doing the work; every other session's pane must stay quiet,
+// and switching back must bring them back.
+describe('Spec 096: live indicators stay on the session doing the work', () => {
+  const thinkingVisible = () => (container.textContent ?? '').includes('Thinking...');
+  const workerDotsVisible = () => (container.textContent ?? '').includes('●●●');
+
+  it('shows Thinking only on the holder, across a switch away and back', async () => {
+    runStatusHolder = 'A';
+    await renderChat({ agentStatus: 'idle', sessionId: 'A' });
+    await flushEffects();
+    await renderChat({ agentStatus: 'running', sessionId: 'A' });
+    await flushEffects();
+    expect(thinkingVisible()).toBe(true);
+
+    // The regression: an idle session showed the holder's spinner.
+    await renderChat({ agentStatus: 'running', sessionId: 'B' });
+    await flushEffects();
+    expect(thinkingVisible()).toBe(false);
+
+    await renderChat({ agentStatus: 'running', sessionId: 'A' });
+    await flushEffects();
+    expect(thinkingVisible()).toBe(true);
+
+    await renderChat({ agentStatus: 'idle', sessionId: 'A' });
+    await flushEffects();
+    expect(thinkingVisible()).toBe(false);
+  });
+
+  it('shows Thinking once the holder resolves after the running tick (mid-run reload)', async () => {
+    runStatusHolder = 'A';
+    // Mount straight into a running turn: the status effect runs before the
+    // holder fetch lands, so the holder is still unknown at that tick.
+    await renderChat({ agentStatus: 'running', sessionId: 'A' });
+    await flushEffects();
+    expect(thinkingVisible()).toBe(true);
+  });
+
+  it('shows no Thinking after a mid-run reload on an idle session', async () => {
+    runStatusHolder = 'A';
+    await renderChat({ agentStatus: 'running', sessionId: 'B' });
+    await flushEffects();
+    expect(thinkingVisible()).toBe(false);
+  });
+
+  it('keeps Thinking on the holder while it is waiting on its workers', async () => {
+    runStatusHolder = 'A';
+    await renderChat({ agentStatus: 'idle', sessionId: 'A' });
+    await flushEffects();
+    await renderChat({ agentStatus: 'running', sessionId: 'A' });
+    await flushEffects();
+    await renderChat({ agentStatus: 'waiting', sessionId: 'A' });
+    await flushEffects();
+    expect(thinkingVisible()).toBe(true);
+  });
+
+  it('shows the pinned-send dots only on the session that sent', async () => {
+    let releaseInject!: () => void;
+    injectMessageMock = () =>
+      new Promise((resolve) => {
+        releaseInject = () => resolve({ status: 'Message sent to claude-code.' });
+      });
+    await renderChat({
+      agentStatus: 'idle',
+      sessionId: 'A',
+      agents: [{ slug: 'claude-code', name: 'Claude Code' }],
+    });
+    await flushEffects();
+
+    const pinToggle = container.querySelector(
+      '[data-testid="pin-target-select"] > button',
+    ) as HTMLButtonElement;
+    await act(async () => { pinToggle.click(); });
+    const option = Array.from(
+      container.querySelectorAll('[role="option"]'),
+    ).find((el) => el.textContent?.includes('Claude Code')) as HTMLButtonElement;
+    await act(async () => { option.click(); });
+    await act(async () => { typeInComposer('hi worker'); });
+    const send = container.querySelector(
+      'button[aria-label="Send"]',
+    ) as HTMLButtonElement;
+    await act(async () => {
+      send.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await flushEffects();
+    expect(injectCalls.length).toBe(1);
+    expect(workerDotsVisible()).toBe(true);
+
+    // The inject is still in flight (slow relay) when the user switches.
+    await renderChat({
+      agentStatus: 'idle',
+      sessionId: 'B',
+      agents: [{ slug: 'claude-code', name: 'Claude Code' }],
+    });
+    await flushEffects();
+    expect(workerDotsVisible()).toBe(false);
+
+    await renderChat({
+      agentStatus: 'idle',
+      sessionId: 'A',
+      agents: [{ slug: 'claude-code', name: 'Claude Code' }],
+    });
+    await flushEffects();
+    expect(workerDotsVisible()).toBe(true);
+
+    await act(async () => { releaseInject(); });
+    await flushEffects();
+    expect(workerDotsVisible()).toBe(false);
+  });
+});
+
 describe('ChatView: pending-input queue (spec 006)', () => {
   // Helper: send a message that gets queued (202 queued_pending_slot) into the
   // viewed session, returning after the optimistic bubble + affordance render.

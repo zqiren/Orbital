@@ -366,6 +366,24 @@ describe('EdgeStrip — aggregate dot', () => {
     });
     expect(screen.queryByTestId('strip-dot')).not.toBeInTheDocument();
   });
+
+  it('does not surface a running worker elsewhere as a dot either (spec 095)', () => {
+    renderStrip({
+      agentStatuses: { 'proj-2': 'idle' },
+      subAgentsRunning: { 'proj-2': true },
+      pendingApprovals: {},
+    });
+    expect(screen.queryByTestId('strip-dot')).not.toBeInTheDocument();
+  });
+
+  it('keeps a manager error red when that project also has a worker running', () => {
+    renderStrip({
+      agentStatuses: { 'proj-2': 'error' },
+      subAgentsRunning: { 'proj-2': true },
+      pendingApprovals: {},
+    });
+    expect(screen.getByTestId('strip-dot')).toHaveClass('bg-error');
+  });
 });
 
 describe('EdgeStrip — accessibility', () => {

@@ -250,6 +250,17 @@ class LifecycleObserver:
             meta["suppress_wake"] = True
         await self._inject(project_id, content, session_id=session_id,
                            meta=meta or None)
+        # Every physical dispatch passes through here, including a queued
+        # prompt drained into an already-warm worker, which gets neither a
+        # ``sub_agent.started`` nor the inject route's ack. The project list
+        # refetches run-status on it (spec 095).
+        self._ws.broadcast(project_id, {
+            "type": "sub_agent.dispatched",
+            "project_id": project_id,
+            "session_id": session_id,
+            "handle": handle,
+            "initiator": initiator,
+        })
 
     async def on_interaction_required(
         self, project_id: str, handle: str, *, interaction_id: str,
