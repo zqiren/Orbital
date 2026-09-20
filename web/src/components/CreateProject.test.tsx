@@ -80,7 +80,7 @@ function nameInput() {
 }
 
 function createButton() {
-  // By role: the dialog title carries the same words.
+  // By role — the button, not any other text on the dialog.
   return screen.getByRole('button', { name: 'Create project' }) as HTMLButtonElement;
 }
 
@@ -298,7 +298,7 @@ describe('CreateProject — modal a11y (backlog #26c)', () => {
     expect(d.getAttribute('aria-modal')).toBe('true');
     const labelledBy = d.getAttribute('aria-labelledby');
     expect(labelledBy).toBeTruthy();
-    expect(document.getElementById(labelledBy as string)?.textContent).toBe('Create project');
+    expect(document.getElementById(labelledBy as string)?.textContent).toBe('New project');
   });
 
   it('closes on Escape', () => {

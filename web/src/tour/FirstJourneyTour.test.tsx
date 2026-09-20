@@ -45,7 +45,7 @@ describe('FirstJourneyTour', () => {
 
     await waitFor(() => expect(screen.getByTestId('tour-card')).toBeTruthy());
     expect(stepId()).toBe('project');
-    expect(screen.getByTestId('tour-card').textContent).toContain('Your agent works inside copenhagen');
+    expect(screen.getByTestId('tour-card').textContent).toContain('Your agent works from the context in copenhagen');
     expect(screen.getByTestId('tour-counter').textContent).toBe('1 of 8');
 
     const seen = [stepId()];

@@ -106,7 +106,7 @@ describe('AutomationsList — rows', () => {
     // The teaching half: automations can be created by chatting — one example
     // per automation kind.
     const empty = screen.getByTestId('automations-empty').textContent ?? '';
-    expect(empty).toContain('Just ask in chat');
+    expect(empty).toContain('Create one right from the chat.');
     expect(empty).toContain('Every weekday at 9am, summarize new GitHub issues');
     expect(empty).toContain('When a new spreadsheet lands in this folder');
   });
