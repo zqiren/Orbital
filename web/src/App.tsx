@@ -28,6 +28,10 @@ import EdgeStrip from './components/EdgeStrip';
 import CreateProject from './components/CreateProject';
 import FirstRunHome from './components/FirstRunHome';
 import { isFirstRun, wizardLandingProjectId } from './utils/firstRun';
+import FirstJourneyTour from './tour/FirstJourneyTour';
+import {
+  decideTourState, readTourState, shouldStartTour, writeTourState, type TourState,
+} from './tour/tourLogic';
 import ProjectDetail from './components/ProjectDetail';
 import QueueTab from './components/QueueTab';
 import SettingsModalPage from './components/SettingsModalPage';
@@ -138,6 +142,30 @@ export default function App() {
   const [sandboxRetrying, setSandboxRetrying] = useState(false);
   // Derive selected project ID from route for convenience
   const selectedProjectId = route.name === 'project' ? route.projectId : null;
+
+  // ── First-journey tour ────────────────────────────────────────────────
+  // `tourState` is this device's one-time decision (see decideTourState: a new
+  // install is `pending`, an install that already had a project is opted out).
+  // It is decided the first time a LOADED project list is seen and never
+  // revisited.
+  const [tourState, setTourState] = useState<TourState | null>(() => {
+    const stored = readTourState();
+    return stored === 'pending' || stored === 'done' ? stored : null;
+  });
+  useEffect(() => {
+    if (tourState !== null) return;
+    const decided = decideTourState(readTourState(), projects);
+    if (decided === null) return;
+    writeTourState(decided);
+    setTourState(decided);
+  }, [projects, tourState]);
+  // A replay from Settings → About shows the tour regardless of `tourState`.
+  const [tourReplay, setTourReplay] = useState(false);
+  const closeTour = useCallback(() => {
+    writeTourState('done');
+    setTourState('done');
+    setTourReplay(false);
+  }, []);
 
   const { triggers, fetchTriggers, toggleTrigger, deleteTrigger } = useTriggers(selectedProjectId ?? '');
 
@@ -541,6 +569,29 @@ export default function App() {
     ? projects.find((p) => p.project_id === route.projectId)
     : undefined;
 
+  // The tour's trigger is DERIVED, not an event: it shows while the user is on
+  // the chat tab of a project they created and the tour is still pending (or
+  // was asked for). Finishing or skipping flips `tourState` to done, which
+  // turns this off — no "start" effect to keep in sync with the route.
+  const onProjectChat = route.name === 'project' && route.tab === 'chat' && !route.settings;
+  // Held until the installed-agents probe has answered (`null` = still
+  // loading; it shells out to find CLI binaries, so it is slow). The tour
+  // freezes its list of stops when it starts, and the pin mark — the agents
+  // stop's anchor — only renders once that list is in: starting early silently
+  // dropped the stop.
+  const tourShowing =
+    onProjectChat && !!selectedProject && agentsAvailable !== null &&
+    (tourReplay || shouldStartTour(tourState, selectedProject));
+
+  function handleTakeTour() {
+    // The tour walks through a project, so open the user's most recent one.
+    const projectId = wizardLandingProjectId(projects);
+    if (!projectId) return;
+    setRoute({ name: 'project', projectId, tab: 'chat', sessionId: undefined });
+    setMobileView('content');
+    setTourReplay(true);
+  }
+
   function handleMobileBack() {
     setMobileView('sidebar');
   }
@@ -640,6 +691,8 @@ export default function App() {
         {route.name === 'settings' && (
           <GlobalSettings
             onBack={() => { setRoute({ name: 'list' }); setMobileView('sidebar'); }}
+            onTakeTour={handleTakeTour}
+            canTakeTour={wizardLandingProjectId(projects) !== null}
           />
         )}
 
@@ -757,6 +810,17 @@ export default function App() {
           everyone else it leaves <main> empty, so the modal's backdrop sits
           over an empty pane rather than the previous route's content. Cancel
           routes back to 'list'. */}
+      {tourShowing && selectedProject && (
+        <FirstJourneyTour
+          folderName={
+            (selectedProject.workspace || '').replace(/[\\/]+$/, '').split(/[\\/]/).filter(Boolean).pop()
+            || selectedProject.name
+          }
+          agentNames={(agentsAvailable ?? []).map((a) => a.name)}
+          onClose={closeTour}
+        />
+      )}
+
       {route.name === 'create' && (
         <CreateProject
           onSubmit={handleCreateProject}

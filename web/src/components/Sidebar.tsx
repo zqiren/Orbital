@@ -236,6 +236,7 @@ export default function Sidebar({
     return (
       <button
         key={project.project_id}
+        data-tour={project.is_scratch ? 'quick-tasks-row' : undefined}
         onClick={() => onSelectProject(project.project_id)}
         className={`flex-1 min-w-0 text-left px-3 py-2 rounded-sm flex items-center gap-2.5 transition-all duration-150 max-md:min-h-[44px] ${
           isActive ? 'bg-nav-hover' : 'hover:bg-nav-hover/50'

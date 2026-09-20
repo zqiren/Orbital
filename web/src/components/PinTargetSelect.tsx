@@ -142,6 +142,7 @@ export default function PinTargetSelect({
           : 'relative self-stretch flex shrink-0 -ml-3 -my-2'
       }
       data-testid={testId ?? 'pin-target-select'}
+      data-tour="pin-select"
     >
       <button
         type="button"

@@ -90,7 +90,7 @@ export interface WorkspacePanelProps {
 
 export default function WorkspacePanel({ view, browser, files }: WorkspacePanelProps) {
   return (
-    <div className="flex flex-col h-full min-h-0 overflow-hidden" data-testid="workspace-panel">
+    <div className="flex flex-col h-full min-h-0 overflow-hidden" data-testid="workspace-panel" data-tour="workspace-panel">
       {view === 'browser' ? browser : files}
     </div>
   );

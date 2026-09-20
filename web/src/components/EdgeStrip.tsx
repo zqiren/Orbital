@@ -250,6 +250,7 @@ export default function EdgeStrip({
     // transformed layer's visibility swap (reference_wkwebview_compositor_quirks).
     <div
       data-testid="edge-strip-wrapper"
+      data-tour="edge-strip"
       data-pinned={pinned ? 'true' : 'false'}
       className={`relative h-full shrink-0 transition-[width] duration-200 ease-out motion-reduce:transition-none ${
         pinned ? 'w-[260px]' : 'w-5'

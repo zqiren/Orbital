@@ -559,6 +559,50 @@ function renderChat(props: {
   });
 }
 
+describe('ChatView: example prompts in a project\'s empty chat', () => {
+  function chips() {
+    return Array.from(
+      container.querySelectorAll<HTMLButtonElement>('[data-testid="chat-empty-examples"] button'),
+    );
+  }
+
+  it('offers the examples, and a click FILLS the composer without sending', async () => {
+    await renderChat({ sessionId: undefined });
+    await flushEffects();
+
+    expect(chips().map((c) => c.textContent)).toEqual([
+      "Look through this folder and tell me what's here",
+      'Every morning at 9, summarize what changed',
+      'Draft a plan for this project and save it as plan.md',
+    ]);
+
+    const postsBefore = apiWithTotalCalls.length;
+    await act(async () => { chips()[1].click(); });
+
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement;
+    expect(textarea.value).toBe('Every morning at 9, summarize what changed');
+    // Nothing was sent — the user reads, edits and sends it themselves.
+    expect(apiWithTotalCalls.length).toBe(postsBefore);
+  });
+
+  it('does not offer them in Quick Tasks (no "this folder" / "this project" there)', async () => {
+    await act(async () => {
+      root.render(
+        <ChatView
+          projectId="p1"
+          project={{ ...project, is_scratch: true }}
+          agentStatus={'idle' as never}
+          agents={[]}
+          sessionId={undefined}
+        />,
+      );
+    });
+    await flushEffects();
+    expect(container.textContent ?? '').toContain('No messages yet');
+    expect(chips()).toEqual([]);
+  });
+});
+
 describe('T5 ChatView: per-session history load', () => {
   it('loads /chat scoped to the active session and reloads when sessionId changes', async () => {
     await renderChat({ sessionId: 's1' });

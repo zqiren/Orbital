@@ -219,8 +219,13 @@ export default function ProjectDetail({
         {/* Left cluster keeps a readable minimum so a long budget pill on the
             right can never crush the title to 0 width (P3-J header collision). */}
         <div className="flex items-center gap-3 min-w-[40%] flex-1">
+          {/* data-tour on the title + badge, not the whole flex-1 cluster: the
+              tour spotlights it, and a half-screen-wide box around a short
+              name points at nothing. */}
+          <div data-tour="project-header" className="flex items-center gap-3 min-w-0">
           <h1 className="text-lg font-semibold tracking-[-0.01em] text-primary truncate min-w-0">{projectDisplayName(project, t)}</h1>
           <StatusBadge status={agentStatus} />
+          </div>
         </div>
         <div className="flex items-center gap-3 min-w-0 shrink">
           {/* Budget corner (P3-G): converted window spend / warn / exhausted
@@ -254,7 +259,9 @@ export default function ProjectDetail({
               </span>
             );
           })()}
-          <SettingsIcon onClick={handleSettingsClick} />
+          <span data-tour="project-settings" className="inline-flex">
+            <SettingsIcon onClick={handleSettingsClick} />
+          </span>
         </div>
       </div>
 
@@ -281,6 +288,7 @@ export default function ProjectDetail({
           return (
             <button
               key={tab.key}
+              data-tour={`tab-${tab.key}`}
               onClick={() => handleTabChange(tab.key)}
               className={`text-xs font-medium px-3 py-2 -mb-px transition-all duration-150 max-md:min-h-[44px] max-md:flex max-md:items-center gap-1.5 ${
                 activeTab === tab.key

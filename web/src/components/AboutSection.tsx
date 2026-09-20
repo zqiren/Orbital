@@ -20,7 +20,16 @@ interface UpdateStatus {
   url: string | null;
 }
 
-export default function AboutSection() {
+interface AboutSectionProps {
+  /** Replay the first-journey tour. Omitted where there is no app shell to
+   * tour (the component is also rendered standalone in tests). */
+  onTakeTour?: () => void;
+  /** False while the user has no project of their own — the tour walks
+   * through a project, so there is nothing to show yet. */
+  canTakeTour?: boolean;
+}
+
+export default function AboutSection({ onTakeTour, canTakeTour = false }: AboutSectionProps = {}) {
   const t = useT();
   const [status, setStatus] = useState<UpdateStatus | null>(null);
   const [checking, setChecking] = useState(false);
@@ -85,6 +94,22 @@ export default function AboutSection() {
               ? t('update.about.upToDate')
               : null}
       </p>
+      {onTakeTour && (
+        <div className="mt-4 pt-4 border-t border-border">
+          <button
+            type="button"
+            onClick={onTakeTour}
+            disabled={!canTakeTour}
+            data-testid="about-take-tour"
+            className="text-sm font-medium text-accent border border-accent/30 rounded-lg px-4 py-2 hover:bg-accent/5 transition-all duration-150 disabled:opacity-50 disabled:hover:bg-transparent max-md:min-h-[44px]"
+          >
+            {t('tour.takeTour')}
+          </button>
+          <p className="text-xs text-secondary mt-1.5">
+            {canTakeTour ? t('tour.takeTour.hint') : t('tour.takeTour.needsProject')}
+          </p>
+        </div>
+      )}
     </div>
   );
 }

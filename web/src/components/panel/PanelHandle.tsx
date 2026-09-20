@@ -25,6 +25,7 @@ export default function PanelHandle({ working, onExpand }: PanelHandleProps) {
       aria-label={t('panel.expand')}
       title={t('panel.handle')}
       data-testid="panel-handle"
+      data-tour="panel-handle"
       className="hidden md:flex w-5 shrink-0 h-full flex-col items-center justify-center gap-1.5 border-l border-border bg-nav text-secondary hover:text-primary hover:bg-card-hover transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/50"
     >
       <ChevronLeft size={12} aria-hidden />

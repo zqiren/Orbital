@@ -101,8 +101,10 @@ describe('AutomationsList — rows', () => {
 
     expect(screen.getByTestId('automations-empty')).toBeInTheDocument();
     expect(screen.getByTestId('automations-empty').textContent).toContain(
-      'No automations configured.',
+      'No automations yet',
     );
+    // The teaching half: automations can be created by chatting.
+    expect(screen.getByTestId('automations-empty').textContent).toContain('Ask your agent in chat');
   });
 
   it('renders a schedule trigger with name, schedule caption, and last-fired date', async () => {

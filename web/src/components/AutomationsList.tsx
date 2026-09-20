@@ -385,9 +385,16 @@ export default function AutomationsList({ projectId, agents = [] }: AutomationsL
       )}
 
       {!loading && triggers.length === 0 && !creating && (
-        <p className="text-sm text-secondary px-1 italic" data-testid="automations-empty">
-          {t('automations.empty')}
-        </p>
+        // A teaching empty state: the agent can create schedules and file
+        // watches from chat (its create_trigger tool), and nothing else in the
+        // UI says so — a bare "none configured" made this form look like the
+        // only way in.
+        <div className="px-1" data-testid="automations-empty">
+          <p className="text-sm font-medium text-primary">{t('automations.empty')}</p>
+          <p className="mt-1 text-sm leading-relaxed text-secondary max-w-prose">
+            {t('automations.emptyHint')}
+          </p>
+        </div>
       )}
 
       {triggers.length > 0 && (

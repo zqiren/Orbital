@@ -25,6 +25,9 @@ import Select from './Select';
 
 interface GlobalSettingsProps {
   onBack: () => void;
+  /** First-journey tour replay, surfaced in About (see AboutSection). */
+  onTakeTour?: () => void;
+  canTakeTour?: boolean;
 }
 
 const API_BASE = import.meta.env.VITE_API_BASE || '';
@@ -61,7 +64,7 @@ export const GLOBAL_SETTINGS_SECTIONS: SettingsRailSection[] = [
   { id: 'about', labelKey: 'update.about.heading' },
 ];
 
-export default function GlobalSettings({ onBack }: GlobalSettingsProps) {
+export default function GlobalSettings({ onBack, onTakeTour, canTakeTour }: GlobalSettingsProps) {
   const [userPreferences, setUserPreferences] = useState('');
   const [userMemory, setUserMemory] = useState('');
   const [userMemoryEnabled, setUserMemoryEnabled] = useState(true);
@@ -321,7 +324,7 @@ export default function GlobalSettings({ onBack }: GlobalSettingsProps) {
                 Zone: a one-entry chapter whose heading repeats the entry is
                 noise. */}
             <SettingsSection id="about" title={t('update.about.heading')}>
-              <AboutSection />
+              <AboutSection onTakeTour={onTakeTour} canTakeTour={canTakeTour} />
             </SettingsSection>
 
             {/* One document, one Save — at the BOTTOM, like project settings.

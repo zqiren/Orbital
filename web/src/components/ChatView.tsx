@@ -55,6 +55,13 @@ function formatToolBreakdown(counts: Record<string, number>): string {
   return entries.map(([n, c]) => (c === 1 ? n : `${c} ${n}s`)).join(', ');
 }
 
+// Example prompts offered in a project's empty chat (see the empty state).
+const EMPTY_CHAT_EXAMPLES: StringKey[] = [
+  'chat.empty.example.explore',
+  'chat.empty.example.automate',
+  'chat.empty.example.plan',
+];
+
 /**
  * One-line label for a staged annotation in the composer chip's expanded list.
  * Deliberately NOT translated: every part of it is dynamic content the agent
@@ -3059,6 +3066,34 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
           ) : (
             <div className="text-secondary text-sm text-center mt-12">
               {t('chat.empty')}
+              {/* Example prompts for a project's empty chat — what to ask is
+                  the first thing a new user does not know, and the middle one
+                  shows that automations are created by just asking. A click
+                  FILLS the composer and never sends: the user reads, edits
+                  and sends it themselves. Not in Quick Tasks, whose scratch
+                  workspace makes "this folder" / "this project" meaningless. */}
+              {!project?.is_scratch && (
+                <div
+                  role="group"
+                  aria-label={t('chat.empty.examples')}
+                  data-testid="chat-empty-examples"
+                  className="mt-5 flex flex-col items-center gap-2"
+                >
+                  {EMPTY_CHAT_EXAMPLES.map((key) => (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => {
+                        handleInputChange(t(key));
+                        textareaRef.current?.focus();
+                      }}
+                      className="max-w-full rounded-full border border-border bg-card px-3.5 py-1.5 text-xs text-primary transition-colors duration-150 hover:border-accent/50 hover:bg-accent/5 max-md:min-h-[44px]"
+                    >
+                      {t(key)}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           )
         )}
@@ -3639,7 +3674,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         </div>
       )}
 
-      <div className="shrink-0 px-4 pb-4 pt-2 max-md:fixed max-md:bottom-0 max-md:left-0 max-md:right-0 max-md:bg-card max-md:z-[60] max-md:pb-[env(safe-area-inset-bottom,12px)]">
+      <div data-tour="composer" className="shrink-0 px-4 pb-4 pt-2 max-md:fixed max-md:bottom-0 max-md:left-0 max-md:right-0 max-md:bg-card max-md:z-[60] max-md:pb-[env(safe-area-inset-bottom,12px)]">
         {queueActive ? (
           // The panel stays usable while the queue runs, so annotations can
           // still be staged here. Show them above the notice — pausing the
