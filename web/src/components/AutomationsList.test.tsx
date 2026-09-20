@@ -103,8 +103,27 @@ describe('AutomationsList — rows', () => {
     expect(screen.getByTestId('automations-empty').textContent).toContain(
       'No automations yet',
     );
-    // The teaching half: automations can be created by chatting.
-    expect(screen.getByTestId('automations-empty').textContent).toContain('Ask your agent in chat');
+    // The teaching half: automations can be created by chatting — one example
+    // per automation kind.
+    const empty = screen.getByTestId('automations-empty').textContent ?? '';
+    expect(empty).toContain('Just ask in chat');
+    expect(empty).toContain('Every weekday at 9am, summarize new GitHub issues');
+    expect(empty).toContain('When a new spreadsheet lands in this folder');
+  });
+
+  it('an example hands its text to the chat (filled there, never sent from here)', async () => {
+    const onTryInChat = vi.fn();
+    await act(async () => {
+      render(<AutomationsList projectId="proj-1" onTryInChat={onTryInChat} />);
+    });
+    fireEvent.click(screen.getByText('Every weekday at 9am, summarize new GitHub issues'));
+    expect(onTryInChat).toHaveBeenCalledWith('Every weekday at 9am, summarize new GitHub issues');
+  });
+
+  it('without a chat to hand off to, the examples are plain cards, not buttons', async () => {
+    await renderPane();
+    const example = screen.getByText('Every weekday at 9am, summarize new GitHub issues');
+    expect(example.closest('button')).toBeNull();
   });
 
   it('renders a schedule trigger with name, schedule caption, and last-fired date', async () => {

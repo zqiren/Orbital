@@ -3,7 +3,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Send, Loader2, Plus, ChevronRight, ChevronDown, ArrowDown } from 'lucide-react';
+import {
+  Send, Loader2, Plus, ChevronRight, ChevronDown, ArrowDown,
+  Clock, CornerDownLeft, FolderSearch, ListChecks, type LucideIcon,
+} from 'lucide-react';
+import ExamplePrompt from './ExamplePrompt';
+import OrbitalMark from './OrbitalMark';
 import { api, apiWithTotal } from '../config';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { useAgent } from '../hooks/useAgent';
@@ -56,10 +61,10 @@ function formatToolBreakdown(counts: Record<string, number>): string {
 }
 
 // Example prompts offered in a project's empty chat (see the empty state).
-const EMPTY_CHAT_EXAMPLES: StringKey[] = [
-  'chat.empty.example.explore',
-  'chat.empty.example.automate',
-  'chat.empty.example.plan',
+const EMPTY_CHAT_EXAMPLES: { key: StringKey; icon: LucideIcon }[] = [
+  { key: 'chat.empty.example.explore', icon: FolderSearch },
+  { key: 'chat.empty.example.automate', icon: Clock },
+  { key: 'chat.empty.example.plan', icon: ListChecks },
 ];
 
 /**
@@ -3064,8 +3069,11 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
               />
             </div>
           ) : (
-            <div className="text-secondary text-sm text-center mt-12">
-              {t('chat.empty')}
+            <div className="mx-auto mt-10 flex w-full max-w-[460px] flex-col items-center px-2 text-center">
+              {/* The mark, quietly: this is the agent you are about to talk to
+                  (the same logo MessageAvatar gives its replies). */}
+              <OrbitalMark className="h-14 w-14 opacity-90" />
+              <p className="mt-3 text-sm text-secondary">{t('chat.empty')}</p>
               {/* Example prompts for a project's empty chat — what to ask is
                   the first thing a new user does not know, and the middle one
                   shows that automations are created by just asking. A click
@@ -3077,20 +3085,26 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                   role="group"
                   aria-label={t('chat.empty.examples')}
                   data-testid="chat-empty-examples"
-                  className="mt-5 flex flex-col items-center gap-2"
+                  className="mt-6 flex w-full flex-col gap-2"
                 >
-                  {EMPTY_CHAT_EXAMPLES.map((key) => (
-                    <button
+                  <span
+                    aria-hidden="true"
+                    className="text-secondary font-semibold"
+                    style={{ fontSize: '9.5px', letterSpacing: '0.8px', textTransform: 'uppercase' }}
+                  >
+                    {t('chat.empty.examples')}
+                  </span>
+                  {EMPTY_CHAT_EXAMPLES.map(({ key, icon }) => (
+                    <ExamplePrompt
                       key={key}
-                      type="button"
+                      icon={icon}
+                      text={t(key)}
+                      actionIcon={CornerDownLeft}
                       onClick={() => {
                         handleInputChange(t(key));
                         textareaRef.current?.focus();
                       }}
-                      className="max-w-full rounded-full border border-border bg-card px-3.5 py-1.5 text-xs text-primary transition-colors duration-150 hover:border-accent/50 hover:bg-accent/5 max-md:min-h-[44px]"
-                    >
-                      {t(key)}
-                    </button>
+                    />
                   ))}
                 </div>
               )}

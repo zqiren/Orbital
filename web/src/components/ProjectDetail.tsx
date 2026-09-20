@@ -212,6 +212,18 @@ export default function ProjectDetail({
     });
   }
 
+  // Automations empty state → "try this in chat": rides the existing one-shot
+  // composer prefill (route.draft, the Workbench doorway) — filled, never sent.
+  function handleTryInChat(text: string) {
+    setRoute({
+      ...route,
+      tab: 'chat',
+      settings: false,
+      previewPath: undefined,
+      draft: text,
+    });
+  }
+
   return (
     <div className="flex flex-col flex-1 min-h-0 bg-card">
       {/* Header */}
@@ -366,6 +378,7 @@ export default function ProjectDetail({
                     <AutomationsList
                       projectId={project.project_id}
                       agents={agentsAvailable}
+                      onTryInChat={handleTryInChat}
                     />
                   </div>
                 ) : (

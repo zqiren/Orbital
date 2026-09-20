@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Calendar, FolderOpen, Pencil, Plus, Trash2 } from 'lucide-react';
+import { ArrowUpRight, Calendar, Clock, FolderOpen, FolderSearch, Pencil, Plus, Trash2 } from 'lucide-react';
+import ExamplePrompt from './ExamplePrompt';
 import { useTriggers, type TriggerDraft } from '../hooks/useTriggers';
 import type { Trigger } from '../types';
 import { translate, useT } from '../i18n/useT';
@@ -20,6 +21,11 @@ interface AutomationsListProps {
    * keeps the pane exactly as it is for a user with no workers.
    */
   agents?: Array<{ slug: string; name: string }>;
+  /**
+   * Open the chat with `text` in the composer (never sent). Makes the empty
+   * state's example prompts clickable; without it they are plain cards.
+   */
+  onTryInChat?: (text: string) => void;
 }
 
 function formatLastFired(last: string | null): string {
@@ -264,7 +270,7 @@ function AutomationRow({
  * `trigger.deleted` and the row disappeared until the next refetch, which is
  * why this surface shipped read-only.
  */
-export default function AutomationsList({ projectId, agents = [] }: AutomationsListProps) {
+export default function AutomationsList({ projectId, agents = [], onTryInChat }: AutomationsListProps) {
   const t = useT();
   const { locale } = useLocale();
   const {
@@ -388,12 +394,47 @@ export default function AutomationsList({ projectId, agents = [] }: AutomationsL
         // A teaching empty state: the agent can create schedules and file
         // watches from chat (its create_trigger tool), and nothing else in the
         // UI says so — a bare "none configured" made this form look like the
-        // only way in.
-        <div className="px-1" data-testid="automations-empty">
-          <p className="text-sm font-medium text-primary">{t('automations.empty')}</p>
-          <p className="mt-1 text-sm leading-relaxed text-secondary max-w-prose">
+        // only way in. One example per automation kind; a click opens the chat
+        // with it in the composer.
+        <div
+          className="mx-auto flex w-full max-w-[460px] flex-col items-center py-10 text-center"
+          data-testid="automations-empty"
+        >
+          {/* The two kinds of automation as tiles, on the logo's disc. */}
+          <div aria-hidden="true" className="relative h-[84px] w-[120px]">
+            <span
+              className="absolute left-1/2 top-1/2 h-[76px] w-[76px] -translate-x-1/2 -translate-y-1/2 rounded-full"
+              style={{ background: '#f4a38c', opacity: 0.3 }}
+            />
+            <span className="absolute left-[14px] top-[16px] flex h-12 w-12 -rotate-6 items-center justify-center rounded-xl border border-border bg-card text-accent shadow-[0_8px_18px_-8px_rgb(0_0_0/0.3)]">
+              <Clock size={20} strokeWidth={1.75} />
+            </span>
+            <span className="absolute right-[14px] top-[22px] flex h-12 w-12 rotate-6 items-center justify-center rounded-xl border border-border bg-card text-accent shadow-[0_8px_18px_-8px_rgb(0_0_0/0.3)]">
+              <FolderSearch size={20} strokeWidth={1.75} />
+            </span>
+          </div>
+          <p className="mt-4 text-sm font-semibold text-primary">{t('automations.empty')}</p>
+          <p className="mt-1 text-[13px] leading-relaxed text-secondary">
             {t('automations.emptyHint')}
           </p>
+          <div className="mt-5 flex w-full flex-col gap-2">
+            <ExamplePrompt
+              icon={Clock}
+              label={t('sessionItem.kind.schedule')}
+              text={t('automations.example.schedule')}
+              onClick={onTryInChat && (() => onTryInChat(t('automations.example.schedule')))}
+              actionIcon={ArrowUpRight}
+              actionLabel={t('automations.example.try')}
+            />
+            <ExamplePrompt
+              icon={FolderSearch}
+              label={t('sessionItem.kind.fileWatch')}
+              text={t('automations.example.fileWatch')}
+              onClick={onTryInChat && (() => onTryInChat(t('automations.example.fileWatch')))}
+              actionIcon={ArrowUpRight}
+              actionLabel={t('automations.example.try')}
+            />
+          </div>
         </div>
       )}
 
