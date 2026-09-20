@@ -356,14 +356,20 @@ describe('LLMProviderSettings — preset cards (providerPicker="cards", wizard-o
   it('renders provider chips in the fixed order instead of a <select>, and selects on click', async () => {
     mockApi({ settings: { provider: '' } });
     render(<LLMProviderSettings mode="global" hideSaveButton providerPicker="cards" />);
-    await waitFor(() => expect(screen.getByText('DeepSeek')).toBeTruthy());
+    // Wait for INIT, not just for the chips. They render as soon as the
+    // provider registry loads, but the default selection is applied only once
+    // settings have loaded too — and that init calls setProvider(default). A
+    // click that lands between the two was overwritten by it, which is how
+    // this flaked on a slow CI runner (chips visible, settings still pending).
+    await waitFor(() =>
+      expect(screen.getByText('DeepSeek').className).toContain('bg-accent'),
+    );
 
     expect(screen.queryByRole('combobox')).toBeNull();
 
-    const openaiChip = screen.getByText('OpenAI');
-    expect(openaiChip.className).not.toContain('bg-accent');
-    fireEvent.click(openaiChip);
-    await waitFor(() => expect(openaiChip.className).toContain('bg-accent'));
+    expect(screen.getByText('OpenAI').className).not.toContain('bg-accent');
+    fireEvent.click(screen.getByText('OpenAI'));
+    await waitFor(() => expect(screen.getByText('OpenAI').className).toContain('bg-accent'));
   });
 
   it('defaults to the dropdown picker when the prop is omitted', async () => {

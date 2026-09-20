@@ -246,7 +246,10 @@ describe('SettingsView autosave', () => {
 
     fireEvent.click(screen.getByTestId('project-card-picker-global-default'));
     await waitFor(() => expect(onSave).toHaveBeenLastCalledWith({ card_id: null }));
-    expect(await screen.findByTestId('settings-autosave-status')).toHaveTextContent('Saved');
+    // Same race as the Retry test below: the pill exists as "Saving…" first.
+    await waitFor(() =>
+      expect(screen.getByTestId('settings-autosave-status')).toHaveTextContent('Saved'),
+    );
   });
 
   it('an autonomy click saves at once', () => {
@@ -286,8 +289,14 @@ describe('SettingsView autosave', () => {
     render(<SettingsView project={project} onSave={onSave} onDelete={vi.fn()} />);
 
     fireEvent.click(screen.getByText('Supervised'));
-    expect(await screen.findByTestId('settings-autosave-status')).toHaveTextContent(
-      "Couldn't save: Project not found",
+    // waitFor, not findByTestId + a synchronous assert: the pill mounts as
+    // "Saving…" first, so finding it says nothing about the rejection having
+    // landed. On a slow CI runner it had not, and this flaked (same SHA red on
+    // the main push, green on the tag push).
+    await waitFor(() =>
+      expect(screen.getByTestId('settings-autosave-status')).toHaveTextContent(
+        "Couldn't save: Project not found",
+      ),
     );
     fireEvent.click(screen.getByTestId('settings-autosave-retry'));
     await waitFor(() => expect(onSave).toHaveBeenCalledTimes(2));
