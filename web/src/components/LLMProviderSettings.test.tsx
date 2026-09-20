@@ -356,11 +356,13 @@ describe('LLMProviderSettings — preset cards (providerPicker="cards", wizard-o
   it('renders provider chips in the fixed order instead of a <select>, and selects on click', async () => {
     mockApi({ settings: { provider: '' } });
     render(<LLMProviderSettings mode="global" hideSaveButton providerPicker="cards" />);
-    // Wait for INIT, not just for the chips. They render as soon as the
-    // provider registry loads, but the default selection is applied only once
-    // settings have loaded too — and that init calls setProvider(default). A
-    // click that lands between the two was overwritten by it, which is how
-    // this flaked on a slow CI runner (chips visible, settings still pending).
+    // Wait for INIT, not just for the chips. The picker is gated on both
+    // loads, so the chips and the data arrive in one commit — but the default
+    // selection is applied by a passive effect that runs just AFTER that
+    // commit. waitFor resolves on the DOM mutation, so a click fired right
+    // away queued setProvider('openai') ahead of the effect's
+    // setProvider(default), which then won. Test-only: no person can click in
+    // that gap. It flaked on a slow CI runner (DeepSeek selected in the dump).
     await waitFor(() =>
       expect(screen.getByText('DeepSeek').className).toContain('bg-accent'),
     );
