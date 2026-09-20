@@ -5,34 +5,30 @@
 // @vitest-environment jsdom
 
 /**
- * CreateProject unit tests (backlog #25 — simplified New Project modal).
+ * CreateProject unit tests (Codex-style Create Project dialog).
  *
- * Covers the Vitest scope from the task brief:
- *  - name auto-derivation state machine: derives from the workspace
- *    basename, a manual name edit stops auto-fill, and a later workspace
- *    change does not overwrite an already-manually-edited name;
+ * The contract:
+ *  - Project name comes first, is typed by the user, and is autofocused;
+ *  - the folder is a separate field with NO path text input in the default
+ *    view — it is chosen through the embedded folder browser (pick an existing
+ *    folder, or create a new one under the browsed path). Picking a folder
+ *    never writes the name, and the new-folder input is prefilled from it;
+ *  - "Create project" stays disabled until there is both a name and a folder;
  *  - "Advanced options" is collapsed by default and reveals Agent
  *    Name/Instructions/Autonomy/Budget on toggle;
  *  - a 409 (agent_name collision) surfaces inline on the name field, without
- *    auto-suffixing the name, distinct from other submit errors; a later
- *    workspace change clears that stale error rather than letting it survive
- *    the name re-deriving to a new value;
+ *    auto-suffixing, and clears when the name is edited;
  *  - the inline folder picker is not a nested <form>: pressing Enter in its
  *    new-folder or manual-path inputs fires the picker's own action (mkdir /
  *    browse) and must NOT also submit (create) the project.
  *
  * The api client is mocked (LLMProviderSettings's wizard-mode fetches, plus
- * the platform browse/folders/mkdir endpoints for the inline-picker tests) —
- * no network. Most tests exercise the plain workspace text input rather than
- * expanding the inline picker: both paths call the same `applyWorkspace`
- * logic in CreateProject, so this keeps them decoupled from
- * FolderBrowserPanel's own network calls (covered separately in
- * FolderBrowserPanel.test.tsx). The inline-picker describe block below is the
- * exception — it specifically verifies the two components compose safely.
+ * the platform browse/folders/mkdir endpoints the picker calls) — no network.
  */
 
 import { render, screen, waitFor, cleanup, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { flushSync } from 'react-dom';
 
 const { apiFn, MockApiError } = vi.hoisted(() => {
   class MockApiError extends Error {
@@ -79,37 +75,101 @@ beforeEach(() => {
   });
 });
 
-function workspaceInput() {
-  return screen.getByPlaceholderText('Select a folder or type a path...') as HTMLInputElement;
-}
-
 function nameInput() {
-  return screen.getByPlaceholderText('e.g., Refactor Auth Module') as HTMLInputElement;
+  return screen.getByPlaceholderText('Copenhagen Trip') as HTMLInputElement;
 }
 
-describe('CreateProject — name auto-derivation', () => {
-  it('derives the project name from the workspace basename', async () => {
+function createButton() {
+  // By role: the dialog title carries the same words.
+  return screen.getByRole('button', { name: 'Create project' }) as HTMLButtonElement;
+}
+
+/** Open the embedded browser from whichever entry point is showing (the empty
+ * "Choose a folder" card, or "Change" on an already-picked row) and wait for
+ * its mount-time browse() to land, so "New folder" / "Use this folder" are
+ * actually clickable. */
+async function expandPicker() {
+  fireEvent.click(screen.queryByText('Choose a folder') ?? screen.getByText('Change'));
+  await waitFor(() => {
+    const btn = screen.getByText('New folder').closest('button') as HTMLButtonElement;
+    expect(btn.disabled).toBe(false);
+  });
+}
+
+/** Pick the browsed directory (mock: /home/user) via "Use this folder". */
+async function pickFolder() {
+  await expandPicker();
+  fireEvent.click(screen.getByText('Use this folder'));
+}
+
+describe('CreateProject — name and folder are separate fields', () => {
+  it('has no path text input in the default view — the folder is chosen by browsing', () => {
     render(<CreateProject onSubmit={vi.fn()} onCancel={vi.fn()} />);
-    fireEvent.change(workspaceInput(), { target: { value: '/Users/alice/my-app' } });
-    expect(nameInput().value).toBe('my-app');
+    expect(screen.getByText('Choose a folder')).toBeTruthy();
+    expect(screen.queryByPlaceholderText('Select a folder or type a path...')).toBeNull();
+    // The browser (which owns the manual path input) is collapsed until asked for.
+    expect(screen.queryByPlaceholderText('Type a path and press Enter...')).toBeNull();
   });
 
-  it('stops auto-fill once the name is manually edited', async () => {
+  it('shows the picked folder as a row (name + path) and collapses the browser', async () => {
     render(<CreateProject onSubmit={vi.fn()} onCancel={vi.fn()} />);
-    fireEvent.change(workspaceInput(), { target: { value: '/Users/alice/my-app' } });
-    expect(nameInput().value).toBe('my-app');
+    await pickFolder();
 
-    fireEvent.change(nameInput(), { target: { value: 'Custom Name' } });
-    expect(nameInput().value).toBe('Custom Name');
+    const row = screen.getByTestId('create-project-folder-row');
+    expect(row.textContent).toContain('user');
+    expect(row.textContent).toContain('/home/user');
+    expect(screen.queryByText('Use this folder')).toBeNull();
+    expect(screen.queryByText('Choose a folder')).toBeNull();
   });
 
-  it('does not overwrite a manually-edited name on a later workspace change', async () => {
+  it('"Change" reopens the browser for an already-picked folder', async () => {
     render(<CreateProject onSubmit={vi.fn()} onCancel={vi.fn()} />);
-    fireEvent.change(workspaceInput(), { target: { value: '/Users/alice/my-app' } });
-    fireEvent.change(nameInput(), { target: { value: 'Custom Name' } });
+    await pickFolder();
+    await expandPicker();
+    expect(screen.getByText('Use this folder')).toBeTruthy();
+  });
 
-    fireEvent.change(workspaceInput(), { target: { value: '/Users/alice/another-repo' } });
-    expect(nameInput().value).toBe('Custom Name');
+  it('never derives the project name from the folder', async () => {
+    render(<CreateProject onSubmit={vi.fn()} onCancel={vi.fn()} />);
+    await pickFolder();
+    expect(nameInput().value).toBe('');
+
+    fireEvent.change(nameInput(), { target: { value: 'Copenhagen' } });
+    await expandPicker();
+    fireEvent.click(screen.getByText('Use this folder'));
+    expect(nameInput().value).toBe('Copenhagen');
+  });
+
+  it('prefills the new-folder name from the project name', async () => {
+    render(<CreateProject onSubmit={vi.fn()} onCancel={vi.fn()} />);
+    fireEvent.change(nameInput(), { target: { value: 'Copenhagen' } });
+    await expandPicker();
+    fireEvent.click(screen.getByText('New folder'));
+    expect((screen.getByPlaceholderText('Folder name') as HTMLInputElement).value).toBe('Copenhagen');
+  });
+
+  it('keeps "Create project" disabled until there is both a name and a folder', async () => {
+    render(<CreateProject onSubmit={vi.fn()} onCancel={vi.fn()} />);
+    expect(createButton().disabled).toBe(true);
+
+    fireEvent.change(nameInput(), { target: { value: 'Copenhagen' } });
+    expect(createButton().disabled).toBe(true);
+
+    await pickFolder();
+    expect(createButton().disabled).toBe(false);
+
+    fireEvent.change(nameInput(), { target: { value: '   ' } });
+    expect(createButton().disabled).toBe(true);
+  });
+
+  it('a submit that slips past the disabled button (implicit Enter) explains what is missing', () => {
+    const onSubmit = vi.fn();
+    const { container } = render(<CreateProject onSubmit={onSubmit} onCancel={vi.fn()} />);
+    fireEvent.submit(container.ownerDocument.getElementById('create-project-form') as HTMLFormElement);
+
+    expect(screen.getByText('Give your project a name.')).toBeTruthy();
+    expect(screen.getByText('Choose a folder for this project.')).toBeTruthy();
+    expect(onSubmit).not.toHaveBeenCalled();
   });
 });
 
@@ -132,8 +192,9 @@ describe('CreateProject — Advanced options disclosure', () => {
 });
 
 describe('CreateProject — submit error handling', () => {
-  function fillValidForm() {
-    fireEvent.change(workspaceInput(), { target: { value: '/Users/alice/my-app' } });
+  async function fillValidForm() {
+    fireEvent.change(nameInput(), { target: { value: 'my-app' } });
+    await pickFolder();
   }
 
   it('surfaces a 409 agent-name conflict inline on the name field, without auto-suffixing', async () => {
@@ -141,8 +202,8 @@ describe('CreateProject — submit error handling', () => {
       new MockApiError(409, "agent_name 'my-app' already in use"),
     );
     render(<CreateProject onSubmit={onSubmit} onCancel={vi.fn()} />);
-    fillValidForm();
-    fireEvent.click(screen.getByText('Deploy Agent'));
+    await fillValidForm();
+    fireEvent.click(createButton());
 
     await waitFor(() => {
       expect(screen.getByText("agent_name 'my-app' already in use")).toBeTruthy();
@@ -150,17 +211,19 @@ describe('CreateProject — submit error handling', () => {
     // Never auto-suffixed — the name field keeps exactly what was submitted.
     expect(nameInput().value).toBe('my-app');
 
-    // A later workspace change must clear the stale 409 message rather than
-    // let it survive alongside the name re-deriving to a new value.
-    fireEvent.change(workspaceInput(), { target: { value: '/Users/alice/another-repo' } });
+    // The collision is about the NAME, so re-picking a folder must not clear
+    // it (the name no longer changes with the folder) — editing the name does.
+    await pickFolder();
+    expect(screen.getByText("agent_name 'my-app' already in use")).toBeTruthy();
+    fireEvent.change(nameInput(), { target: { value: 'my-app-2' } });
     expect(screen.queryByText("agent_name 'my-app' already in use")).toBeNull();
   });
 
   it('shows a generic fallback for non-409 errors', async () => {
     const onSubmit = vi.fn().mockRejectedValue(new Error('network down'));
     render(<CreateProject onSubmit={onSubmit} onCancel={vi.fn()} />);
-    fillValidForm();
-    fireEvent.click(screen.getByText('Deploy Agent'));
+    await fillValidForm();
+    fireEvent.click(createButton());
 
     await waitFor(() => {
       expect(screen.getByText("Couldn't create the project. Please try again.")).toBeTruthy();
@@ -170,30 +233,19 @@ describe('CreateProject — submit error handling', () => {
   it('calls onSubmit without model/api_key placeholders on a valid submit', async () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined);
     render(<CreateProject onSubmit={onSubmit} onCancel={vi.fn()} />);
-    fillValidForm();
-    fireEvent.click(screen.getByText('Deploy Agent'));
+    await fillValidForm();
+    fireEvent.click(createButton());
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalled());
     const payload = onSubmit.mock.calls[0][0];
     expect(payload).not.toHaveProperty('model');
     expect(payload).not.toHaveProperty('api_key');
     expect(payload.name).toBe('my-app');
-    expect(payload.workspace).toBe('/Users/alice/my-app');
+    expect(payload.workspace).toBe('/home/user');
   });
 });
 
 describe('CreateProject — inline folder picker composes safely with the outer form', () => {
-  async function expandPicker() {
-    fireEvent.click(screen.getByText('Browse'));
-    // Wait for the picker's own mount-time browse() to resolve and
-    // setCurrentPath to flush, so "New folder" (disabled until a currentPath
-    // is known) is actually clickable.
-    await waitFor(() => {
-      const btn = screen.getByText('New folder').closest('button') as HTMLButtonElement;
-      expect(btn.disabled).toBe(false);
-    });
-  }
-
   it('Enter in the new-folder input creates the folder but does not submit the project', async () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined);
     render(<CreateProject onSubmit={onSubmit} onCancel={vi.fn()} />);
@@ -211,6 +263,10 @@ describe('CreateProject — inline folder picker composes safely with the outer 
       });
     });
     expect(onSubmit).not.toHaveBeenCalled();
+    // The created folder becomes the project folder.
+    await waitFor(() => {
+      expect(screen.getByTestId('create-project-folder-row').textContent).toContain('/home/user/my-app');
+    });
   });
 
   it('Enter in the manual-path input navigates but does not submit the project', async () => {
@@ -242,7 +298,7 @@ describe('CreateProject — modal a11y (backlog #26c)', () => {
     expect(d.getAttribute('aria-modal')).toBe('true');
     const labelledBy = d.getAttribute('aria-labelledby');
     expect(labelledBy).toBeTruthy();
-    expect(document.getElementById(labelledBy as string)?.textContent).toBe('New Project');
+    expect(document.getElementById(labelledBy as string)?.textContent).toBe('Create project');
   });
 
   it('closes on Escape', () => {
@@ -267,11 +323,7 @@ describe('CreateProject — modal a11y (backlog #26c)', () => {
     const onCancel = vi.fn();
     render(<CreateProject onSubmit={vi.fn()} onCancel={onCancel} />);
 
-    fireEvent.click(screen.getByText('Browse'));
-    await waitFor(() => {
-      const btn = screen.getByText('New folder').closest('button') as HTMLButtonElement;
-      expect(btn.disabled).toBe(false);
-    });
+    await expandPicker();
     fireEvent.click(screen.getByText('New folder'));
     const folderNameInput = screen.getByPlaceholderText('Folder name');
 
@@ -285,21 +337,51 @@ describe('CreateProject — modal a11y (backlog #26c)', () => {
     expect(screen.getByRole('dialog')).toBeTruthy();
   });
 
-  it('autofocuses the workspace field with preventScroll, deferred by two frames (WKWebView-safe)', async () => {
+  it('does NOT close on Escape in the picker when React has already unmounted the input by the time the window listener runs', async () => {
+    // The fireEvent test above cannot see this. A browser runs a microtask
+    // checkpoint between event listeners, and that is when React flushes the
+    // Escape handler's update — so the new-folder input is DETACHED before the
+    // event reaches `window`, and `picker.contains(event.target)` is false.
+    // jsdom dispatches in one synchronous stack (no checkpoint between
+    // listeners), so the flush is forced here from a document-level listener,
+    // which sits between React's root listener and `window` on the bubble
+    // path. Found in a real browser: one Escape cancelled the folder editor
+    // AND discarded the whole form.
+    const onCancel = vi.fn();
+    render(<CreateProject onSubmit={vi.fn()} onCancel={onCancel} />);
+
+    await expandPicker();
+    fireEvent.click(screen.getByText('New folder'));
+    const folderNameInput = screen.getByPlaceholderText('Folder name');
+
+    const checkpoint = () => flushSync(() => {});
+    document.addEventListener('keydown', checkpoint);
+    try {
+      fireEvent.keyDown(folderNameInput, { key: 'Escape' });
+    } finally {
+      document.removeEventListener('keydown', checkpoint);
+    }
+
+    // Precondition for the test to mean anything: the input really was gone.
+    expect(folderNameInput.isConnected).toBe(false);
+    expect(onCancel).not.toHaveBeenCalled();
+  });
+
+  it('autofocuses the name field with preventScroll, deferred by two frames (WKWebView-safe)', async () => {
     render(<CreateProject onSubmit={vi.fn()} onCancel={vi.fn()} />);
-    const ws = workspaceInput();
+    const name = nameInput();
 
     // Not focused synchronously on mount. React's `autoFocus` prop would have
     // landed focus by now, mid `animate-slide-up` — precisely the WKWebView
     // scroll-chase this defers around. Checking activeElement (not a spy) is
     // what makes this meaningful: a spy attached after render cannot observe
     // a focus that already happened during it.
-    expect(document.activeElement).not.toBe(ws);
+    expect(document.activeElement).not.toBe(name);
 
-    const focusSpy = vi.spyOn(ws, 'focus');
+    const focusSpy = vi.spyOn(name, 'focus');
     await waitFor(() => expect(focusSpy).toHaveBeenCalled());
     expect(focusSpy.mock.calls[0][0]).toEqual({ preventScroll: true });
-    expect(document.activeElement).toBe(ws);
+    expect(document.activeElement).toBe(name);
   });
 
   it('traps Tab within the dialog (Shift+Tab from the first focusable wraps to the last)', () => {

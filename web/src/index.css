@@ -279,6 +279,18 @@ body {
   animation: slide-up 0.2s ease-out;
 }
 
+/* First-run hero entrance: a short rise, not the modal sheet's full-height
+   slide above. `both` holds the from-state until the animation starts, so the
+   block never paints at rest and then jumps. */
+@keyframes rise-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-rise-in {
+  animation: rise-in 0.45s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+
 /* Composer stop button, cancelling state. A dash running around a STATIONARY
    outline — deliberately not `animate-spin`. The glyph's ring used to be a
    circle, which is rotation-invariant, so spinning the whole SVG was
@@ -315,7 +327,8 @@ body {
     scroll-behavior: auto !important;
   }
 
-  .animate-slide-up {
+  .animate-slide-up,
+  .animate-rise-in {
     animation: none;
   }
 }

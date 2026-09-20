@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { useState, useEffect, useId, useRef } from 'react';
-import { ChevronDown, ChevronRight, Loader2, X } from 'lucide-react';
+import { ChevronDown, ChevronRight, Folder, FolderPlus, Lightbulb, Loader2, X } from 'lucide-react';
 import type {
   Autonomy,
   ProjectCreateRequest,
@@ -46,12 +46,7 @@ const AUTONOMY_OPTIONS: {
   },
 ];
 
-function isAbsolutePath(path: string): boolean {
-  return /^(?:[A-Za-z]:\\|\/|~\/)/.test(path.trim());
-}
-
-/** Last path segment, cross-platform (mirrors the server-side sanitizer
- * loosely — the server's sanitized value always wins on submit). */
+/** Last path segment, cross-platform — the picked folder's display name. */
 function basename(path: string): string {
   const parts = path.trim().replace(/[\\/]+$/, '').split(/[\\/]/).filter(Boolean);
   return parts[parts.length - 1] || '';
@@ -63,7 +58,6 @@ export default function CreateProject({
 }: CreateProjectProps) {
   const t = useT();
   const [name, setName] = useState('');
-  const [nameTouched, setNameTouched] = useState(false);
   const [agentName, setAgentName] = useState('');
   const [workspace, setWorkspace] = useState('');
   const [instructions, setInstructions] = useState('');
@@ -78,7 +72,7 @@ export default function CreateProject({
   const titleId = useId();
   const panelRef = useRef<HTMLDivElement>(null);
   const pickerRef = useRef<HTMLDivElement>(null);
-  const workspaceInputRef = useRef<HTMLInputElement>(null);
+  const nameInputRef = useRef<HTMLInputElement>(null);
   // The element focused before the modal mounted, restored when it unmounts.
   const prevFocusRef = useRef<HTMLElement | null>(null);
 
@@ -93,8 +87,15 @@ export default function CreateProject({
       // listener has to scope itself out; otherwise one Escape would both
       // cancel the folder editor AND tear down the modal, discarding
       // everything already typed into the form.
-      const target = e.target as Node | null;
-      if (target && pickerRef.current?.contains(target)) return;
+      //
+      // composedPath(), NOT `picker.contains(e.target)`: the picker's Escape
+      // handler unmounts the new-folder input, and React flushes that at the
+      // microtask checkpoint the browser runs between listeners — so by the
+      // time the event reaches `window` the target is already detached and
+      // `contains` says false. The path is captured at dispatch time and
+      // still records where the key was actually pressed.
+      const picker = pickerRef.current;
+      if (picker && e.composedPath().includes(picker)) return;
       onCancel();
     };
     window.addEventListener('keydown', onKey);
@@ -118,7 +119,7 @@ export default function CreateProject({
     let inner = 0;
     const outer = requestAnimationFrame(() => {
       inner = requestAnimationFrame(() => {
-        workspaceInputRef.current?.focus({ preventScroll: true });
+        nameInputRef.current?.focus({ preventScroll: true });
       });
     });
     return () => {
@@ -159,32 +160,19 @@ export default function CreateProject({
     }
   }
 
-  /** Shared by both workspace-change paths (typing the path directly, or
-   * picking/creating a folder in the embedded browser): re-derive the name
-   * from the folder basename only while the user hasn't manually edited it. */
-  function applyWorkspace(path: string) {
-    setWorkspace(path);
-    // Clear the name error too, not just workspace's: a stale 409
-    // agent-name-collision message must not survive a folder re-selection
-    // while the name is re-deriving to a (probably different) value.
-    setErrors((prev) => ({ ...prev, workspace: undefined, name: undefined }));
-    if (!nameTouched) {
-      setName(basename(path));
-    }
-  }
-
-  function handleWorkspaceInputChange(value: string) {
-    applyWorkspace(value);
-  }
-
+  /** The folder is only ever set from the embedded browser (pick an existing
+   * folder, or create one under the browsed path) — there is no free-text
+   * path field here, so it is always a real directory the daemon listed or
+   * just made. Name and folder are independent: picking a folder never
+   * touches the name, so a name error (e.g. a 409 collision) is left alone. */
   function handleWorkspaceSelect(path: string) {
-    applyWorkspace(path);
+    setWorkspace(path);
+    setErrors((prev) => ({ ...prev, workspace: undefined }));
     setPickerExpanded(false);
   }
 
   function handleNameChange(value: string) {
     setName(value);
-    setNameTouched(true);
     setErrors((prev) => ({ ...prev, name: undefined }));
   }
 
@@ -192,10 +180,10 @@ export default function CreateProject({
     const e: FormErrors = {};
     if (!name.trim()) e.name = t('createProject.name.required');
     if (!workspace.trim()) e.workspace = t('createProject.workspace.required');
-    else if (!isAbsolutePath(workspace))
-      e.workspace = t('createProject.workspace.absolute');
     return e;
   }
+
+  const canSubmit = name.trim() !== '' && workspace.trim() !== '';
 
   async function handleSubmit(ev: React.FormEvent) {
     ev.preventDefault();
@@ -256,53 +244,98 @@ export default function CreateProject({
 
         {/* Scrollable body — only this area scrolls when Advanced is expanded */}
         <form id="create-project-form" onSubmit={handleSubmit} className="flex-1 overflow-y-auto min-h-0 px-5 py-4 space-y-5">
-          {/* Workspace (first — name derives from it) */}
-          <div>
-            <label className="block text-sm font-medium text-primary mb-1.5">
-              {t('createProject.workspace.label')}
-            </label>
-            <div className="flex gap-2">
-              <input
-                ref={workspaceInputRef}
-                type="text"
-                value={workspace}
-                onChange={(e) => handleWorkspaceInputChange(e.target.value)}
-                placeholder={t('createProject.workspace.placeholder')}
-                className="flex-1 text-sm font-mono bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150"
-              />
-              <button
-                type="button"
-                onClick={() => setPickerExpanded((v) => !v)}
-                className="text-sm font-medium text-accent border border-accent/30 rounded-lg px-4 py-2 hover:bg-accent/5 transition-all duration-150 shrink-0 max-md:min-h-[44px]"
-              >
-                {pickerExpanded ? t('createProject.workspace.hideBrowse') : t('createProject.browse')}
-              </button>
-            </div>
-            {errors.workspace && (
-              <p className="text-xs text-error mt-1">{errors.workspace}</p>
-            )}
-            {pickerExpanded && (
-              <div ref={pickerRef} className="mt-2 border border-border rounded-lg overflow-hidden">
-                <FolderBrowserPanel compact onSelect={handleWorkspaceSelect} />
-              </div>
-            )}
-          </div>
-
-          {/* Project Name (pre-filled from workspace, still editable) */}
+          {/* Project name — first, typed by the user, never derived. */}
           <div>
             <label className="block text-sm font-medium text-primary mb-1.5">
               {t('createProject.name.label')}
             </label>
-            <input
-              type="text"
-              value={name}
-              onChange={(e) => handleNameChange(e.target.value)}
-              placeholder={t('createProject.name.placeholder')}
-              className="w-full text-sm bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150"
-            />
+            <div className="relative">
+              <Folder
+                size={16}
+                aria-hidden="true"
+                className="absolute left-3 top-1/2 -translate-y-1/2 text-secondary pointer-events-none"
+              />
+              <input
+                ref={nameInputRef}
+                type="text"
+                value={name}
+                onChange={(e) => handleNameChange(e.target.value)}
+                placeholder={t('createProject.name.placeholder')}
+                className="w-full text-sm bg-sidebar border border-border rounded-lg pl-9 pr-3 py-2.5 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150"
+              />
+            </div>
             {errors.name && (
               <p className="text-xs text-error mt-1">{errors.name}</p>
             )}
+          </div>
+
+          {/* Folder — a separate field, chosen by browsing (no path input in
+              the default view; the browser panel keeps its own manual-path
+              row for people who want to type one). */}
+          <div>
+            <label className="block text-sm font-medium text-primary mb-1.5">
+              {t('createProject.workspace.label')}
+            </label>
+            {workspace ? (
+              <div
+                data-testid="create-project-folder-row"
+                className="flex items-center gap-3 bg-sidebar border border-border rounded-lg px-3 py-2.5"
+              >
+                <Folder size={16} aria-hidden="true" className="shrink-0 text-accent" />
+                <div className="min-w-0 flex-1">
+                  <span className="block text-sm font-medium text-primary truncate">
+                    {basename(workspace) || workspace}
+                  </span>
+                  <span className="block text-xs font-mono text-secondary truncate">
+                    {workspace}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setPickerExpanded((v) => !v)}
+                  className="shrink-0 text-sm font-medium text-accent hover:text-accent/80 transition-all duration-150 max-md:min-h-[44px]"
+                >
+                  {t('createProject.folder.change')}
+                </button>
+              </div>
+            ) : !pickerExpanded && (
+              <button
+                type="button"
+                onClick={() => setPickerExpanded(true)}
+                className="w-full flex flex-col items-center justify-center gap-1.5 border border-dashed border-secondary/35 rounded-lg px-4 py-7 text-center hover:border-accent/50 hover:bg-accent/5 transition-all duration-150"
+              >
+                <FolderPlus size={20} aria-hidden="true" className="text-secondary" />
+                <span className="text-sm font-medium text-primary">
+                  {t('createProject.folder.choose')}
+                </span>
+                <span className="text-xs text-secondary max-w-[340px]">
+                  {t('createProject.folder.chooseHint')}
+                </span>
+              </button>
+            )}
+            {errors.workspace && (
+              <p className="text-xs text-error mt-1">{errors.workspace}</p>
+            )}
+            {pickerExpanded && (
+              <div
+                ref={pickerRef}
+                className={`border border-border rounded-lg overflow-hidden ${workspace ? 'mt-2' : ''}`}
+              >
+                <FolderBrowserPanel
+                  compact
+                  onSelect={handleWorkspaceSelect}
+                  suggestedFolderName={name}
+                />
+              </div>
+            )}
+          </div>
+
+          {/* What a project is — stated once, at the moment of the decision. */}
+          <div className="flex items-start gap-3 bg-sidebar rounded-lg px-3.5 py-3">
+            <Lightbulb size={16} aria-hidden="true" className="shrink-0 mt-0.5 text-secondary" />
+            <p className="text-xs leading-relaxed text-secondary">
+              {t('createProject.hint')}
+            </p>
           </div>
 
           {/* LLM info: renders only the no-api-key warning; nothing otherwise */}
@@ -419,7 +452,7 @@ export default function CreateProject({
           <button
             type="submit"
             form="create-project-form"
-            disabled={submitting}
+            disabled={submitting || !canSubmit}
             className="inline-flex items-center justify-center gap-2 bg-accent text-white text-sm font-medium rounded-lg px-5 py-2.5 hover:bg-accent/90 transition-all duration-150 disabled:opacity-50 max-md:w-full max-md:min-h-[44px]"
           >
             {submitting && <Loader2 size={14} className="animate-spin" />}

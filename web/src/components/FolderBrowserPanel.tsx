@@ -46,6 +46,12 @@ export interface FolderBrowserPanelProps {
   onSelect: (path: string) => void;
   /** Shorter panel for embedding inline in a modal (default: full height). */
   compact?: boolean;
+  /**
+   * Prefills the "New folder" name input (CreateProject passes the project
+   * name). Only a starting value — the user can retype it, and the folder is
+   * still created under whatever directory they navigated to.
+   */
+  suggestedFolderName?: string;
 }
 
 const SHORTCUT_ICONS: Record<string, typeof Home> = {
@@ -62,7 +68,7 @@ const SHORTCUT_ICONS: Record<string, typeof Home> = {
  * consumer. The standalone-dialog wrapper it was extracted from was deleted in
  * backlog #26 once that inline embed became the sole call site.
  */
-export default function FolderBrowserPanel({ onSelect, compact = false }: FolderBrowserPanelProps) {
+export default function FolderBrowserPanel({ onSelect, compact = false, suggestedFolderName = '' }: FolderBrowserPanelProps) {
   const t = useT();
   const { locale } = useLocale();
   const [currentPath, setCurrentPath] = useState('');
@@ -148,9 +154,14 @@ export default function FolderBrowserPanel({ onSelect, compact = false }: Folder
 
   function openNewFolder() {
     setNewFolderOpen(true);
-    setNewFolderName('');
+    setNewFolderName(suggestedFolderName.trim());
     setNewFolderError(null);
-    requestAnimationFrame(() => newFolderInputRef.current?.focus());
+    // select(), not just focus(): a prefilled name should be replaceable by
+    // simply typing over it.
+    requestAnimationFrame(() => {
+      newFolderInputRef.current?.focus();
+      newFolderInputRef.current?.select();
+    });
   }
 
   function cancelNewFolder() {

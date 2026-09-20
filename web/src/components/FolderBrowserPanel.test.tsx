@@ -182,6 +182,33 @@ describe('FolderBrowserPanel', () => {
     expect(onSelect).toHaveBeenCalledWith('/home/user/my-app');
   });
 
+  it('prefills the new-folder name from suggestedFolderName, still editable before Create', async () => {
+    const onSelect = vi.fn();
+    render(<FolderBrowserPanel onSelect={onSelect} suggestedFolderName="Copenhagen Trip" />);
+    await settle();
+
+    fireEvent.click(screen.getByText('New folder'));
+    const input = screen.getByPlaceholderText('Folder name') as HTMLInputElement;
+    expect(input.value).toBe('Copenhagen Trip');
+
+    fireEvent.click(screen.getByText('Create'));
+    await settle();
+
+    expect(apiFn).toHaveBeenCalledWith('/api/v2/platform/mkdir', {
+      method: 'POST',
+      body: JSON.stringify({ parent: '/home/user', name: 'Copenhagen Trip' }),
+    });
+    expect(onSelect).toHaveBeenCalledWith('/home/user/Copenhagen Trip');
+  });
+
+  it('opens the new-folder input empty when no suggestion is given', async () => {
+    render(<FolderBrowserPanel onSelect={() => {}} />);
+    await settle();
+
+    fireEvent.click(screen.getByText('New folder'));
+    expect((screen.getByPlaceholderText('Folder name') as HTMLInputElement).value).toBe('');
+  });
+
   it('shows a mkdir error inline instead of a toast, and does not select', async () => {
     const onSelect = vi.fn();
     apiFn.mockImplementation(async (path: string, init?: { method?: string }) => {

@@ -26,6 +26,8 @@ import SetupWizard from './components/SetupWizard';
 import Sidebar from './components/Sidebar';
 import EdgeStrip from './components/EdgeStrip';
 import CreateProject from './components/CreateProject';
+import FirstRunHome from './components/FirstRunHome';
+import { isFirstRun, wizardLandingProjectId } from './utils/firstRun';
 import ProjectDetail from './components/ProjectDetail';
 import QueueTab from './components/QueueTab';
 import SettingsModalPage from './components/SettingsModalPage';
@@ -497,7 +499,19 @@ export default function App() {
         onComplete={async () => {
           setNeedsWizard(false);
           setSetupComplete(true);
-          listProjects();
+          // Hand off straight into a project instead of the bare list: the
+          // one the wizard's import step just added if there is one,
+          // otherwise the Create Project dialog. A new user was never told
+          // that creating a project is the next step — so make it the next
+          // step. Closing the dialog falls back to the first-run home.
+          const loaded = await listProjects();
+          const landing = wizardLandingProjectId(loaded);
+          if (landing) {
+            setRoute({ name: 'project', projectId: landing, tab: 'chat', sessionId: undefined });
+          } else {
+            setRoute({ name: 'create' });
+          }
+          setMobileView('content');
           await platform.getStatus();
         }}
       />
@@ -715,21 +729,19 @@ export default function App() {
           </ErrorBoundary>
         )}
 
-        {route.name === 'list' && (
+        {/* No project of their own yet → the first-run home. The old
+            `projects.length === 0` "create your first one" branch that stood
+            here never rendered: the daemon always creates Quick Tasks, so a
+            loaded list is never empty. */}
+        {/* One branch for 'list' AND 'create' so the home stays mounted behind
+            the Create Project dialog's backdrop: the screen is not blank
+            under it, and cancelling does not replay the entrance. */}
+        {(route.name === 'list' || route.name === 'create') && isFirstRun(projects) && (
+          <FirstRunHome onNewProject={handleNewProject} />
+        )}
+        {route.name === 'list' && !isFirstRun(projects) && (
           <div className="flex flex-col items-center justify-center flex-1 min-h-0 gap-4">
-            <p className="text-secondary text-sm">
-              {projects.length === 0
-                ? t('app.list.empty')
-                : t('app.list.selectPrompt')}
-            </p>
-            {projects.length === 0 && (
-              <button
-                onClick={handleNewProject}
-                className="bg-accent text-white text-sm font-medium rounded-lg px-5 py-2.5 hover:bg-accent/90 transition-all duration-150"
-              >
-                {t('app.newProject')}
-              </button>
-            )}
+            <p className="text-secondary text-sm">{t('app.list.selectPrompt')}</p>
           </div>
         )}
 
@@ -741,11 +753,10 @@ export default function App() {
 
       {/* New Project is a modal overlay (backlog #25), not page content —
           kept as a sibling of <main> rather than one of its route branches.
-          'create' has no matching branch inside <main> above, so navigating
-          here leaves <main> empty (none of the 'settings'/'calendar'/
-          'project'/'list'/'blocked' conditions match 'create'); the modal's
-          backdrop sits over that empty <main>, not over the previous route's
-          content. Cancel routes back to 'list'. */}
+          Inside <main> above, 'create' matches only the first-run home; for
+          everyone else it leaves <main> empty, so the modal's backdrop sits
+          over an empty pane rather than the previous route's content. Cancel
+          routes back to 'list'. */}
       {route.name === 'create' && (
         <CreateProject
           onSubmit={handleCreateProject}
