@@ -1310,6 +1310,68 @@ async def cold_start_scan(project_id: str):
     return {"status": "started", "session_id": session_id}
 
 
+# Projects with a start-onboarding request between its guard and its mint. The
+# guard reads the session list and the mint awaits, so without this a
+# double-fire would pass the guard twice and leave an orphan second session.
+_ONBOARDING_STARTING: set[str] = set()
+
+
+@router.post("/agents/{project_id}/start-onboarding", status_code=201)
+async def start_onboarding(project_id: str):
+    """Mint the project's first session and let the agent speak first.
+
+    A content-less start, like the cold-start scan minus the scan: with no
+    project_goals.md the prompt is in onboarding mode, so the run is a greeting
+    and clarifying questions with no tool calls. Called once by the frontend —
+    after creating a project on an empty folder, or after Skip on the scan
+    card.
+
+    The guard lives HERE, not in the caller: no goals, no sessions, not Quick
+    Tasks — else 409. A content-less start on a project that HAS goals is how
+    agents used to invent their own work on project open (removed in 0722d5fa);
+    a stale tab or a retry must not be able to bring that back.
+    """
+    project = _project_store.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="project not found")
+    workspace = project.get("workspace", "")
+    if not workspace or not os.path.isdir(workspace):
+        raise HTTPException(status_code=400, detail="workspace missing")
+    if project.get("is_scratch"):
+        raise HTTPException(status_code=409, detail="not an onboarding project")
+    # Same "missing" test the prompt uses: an empty goals file is still onboarding.
+    if _read_file_or_empty(ProjectPaths(workspace).project_goals).strip():
+        raise HTTPException(status_code=409, detail="project already has goals")
+    if project_id in _ONBOARDING_STARTING:
+        raise HTTPException(status_code=409, detail="onboarding already starting")
+    _ONBOARDING_STARTING.add(project_id)
+    try:
+        if await asyncio.to_thread(_agent_manager.list_sessions, project_id):
+            raise HTTPException(status_code=409, detail="project already has sessions")
+        config = _agent_manager._build_agent_config_from_project(project_id)
+        # Validate before minting, as the scan does: a credential failure is a
+        # structured 400 and leaves no orphan session behind.
+        try:
+            _agent_manager.validate_provider_config(config)
+        except ProviderConfigError as e:
+            raise HTTPException(status_code=400,
+                                detail={"code": e.code, "message": str(e)})
+        minted = await _agent_manager.new_session(project_id)
+        session_id = minted["session_id"]
+        try:
+            await _agent_manager.start_agent(
+                project_id, config,
+                initial_message=None,
+                session_id=session_id,
+            )
+        except ProviderConfigError as e:
+            raise HTTPException(status_code=400,
+                                detail={"code": e.code, "message": str(e)})
+    finally:
+        _ONBOARDING_STARTING.discard(project_id)
+    return {"status": "started", "session_id": session_id}
+
+
 # The session JSONL's advisory lock is held in short bursts by concurrent
 # same-process writers — the pin PATCH's load + meta-rewrite is the known
 # collider (the composer fires it fire-and-forget, so a send routinely lands

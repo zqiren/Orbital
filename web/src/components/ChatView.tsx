@@ -9,7 +9,7 @@ import {
 } from 'lucide-react';
 import ExamplePrompt from './ExamplePrompt';
 import OrbitalMark from './OrbitalMark';
-import { api, apiWithTotal } from '../config';
+import { api, apiWithTotal, ApiError } from '../config';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { useAgent } from '../hooks/useAgent';
 import { useQueue } from '../hooks/useQueue';
@@ -26,6 +26,7 @@ import { isWorkerHandle } from '../utils/subAgentHandle';
 import type { ChatMessage as ChatMessageRow, AgentStatusEvent } from '../types';
 import AgentErrorNotice from './AgentErrorNotice';
 import { parseProviderError, providerErrorKey } from '../utils/providerError';
+import { consumeOnboardingKickoff } from '../utils/onboardingKickoff';
 import AttachmentChip from './AttachmentChip';
 import { useAttachments } from '../hooks/useAttachments';
 import { useAnnotations } from '../hooks/useAnnotations';
@@ -587,6 +588,9 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   // Translated inline error on the cold-start card (scan failed, e.g.
   // missing API key). Previously the failure was console-only.
   const [coldStartError, setColdStartError] = useState<string | null>(null);
+  // i18n key of a failed onboarding kickoff's error (e.g. missing API key),
+  // shown in the empty state — the user can still just send a message.
+  const [onboardingError, setOnboardingError] = useState<StringKey | null>(null);
   // Classified agent/provider error for the viewed session (credential-error
   // surfacing): fed by agent.status error broadcasts and run-status
   // last_terminal_event hydration; rendered as AgentErrorNotice.
@@ -735,7 +739,31 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   const localNoncesRef = useRef<Map<string, number>>(new Map());
   const wasRunningRef = useRef(false);
   const { on, off, connectionState } = useWebSocket();
-  const { injectMessage, cancelMessage, newSession, coldStartScan, cancelPendingInput, getPending } = useAgent();
+  const { injectMessage, cancelMessage, newSession, coldStartScan, startOnboarding, cancelPendingInput, getPending } = useAgent();
+  // The agent speaks first on a project with no goals and no sessions. Called
+  // only from a user action — Skip on the scan card, or the project the user
+  // just created (the one-shot below) — never from merely opening a project.
+  // Navigation to the new session is WS-driven, like the scan and /new.
+  const kickoffOnboarding = useCallback(async () => {
+    setOnboardingError(null);
+    try {
+      await startOnboarding(projectId);
+    } catch (err) {
+      // 409 = the backend's guard: the project already has goals or a
+      // session, so there is nothing to start and nothing to tell the user.
+      if (err instanceof ApiError && err.status === 409) return;
+      console.error('[ChatView] onboarding kickoff failed:', err);
+      setOnboardingError(providerErrorKey(parseProviderError(err)?.code));
+    }
+  }, [projectId, startOnboarding]);
+
+  // Create → chat handoff: App marks the project it just created; the mark is
+  // consumed once, so StrictMode's second effect run and later visits are inert.
+  useEffect(() => {
+    if (sessionId !== undefined) return;
+    if (consumeOnboardingKickoff(projectId)) void kickoffOnboarding();
+  }, [projectId, sessionId, kickoffOnboarding]);
+
   // Queue-active gating: when the queue is running (actively dispatching a
   // task), the chat composer is replaced by ComposerDisabledPrompt — the user
   // must pause the queue first. ('idle'/'paused' leave the composer enabled.)
@@ -1299,6 +1327,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   useEffect(() => {
     setAgentError(null);
     setColdStartError(null);
+    setOnboardingError(null);
   }, [projectId, sessionId]);
 
   // Per-session history load. Re-runs when the viewed sessionId changes so
@@ -3065,7 +3094,14 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                     setColdStartBusy(false);
                   }
                 }}
-                onSkip={() => setColdStartDismissed(true)}
+                onSkip={async () => {
+                  // Skip declines the file scan, not the agent: it still
+                  // greets and asks what the project is for (reads no files).
+                  setColdStartBusy(true);
+                  await kickoffOnboarding();
+                  setColdStartBusy(false);
+                  setColdStartDismissed(true);
+                }}
               />
             </div>
           ) : (
@@ -3074,6 +3110,11 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                   (the same logo MessageAvatar gives its replies). */}
               <OrbitalMark className="h-14 w-14 opacity-90" />
               <p className="mt-3 text-sm text-secondary">{t('chat.empty')}</p>
+              {onboardingError && (
+                <p data-testid="onboarding-error" className="mt-2 text-sm text-error" role="alert">
+                  {t(onboardingError)}
+                </p>
+              )}
               {/* Example prompts for a project's empty chat — what to ask is
                   the first thing a new user does not know, and the middle one
                   shows that automations are created by just asking. A click

@@ -156,6 +156,11 @@ let getPendingMock: (projectId: string) => Promise<unknown> = async () => ({
 let coldStartScanMock: (...args: unknown[]) => Promise<unknown> = async () => ({
   status: 'ok',
 });
+// Per-test override for startOnboarding (the agent-speaks-first kickoff).
+const startOnboardingCalls: string[] = [];
+let startOnboardingMock: (...args: unknown[]) => Promise<unknown> = async () => ({
+  status: 'started',
+});
 // v3: cancel/dequeue is server-authoritative — it returns `removed` so recall
 // knows whether it pulled back a still-queued entry (true) or the message had
 // already dispatched (false). Default: removed a live entry.
@@ -186,6 +191,10 @@ vi.mock('../hooks/useAgent', () => {
     }),
     newSession: vi.fn(async () => undefined),
     coldStartScan: vi.fn((...args: unknown[]) => coldStartScanMock(...args)),
+    startOnboarding: vi.fn((projectId: string) => {
+      startOnboardingCalls.push(projectId);
+      return startOnboardingMock(projectId);
+    }),
     getPending: vi.fn((projectId: string) => getPendingMock(projectId)),
     cancelPendingInput: vi.fn((...args: unknown[]) => {
       cancelPendingInputCalls.push(args);
@@ -274,6 +283,8 @@ beforeEach(() => {
   getPendingMock = async () => ({ holder: null, pending: [] });
   cancelPendingInputMock = async () => ({ status: 'cancelled', removed: true });
   coldStartScanMock = async () => ({ status: 'ok' });
+  startOnboardingCalls.length = 0;
+  startOnboardingMock = async () => ({ status: 'started' });
   runStatusHolder = null;
   runStatusTerminalEvent = null;
   chatInitialResponse = { data: [], total: 0 };
@@ -2717,6 +2728,92 @@ describe('credential-error surfacing (AgentErrorNotice)', () => {
     const err = container.querySelector('[data-testid="cold-start-error"]');
     expect(err).not.toBeNull();
     expect(err!.textContent).toMatch(/API key/i);
+  });
+});
+
+// --------------------------------------------------------------------------
+// Onboarding kickoff: the agent speaks first, but ONLY off a user action —
+// Skip on the scan card, or the project the user just created. Merely opening
+// a project stays pure navigation (the open-time auto-start removed in
+// 0722d5fa made agents with goals invent their own work).
+// --------------------------------------------------------------------------
+describe('ChatView: onboarding kickoff', () => {
+  async function renderProject(isEmpty: boolean) {
+    await act(async () => {
+      root.render(
+        <ChatView
+          projectId="p1"
+          project={{ ...project, is_empty_workspace: isEmpty }}
+          agentStatus="idle"
+          agents={[]}
+        />,
+      );
+    });
+    await flushEffects();
+  }
+
+  function skipButton() {
+    return [...container.querySelectorAll('button')].find(
+      (b) => /^skip$/i.test((b.textContent ?? '').trim()),
+    );
+  }
+
+  it('Skip on the scan card starts onboarding and dismisses the card', async () => {
+    await renderProject(false);
+    expect(startOnboardingCalls).toEqual([]);
+    await act(async () => {
+      skipButton()!.click();
+    });
+    await flushEffects();
+    expect(startOnboardingCalls).toEqual(['p1']);
+    expect(skipButton()).toBeUndefined();
+  });
+
+  it('opening a project never starts onboarding', async () => {
+    await renderProject(true);
+    await renderProject(false);
+    expect(startOnboardingCalls).toEqual([]);
+  });
+
+  it('a just-created project starts onboarding exactly once', async () => {
+    const { requestOnboardingKickoff } = await import('../utils/onboardingKickoff');
+    requestOnboardingKickoff('p1');
+    await renderProject(true);
+    expect(startOnboardingCalls).toEqual(['p1']);
+    // Re-rendering / revisiting the same project is inert: the mark was consumed.
+    await renderProject(true);
+    expect(startOnboardingCalls).toEqual(['p1']);
+  });
+
+  it('a failed kickoff shows the classified error in the empty state', async () => {
+    const { ApiError } = await import('../config');
+    startOnboardingMock = async () => {
+      throw new ApiError(
+        400,
+        JSON.stringify({ code: 'missing_api_key', message: 'No LLM API key configured' }),
+      );
+    };
+    await renderProject(false);
+    await act(async () => {
+      skipButton()!.click();
+    });
+    await flushEffects();
+    const err = container.querySelector('[data-testid="onboarding-error"]');
+    expect(err).not.toBeNull();
+    expect(err!.textContent).toMatch(/API key/i);
+  });
+
+  it("the backend's 409 guard is silent", async () => {
+    const { ApiError } = await import('../config');
+    startOnboardingMock = async () => {
+      throw new ApiError(409, 'project already has sessions');
+    };
+    await renderProject(false);
+    await act(async () => {
+      skipButton()!.click();
+    });
+    await flushEffects();
+    expect(container.querySelector('[data-testid="onboarding-error"]')).toBeNull();
   });
 });
 

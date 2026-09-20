@@ -30,6 +30,8 @@ from agent_os.daemon_v2.browser_manager import BrowserManager
 from agent_os.daemon_v2.activity_translator import ActivityTranslator
 from agent_os.daemon_v2.process_manager import ProcessManager
 from agent_os.agent.project_paths import ProjectPaths
+from agent_os.config.provider_registry import ProviderRegistry
+from tests.card_doubles import FakeCardStore
 
 
 @pytest.fixture
@@ -50,9 +52,10 @@ def client(tmp_path, workspace):
     activity_translator = ActivityTranslator(ws_manager)
     process_manager = ProcessManager(ws_manager, activity_translator)
 
-    mock_settings_store = MagicMock()
-    mock_settings_store.get.return_value = MagicMock(
-        llm=MagicMock(provider="anthropic", model="claude-sonnet-4-20250514", api_key="", base_url="")
+    # Spec 082: provider, endpoint, key and model come from a credential card
+    # through the REAL provider registry (a mock registry hands back mock URLs).
+    mock_settings_store = FakeCardStore.with_default(
+        provider="anthropic", model="claude-sonnet-4-20250514", key="sk-test-key",
     )
     mock_credential_store = MagicMock()
     mock_credential_store.get_api_key.return_value = "sk-test-key"
@@ -72,14 +75,14 @@ def client(tmp_path, workspace):
         credential_store=mock_credential_store, ws_manager=ws_manager,
         activity_translator=activity_translator, process_manager=process_manager,
         platform_provider=mock_platform, sub_agent_manager=sub_agent_manager,
-        browser_manager=browser_manager, provider_registry=MagicMock(),
+        browser_manager=browser_manager, provider_registry=ProviderRegistry(),
     )
     agents_v2.configure(
         project_store=project_store, agent_manager=agent_manager,
         ws_manager=ws_manager, sub_agent_manager=sub_agent_manager,
         setup_engine=MagicMock(), settings_store=mock_settings_store,
         credential_store=mock_credential_store, trigger_manager=MagicMock(),
-        provider_registry=MagicMock(),
+        provider_registry=ProviderRegistry(),
     )
     app.include_router(agents_v2.router)
     return TestClient(app), {
@@ -169,7 +172,8 @@ def _create_keyless_project(tc, workspace, name="Keyless"):
 
 def _strip_all_keys(deps):
     deps["credential_store"].get_api_key.return_value = None
-    deps["settings_store"].get.return_value.llm.api_key = ""
+    store = deps["settings_store"]
+    store.keys = {card_id: "" for card_id in store.keys}
 
 
 def test_scan_without_any_api_key_is_structured_400_and_mints_nothing(client):
@@ -227,3 +231,94 @@ def test_run_status_exposes_last_terminal_error_for_hydration(client):
     assert ev["type"] == "error"
     assert ev["error_code"] == "missing_api_key"
     assert ev["details"] == "No LLM API key configured"
+
+
+# ---------------------------------------------------------------------------
+# Onboarding kickoff: the agent speaks first, once, on a project that has no
+# goals and no sessions (after creation on an empty folder, or after Skip on
+# the scan card). The backend owns the guard so a stale tab or a retry can
+# never turn this back into "the agent starts whenever a project is opened"
+# (removed in 0722d5fa — it made agents with goals invent their own work).
+# ---------------------------------------------------------------------------
+
+def _sessions(tc, pid):
+    return tc.get(f"/api/v2/projects/{pid}/sessions").json()["sessions"]
+
+
+def test_start_onboarding_mints_and_starts_first_session(client):
+    tc, deps = client
+    pid = _create_project(tc, deps["workspace"])
+    assert _sessions(tc, pid) == []
+
+    r = tc.post(f"/api/v2/agents/{pid}/start-onboarding")
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["status"] == "started" and body["session_id"]
+    assert any(s.get("session_id") == body["session_id"] for s in _sessions(tc, pid))
+
+
+def test_start_onboarding_is_not_a_scan(client):
+    """Skip declined the file scan: the kickoff must not run in cold-start mode."""
+    tc, deps = client
+    open(os.path.join(deps["workspace"], "README.md"), "w").write("# Real project")
+    pid = _create_project(tc, deps["workspace"])
+
+    seen = {}
+    am = deps["agent_manager"]
+
+    async def _fake_start(project_id, config, **kwargs):
+        seen.update(kwargs)
+
+    am.start_agent = _fake_start
+    r = tc.post(f"/api/v2/agents/{pid}/start-onboarding")
+    assert r.status_code == 201, r.text
+    assert seen["initial_message"] is None
+    assert not seen.get("cold_start")
+    assert not seen.get("cold_start_skeleton")
+
+
+def test_start_onboarding_refused_once_goals_exist(client):
+    tc, deps = client
+    pid = _create_project(tc, deps["workspace"])
+    pp = ProjectPaths(deps["workspace"])
+    os.makedirs(pp.instructions_dir, exist_ok=True)
+    open(pp.project_goals, "w").write("Mission: ship the thing")
+
+    r = tc.post(f"/api/v2/agents/{pid}/start-onboarding")
+    assert r.status_code == 409, r.text
+    assert _sessions(tc, pid) == []
+
+
+def test_start_onboarding_refused_when_a_session_exists(client):
+    tc, deps = client
+    pid = _create_project(tc, deps["workspace"])
+    first = tc.post(f"/api/v2/agents/{pid}/start-onboarding")
+    assert first.status_code == 201, first.text
+
+    again = tc.post(f"/api/v2/agents/{pid}/start-onboarding")
+    assert again.status_code == 409, again.text
+    assert len(_sessions(tc, pid)) == 1
+
+
+def test_start_onboarding_refused_for_quick_tasks(client):
+    tc, deps = client
+    resp = tc.post("/api/v2/projects", json={
+        "name": "Quick Tasks", "workspace": deps["workspace"], "is_scratch": True,
+    })
+    assert resp.status_code == 201, resp.text
+    pid = resp.json()["project_id"]
+
+    r = tc.post(f"/api/v2/agents/{pid}/start-onboarding")
+    assert r.status_code == 409, r.text
+    assert _sessions(tc, pid) == []
+
+
+def test_start_onboarding_without_any_api_key_is_structured_400_and_mints_nothing(client):
+    tc, deps = client
+    _strip_all_keys(deps)
+    pid = _create_keyless_project(tc, deps["workspace"])
+
+    r = tc.post(f"/api/v2/agents/{pid}/start-onboarding")
+    assert r.status_code == 400, r.text
+    assert r.json()["detail"]["code"] == "missing_api_key"
+    assert _sessions(tc, pid) == []

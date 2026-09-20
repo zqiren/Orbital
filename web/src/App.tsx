@@ -26,6 +26,7 @@ import SetupWizard from './components/SetupWizard';
 import Sidebar from './components/Sidebar';
 import EdgeStrip from './components/EdgeStrip';
 import CreateProject from './components/CreateProject';
+import { requestOnboardingKickoff } from './utils/onboardingKickoff';
 import FirstRunHome from './components/FirstRunHome';
 import { isFirstRun, wizardLandingProjectId } from './utils/firstRun';
 import FirstJourneyTour from './tour/FirstJourneyTour';
@@ -510,6 +511,9 @@ export default function App() {
 
   async function handleCreateProject(data: ProjectCreateRequest) {
     const created = await createProject(data);
+    // A project on an empty folder opens with the agent speaking first. A
+    // folder with files gets the scan card instead, whose Skip does the same.
+    if (created.is_empty_workspace) requestOnboardingKickoff(created.project_id);
     setRoute({ name: 'project', projectId: created.project_id, tab: 'chat', sessionId: undefined });
   }
 

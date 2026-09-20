@@ -130,6 +130,16 @@ export function useAgent() {
     );
   }, []);
 
+  // The agent speaks first on a project with no goals and no sessions (after
+  // create on an empty folder, or Skip on the scan card). The backend owns the
+  // guard and answers 409 when the project is past that point.
+  const startOnboarding = useCallback(async (projectId: string) => {
+    return api<{ status: string; session_id?: string }>(
+      `/api/v2/agents/${encodeURIComponent(projectId)}/start-onboarding`,
+      { method: 'POST' },
+    );
+  }, []);
+
   // `pinned` (spec 074): true when `target` is the composer's sticky "Talking
   // to" pin — since spec 091 the only way the composer sets `target`. The
   // backend maps every `target` send to initiator="user_pinned"
@@ -249,5 +259,5 @@ export function useAgent() {
     [],
   );
 
-  return { startAgent, cancelMessage, newSession, coldStartScan, injectMessage, cancelPendingInput, getPending, getSubAgentTranscript, approveToolCall, denyToolCall };
+  return { startAgent, cancelMessage, newSession, coldStartScan, startOnboarding, injectMessage, cancelPendingInput, getPending, getSubAgentTranscript, approveToolCall, denyToolCall };
 }
