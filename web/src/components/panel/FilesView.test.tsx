@@ -39,6 +39,18 @@ vi.mock('../../hooks/useFiles', () => ({
   }),
 }));
 
+// The live event stream that drives the panel's refresh. One handler per type
+// is enough here; `emit` plays a daemon broadcast.
+const wsHandlers = vi.hoisted(() => new Map<string, (event: unknown) => void>());
+vi.mock('../../hooks/useWebSocket', () => ({
+  useWebSocket: () => ({
+    connectionState: 'connected',
+    subscribe: vi.fn(),
+    on: (type: string, fn: (event: unknown) => void) => wsHandlers.set(type, fn),
+    off: (type: string) => wsHandlers.delete(type),
+  }),
+}));
+
 // Spec 093: whether this client can reveal in Finder / File Explorer.
 const reveal = vi.hoisted(() => ({ can: true }));
 vi.mock('../../utils/clientPlatform', () => ({
@@ -388,5 +400,98 @@ describe('FilesView — onQuote maps to the three annotation forms', () => {
       path: 'report.pdf',
       note: '',
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Live refresh — the panel is how a user WATCHES the agent work. It used to
+// read each directory once and each file once per selection, and it opens a
+// file on the tool CALL event (before the write has run), so what it showed
+// was routinely the pre-edit snapshot, for good.
+// ---------------------------------------------------------------------------
+
+describe('FilesView — live refresh', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  async function emit(type: string, event: Record<string, unknown>) {
+    await act(async () => {
+      wsHandlers.get(type)?.({ type, project_id: 'proj-1', ...event });
+      await vi.advanceTimersByTimeAsync(300);
+    });
+  }
+
+  it('re-reads the open file when a tool result lands, and shows the new content', async () => {
+    renderView({ file: 'plan.md' });
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect((lastFilePreviewProps.fileContent as FileContent).content).toBe('hello');
+
+    getFileContent.mockImplementation(async (_projectId, path) => ({
+      path, content: 'hello, edited', size: 13, truncated: false, type: 'text', revision: 'r2',
+    }));
+    await emit('agent.activity', { category: 'tool_result' });
+
+    expect((lastFilePreviewProps.fileContent as FileContent).content).toBe('hello, edited');
+    // Silent: a refresh never drops the view back to a loading state.
+    expect(lastFilePreviewProps.loading).toBe(false);
+  });
+
+  it('keeps the same content object when the file did not change', async () => {
+    getFileContent.mockImplementation(async (_projectId, path) => ({
+      path, content: 'hello', size: 5, truncated: false, type: 'text', revision: 'r1',
+    }));
+    renderView({ file: 'plan.md' });
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    const before = lastFilePreviewProps.fileContent;
+
+    await emit('agent.activity', { category: 'tool_result' });
+
+    expect(getFileContent).toHaveBeenCalledTimes(2);
+    expect(lastFilePreviewProps.fileContent).toBe(before);
+  });
+
+  it('shows a file the agent created after the tree was first listed', async () => {
+    renderView();
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(screen.queryByText('plan.md')).not.toBeInTheDocument();
+
+    listDirectory.mockImplementation(async (_projectId, path) =>
+      (path ?? '') === ''
+        ? { path: '', entries: [...TREE[''].entries, { name: 'plan.md', type: 'file', size: 3 }] }
+        : TREE[path ?? ''] ?? null,
+    );
+    await emit('agent.activity', { category: 'tool_result' });
+
+    expect(screen.getByText('plan.md')).toBeInTheDocument();
+  });
+
+  it('refreshes on sub-agent output and on a status change too', async () => {
+    renderView({ file: 'plan.md' });
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    await emit('chat.sub_agent_message', {});
+    await emit('agent.status', { status: 'idle' });
+    expect(getFileContent).toHaveBeenCalledTimes(3);
+  });
+
+  it('ignores tool CALL events and other projects', async () => {
+    renderView({ file: 'plan.md' });
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    await emit('agent.activity', { category: 'file_write' });
+    await emit('agent.activity', { category: 'tool_result', project_id: 'someone-else' });
+    expect(getFileContent).toHaveBeenCalledTimes(1);
+  });
+
+  it('collapses a burst of results into one refresh', async () => {
+    renderView({ file: 'plan.md' });
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    await act(async () => {
+      for (let i = 0; i < 5; i += 1) {
+        wsHandlers.get('agent.activity')?.({
+          type: 'agent.activity', project_id: 'proj-1', category: 'tool_result',
+        });
+      }
+      await vi.advanceTimersByTimeAsync(300);
+    });
+    expect(getFileContent).toHaveBeenCalledTimes(2);
   });
 });

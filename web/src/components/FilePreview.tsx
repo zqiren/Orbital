@@ -370,7 +370,16 @@ export default function FilePreview({
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(false);
   const [editView, setEditView] = useState<'write' | 'preview'>('write');
-  const [override, setOverride] = useState<string | null>(null);
+  // The override stands in for a parent that has NOT re-fetched, so it is
+  // remembered together with the fetched content it was saved over. Once the
+  // parent does re-fetch — the panel re-reads the open file after every tool
+  // result — and the content differs, the fetch is the newer truth: a lingering
+  // override would hide the agent's next edit behind the user's last save.
+  const [savedOverride, setSavedOverride] = useState<{ over: string; text: string } | null>(null);
+  const override =
+    savedOverride !== null && savedOverride.over === fileContent?.content
+      ? savedOverride.text
+      : null;
   // Spec 078: the rendered <img>, so a drag box measured in on-screen pixels
   // can be reported to the agent in IMAGE pixels (§5.4 "box in image pixels").
   const imgRef = useRef<HTMLImageElement | null>(null);
@@ -398,7 +407,7 @@ export default function FilePreview({
     setSaving(false);
     setSaveError(false);
     setEditView('write');
-    setOverride(null);
+    setSavedOverride(null);
   }, [selectedPath]);
   // Save raw text/HTML to disk. A `download` anchor writes a file and never
   // renders/executes in the app origin — safe even though blob: URLs are
@@ -855,7 +864,7 @@ export default function FilePreview({
     const ok = await onSave(fileContent.path, draft);
     if (ok) {
       // Reflect the save locally (parent doesn't re-fetch) and exit edit mode.
-      setOverride(draft);
+      setSavedOverride({ over: fileContent.content, text: draft });
       setEditing(false);
     } else {
       // Keep the draft so the user doesn't lose edits; surface the failure.

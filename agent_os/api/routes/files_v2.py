@@ -210,7 +210,12 @@ async def get_file_content(project_id: str, path: str, document_preview: bool = 
     if not os.path.isfile(target):
         raise HTTPException(status_code=404, detail="File not found")
 
-    size = os.path.getsize(target)
+    stat = os.stat(target)
+    size = stat.st_size
+    # Same revision the /files/preview ETag uses. The workspace panel compares
+    # it to tell a changed file from an unchanged one when it re-reads the
+    # open file after each tool result, so an unchanged file never re-renders.
+    revision = f"{stat.st_mtime_ns:x}-{stat.st_size:x}"
     ext = os.path.splitext(target)[1].lower()
     mime_type = mimetypes.guess_type(target)[0] or "application/octet-stream"
 
@@ -230,9 +235,12 @@ async def get_file_content(project_id: str, path: str, document_preview: bool = 
             "format": doc_format,
             "mime": doc_mime,
             "size": size,
+            "revision": revision,
             "content": "",
             "truncated": False,
-            "preview_url": f"/api/v2/projects/{project_id}/files/preview?path={encoded_path}",
+            # `v` is ignored by the route: it makes a changed document a new URL,
+            # which is what the client keys its byte fetch on.
+            "preview_url": f"/api/v2/projects/{project_id}/files/preview?path={encoded_path}&v={revision}",
             "download_url": f"/api/v2/projects/{project_id}/files/download?path={encoded_path}",
         }
         if size > MAX_DOWNLOAD_BYTES:
@@ -253,6 +261,7 @@ async def get_file_content(project_id: str, path: str, document_preview: bool = 
             "type": "image",
             "mime": mime_type,
             "size": size,
+            "revision": revision,
         }
 
     # HTML files: same UTF-8 read + preview cap as text, but tagged "html" so
@@ -269,6 +278,7 @@ async def get_file_content(project_id: str, path: str, document_preview: bool = 
             "type": "html",
             "mime": "text/html",
             "size": size,
+            "revision": revision,
             "truncated": size > MAX_PREVIEW_BYTES,
         }
 
@@ -282,6 +292,7 @@ async def get_file_content(project_id: str, path: str, document_preview: bool = 
             "content": content,
             "type": "text",
             "size": size,
+            "revision": revision,
             "truncated": truncated,
         }
     except (UnicodeDecodeError, ValueError):
@@ -298,6 +309,7 @@ async def get_file_content(project_id: str, path: str, document_preview: bool = 
             "type": "binary",
             "mime": mime_type,
             "size": size,
+            "revision": revision,
             "content": content_b64,
             "download_url": f"/api/v2/projects/{project_id}/files/download?path={path}",
         }

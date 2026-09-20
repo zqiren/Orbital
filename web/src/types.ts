@@ -1089,6 +1089,9 @@ export interface FileContent {
   content: string;
   size: number;
   truncated: boolean;
+  /** mtime + size, as the daemon computes it (absent on older daemons).
+   *  Moves whenever the file changes; the panel's live refresh compares it. */
+  revision?: string;
   type?: 'text' | 'image' | 'binary' | 'html' | 'document';
   mime?: string;
   download_url?: string;

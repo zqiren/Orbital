@@ -111,9 +111,22 @@ class TestContentEnvelope:
         # Never base64-in-JSON for a document type.
         assert data["content"] == ""
         assert data["truncated"] is False
-        assert data["preview_url"] == f"/api/v2/projects/p1/files/preview?path={quote(path)}"
+        # The revision rides on the URL so a changed document is a new URL —
+        # the client keys its byte fetch on it (live refresh in the panel).
+        assert data["revision"]
+        assert data["preview_url"] == (
+            f"/api/v2/projects/p1/files/preview?path={quote(path)}&v={data['revision']}"
+        )
         assert data["download_url"] == f"/api/v2/projects/p1/files/download?path={quote(path)}"
         assert "preview_unavailable" not in data
+
+    def test_text_revision_changes_when_the_file_changes(self, client, workspace):
+        # The panel re-reads the open file after each tool result and swaps the
+        # view only when this moves — so it must move on a same-path rewrite.
+        before = _content(client, "notes.txt").json()["revision"]
+        assert _content(client, "notes.txt").json()["revision"] == before
+        (workspace / "notes.txt").write_text("plain, then edited by the agent", encoding="utf-8")
+        assert _content(client, "notes.txt").json()["revision"] != before
 
     def test_gbk_csv_is_classified_before_the_utf8_attempt(self, client):
         # A GBK CSV fails UTF-8 decoding; it must still be a document (the client
