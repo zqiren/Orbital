@@ -29,6 +29,8 @@ from pydantic import BaseModel, Field, field_validator
 from agent_os.agent.prompt_builder import Autonomy
 from agent_os.agent.skills import SkillLoader
 from agent_os.daemon_v2.agent_md_seeder import (
+    AGENT_MD_FILENAME,
+    is_seeded_agent_md,
     reseed_project_agent_md,
     seed_project_agent_md,
 )
@@ -453,14 +455,22 @@ def _provider_currency(provider: str, model: str) -> str:
 # ---- Helpers ----
 
 def _workspace_is_empty(workspace: str) -> bool:
-    """True if the workspace has no user content (ignoring the orbital/ scaffold
-    and dotfiles). Used by the frontend to decide whether to offer a cold-start scan.
+    """True if the workspace has no user content (ignoring Orbital's own scaffold
+    — orbital/ and the AGENTS.md seeded at project creation — and dotfiles).
+    Used by the frontend to decide whether to offer a cold-start scan.
     """
     if not workspace or not os.path.isdir(workspace):
         return True
     try:
         for name in os.listdir(workspace):
             if name == "orbital" or name.startswith("."):
+                continue
+            # The seed is written at creation, so counting it made every new
+            # project look imported. An AGENTS.md the user wrote or edited is
+            # still content.
+            if name == AGENT_MD_FILENAME and is_seeded_agent_md(
+                os.path.join(workspace, name)
+            ):
                 continue
             return False
     except OSError:

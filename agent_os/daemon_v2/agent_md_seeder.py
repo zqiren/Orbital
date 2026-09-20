@@ -278,6 +278,39 @@ depends on.
 _HISTORICAL_TEMPLATES: tuple[str, ...] = (_TEMPLATE_PRE_ASKS,)
 
 
+# The two lines of a seeded file that vary per project. Everything else is the
+# template verbatim, so comparing with these dropped recognizes Orbital's own
+# seed without knowing the name the project had when it was created.
+_PER_PROJECT_LINE_PREFIXES = ("- **Project:**", "- **Orbital agent:**")
+
+
+def _without_project_lines(text: str) -> str:
+    return "\n".join(
+        line for line in text.replace("\r\n", "\n").split("\n")
+        if not line.startswith(_PER_PROJECT_LINE_PREFIXES)
+    )
+
+
+def is_seeded_agent_md(path: str) -> bool:
+    """True when *path* is an ``AGENTS.md`` Orbital seeded and nobody edited.
+
+    Used by the empty-workspace check: the seed lands at the workspace root at
+    project creation, so without this a brand-new project already "has files"
+    and is offered the imported-project scan. A user-authored or user-edited
+    ``AGENTS.md`` is content and returns False. Rename-proof by design — see
+    ``_PER_PROJECT_LINE_PREFIXES``. Never raises.
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            found = _without_project_lines(f.read())
+    except (OSError, UnicodeDecodeError):
+        return False
+    return any(
+        found == _without_project_lines(template)
+        for template in (AGENT_MD_TEMPLATE, *_HISTORICAL_TEMPLATES)
+    )
+
+
 def reseed_project_agent_md(project_store, project_id: str) -> dict:
     """Hash-guarded ``AGENTS.md`` refresh at pin time (spec 074 §3.6).
 

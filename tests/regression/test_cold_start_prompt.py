@@ -36,3 +36,24 @@ def test_existing_goals_still_directive(tmp_path):
     section = PromptBuilder()._onboarding_or_directive(_ctx(tmp_path, cold_start=True))
     # Goals exist -> directive wins even under cold_start (idempotent re-entry).
     assert "PROJECT DIRECTIVE" in section
+
+
+def test_onboarding_greeting_introduces_abilities_and_the_project_asset(tmp_path):
+    # A new user does not know what the agent can do or what Orbital builds up
+    # for them; the first message has to say so, briefly.
+    section = PromptBuilder()._onboarding_or_directive(_ctx(tmp_path))
+    assert "What you can do" in section
+    assert "asset" in section
+    assert "accumulates" in section
+    # The abilities must come from the real tool list, not a canned brochure.
+    assert "tool list" in section
+    # ...and it stays a greeting, not a lecture.
+    assert "Do not recite" in section
+
+
+def test_scratch_onboarding_skips_the_asset_pitch(tmp_path):
+    # Quick Tasks keeps no project memory, so promising an accumulating asset
+    # there would be false.
+    section = PromptBuilder()._onboarding_or_directive(_ctx(tmp_path, is_scratch=True))
+    assert "ONBOARDING MODE" in section
+    assert "asset" not in section

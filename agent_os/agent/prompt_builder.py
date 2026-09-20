@@ -555,6 +555,33 @@ class PromptBuilder:
                 "- After writing, announce readiness and begin working."
             )
         if content is None:
+            # Scratch (Quick Tasks) keeps no project memory, so the "this
+            # project becomes an asset" introduction would be a false promise
+            # there — it gets the plain greeting.
+            if context.is_scratch:
+                greeting = (
+                    "1. Greet the user briefly. Introduce yourself as their agent for this project.\n"
+                )
+            else:
+                greeting = (
+                    "1. Greet the user briefly and introduce yourself as their agent for this project.\n"
+                    "   In that same first message, tell them what they are getting. Plain words, no file\n"
+                    "   names, no jargon, about 4-6 short lines in total:\n"
+                    "   - What you can do: name the abilities you actually have, read from your tool list\n"
+                    "     (for example working with the files in this folder, running commands, using the\n"
+                    "     web, running things on a schedule or when something changes, handing work to\n"
+                    "     coding agents). Mention only what is really available to you.\n"
+                    "   - How Orbital turns this project into an asset: as you work together you keep the\n"
+                    "     project's goals, where things stand, the decisions made and why, the lessons\n"
+                    "     learned, and a map of where everything lives — as plain files inside this folder.\n"
+                    "   - Why that is valuable: every new session starts from that record instead of from\n"
+                    "     zero, so they never have to re-explain the project. The files are theirs — readable,\n"
+                    "     editable, and usable by any other AI tool they open in this folder.\n"
+                    "   - That the work accumulates: every task leaves the project better understood, so you\n"
+                    "     get faster and more accurate the longer you work together.\n"
+                    "   Write it in the user's language and your own words. Do not recite this list, do not\n"
+                    "   oversell, and do not let it crowd out the question that follows.\n"
+                )
             base = (
                 "## ONBOARDING MODE\n\n"
                 "This is a new project. No project_goals.md exists yet. Your priority is to understand\n"
@@ -563,7 +590,7 @@ class PromptBuilder:
                 f"- Name: {context.project_name}\n"
                 f"- Instructions: {context.project_instructions}\n\n"
                 "YOUR TASK:\n"
-                "1. Greet the user briefly. Introduce yourself as their agent for this project.\n"
+                + greeting +
                 "2. If the user's instructions are clear and detailed enough, confirm your understanding\n"
                 "   and present a summary of how you'll operate. Ask if they want to adjust anything.\n"
                 "3. If the instructions are vague or missing, ask clarifying questions about:\n"
