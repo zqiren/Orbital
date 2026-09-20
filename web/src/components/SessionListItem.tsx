@@ -33,6 +33,7 @@ import { getStatusDisplay } from './sessionStatus';
 import { classifySessionName, type SessionKind } from '../lib/sessionLabel';
 import type { StringKey } from '../i18n/strings';
 import { useT } from '../i18n/useT';
+import { formatRelativeTime } from '../utils/relativeTime';
 
 export interface SessionListItemProps {
   session: SessionListEntry;
@@ -45,29 +46,12 @@ export interface SessionListItemProps {
   onPin?: (sessionId: string, pinned: boolean) => void | Promise<void>;
   /** Delete this session. Receives the sessionId. */
   onDelete?: (sessionId: string) => void | Promise<void>;
-}
-
-/**
- * Format an ISO timestamp as a short relative time string.
- * Falls back to "—" when the value is null/undefined.
- */
-function formatRelativeTime(
-  isoString: string | null | undefined,
-  t: ReturnType<typeof useT>,
-): string {
-  if (!isoString) return '—';
-  const date = new Date(isoString);
-  if (isNaN(date.getTime())) return '—';
-  const now = Date.now();
-  const diffMs = now - date.getTime();
-  const diffSec = Math.floor(diffMs / 1000);
-  if (diffSec < 60) return t('sessionItem.relTime.seconds', { n: diffSec });
-  const diffMin = Math.floor(diffSec / 60);
-  if (diffMin < 60) return t('sessionItem.relTime.minutes', { n: diffMin });
-  const diffHr = Math.floor(diffMin / 60);
-  if (diffHr < 24) return t('sessionItem.relTime.hours', { n: diffHr });
-  const diffDay = Math.floor(diffHr / 24);
-  return t('sessionItem.relTime.days', { n: diffDay });
+  /**
+   * Drop the kind chip. Set for runs listed under their automation's group
+   * header, which already states the kind — repeating it on every run only
+   * squeezes the name. The chip still feeds the accessible label.
+   */
+  hideKindChip?: boolean;
 }
 
 /** i18n key for each machine-session chip; attachment/plain render no chip. */
@@ -84,6 +68,7 @@ function SessionListItemBase({
   onRename,
   onPin,
   onDelete,
+  hideKindChip = false,
 }: SessionListItemProps) {
   const [hovered, setHovered] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -233,7 +218,7 @@ function SessionListItemBase({
           the name; when nothing human-readable survived the machine prefix
           the chip carries the row alone. */}
       <span className="flex-1 min-w-0 flex items-baseline gap-1.5">
-        {!editing && chipText && (
+        {!editing && chipText && !hideKindChip && (
           <span
             data-testid="session-kind-chip"
             title={labelInfo.detail}

@@ -5,7 +5,7 @@
 // @vitest-environment jsdom
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen, cleanup } from '@testing-library/react';
+import { render, screen, cleanup, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { SessionListEntry } from '../types';
 
@@ -519,7 +519,7 @@ describe('SessionSidebar — pinned sessions', () => {
 // Spec 066 4b — automation sessions are grouped apart from chats
 // ---------------------------------------------------------------------------
 
-describe('SessionSidebar — automations group', () => {
+describe('SessionSidebar — filter and automation groups', () => {
   function ids() {
     return screen
       .getAllByTestId(/^session-list-item-/)
@@ -534,105 +534,131 @@ describe('SessionSidebar — automations group', () => {
     }
   });
 
+  const daily = (id: string, at: string, extra: Partial<SessionListEntry> = {}) =>
+    makeSession({
+      session_id: id, session_uuid: `u-${id}`, trigger_type: 'schedule',
+      name: "[Triggered by schedule 'Daily' (Every day)]", last_activity_at: at, ...extra,
+    });
+
+  // Two chats around three runs of one automation, plus a lone queue item.
   const mixed = () => [
-    makeSession({
-      session_id: 'cron-new', session_uuid: 'u1', trigger_type: 'schedule',
-      name: "[Triggered by schedule 'Daily'…", last_activity_at: '2026-09-10T00:00:00Z',
-    }),
-    makeSession({
-      session_id: 'chat-old', session_uuid: 'u2', origin: 'chat',
-      name: 'Plan the launch', last_activity_at: '2026-09-01T00:00:00Z',
-    }),
-    makeSession({
-      session_id: 'queue-mid', session_uuid: 'u3', origin: 'queue',
-      last_activity_at: '2026-09-05T00:00:00Z',
-    }),
-    makeSession({
-      session_id: 'chat-new', session_uuid: 'u4',
-      name: 'Fix the bug', last_activity_at: '2026-09-09T00:00:00Z',
-    }),
+    daily('run-3', '2026-09-10T00:00:00Z'),
+    makeSession({ session_id: 'chat-new', session_uuid: 'u-cn', name: 'Fix the bug', last_activity_at: '2026-09-09T00:00:00Z' }),
+    daily('run-2', '2026-09-08T00:00:00Z'),
+    makeSession({ session_id: 'queue-one', session_uuid: 'u-q', origin: 'queue', last_activity_at: '2026-09-05T00:00:00Z' }),
+    makeSession({ session_id: 'chat-old', session_uuid: 'u-co', origin: 'chat', name: 'Plan the launch', last_activity_at: '2026-09-01T00:00:00Z' }),
+    daily('run-1', '2026-08-01T00:00:00Z'),
   ];
 
-  it('lists chats first and automation sessions under their own header', () => {
+  it("folds an automation's runs into ONE collapsed row, placed at its latest run — not parked below the chats", () => {
     resetMocks();
     mockSessions = mixed();
     render(<SessionSidebar projectId="p1" />);
 
+    // Runs are folded away; the lone queue item is a plain row (a group of one
+    // has nothing to collapse).
     expect(ids()).toEqual([
       'session-list-item-chat-new',
+      'session-list-item-queue-one',
       'session-list-item-chat-old',
-      'session-list-item-cron-new',
-      'session-list-item-queue-mid',
     ]);
-    const header = screen.getByTestId('session-automations-toggle');
-    expect(header).toHaveTextContent('Automations');
-    expect(header).toHaveTextContent('2');
-    expect(header).toHaveAttribute('aria-expanded', 'true');
-    // Every session is still listed and counted (no hidden bucket).
+    const group = screen.getByTestId('session-automation-group-toggle');
+    expect(group).toHaveTextContent('Daily');
+    expect(group).toHaveTextContent('3 runs');
+    expect(group).toHaveAttribute('aria-expanded', 'false');
+    // The group leads the list: its latest run is the most recent activity.
+    const list = screen.getByTestId('session-list');
+    expect(list.firstElementChild).toBe(screen.getByTestId('session-automation-group'));
+    // Every session is still counted (no hidden bucket).
+    expect(screen.getByTestId('session-active-count')).toHaveTextContent('6');
+  });
+
+  it('expanding a group lists its runs, most recent first', async () => {
+    const user = userEvent.setup();
+    resetMocks();
+    mockSessions = mixed();
+    render(<SessionSidebar projectId="p1" />);
+
+    await user.click(screen.getByTestId('session-automation-group-toggle'));
+    expect(screen.getByTestId('session-automation-group-toggle')).toHaveAttribute('aria-expanded', 'true');
+    const runs = within(screen.getByTestId('session-automation-group'))
+      .getAllByTestId(/^session-list-item-/)
+      .map((el) => el.getAttribute('data-testid'));
+    expect(runs).toEqual(['session-list-item-run-3', 'session-list-item-run-2', 'session-list-item-run-1']);
+  });
+
+  it('a collapsed group still shows its active runs and the selected one', () => {
+    resetMocks();
+    mockSessions = [...mixed(), daily('run-live', '2026-07-01T00:00:00Z', { status: 'running' })];
+    render(<SessionSidebar projectId="p1" selectedSessionId="run-2" />);
+
+    expect(screen.getByTestId('session-automation-group-toggle')).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.getByTestId('session-list-item-run-2')).toBeInTheDocument();
+    expect(screen.getByTestId('session-list-item-run-live')).toBeInTheDocument();
+    expect(screen.queryByTestId('session-list-item-run-3')).toBeNull();
+  });
+
+  it('Chats shows only conversations; Automations shows only automation sessions', async () => {
+    const user = userEvent.setup();
+    resetMocks();
+    mockSessions = mixed();
+    render(<SessionSidebar projectId="p1" />);
+
+    await user.click(screen.getByTestId('session-filter-chats'));
+    expect(ids()).toEqual(['session-list-item-chat-new', 'session-list-item-chat-old']);
+    expect(screen.queryByTestId('session-automation-group')).toBeNull();
+    expect(screen.getByTestId('session-active-count')).toHaveTextContent('2');
+
+    await user.click(screen.getByTestId('session-filter-automations'));
+    expect(ids()).toEqual(['session-list-item-queue-one']);
+    expect(screen.getByTestId('session-automation-group-toggle')).toHaveTextContent('3 runs');
     expect(screen.getByTestId('session-active-count')).toHaveTextContent('4');
   });
 
-  it('recognises a renamed-away trigger session by its trigger_type', () => {
+  it('recognises a renamed-away trigger session by its trigger_type', async () => {
+    const user = userEvent.setup();
     resetMocks();
     mockSessions = [
       makeSession({ session_id: 'a', session_uuid: 'ua', trigger_type: 'file_watch', name: 'Renamed' }),
       makeSession({ session_id: 'b', session_uuid: 'ub', name: 'Chat' }),
     ];
     render(<SessionSidebar projectId="p1" />);
-    expect(ids()).toEqual(['session-list-item-b', 'session-list-item-a']);
+    await user.click(screen.getByTestId('session-filter-automations'));
+    expect(ids()).toEqual(['session-list-item-a']);
   });
 
-  it('falls back to the name prefix when the backend sends no trigger_type', () => {
+  it('falls back to the name prefix when the backend sends no trigger_type', async () => {
+    const user = userEvent.setup();
     resetMocks();
     mockSessions = [
       makeSession({ session_id: 'a', session_uuid: 'ua', name: "[Triggered by file_watch 'Inbox']" }),
       makeSession({ session_id: 'b', session_uuid: 'ub', name: 'Chat' }),
     ];
     render(<SessionSidebar projectId="p1" />);
-    expect(ids()).toEqual(['session-list-item-b', 'session-list-item-a']);
+    await user.click(screen.getByTestId('session-filter-chats'));
+    expect(ids()).toEqual(['session-list-item-b']);
   });
 
-  it('renders no automations header when there are none', () => {
+  it('an empty filter says so instead of showing a blank list', async () => {
+    const user = userEvent.setup();
     resetMocks();
     mockSessions = [makeSession({ session_id: 'a', session_uuid: 'ua', name: 'Chat' })];
     render(<SessionSidebar projectId="p1" />);
-    expect(screen.queryByTestId('session-automations-toggle')).toBeNull();
+    await user.click(screen.getByTestId('session-filter-automations'));
+    expect(screen.getByTestId('session-empty')).toHaveTextContent('No automation runs yet');
   });
 
-  it('collapsing hides idle automation rows but keeps active and selected ones', async () => {
-    const user = userEvent.setup();
-    resetMocks();
-    mockSessions = [
-      ...mixed(),
-      makeSession({
-        session_id: 'cron-running', session_uuid: 'u5', trigger_type: 'schedule',
-        status: 'running', last_activity_at: '2026-08-01T00:00:00Z',
-      }),
-    ];
-    render(<SessionSidebar projectId="p1" selectedSessionId="queue-mid" />);
-
-    await user.click(screen.getByTestId('session-automations-toggle'));
-
-    expect(screen.getByTestId('session-automations-toggle')).toHaveAttribute('aria-expanded', 'false');
-    expect(screen.queryByTestId('session-list-item-cron-new')).toBeNull();
-    expect(screen.getByTestId('session-list-item-queue-mid')).toBeInTheDocument();
-    expect(screen.getByTestId('session-list-item-cron-running')).toBeInTheDocument();
-    expect(screen.getByTestId('session-list-item-chat-new')).toBeInTheDocument();
-
-    await user.click(screen.getByTestId('session-automations-toggle'));
-    expect(screen.getByTestId('session-list-item-cron-new')).toBeInTheDocument();
-  });
-
-  it('remembers the collapsed state across remounts', async () => {
+  it('remembers the chosen filter across remounts', async () => {
     const user = userEvent.setup();
     resetMocks();
     mockSessions = mixed();
     const { unmount } = render(<SessionSidebar projectId="p1" />);
-    await user.click(screen.getByTestId('session-automations-toggle'));
+    await user.click(screen.getByTestId('session-filter-chats'));
     unmount();
 
     render(<SessionSidebar projectId="p1" />);
-    expect(screen.getByTestId('session-automations-toggle')).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.getByTestId('session-filter-chats')).toHaveAttribute('aria-selected', 'true');
+    expect(ids()).toEqual(['session-list-item-chat-new', 'session-list-item-chat-old']);
   });
 
   it('a pinned automation stays in the pinned block', () => {
@@ -646,6 +672,6 @@ describe('SessionSidebar — automations group', () => {
     ];
     render(<SessionSidebar projectId="p1" />);
     expect(ids()).toEqual(['session-list-item-cron-pinned', 'session-list-item-chat']);
-    expect(screen.queryByTestId('session-automations-toggle')).toBeNull();
+    expect(screen.queryByTestId('session-automation-group')).toBeNull();
   });
 });

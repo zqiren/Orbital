@@ -5,19 +5,23 @@
 /**
  * SessionSidebar — 260px left column of the Chat tab (V1 layout).
  *
- * Header: "SESSIONS" uppercase + total session count.
- * Body: SessionListItem rows for ALL sessions, sorted by last-activity
- *   descending (most recent first): pinned rows first (spec 067), then the
- *   conversations the user started, then — under an "Automations" header —
- *   sessions a schedule, a file watch or the queue fired (spec 066 4b), so
- *   hundreds of identical automation runs no longer bury the chats. A
- *   session's state is derived purely from its current condition
+ * Header: "SESSIONS" uppercase + the count for the active filter, then an
+ *   All | Chats | Automations filter (remembered per device).
+ * Body: pinned rows first (spec 067), then everything else most recent first.
+ *   Sessions a schedule, a file watch or the queue fired are folded into ONE
+ *   row per automation, sitting where its latest run was (see
+ *   utils/sessionGroups). Spec 066 4b had parked them in a section below the
+ *   chats so hundreds of identical runs stopped burying the conversations —
+ *   but in a project with hundreds of chats that put them a long scroll away.
+ *   One row per automation un-buries the chats without hiding the
+ *   automations, and the filter makes either half one click away. A session's
+ *   state is derived purely from its current condition
  *   (running/waiting/idle/error/pending_approval/new_session).
  * Bottom: "+ new session" button — calls onNewSession prop (no implementation here).
  *
- * ALL sessions are listed regardless of origin. The Automations group can be
- * collapsed (remembered per device); collapsed, it still shows its active
- * rows and the selected one, so nothing live or open is ever hidden.
+ * ALL sessions are listed regardless of origin. A collapsed automation group
+ * still shows its active runs and the selected one, so nothing live or open
+ * is ever hidden.
  *
  * Selection is CONTROLLED: the highlighted (active) session is driven by the
  * `selectedSessionId` prop, NOT an internal hook. ChatTab owns the single
@@ -37,33 +41,49 @@
  */
 
 import { useCallback, useMemo, useState } from 'react';
-import { ChevronDown, ChevronRight } from 'lucide-react';
+import { ChevronDown, ChevronRight, Clock, FolderSearch, ListOrdered } from 'lucide-react';
 import { useSessions } from '../hooks/useSessions';
 import type { SessionListEntry } from '../types';
 import { SessionListItem } from './SessionListItem';
+import { formatRelativeTime } from '../utils/relativeTime';
 import { getStatusDisplay } from './sessionStatus';
-import { classifySessionName } from '../lib/sessionLabel';
+import {
+  buildSessionList,
+  type AutomationGroup,
+  type SessionFilter,
+} from '../utils/sessionGroups';
+import type { StringKey } from '../i18n/strings';
 import { useT } from '../i18n/useT';
 
-const AUTOMATIONS_COLLAPSED_KEY = 'orbital:sessionSidebar.automationsCollapsed';
+const FILTER_KEY = 'orbital:sessionSidebar.filter';
 
-/**
- * True for sessions an automation fired rather than the user: queue items
- * (`origin`), schedule / file-watch triggers (`trigger_type`, which survives a
- * rename). The name-prefix classifier is the fallback for rows that carry
- * neither (a backend that predates `trigger_type`).
- */
-function isAutomationSession(s: SessionListEntry): boolean {
-  if (s.origin === 'queue' || s.trigger_type) return true;
-  const kind = classifySessionName(s.name, s.origin).kind;
-  return kind === 'queue' || kind === 'schedule' || kind === 'file_watch';
-}
+const FILTERS: { key: SessionFilter; labelKey: StringKey }[] = [
+  { key: 'all', labelKey: 'sessionSidebar.filter.all' },
+  { key: 'chats', labelKey: 'sessionSidebar.filter.chats' },
+  { key: 'automations', labelKey: 'sessionSidebar.automations' },
+];
 
-function readCollapsed(): boolean {
+const GROUP_KIND_KEY: Record<AutomationGroup['kind'], StringKey> = {
+  queue: 'sessionItem.kind.queue',
+  schedule: 'sessionItem.kind.schedule',
+  file_watch: 'sessionItem.kind.fileWatch',
+};
+
+/** The group header states its kind with an icon (labelled by the same
+ * strings the row chips use) rather than a text chip: at 260px the chip cost
+ * the automation's NAME most of its room. */
+const GROUP_KIND_ICON = {
+  queue: ListOrdered,
+  schedule: Clock,
+  file_watch: FolderSearch,
+} as const;
+
+function readFilter(): SessionFilter {
   try {
-    return localStorage.getItem(AUTOMATIONS_COLLAPSED_KEY) === '1';
+    const v = localStorage.getItem(FILTER_KEY);
+    return v === 'chats' || v === 'automations' ? v : 'all';
   } catch {
-    return false; // storage unavailable (private/locked-down webview)
+    return 'all'; // storage unavailable (private/locked-down webview)
   }
 }
 
@@ -116,41 +136,36 @@ export function SessionSidebar({
     [sessions],
   );
 
-  // Three blocks, each keeping the order above: pinned rows (any kind — a pin
-  // is the user saying "keep this at the top"), then chats, then automations.
-  const { pinned, chats, automations } = useMemo(() => {
-    const groups = {
-      pinned: [] as SessionListEntry[],
-      chats: [] as SessionListEntry[],
-      automations: [] as SessionListEntry[],
-    };
-    for (const s of sortedSessions) {
-      if (s.pinned) groups.pinned.push(s);
-      else if (isAutomationSession(s)) groups.automations.push(s);
-      else groups.chats.push(s);
+  const [filter, setFilter] = useState<SessionFilter>(readFilter);
+  const chooseFilter = useCallback((next: SessionFilter) => {
+    setFilter(next);
+    try {
+      localStorage.setItem(FILTER_KEY, next);
+    } catch {
+      /* storage unavailable — the filter still works for this visit */
     }
-    return groups;
-  }, [sortedSessions]);
+  }, []);
 
-  const [automationsCollapsed, setAutomationsCollapsed] = useState(readCollapsed);
-  const toggleAutomations = useCallback(() => {
-    setAutomationsCollapsed((prev) => {
-      const next = !prev;
-      try {
-        localStorage.setItem(AUTOMATIONS_COLLAPSED_KEY, next ? '1' : '0');
-      } catch {
-        /* storage unavailable — the toggle still works for this visit */
-      }
+  // Pinned rows (any kind — a pin is the user saying "keep this at the top"),
+  // then the rest in the order above, with each automation's runs folded into
+  // one group node.
+  const { pinned, nodes, counts } = useMemo(
+    () => buildSessionList(sortedSessions, filter),
+    [sortedSessions, filter],
+  );
+
+  // Which automation groups are open. Not persisted: a group is opened to look
+  // something up, and a sidebar that remembers every expansion drifts back to
+  // the wall of runs this grouping exists to remove.
+  const [openGroups, setOpenGroups] = useState<ReadonlySet<string>>(() => new Set());
+  const toggleGroup = useCallback((key: string) => {
+    setOpenGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       return next;
     });
   }, []);
-  // Collapsed hides only resting rows: a running/waiting/blocked automation
-  // and the session being viewed always stay visible.
-  const visibleAutomations = automationsCollapsed
-    ? automations.filter(
-        (s) => s.session_id === selectedSessionId || !getStatusDisplay(s.status).resting,
-      )
-    : automations;
 
   const handleSelect = useCallback(
     (sessionId: string) => {
@@ -199,11 +214,12 @@ export function SessionSidebar({
     [deleteSession, onSessionDeleted, sortedSessions],
   );
 
-  function renderRow(session: SessionListEntry) {
+  function renderRow(session: SessionListEntry, inGroup = false) {
     return (
       <SessionListItem
         key={session.session_uuid ?? session.session_id}
         session={session}
+        hideKindChip={inGroup}
         selected={selectedSessionId === session.session_id}
         onSelect={handleSelect}
         onRename={handleRename}
@@ -212,6 +228,73 @@ export function SessionSidebar({
       />
     );
   }
+
+  function renderGroup(group: AutomationGroup) {
+    const open = openGroups.has(group.key);
+    // Collapsed hides only resting runs: a running/waiting/blocked run and the
+    // session being viewed always stay visible.
+    const visibleRuns = open
+      ? group.runs
+      : group.runs.filter(
+          (r) => r.session_id === selectedSessionId || !getStatusDisplay(r.status).resting,
+        );
+    const kindLabel = t(GROUP_KIND_KEY[group.kind]);
+    const KindIcon = GROUP_KIND_ICON[group.kind];
+    return (
+      <div key={`group:${group.key}`} data-testid="session-automation-group">
+        <button
+          type="button"
+          data-testid="session-automation-group-toggle"
+          aria-expanded={open}
+          onClick={() => toggleGroup(group.key)}
+          className="w-full flex items-center gap-1.5 px-2.5 py-[7px] rounded-md text-left select-none transition-colors hover:bg-card-hover"
+        >
+          <span className="w-[14px] shrink-0 flex items-center justify-center text-secondary">
+            {open ? (
+              <ChevronDown size={12} aria-hidden="true" />
+            ) : (
+              <ChevronRight size={12} aria-hidden="true" />
+            )}
+          </span>
+          <span className="flex-1 min-w-0 flex items-baseline gap-1.5">
+            <KindIcon
+              size={12}
+              role="img"
+              aria-label={kindLabel}
+              className="shrink-0 self-center text-secondary"
+            />
+            {/* A group with no trigger name left (queue items, renamed runs)
+                is named by its kind. */}
+            <span
+              className="flex-1 min-w-0 truncate font-medium text-primary"
+              style={{ fontSize: '11.5px' }}
+              title={group.name ?? kindLabel}
+            >
+              {group.name ?? kindLabel}
+            </span>
+            <span className="text-2xs text-secondary shrink-0">
+              {t('sessionSidebar.group.runs', { n: group.runs.length })}
+              {' · '}
+              {formatRelativeTime(group.runs[0].last_activity_at, t)}
+            </span>
+          </span>
+        </button>
+        {visibleRuns.length > 0 && (
+          <div className="ml-[13px] pl-1.5 border-l border-border/60 flex flex-col gap-0.5">
+            {visibleRuns.map((r) => renderRow(r, true))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  const visibleCount = counts[filter];
+  const emptyKey: StringKey =
+    filter === 'chats'
+      ? 'sessionSidebar.emptyChats'
+      : filter === 'automations'
+        ? 'sessionSidebar.emptyAutomations'
+        : 'sessionSidebar.empty';
 
   return (
     <aside
@@ -239,11 +322,42 @@ export function SessionSidebar({
           data-testid="session-active-count"
           style={{ fontSize: '9.5px' }}
         >
-          ({sortedSessions.length})
+          ({visibleCount})
         </span>
       </div>
 
-      {/* Session list: pinned, then chats, then automations (most-recent first in each) */}
+      {/* All | Chats | Automations — a segmented control on a track, the same
+          pattern as the Tasks tab's Queue | Automations switch. */}
+      <div className="px-3 pb-1.5 shrink-0">
+        <div
+          role="tablist"
+          aria-label={t('sessionSidebar.filter.label')}
+          className="flex gap-0.5 rounded-lg border border-border bg-nav p-0.5"
+        >
+          {FILTERS.map((f) => {
+            const active = filter === f.key;
+            return (
+              <button
+                key={f.key}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                data-testid={`session-filter-${f.key}`}
+                onClick={() => chooseFilter(f.key)}
+                className={`flex-auto whitespace-nowrap text-[11px] font-medium px-1.5 py-1 rounded-md transition-colors duration-150 ${
+                  active
+                    ? 'bg-card text-primary shadow-[0_1px_2px_rgb(0_0_0/0.06)]'
+                    : 'text-secondary hover:text-primary'
+                }`}
+              >
+                {t(f.labelKey)}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Session list: pinned, then the rest most-recent first, one row per automation */}
       <div
         className="flex-1 overflow-y-auto px-1.5 py-1 flex flex-col gap-0.5"
         data-testid="session-list"
@@ -253,44 +367,26 @@ export function SessionSidebar({
             {t('sessionSidebar.loading')}
           </p>
         )}
-        {!loading && sortedSessions.length === 0 && (
+        {!loading && visibleCount === 0 && (
           <p className="text-xs text-secondary px-2 py-2" data-testid="session-empty">
-            {t('sessionSidebar.empty')}
+            {t(emptyKey)}
           </p>
         )}
-        {pinned.map(renderRow)}
+        {pinned.map((p) => renderRow(p))}
         {/* Hairline closing the pinned block — the same "pinned above a rule"
             pattern the nav column uses for Quick Tasks. Only rendered when
             there is both a pin AND something under it — a rule at the very
             bottom of the list would separate nothing. */}
-        {pinned.length > 0 && chats.length + automations.length > 0 && (
+        {pinned.length > 0 && nodes.length > 0 && (
           <div
             role="separator"
             data-testid="session-pin-divider"
             className="my-1 border-t border-border/60"
           />
         )}
-        {chats.map(renderRow)}
-        {automations.length > 0 && (
-          <button
-            type="button"
-            data-testid="session-automations-toggle"
-            aria-expanded={!automationsCollapsed}
-            title={t('sessionSidebar.automationsToggle')}
-            onClick={toggleAutomations}
-            className="mt-2 mb-0.5 flex items-center gap-1 px-2 py-0.5 rounded text-secondary font-semibold hover:text-primary transition-colors"
-            style={{ fontSize: '9.5px', letterSpacing: '0.8px', textTransform: 'uppercase' }}
-          >
-            {automationsCollapsed ? (
-              <ChevronRight size={11} aria-hidden="true" />
-            ) : (
-              <ChevronDown size={11} aria-hidden="true" />
-            )}
-            <span>{t('sessionSidebar.automations')}</span>
-            <span className="font-mono font-normal">({automations.length})</span>
-          </button>
+        {nodes.map((node) =>
+          node.type === 'session' ? renderRow(node.session) : renderGroup(node.group),
         )}
-        {visibleAutomations.map(renderRow)}
       </div>
 
       {/* New session button */}
