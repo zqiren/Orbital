@@ -15,7 +15,8 @@ import CardList from './CardList';
 import MigrationNoteBanner from './MigrationNoteBanner';
 import FallbackModelsEditor from './FallbackModelsEditor';
 import { useCredentialCards } from '../hooks/useCredentialCards';
-import { useAutosave, type AutosaveStatus } from '../hooks/useAutosave';
+import { useAutosave } from '../hooks/useAutosave';
+import AutosaveStatusPill from './AutosaveStatusPill';
 import { type SubAgentMemoryEntry } from './SubAgentMemoryCard';
 import { type InstalledSubAgent } from './SubAgentToggleList';
 import SubAgentCard from './SubAgentCard';
@@ -881,61 +882,6 @@ export default function SettingsView({
       error={autosave.error}
       onRetry={() => void autosave.retry()}
     />
-    </div>
-  );
-}
-
-/**
- * Where the Save button's confirmation used to be — except it follows the
- * user down the page, since the edit may be a card tile halfway down. Shows
- * while saving, briefly after, and stays with a Retry while a save failed.
- */
-function AutosaveStatusPill({
-  status,
-  error,
-  onRetry,
-}: {
-  status: AutosaveStatus;
-  error: string;
-  onRetry: () => void;
-}) {
-  const t = useT();
-  const [showSaved, setShowSaved] = useState(false);
-  useEffect(() => {
-    if (status !== 'saved') return;
-    setShowSaved(true);
-    const id = setTimeout(() => setShowSaved(false), 2000);
-    return () => clearTimeout(id);
-  }, [status]);
-
-  if (status === 'idle' || (status === 'saved' && !showSaved)) return null;
-  return (
-    <div className="sticky bottom-4 flex justify-center pointer-events-none">
-      <div
-        role="status"
-        data-testid="settings-autosave-status"
-        className={`pointer-events-auto inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs shadow-sm ${
-          status === 'error'
-            ? 'border-error/40 bg-background text-error'
-            : 'border-border bg-background text-secondary'
-        }`}
-      >
-        {status === 'saving' && t('settings.autosave.saving')}
-        {status === 'saved' && t('settings.saved')}
-        {status === 'error' && (
-          <>
-            {t('settings.autosave.error', { message: error })}
-            <button
-              type="button"
-              onClick={onRetry}
-              data-testid="settings-autosave-retry"
-              className="font-medium underline underline-offset-2"
-            >
-              {t('settings.autosave.retry')}
-            </button>
-          </>
-        )}
-      </div>
     </div>
   );
 }

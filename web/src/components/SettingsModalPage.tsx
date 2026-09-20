@@ -3,10 +3,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import type { Dispatch, SetStateAction } from 'react';
-import { ArrowLeft } from 'lucide-react';
 import type { Project, ProjectUpdateRequest } from '../types';
 import type { Route } from '../route';
 import SettingsView from './SettingsView';
+import SettingsBackButton from './SettingsBackButton';
 import { useT } from '../i18n/useT';
 
 interface SettingsModalPageProps {
@@ -58,15 +58,12 @@ export default function SettingsModalPage({
           {/* Same box AND same inner padding as the settings column, so the
               title lands on the same left edge as the fields under it. */}
           <div className="flex flex-col gap-1 max-w-[720px] w-full min-w-0 px-6 max-md:px-4">
-            <button
+            <SettingsBackButton
+              label={t('settingsModal.back', { project: project.name })}
               onClick={handleBack}
-              data-testid="settings-back-button"
-              className="flex items-center gap-1.5 text-sm text-secondary hover:text-primary transition-colors w-fit"
-            >
-              <ArrowLeft size={14} />
-              {t('settingsModal.back', { project: project.name })}
-            </button>
-            <h1 className="text-lg font-semibold text-primary mt-1" data-testid="settings-modal-title">
+              testId="settings-back-button"
+            />
+            <h1 className="text-lg font-semibold text-primary mt-2" data-testid="settings-modal-title">
               {t('settingsModal.title', { project: project.name })}
             </h1>
             <p className="text-sm text-secondary">

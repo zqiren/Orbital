@@ -4,6 +4,7 @@
 
 import { useEffect, useState } from 'react';
 import { useT } from '../i18n/useT';
+import { LabelWithHint } from './SettingsSection';
 
 /**
  * Data & privacy section (spec 046 §6). Two pieces:
@@ -63,10 +64,9 @@ export default function TelemetrySettings() {
           (GlobalSettings) — see ConnectorSettings for the same note. */}
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
-          <label className="block text-sm font-medium text-primary mb-1">
+          <LabelWithHint hint={t('telemetry.toggle.hint')}>
             {t('telemetry.toggle.label')}
-          </label>
-          <p className="text-xs text-secondary">{t('telemetry.toggle.hint')}</p>
+          </LabelWithHint>
         </div>
         <button
           type="button"

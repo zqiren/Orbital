@@ -47,8 +47,8 @@ export default function CredentialCards({ providers }: CredentialCardsProps) {
   const [adding, setAdding] = useState(false);
   return (
     <div data-testid="credential-cards">
-      <p className="text-[13px] leading-relaxed text-secondary mb-4">{t('cards.intro')}</p>
-
+      {/* The intro prose is the enclosing SettingsSection's ⓘ description
+          (GlobalSettings) — hidden until asked for, like project settings. */}
       {/* List-level actions. Per-card actions live on the card, and there are
           only ever three of those. */}
       <div className="flex flex-wrap items-center gap-3 mb-4">

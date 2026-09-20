@@ -37,10 +37,12 @@ beforeEach(() => {
 });
 
 describe('BrowserSignInCard', () => {
-  it('renders the sign-in copy and an Open Browser button', () => {
+  it('renders an Open Browser button and leaves title + prose to the section', () => {
     render(<BrowserSignInCard />);
-    expect(screen.getByText('Browser Sign-In')).toBeInTheDocument();
-    expect(screen.getByText(/stay signed in/)).toBeInTheDocument();
+    // The title and the explanation are the enclosing SettingsSection's title
+    // and ⓘ description (GlobalSettings); printing them here repeated both.
+    expect(screen.queryByText('Browser Sign-In')).not.toBeInTheDocument();
+    expect(screen.queryByText(/stay signed in/)).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Open Browser' })).toBeInTheDocument();
   });
 

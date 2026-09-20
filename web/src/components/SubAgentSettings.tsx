@@ -8,6 +8,7 @@ import { useWebSocket } from '../hooks/useWebSocket';
 import MessageAvatar from './MessageAvatar';
 import type { StringKey } from '../i18n/strings';
 import { useT } from '../i18n/useT';
+import { LabelWithHint } from './SettingsSection';
 import type { WebSocketEvent } from '../types';
 import Select from './Select';
 
@@ -254,15 +255,22 @@ export default function SubAgentSettings({ standalone = false, onBack }: Props) 
         </div>
       </div>
 
-      <p className="text-xs text-secondary mb-1">
-        {t('subAgentSettings.installHint')}
-      </p>
-      <p className="text-xs text-secondary mb-1 italic">
-        {t('subAgentSettings.credNote')}
-      </p>
-      <p className="text-xs text-secondary mb-4 italic">
-        {t('subAgentSettings.loginNote')}
-      </p>
+      {/* Embedded in Global Settings these three notes live behind the
+          section's ⓘ, with the rest of its description. The standalone page
+          has no section heading to hang them on, so it still prints them. */}
+      {standalone && (
+        <>
+          <p className="text-xs text-secondary mb-1">
+            {t('subAgentSettings.installHint')}
+          </p>
+          <p className="text-xs text-secondary mb-1 italic">
+            {t('subAgentSettings.credNote')}
+          </p>
+          <p className="text-xs text-secondary mb-4 italic">
+            {t('subAgentSettings.loginNote')}
+          </p>
+        </>
+      )}
 
       {error && (
         <div className="bg-warning/10 border border-warning/20 rounded-lg px-4 py-3 mb-4 text-sm text-warning">
@@ -947,9 +955,13 @@ function ManagedCredentials({ slug, fields, onChanged }: ManagedCredentialsProps
       data-testid={`sub-agent-credentials-${slug}`}
       className="border-t border-border pt-3 mt-1 flex flex-col gap-3"
     >
+      {/* The note sat in full under this heading on EVERY API-key card — the
+          same two lines three or four times down the page. Behind the ⓘ it is
+          one click away on each, and printed on none. */}
       <div>
-        <h3 className="text-xs font-medium text-primary">{t('subAgentCard.cred.heading')}</h3>
-        <p className="text-xs text-secondary">{t('subAgentCard.cred.note')}</p>
+        <LabelWithHint className="!text-xs" hint={t('subAgentCard.cred.note')}>
+          {t('subAgentCard.cred.heading')}
+        </LabelWithHint>
       </div>
 
       {fields.map(field => {

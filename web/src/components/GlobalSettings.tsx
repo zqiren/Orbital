@@ -2,12 +2,15 @@
 // Copyright (C) 2026 Orbital Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { useState, useEffect, useRef } from 'react';
-import { ArrowLeft } from 'lucide-react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import type { FallbackModelEntry, ProviderRegistry } from '../types';
 import { useCredentialCards } from '../hooks/useCredentialCards';
+import { useAutosave } from '../hooks/useAutosave';
+import { api } from '../config';
 import BetaBadge from './BetaBadge';
-import SettingsSection, { SettingsGroup } from './SettingsSection';
+import SettingsSection, { SettingsGroup, LabelWithHint } from './SettingsSection';
+import SettingsBackButton from './SettingsBackButton';
+import AutosaveStatusPill from './AutosaveStatusPill';
 import CredentialCards from './CredentialCards';
 import FallbackModelsEditor from './FallbackModelsEditor';
 import CredentialStore from './CredentialStore';
@@ -31,6 +34,15 @@ interface GlobalSettingsProps {
 }
 
 const API_BASE = import.meta.env.VITE_API_BASE || '';
+
+/** The fields this page edits directly; every other section saves itself. */
+interface GlobalSettingsPatch {
+  user_preferences_content: string;
+  user_memory_content: string;
+  user_memory_enabled: boolean;
+  scratch_workspace: string;
+  llm_fallback_models: FallbackModelEntry[];
+}
 
 /**
  * Index-rail entries for the global settings document (spec 011 §0.8).
@@ -74,7 +86,6 @@ export default function GlobalSettings({ onBack, onTakeTour, canTakeTour }: Glob
   // The card list is shared by the Credentials section and the fallback chain
   // below it: both offer the same cards, so they must read the same list.
   const { cards, defaultCardId } = useCredentialCards();
-  const [saved, setSaved] = useState(false);
   const [loading, setLoading] = useState(true);
   const { locale, setLocale } = useLocale();
   const t = useT();
@@ -103,21 +114,16 @@ export default function GlobalSettings({ onBack, onTakeTour, canTakeTour }: Glob
       .catch(() => {});
   }, []);
 
-  async function handleSave() {
-    await fetch(`${API_BASE}/api/v2/settings`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        user_preferences_content: userPreferences,
-        user_memory_content: userMemory,
-        user_memory_enabled: userMemoryEnabled,
-        scratch_workspace: scratchWorkspace || undefined,
-        llm_fallback_models: fallbackModels,
-      }),
-    });
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
-  }
+  // Save-as-you-go, exactly like project settings. This page used to end in
+  // one Save button below thirteen sections — a user who edited About You had
+  // to scroll the whole document to keep the change, past sections that had
+  // all been saving themselves the entire time. PUT /settings ignores fields
+  // it is not sent, so each edit travels as its own partial patch.
+  const savePatch = useCallback(async (patch: Partial<GlobalSettingsPatch>) => {
+    await api('/api/v2/settings', { method: 'PUT', body: JSON.stringify(patch) });
+  }, []);
+  const autosave = useAutosave<GlobalSettingsPatch>(savePatch);
+  const { saveNow, saveSoon } = autosave;
 
   return (
     <div className="flex flex-col flex-1 min-h-0 bg-background">
@@ -133,15 +139,12 @@ export default function GlobalSettings({ onBack, onTakeTour, canTakeTour }: Glob
         <div className="flex justify-start pl-6 max-md:pl-0 max-md:block">
           <div className="w-44 shrink-0 max-lg:hidden" aria-hidden="true" />
           <div className="flex flex-col gap-1 max-w-[720px] w-full min-w-0 px-6 max-md:px-4">
-            <button
+            <SettingsBackButton
+              label={t('global.back')}
               onClick={onBack}
-              data-testid="global-settings-back-button"
-              className="flex items-center gap-1.5 text-sm text-secondary hover:text-primary transition-colors w-fit"
-            >
-              <ArrowLeft size={14} />
-              {t('global.back')}
-            </button>
-            <h1 className="text-lg font-semibold text-primary mt-1" data-testid="global-settings-title">
+              testId="global-settings-back-button"
+            />
+            <h1 className="text-lg font-semibold text-primary mt-2" data-testid="global-settings-title">
               {t('global.title')}
             </h1>
             <p className="text-sm text-secondary">{t('global.subtitle')}</p>
@@ -164,6 +167,9 @@ export default function GlobalSettings({ onBack, onTakeTour, canTakeTour }: Glob
           />
           <div className="max-w-[720px] w-full min-w-0 py-8 px-6 max-md:px-4">
 
+            {/* Leaving a field sends what was typed without waiting out the
+                pause — same wrapper as SettingsView. */}
+            <div onBlur={() => void autosave.flush()}>
             <SettingsGroup title={t('settings.group.general')}>
               <SettingsSection id="language" title={t('global.language')}>
                 <Select
@@ -185,7 +191,10 @@ export default function GlobalSettings({ onBack, onTakeTour, canTakeTour }: Glob
                 <textarea
                   rows={4}
                   value={userPreferences}
-                  onChange={(e) => setUserPreferences(e.target.value)}
+                  onChange={(e) => {
+                    setUserPreferences(e.target.value);
+                    saveSoon({ user_preferences_content: e.target.value });
+                  }}
                   placeholder={t('global.aboutYou.placeholder')}
                   disabled={loading}
                   className="w-full text-sm bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150 resize-y disabled:opacity-50"
@@ -194,25 +203,30 @@ export default function GlobalSettings({ onBack, onTakeTour, canTakeTour }: Glob
 
               {/* Spec 073 — user-level memory: agent-filed facts about the
                   user, injected into every project's prompt. The textarea is
-                  the edit/prune surface (full overwrite on Save, like About
-                  You — the two are separate files so neither save clobbers
-                  the other); the toggle rides the same one-document Save. */}
+                  the edit/prune surface (full overwrite on each save, like
+                  About You — the two are separate files so neither save
+                  clobbers the other); the toggle saves on the flip. */}
               <SettingsSection
                 id="user-memory"
                 title={t('global.userMemory.label')}
                 description={t('global.userMemory.hint')}
               >
                 <div className="flex items-start justify-between gap-4 mb-3">
-                  <p className="text-xs text-secondary min-w-0">
-                    {t('global.userMemory.toggle.hint')}
-                  </p>
+                  <div className="min-w-0">
+                    <LabelWithHint hint={t('global.userMemory.toggle.hint')}>
+                      {t('global.userMemory.toggle.label')}
+                    </LabelWithHint>
+                  </div>
                   <button
                     type="button"
                     role="switch"
                     aria-checked={userMemoryEnabled}
                     aria-label={t('global.userMemory.toggle.label')}
                     disabled={loading}
-                    onClick={() => setUserMemoryEnabled(!userMemoryEnabled)}
+                    onClick={() => {
+                      setUserMemoryEnabled(!userMemoryEnabled);
+                      saveNow({ user_memory_enabled: !userMemoryEnabled });
+                    }}
                     data-testid="user-memory-toggle"
                     className={`shrink-0 relative inline-flex h-6 w-11 items-center rounded-full transition-colors duration-150 disabled:opacity-50 ${
                       userMemoryEnabled ? 'bg-accent' : 'bg-border'
@@ -228,7 +242,10 @@ export default function GlobalSettings({ onBack, onTakeTour, canTakeTour }: Glob
                 <textarea
                   rows={4}
                   value={userMemory}
-                  onChange={(e) => setUserMemory(e.target.value)}
+                  onChange={(e) => {
+                    setUserMemory(e.target.value);
+                    saveSoon({ user_memory_content: e.target.value });
+                  }}
                   placeholder={t('global.userMemory.placeholder')}
                   disabled={loading || !userMemoryEnabled}
                   data-testid="user-memory-textarea"
@@ -244,7 +261,12 @@ export default function GlobalSettings({ onBack, onTakeTour, canTakeTour }: Glob
                 <input
                   type="text"
                   value={scratchWorkspace}
-                  onChange={(e) => setScratchWorkspace(e.target.value)}
+                  onChange={(e) => {
+                    setScratchWorkspace(e.target.value);
+                    // An emptied field is not sent, as before: the daemon
+                    // keeps its current workspace rather than taking ''.
+                    if (e.target.value) saveSoon({ scratch_workspace: e.target.value });
+                  }}
                   placeholder={t('global.scratch.placeholder')}
                   disabled={loading}
                   className="w-full text-sm font-mono bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150 disabled:opacity-50"
@@ -257,14 +279,21 @@ export default function GlobalSettings({ onBack, onTakeTour, canTakeTour }: Glob
                   the flat credential-card list. Unlike the old mount it takes
                   a real `title`, because a list of cards has no disclosure
                   button of its own to act as the heading. */}
-              <SettingsSection id="llm" title={t('cards.heading')}>
+              <SettingsSection
+                id="llm"
+                title={t('cards.heading')}
+                description={t('cards.intro')}
+              >
                 <CredentialCards providers={providers} />
               </SettingsSection>
 
               <SettingsSection id="fallback-models">
                 <FallbackModelsEditor
                   models={fallbackModels}
-                  onChange={setFallbackModels}
+                  onChange={(next) => {
+                    setFallbackModels(next);
+                    saveNow({ llm_fallback_models: next });
+                  }}
                   cards={cards}
                   defaultCardId={defaultCardId}
                 />
@@ -283,6 +312,7 @@ export default function GlobalSettings({ onBack, onTakeTour, canTakeTour }: Glob
               <SettingsSection
                 id="browser-sign-in"
                 title={t('global.browserSignIn.title')}
+                description={t('global.browserSignIn.body')}
               >
                 <BrowserSignInCard />
               </SettingsSection>
@@ -295,7 +325,12 @@ export default function GlobalSettings({ onBack, onTakeTour, canTakeTour }: Glob
                 id="connectors"
                 title={t('connectors.heading')}
                 suffix={<BetaBadge />}
-                description={t('connectors.global.hint')}
+                description={
+                  <>
+                    {t('connectors.global.hint')}
+                    <span className="block mt-1.5">{t('connectors.betaNote')}</span>
+                  </>
+                }
               >
                 <ConnectorSettings />
               </SettingsSection>
@@ -303,7 +338,14 @@ export default function GlobalSettings({ onBack, onTakeTour, canTakeTour }: Glob
               <SettingsSection
                 id="sub-agents"
                 title={t('global.subAgents.heading')}
-                description={t('subAgentSettings.intro')}
+                description={
+                  <>
+                    {t('subAgentSettings.intro')}
+                    <span className="block mt-1.5">{t('subAgentSettings.installHint')}</span>
+                    <span className="block mt-1.5">{t('subAgentSettings.credNote')}</span>
+                    <span className="block mt-1.5">{t('subAgentSettings.loginNote')}</span>
+                  </>
+                }
               >
                 <SubAgentSettings />
               </SettingsSection>
@@ -327,27 +369,19 @@ export default function GlobalSettings({ onBack, onTakeTour, canTakeTour }: Glob
               <AboutSection onTakeTour={onTakeTour} canTakeTour={canTakeTour} />
             </SettingsSection>
 
-            {/* One document, one Save — at the BOTTOM, like project settings.
-                It used to sit mid-document, directly under Quick Tasks
-                Workspace, while ALSO persisting `llm_fallback_models` from the
-                Fallback Models editor rendered above it. The file's own header
-                comment already claimed "one document, one Save"; this makes
-                that true. */}
-            <div className="flex items-center gap-3 mt-12">
-              <button
-                onClick={handleSave}
-                disabled={loading}
-                data-testid="global-settings-save"
-                className="bg-accent text-white text-sm font-medium rounded-lg px-5 py-2.5 hover:bg-accent/90 transition-all duration-150 disabled:opacity-50 max-md:w-full max-md:min-h-[44px]"
-              >
-                {t('settings.save')}
-              </button>
-              {saved && (
-                <span className="text-sm text-success">{t('settings.saved')}</span>
-              )}
             </div>
+
+            <p className="text-xs text-secondary/70 mt-12" data-testid="global-settings-autosave-hint">
+              {t('settings.autosave.hint')}
+            </p>
           </div>
         </div>
+        {/* Sticky, so it must sit inside the scroll container. */}
+        <AutosaveStatusPill
+          status={autosave.status}
+          error={autosave.error}
+          onRetry={() => void autosave.retry()}
+        />
       </div>
     </div>
   );

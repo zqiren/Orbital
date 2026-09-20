@@ -33,6 +33,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { api, ApiError } from '../config';
 import type { Connector, ConnectorListResponse } from '../types';
 import { useT } from '../i18n/useT';
+import { LabelWithHint } from './SettingsSection';
 import Select from './Select';
 
 /** "google" → "Google" for the provider-scoped disconnect copy. Provider ids
@@ -175,9 +176,8 @@ export default function ConnectorSettings() {
           SettingsSection's `title` / `suffix` / `description` (GlobalSettings),
           mirroring how project settings titles its own connectors section.
           Rendering them here too would print the section name twice, at two
-          different weights. The beta *caveat* stays — it is a warning about
-          behaviour, not a section label. */}
-      <p className="text-xs text-secondary/80 mb-3">{t('connectors.betaNote')}</p>
+          different weights. The beta caveat rides in that same ⓘ description:
+          it is worth reading once, not on every visit. */}
 
       {loadError && (
         <p className="text-xs text-error mb-2" role="alert">
@@ -325,10 +325,9 @@ export default function ConnectorSettings() {
       {/* Custom MCP server (Tier-0, Spec 011 §3): a power-user escape hatch —
           paste a server URL, no catalog work required. */}
       <form onSubmit={handleAddCustom} className="mt-4 pt-3 border-t border-border">
-        <label className="block text-sm font-medium text-primary mb-1">
+        <LabelWithHint hint={t('connectors.custom.hint')}>
           {t('connectors.custom.heading')}
-        </label>
-        <p className="text-xs text-secondary mb-2">{t('connectors.custom.hint')}</p>
+        </LabelWithHint>
         <div className="flex flex-col gap-2">
           <div className="flex gap-2 max-md:flex-col">
             <input

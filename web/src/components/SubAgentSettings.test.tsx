@@ -156,11 +156,22 @@ describe('SubAgentSettings', () => {
     expect(screen.queryByText('Gemini CLI')).not.toBeInTheDocument();
   });
 
-  it('shows the install helper line near Refresh', async () => {
+  it('keeps the install helper out of the embedded view, and on the standalone page', async () => {
+    // Embedded in Global Settings the helper notes ride behind the section's
+    // ⓘ (GlobalSettings passes them as the description); only the standalone
+    // page, which has no section heading, still prints them.
     api.mockResolvedValueOnce([makeEntry()]);
+    const { unmount } = render(<SubAgentSettings />);
+    await waitFor(() => {
+      expect(screen.getByText('Claude Code')).toBeInTheDocument();
+    });
+    expect(
+      screen.queryByText("Don't see an agent? Install its CLI, then Refresh."),
+    ).not.toBeInTheDocument();
+    unmount();
 
-    render(<SubAgentSettings />);
-
+    api.mockResolvedValueOnce([makeEntry()]);
+    render(<SubAgentSettings standalone />);
     await waitFor(() => {
       expect(
         screen.getByText("Don't see an agent? Install its CLI, then Refresh."),

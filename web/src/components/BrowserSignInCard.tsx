@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Globe, Loader2 } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 import { api } from '../config';
 import { useT } from '../i18n/useT';
 import { useLocale } from '../i18n/LocaleContext';
@@ -56,15 +56,10 @@ export default function BrowserSignInCard() {
 
   return (
     <div>
-      <div className="flex items-center gap-2 mb-1">
-        <Globe className="w-4 h-4 text-accent" />
-        <label className="block text-sm font-medium text-primary">
-          {t('global.browserSignIn.title')}
-        </label>
-      </div>
-      <p className="text-xs text-secondary mb-3">
-        {t('global.browserSignIn.body')}
-      </p>
+      {/* Title and body are the enclosing SettingsSection's title and ⓘ
+          description (GlobalSettings). Printing them here too repeated the
+          section name and put a paragraph under it that project settings
+          would have hidden. */}
 
       {error && (
         <div className="bg-error/10 border border-error/20 rounded-lg px-4 py-3 mb-3 text-sm text-error">
