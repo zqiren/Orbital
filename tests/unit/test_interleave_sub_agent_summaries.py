@@ -431,3 +431,104 @@ def test_started_marker_is_not_an_anchor(tmp_path):
     ]
     out = _interleave_sub_agent_summaries(messages)
     assert _subs(out) == []         # started marker alone injects nothing
+
+
+# ---------------------------------------------------------------------------
+# Spec 104: the synthetic row carries the turn's ordered stream
+# (``sub_agent_stream``) so the chat can render the intermediate messages
+# after a reload / switch / turn completion. Additive, display-only.
+# ---------------------------------------------------------------------------
+
+def _stream_transcript(tmp_path):
+    transcript = tmp_path / "claude-code" / "stream.jsonl"
+    transcript.parent.mkdir(parents=True)
+    _write_transcript(transcript, [
+        {"content": "[Using tool: Bash]", "chunk_type": "tool_activity", "timestamp": "2026-10-08T12:00:00+00:00"},
+        {"content": "Listed the files; now writing.", "chunk_type": "response", "timestamp": "2026-10-08T12:00:01+00:00"},
+        {"content": "[Using tool: Write]", "chunk_type": "tool_activity", "timestamp": "2026-10-08T12:00:02+00:00"},
+        {"content": "Wrote it.", "chunk_type": "response", "timestamp": "2026-10-08T12:00:03+00:00"},
+        _boundary("2026-10-08T12:00:04+00:00", "sess_s:d1"),
+    ])
+    return transcript
+
+
+def test_injected_row_carries_the_ordered_stream_with_intermediate_text(tmp_path):
+    transcript = _stream_transcript(tmp_path)
+    messages = [
+        {"role": "user", "content": "do it", "timestamp": "2026-10-08T11:59:00+00:00"},
+        _routed("claude-code", "do it", transcript, "2026-10-08T11:59:30+00:00",
+                dispatch_id="sess_s:d1", session_id="sess_s"),
+    ]
+    out = _interleave_sub_agent_summaries(messages)
+    (inj,) = _subs(out)
+    # Existing shape untouched.
+    assert inj["content"] == "Wrote it."
+    assert [r["name"] for r in inj["sub_agent_tool_rows"]] == ["Bash", "Write"]
+    # The stream: intermediate text present, in transcript order.
+    stream = inj["sub_agent_stream"]
+    assert [r["kind"] for r in stream] == ["tool", "message", "tool", "message"]
+    assert stream[1]["content"] == "Listed the files; now writing."
+    assert stream[3]["content"] == "Wrote it."
+    assert stream[0]["name"] == "Bash" and stream[2]["name"] == "Write"
+
+
+def test_stream_is_display_only_and_touches_nothing_else(tmp_path):
+    """Dual-stream isolation (TASK Task 6): the stream rides only the synthetic
+    row. The marker and every other input row pass through unchanged (no
+    field added, no mutation), and the transcript on disk is not rewritten."""
+    transcript = _stream_transcript(tmp_path)
+    before_bytes = transcript.read_bytes()
+    marker = _routed("claude-code", "do it", transcript, "2026-10-08T11:59:30+00:00",
+                     dispatch_id="sess_s:d1", session_id="sess_s")
+    user = {"role": "user", "content": "do it", "timestamp": "2026-10-08T11:59:00+00:00"}
+    marker_snapshot = json.loads(json.dumps(marker))
+    user_snapshot = dict(user)
+    messages = [user, marker]
+    out = _interleave_sub_agent_summaries(messages)
+    assert transcript.read_bytes() == before_bytes
+    assert marker == marker_snapshot
+    assert user == user_snapshot
+    assert "sub_agent_stream" not in marker and "sub_agent_stream" not in user
+    assert [m for m in out if m.get("source") != "sub_agent"] == [user, marker]
+    assert all("sub_agent_stream" not in m for m in out if m.get("source") != "sub_agent")
+
+
+def test_still_exactly_one_sub_agent_row_per_dispatch_with_stream(tmp_path):
+    """The stream rides the ONE existing synthetic row — never one row per
+    intermediate message — so pagination and the per-dispatch join hold."""
+    transcript = _stream_transcript(tmp_path)
+    messages = [
+        _routed("claude-code", "do it", transcript, "2026-10-08T11:59:30+00:00",
+                dispatch_id="sess_s:d1", session_id="sess_s"),
+        # The @mention double-marker for the same physical dispatch.
+        _routed("claude-code", "do it", transcript, "2026-10-08T11:59:31+00:00",
+                dispatch_id="sess_s:d1", session_id="sess_s", user=True),
+    ]
+    out = _interleave_sub_agent_summaries(messages)
+    subs = _subs(out)
+    assert len(subs) == 1
+    assert len(out) == 3
+    assert len([r for r in subs[0]["sub_agent_stream"] if r["kind"] == "message"]) == 2
+
+
+def test_in_flight_turn_with_only_text_so_far_renders_its_stream(tmp_path):
+    """A reload mid-run, before the first tool call: the worker has said
+    something, and the live view showed it. The in-flight row now carries it
+    in the stream (content stays "" — the partial text is not the answer)."""
+    transcript = tmp_path / "claude-code" / "flight.jsonl"
+    transcript.parent.mkdir(parents=True)
+    _write_transcript(transcript, [
+        {"content": "Starting with a listing.", "chunk_type": "response",
+         "timestamp": "2026-10-08T12:00:00+00:00", "dispatch_id": "sess_f:d1"},
+    ])
+    messages = [
+        _routed("claude-code", "go", transcript, "2026-10-08T11:59:30+00:00",
+                dispatch_id="sess_f:d1", session_id="sess_f"),
+    ]
+    out = _interleave_sub_agent_summaries(messages)
+    (inj,) = _subs(out)
+    assert inj["sub_agent_in_flight"] is True
+    assert inj["content"] == ""
+    assert inj["sub_agent_stream"] == [
+        {"kind": "message", "content": "Starting with a listing.", "timestamp": "2026-10-08T12:00:00+00:00"},
+    ]

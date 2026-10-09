@@ -78,6 +78,7 @@ def _summarize_turn(entries: list) -> dict:
             "chunk_count": 4,
             "tools_used": ["Write", "Bash", "Read"],   # de-duped, first-seen order
             "duration_seconds": 7.3,                    # alias of total_duration_seconds
+            "stream_rows": [...],                       # spec 104: the turn in order
         }
 
     ``response`` is the LAST response/message chunk in THIS turn, or ``""`` if
@@ -99,6 +100,18 @@ def _summarize_turn(entries: list) -> dict:
     rows merge into one block (stream fragments concatenate, whole blocks join
     as paragraphs). Legacy ACP thoughts (``status`` rows with no metadata,
     from an agent on the ACP transport only) are backfilled the same way.
+
+    ``stream_rows`` (spec 104) is the turn in transcript order — what the
+    live view showed, so a reload can render the same record: every tool
+    row (the SAME dict object as in ``tool_rows``, plus ``"kind": "tool"``,
+    so a result arriving later enriches both), every non-empty
+    response/message as ``{"kind": "message", "content", "timestamp"}``, and
+    every thinking block as ``{"kind": "thinking", "content", "timestamp"}``
+    (merged exactly like ``thinking``). Rows the summary already ignores
+    (``tool_result`` without metadata, ``error``, ``status`` placeholders,
+    a ``tool_activity`` the regex does not match) add nothing here either.
+    ``response`` still is the last message; the stream's last message row
+    is that same text.
     """
     chunk_count = len(entries)
     response = ""
@@ -108,6 +121,9 @@ def _summarize_turn(entries: list) -> dict:
     rows_by_id: dict = {}
     row_started: dict = {}
     thinking: list = []
+    stream_rows: list = []
+    # The stream row mirroring the latest thinking block (merges update both).
+    stream_thinking: list = []
     last_was_thinking = False
 
     def _note_tool(name: str) -> None:
@@ -115,11 +131,20 @@ def _summarize_turn(entries: list) -> dict:
             seen_tools.add(name)
             tools_used.append(name)
 
-    def _add_thinking(text: str, *, delta: bool, merge: bool) -> None:
+    def _add_thinking(text: str, *, delta: bool, merge: bool, timestamp: str) -> None:
         if merge and thinking and thinking[-1]["after_tool"] == len(tool_rows):
             thinking[-1]["content"] += text if delta else "\n\n" + text
+            stream_thinking[-1]["content"] = thinking[-1]["content"]
         elif text.strip():
             thinking.append({"content": text, "after_tool": len(tool_rows)})
+            stream_thinking.append(
+                {"kind": "thinking", "content": text, "timestamp": timestamp})
+            stream_rows.append(stream_thinking[-1])
+
+    def _add_tool_row(row: dict) -> None:
+        row["kind"] = "tool"
+        tool_rows.append(row)
+        stream_rows.append(row)
 
     first_ts = None
     last_ts = None
@@ -153,7 +178,7 @@ def _summarize_turn(entries: list) -> dict:
                     row["tool_call_id"] = tool_call_id
                     rows_by_id[tool_call_id] = row
                 row_started[id(row)] = ts
-                tool_rows.append(row)
+                _add_tool_row(row)
                 _note_tool(name)
             elif meta.get("tool_name") and row["name"] == "tool":
                 row["name"] = str(meta["tool_name"])
@@ -183,7 +208,7 @@ def _summarize_turn(entries: list) -> dict:
             dur = 0.0
             if ts is not None and next_ts is not None:
                 dur = max(0.0, (next_ts - ts).total_seconds())
-            tool_rows.append({
+            _add_tool_row({
                 "name": name,
                 "timestamp": e.get("timestamp") or "",
                 "duration_seconds": round(dur, 1),
@@ -191,17 +216,23 @@ def _summarize_turn(entries: list) -> dict:
             _note_tool(name)
         elif chunk_type == "thinking" and content:
             _add_thinking(content, delta=bool(meta and meta.get("delta")),
-                          merge=was_thinking)
+                          merge=was_thinking, timestamp=e.get("timestamp") or "")
             last_was_thinking = True
         elif (chunk_type == "status" and meta is None and content.strip()
                 and content not in _LEGACY_STATUS_TEXTS
                 and e.get("source") in _acp_handles()):
             # D4 backfill: an old ACP thought chunk (streamed fragments).
-            _add_thinking(content, delta=True, merge=was_thinking)
+            _add_thinking(content, delta=True, merge=was_thinking,
+                          timestamp=e.get("timestamp") or "")
             last_was_thinking = True
         elif chunk_type in ("response", "message") or chunk_type is None:
             if content:
                 response = content
+                stream_rows.append({
+                    "kind": "message",
+                    "content": content,
+                    "timestamp": e.get("timestamp") or "",
+                })
 
     # Metadata rows whose result never arrived: look-ahead duration, as legacy.
     for row in tool_rows:
@@ -224,6 +255,8 @@ def _summarize_turn(entries: list) -> dict:
         # Back-compat aliases.
         "tools_used": tools_used,
         "duration_seconds": total_duration_seconds,
+        # Spec 104: the turn in order (tool rows shared with tool_rows).
+        "stream_rows": stream_rows,
     }
 
 

@@ -371,10 +371,26 @@ export interface ChatMessage {
   sub_agent_thinking?: Array<{ content: string; after_tool: number }>;
   /** Spec 100: the dispatch is still running; the rows are the run so far. */
   sub_agent_in_flight?: boolean;
+  /**
+   * Spec 104: the turn in transcript order — the worker's intermediate
+   * messages, its tool rows (the same rows as `sub_agent_tool_rows`) and its
+   * thinking, as the live view showed them. When present and non-empty the
+   * transform renders it instead of the capsule + final-bubble shape; absent
+   * (an older daemon) it falls back to that shape.
+   */
+  sub_agent_stream?: SubAgentStreamRow[];
 }
+
+/** One row of a sub-agent turn's ordered stream (spec 104). */
+export type SubAgentStreamRow =
+  | ({ kind: 'tool' } & SubAgentToolRow)
+  | { kind: 'message'; content: string; timestamp: string }
+  | { kind: 'thinking'; content: string; timestamp: string };
 
 /** One tool row of a sub-agent turn (agents_v2._interleave_sub_agent_summaries). */
 export interface SubAgentToolRow {
+  /** Spec 104: set by daemons that also emit the stream (the row is shared). */
+  kind?: 'tool';
   name: string;
   timestamp: string;
   duration_seconds: number;

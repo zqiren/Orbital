@@ -286,3 +286,101 @@ def test_flat_legacy_transcript_zero_boundaries_has_none_dispatch_id(tmp_path):
     summary = read_sub_agent_summary(str(p))
     assert len(summary) == 1
     assert summary[0]["dispatch_id"] is None
+
+
+# ---------------------------------------------------------------------------
+# Spec 104: the ordered stream — every intermediate message, in transcript
+# order, interleaved with the tool rows. ``response`` (last wins) and
+# ``tool_rows`` are unchanged; the stream is additive.
+# ---------------------------------------------------------------------------
+
+def test_stream_rows_keep_messages_and_tools_in_transcript_order(tmp_path):
+    p = tmp_path / "stream.jsonl"
+    _write_transcript(p, [
+        {"content": "[Using tool: Bash]", "chunk_type": "tool_activity", "timestamp": "2026-10-08T12:00:00+00:00"},
+        {"content": "A", "chunk_type": "response", "timestamp": "2026-10-08T12:00:01+00:00"},
+        {"content": "[Using tool: Write]", "chunk_type": "tool_activity", "timestamp": "2026-10-08T12:00:02+00:00"},
+        {"content": "B", "chunk_type": "response", "timestamp": "2026-10-08T12:00:03+00:00"},
+    ])
+    (turn,) = read_sub_agent_summary(str(p))
+    # Unchanged contract.
+    assert turn["response"] == "B"
+    assert [r["name"] for r in turn["tool_rows"]] == ["Bash", "Write"]
+    # The stream.
+    stream = turn["stream_rows"]
+    assert [r["kind"] for r in stream] == ["tool", "message", "tool", "message"]
+    assert [r["content"] for r in stream if r["kind"] == "message"] == ["A", "B"]
+    assert stream[1]["timestamp"] == "2026-10-08T12:00:01+00:00"
+    # §3.5: the stream's tool rows ARE the tool_rows dicts (same objects), so
+    # any later enrichment of a tool row flows into the stream.
+    assert stream[0] is turn["tool_rows"][0]
+    assert stream[2] is turn["tool_rows"][1]
+    assert stream[0]["name"] == "Bash" and stream[0]["duration_seconds"] == 1.0
+
+
+def test_stream_rows_skip_rows_the_summary_already_skips(tmp_path):
+    """tool_result / error / status / non-matching tool_activity (codex's
+    ``[Running command: …]``) produce no stream row — exactly as they produce
+    no tool row and no response today."""
+    p = tmp_path / "skip.jsonl"
+    _write_transcript(p, [
+        {"content": "[Running command: ls]", "chunk_type": "tool_activity", "timestamp": "2026-10-08T12:00:00+00:00"},
+        {"content": "Tool result received", "chunk_type": "tool_result", "timestamp": "2026-10-08T12:00:01+00:00"},
+        {"content": "Reconnecting... 2/5", "chunk_type": "error", "timestamp": "2026-10-08T12:00:02+00:00"},
+        {"content": "Thinking...", "chunk_type": "status", "timestamp": "2026-10-08T12:00:03+00:00"},
+        {"content": "", "chunk_type": "response", "timestamp": "2026-10-08T12:00:04+00:00"},
+        {"content": "only text", "chunk_type": "response", "timestamp": "2026-10-08T12:00:05+00:00"},
+    ])
+    (turn,) = read_sub_agent_summary(str(p))
+    assert turn["response"] == "only text"
+    assert turn["tool_rows"] == []
+    assert turn["stream_rows"] == [
+        {"kind": "message", "content": "only text", "timestamp": "2026-10-08T12:00:05+00:00"},
+    ]
+
+
+def test_stream_rows_metadata_result_updates_its_row_in_place(tmp_path):
+    """Spec 100 rows: a call's result (a tool_result row with the same id)
+    enriches the existing stream row; it never adds a second one."""
+    p = tmp_path / "meta.jsonl"
+    _write_transcript(p, [
+        {"content": "[Using tool: Read]", "chunk_type": "tool_activity", "timestamp": "2026-10-08T12:00:00+00:00",
+         "metadata": {"tool_call_id": "tu1", "tool_name": "Read", "arguments": {"file_path": "a.txt"}}},
+        {"content": "I read it; now writing.", "chunk_type": "response", "timestamp": "2026-10-08T12:00:01+00:00"},
+        {"content": "", "chunk_type": "tool_result", "timestamp": "2026-10-08T12:00:02+00:00",
+         "metadata": {"tool_call_id": "tu1", "result_preview": "hello", "is_error": False}},
+        {"content": "Done.", "chunk_type": "response", "timestamp": "2026-10-08T12:00:03+00:00"},
+    ])
+    (turn,) = read_sub_agent_summary(str(p))
+    stream = turn["stream_rows"]
+    assert [r["kind"] for r in stream] == ["tool", "message", "message"]
+    assert stream[0]["result_preview"] == "hello"
+    assert stream[0]["tool_call_id"] == "tu1"
+    assert stream[0] is turn["tool_rows"][0]
+
+
+def test_stream_rows_carry_thinking_in_order(tmp_path):
+    """Spec 100's thinking rides the stream too (``kind: "thinking"``) so the
+    stream path can place it where it happened; ``thinking`` (the
+    ``after_tool``-indexed list) is unchanged. Consecutive thinking rows merge
+    into one stream row exactly as they merge into one thinking block."""
+    p = tmp_path / "think.jsonl"
+    _write_transcript(p, [
+        {"content": "Look", "chunk_type": "thinking", "timestamp": "2026-10-08T12:00:00+00:00",
+         "metadata": {"delta": True}},
+        {"content": " around", "chunk_type": "thinking", "timestamp": "2026-10-08T12:00:01+00:00",
+         "metadata": {"delta": True}},
+        {"content": "[Using tool: Glob]", "chunk_type": "tool_activity", "timestamp": "2026-10-08T12:00:02+00:00"},
+        {"content": "Found them.", "chunk_type": "response", "timestamp": "2026-10-08T12:00:03+00:00"},
+        {"content": "Second thought.", "chunk_type": "thinking", "timestamp": "2026-10-08T12:00:04+00:00"},
+        {"content": "Final.", "chunk_type": "response", "timestamp": "2026-10-08T12:00:05+00:00"},
+    ])
+    (turn,) = read_sub_agent_summary(str(p))
+    assert turn["thinking"] == [
+        {"content": "Look around", "after_tool": 0},
+        {"content": "Second thought.", "after_tool": 1},
+    ]
+    stream = turn["stream_rows"]
+    assert [r["kind"] for r in stream] == ["thinking", "tool", "message", "thinking", "message"]
+    assert stream[0] == {"kind": "thinking", "content": "Look around", "timestamp": "2026-10-08T12:00:00+00:00"}
+    assert stream[3]["content"] == "Second thought."

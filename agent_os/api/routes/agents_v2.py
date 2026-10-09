@@ -2730,6 +2730,12 @@ def _interleave_sub_agent_summaries(messages: list[dict]) -> list[dict]:
     - Spec 100: tool rows carry ``tool_call_id`` / ``arguments`` / the
       result preview when the transcript has them, and the turn's thinking
       rides ``sub_agent_thinking`` (only when non-empty). Display-only.
+    - Spec 104: the row also carries ``sub_agent_stream`` — the turn in
+      transcript order (tool / message / thinking rows), so the chat renders
+      the worker's intermediate messages as bubbles between its tool
+      capsules after a reload, exactly as the live view showed them. An
+      old frontend ignores the field and keeps the capsule + final-bubble
+      shape; a new frontend on an old daemon (no field) does the same.
 
     Read-only and best-effort: a missing/unreadable transcript is a no-op.
     Operates on the already-paginated page, so it never changes the total-count
@@ -2773,7 +2779,8 @@ def _interleave_sub_agent_summaries(messages: list[dict]) -> list[dict]:
             continue
         in_flight = bool(turn.get("in_flight"))
         if in_flight:
-            if not turn.get("tool_rows") and not turn.get("thinking"):
+            if (not turn.get("tool_rows") and not turn.get("thinking")
+                    and not turn.get("stream_rows")):
                 continue  # nothing to show yet
         elif not (turn.get("response") or "").strip():
             # Errored / interrupted / tool-only turn: let the existing terminal
@@ -2788,6 +2795,7 @@ def _interleave_sub_agent_summaries(messages: list[dict]) -> list[dict]:
             "sub_agent_handle": meta.get("handle", ""),
             "sub_agent_tool_rows": turn.get("tool_rows", []),
             "sub_agent_duration": turn.get("total_duration_seconds", 0.0),
+            "sub_agent_stream": turn.get("stream_rows", []),
             "timestamp": msg.get("timestamp", ""),
             "session_id": msg.get("session_id"),
         }

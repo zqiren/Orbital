@@ -2115,6 +2115,240 @@ describe('transformChatHistory — spec 100 enriched sub-agent capsule', () => {
   });
 });
 
+describe('transformChatHistory — spec 104 sub-agent stream (intermediate bubbles survive reload)', () => {
+  type Item = ReturnType<typeof transformChatHistory>[number];
+  type Run = Extract<Item, { type: 'agent_run' }>;
+  type Msg = Extract<Item, { type: 'agent_message' }>;
+  const isHeader = (i: Item): i is Msg => i.type === 'agent_message' && !!i.isHeaderOnly;
+  const isBubble = (i: Item): i is Msg => i.type === 'agent_message' && !i.isHeaderOnly;
+  const rowNames = (run: Run) =>
+    run.items.filter((c) => c.type === 'tool_call_row').map((c) => (c.type === 'tool_call_row' ? c.tool_name : ''));
+
+  const bash = { kind: 'tool' as const, name: 'Bash', timestamp: TS, duration_seconds: 1.0 };
+  const write = { kind: 'tool' as const, name: 'Write', timestamp: TS3, duration_seconds: 0.5 };
+  const msgA = { kind: 'message' as const, content: 'A: listed the files; now writing.', timestamp: TS2 };
+  const msgB = { kind: 'message' as const, content: 'B: wrote it.', timestamp: TS4 };
+
+  function sub(overrides: Partial<ChatMessage>): ChatMessage {
+    return {
+      role: 'assistant',
+      content: 'B: wrote it.',
+      source: 'sub_agent',
+      timestamp: TS,
+      sub_agent_handle: 'claude-code',
+      sub_agent_tool_rows: [bash, write],
+      sub_agent_duration: 3,
+      ...overrides,
+    };
+  }
+
+  it('renders the stream in order: capsule(Bash), bubble A, capsule(Write), bubble B — final text exactly once', () => {
+    const items = transformChatHistory([sub({ sub_agent_stream: [bash, msgA, write, msgB] })], '/w');
+    expect(items.map((i) => (isHeader(i) ? 'header' : i.type))).toEqual([
+      'header', 'agent_run', 'agent_message', 'agent_run', 'agent_message',
+    ]);
+    const runs = items.filter((i): i is Run => i.type === 'agent_run');
+    expect(runs.map(rowNames)).toEqual([['Bash'], ['Write']]);
+    const bubbles = items.filter(isBubble);
+    expect(bubbles.map((b) => b.content)).toEqual([msgA.content, msgB.content]);
+    expect(bubbles.every((b) => b.source === 'claude-code')).toBe(true);
+    expect(bubbles[0].timestamp).toBe(TS2);
+    // The final text appears once (the stream's last message IS msg.content).
+    expect(items.filter((i) => i.type === 'agent_message' && i.content === 'B: wrote it.')).toHaveLength(1);
+    // Exactly one header anchor, before the first capsule, and none directly before a bubble.
+    expect(items.filter(isHeader)).toHaveLength(1);
+    expect(isHeader(items[0])).toBe(true);
+    items.forEach((it, idx) => {
+      if (isBubble(it) && idx > 0) expect(isHeader(items[idx - 1])).toBe(false);
+    });
+  });
+
+  it('each stream capsule is a collapsed, completed sub_agent capsule under the worker handle with synthetic ids', () => {
+    const items = transformChatHistory([sub({ sub_agent_stream: [bash, msgA, write, msgB] })], '/w');
+    const runs = items.filter((i): i is Run => i.type === 'agent_run');
+    for (const run of runs) {
+      expect(run.capsule_id.startsWith('sub_agent:claude-code:')).toBe(true);
+      expect(run.status).toBe('completed');
+      expect(run.defaultExpanded).toBe(false);
+      expect(run.source).toBe('claude-code');
+      expect(run.ended_at).not.toBeNull();
+    }
+    expect(new Set(runs.map((r) => r.capsule_id)).size).toBe(2);
+    const [r0, r1] = runs.map((r) => r.items[0]);
+    expect(r0.type === 'tool_call_row' && r0.tool_call_id).toBe(`sub:claude-code:${TS}:0`);
+    expect(r1.type === 'tool_call_row' && r1.tool_call_id).toBe(`sub:claude-code:${TS}:1`);
+    expect(r0.type === 'tool_call_row' && r0.target_description).toBe('1.0s');
+    expect(r0.type === 'tool_call_row' && r0.result_content).toBeNull();
+    expect(r0.type === 'tool_call_row' && r0.result_status).toBe('received');
+    // Durations: Bash ran 1.0s from TS.
+    expect(runs[0].started_at).toBe(Date.parse(TS));
+    expect(runs[0].ended_at).toBe(Date.parse(TS) + 1000);
+  });
+
+  it('D2: tool rows after the last message render as a trailing capsule after the final bubble', () => {
+    const items = transformChatHistory([sub({ sub_agent_stream: [bash, msgA, write, msgB, bash] })], '/w');
+    expect(items.map((i) => (isHeader(i) ? 'header' : i.type))).toEqual([
+      'header', 'agent_run', 'agent_message', 'agent_run', 'agent_message', 'agent_run',
+    ]);
+    const last = items[items.length - 1] as Run;
+    expect(rowNames(last)).toEqual(['Bash']);
+    expect(last.status).toBe('completed');
+  });
+
+  it('a stream that starts with a message renders the bubble first, with no header anchor before it', () => {
+    const items = transformChatHistory([sub({ sub_agent_stream: [msgA, bash, msgB] })], '/w');
+    expect(items.map((i) => (isHeader(i) ? 'header' : i.type))).toEqual([
+      'agent_message', 'agent_run', 'agent_message',
+    ]);
+    // The capsule after the bubble is anchored by the bubble itself (same handle).
+    expect(items.filter(isHeader)).toHaveLength(0);
+  });
+
+  it('a message-only stream renders one bubble per message and no capsule (codex before spec 100)', () => {
+    const items = transformChatHistory(
+      [sub({ sub_agent_tool_rows: [], sub_agent_stream: [msgA, msgB] })],
+      '/w',
+    );
+    expect(items.map((i) => i.type)).toEqual(['agent_message', 'agent_message']);
+    expect(items.filter(isHeader)).toHaveLength(0);
+    expect(items.map((i) => (i.type === 'agent_message' ? i.content : ''))).toEqual([msgA.content, msgB.content]);
+  });
+
+  it('skips empty / "(no response)" / ANSI-only message rows and strips ANSI from the rest', () => {
+    const items = transformChatHistory(
+      [
+        sub({
+          sub_agent_tool_rows: [],
+          content: 'done',
+          sub_agent_stream: [
+            { kind: 'message', content: '   ', timestamp: TS },
+            { kind: 'message', content: '(no response)', timestamp: TS2 },
+            { kind: 'message', content: '\x1b[32mgreen\x1b[0m done', timestamp: TS3 },
+          ],
+        }),
+      ],
+      '/w',
+    );
+    expect(items.map((i) => i.type)).toEqual(['agent_message']);
+    expect(items[0].type === 'agent_message' && items[0].content).toBe('green done');
+  });
+
+  it('spec 100 enrichment flows into the stream rows (arguments, result, totals) through the shared row builder', () => {
+    const read = {
+      kind: 'tool' as const, name: 'Read', timestamp: TS, duration_seconds: 0.4, tool_call_id: 'tu1',
+      arguments: { file_path: '/w/notes.txt' }, result_preview: 'hello', result_total_chars: 900, result_total_lines: 40,
+    };
+    const items = transformChatHistory(
+      [sub({ sub_agent_tool_rows: [read], sub_agent_stream: [read, msgB] })],
+      '/w',
+    );
+    const run = items.find((i): i is Run => i.type === 'agent_run')!;
+    const row = run.items[0];
+    expect(row.type).toBe('tool_call_row');
+    if (row.type !== 'tool_call_row') return;
+    expect(row.tool_call_id).toBe('tu1');
+    expect(row.target_description).toBe(describeWorkerTool('Read', { file_path: '/w/notes.txt' }, '/w'));
+    expect(row.result_content).toBe('hello');
+    expect(row.result_totals).toEqual({ chars: 900, lines: 40 });
+    // Identical to what the fallback path builds for the same row.
+    const fallback = transformChatHistory([sub({ sub_agent_tool_rows: [read] })], '/w')
+      .find((i): i is Run => i.type === 'agent_run')!;
+    expect(row).toEqual(fallback.items[0]);
+  });
+
+  it('thinking rows land inside the capsule they came in, in order', () => {
+    const think1 = { kind: 'thinking' as const, content: 'Find the files first.', timestamp: TS };
+    const think2 = { kind: 'thinking' as const, content: 'Now write.', timestamp: TS3 };
+    const items = transformChatHistory(
+      [
+        sub({
+          sub_agent_thinking: [{ content: think1.content, after_tool: 0 }, { content: think2.content, after_tool: 1 }],
+          sub_agent_stream: [think1, bash, msgA, think2, write, msgB],
+        }),
+      ],
+      '/w',
+    );
+    const runs = items.filter((i): i is Run => i.type === 'agent_run');
+    expect(runs).toHaveLength(2);
+    expect(runs[0].items.map((c) => c.type)).toEqual(['reasoning_block', 'tool_call_row']);
+    expect(runs[1].items.map((c) => c.type)).toEqual(['reasoning_block', 'tool_call_row']);
+    expect(runs.every((r) => r.has_thinking)).toBe(true);
+    const t0 = runs[0].items[0];
+    expect(t0.type === 'reasoning_block' && t0.content).toBe(think1.content);
+  });
+
+  it('a thinking row after the last message becomes a trailing (thinking-only) capsule', () => {
+    const think = { kind: 'thinking' as const, content: 'Done thinking.', timestamp: TS5 };
+    const items = transformChatHistory([sub({ sub_agent_stream: [bash, msgB, think] })], '/w');
+    expect(items.map((i) => (isHeader(i) ? 'header' : i.type))).toEqual([
+      'header', 'agent_run', 'agent_message', 'agent_run',
+    ]);
+    const last = items[items.length - 1] as Run;
+    expect(last.items.map((c) => c.type)).toEqual(['reasoning_block']);
+  });
+
+  it('in flight: intermediate capsules are completed, the trailing one is running, bubbles so far are shown', () => {
+    const pendingWrite = { ...write, tool_call_id: 'w1', arguments: { file_path: 'x' } };
+    const items = transformChatHistory(
+      [
+        sub({
+          content: '',
+          sub_agent_in_flight: true,
+          sub_agent_tool_rows: [bash, pendingWrite],
+          sub_agent_stream: [bash, msgA, pendingWrite],
+        }),
+      ],
+      '/w',
+    );
+    expect(items.map((i) => (isHeader(i) ? 'header' : i.type))).toEqual([
+      'header', 'agent_run', 'agent_message', 'agent_run',
+    ]);
+    const runs = items.filter((i): i is Run => i.type === 'agent_run');
+    expect(runs[0].status).toBe('completed');
+    expect(runs[1].status).toBe('running');
+    expect(runs[1].ended_at).toBeNull();
+    const pending = runs[1].items[0];
+    expect(pending.type === 'tool_call_row' && pending.result_status).toBe('pending');
+    expect(items.filter(isBubble).map((b) => b.content)).toEqual([msgA.content]);
+  });
+
+  it('in flight with the stream ending in a message: no running capsule, the bubble is last', () => {
+    const items = transformChatHistory(
+      [sub({ content: '', sub_agent_in_flight: true, sub_agent_tool_rows: [bash], sub_agent_stream: [bash, msgA] })],
+      '/w',
+    );
+    expect(items.map((i) => (isHeader(i) ? 'header' : i.type))).toEqual(['header', 'agent_run', 'agent_message']);
+    expect(items.some((i) => i.type === 'agent_run' && i.status === 'running')).toBe(false);
+  });
+
+  it('no sub_agent_stream (old daemon) → byte-identical to the legacy capsule + final-bubble shape', () => {
+    const legacy = sub({});
+    const withEmpty = sub({ sub_agent_stream: [] });
+    const withoutField = transformChatHistory([legacy], '/w');
+    expect(transformChatHistory([withEmpty], '/w')).toEqual(withoutField);
+    // And the legacy shape itself is still header + ONE capsule of every row + ONE bubble.
+    expect(withoutField.map((i) => (isHeader(i) ? 'header' : i.type))).toEqual(['header', 'agent_run', 'agent_message']);
+    expect(rowNames(withoutField[1] as Run)).toEqual(['Bash', 'Write']);
+  });
+
+  it('a stream turn is finalized like any other: an open management capsule closes before it', () => {
+    const messages: ChatMessage[] = [
+      { role: 'assistant', content: '', source: 'management', timestamp: TS,
+        tool_calls: [{ id: 'c1', type: 'function', function: { name: 'read_file', arguments: '{"path":"a"}' } }] },
+      { role: 'tool', content: 'x', tool_call_id: 'c1', source: 'tool', timestamp: TS2 },
+      sub({ timestamp: TS3, sub_agent_stream: [bash, msgA, write, msgB] }),
+    ];
+    const items = transformChatHistory(messages, '/w');
+    const mgr = items.findIndex((i) => i.type === 'agent_run' && i.capsule_id.startsWith('cap:'));
+    expect(mgr).toBeGreaterThanOrEqual(0);
+    // The worker's first capsule gets its own header: the previous item is the manager's capsule.
+    expect(isHeader(items[mgr + 1])).toBe(true);
+    expect((items[mgr + 1] as Msg).source).toBe('claude-code');
+    expect(items[mgr + 2].type).toBe('agent_run');
+    expect((items[mgr + 2] as Run).source).toBe('claude-code');
+  });
+});
+
 describe('describeWorkerTool', () => {
   const en: ActivityTranslate = (k, v) => translate('en', k, v);
 
