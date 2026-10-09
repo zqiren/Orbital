@@ -1,0 +1,23 @@
+﻿About the AgentOS-Worker account
+
+Orbital runs agent commands as a separate, low-privilege local Windows account named "AgentOS-Worker", so an agent cannot read your user profile, your browser data or your credentials.
+
+- The account is created during installation and does not appear on the sign-in screen.
+- Its password is random; nobody knows it, and nobody needs to.
+- Uninstalling Orbital removes the account.
+- Giving that account read access to your developer tools (the folders holding npm, cargo, Python and so on) happens in the background the first time Orbital starts; it does not slow the installation down.
+
+If you see AgentOS-Worker under Computer Management > Local Users and Groups > Users, its description says it belongs to Orbital.
+
+------------------------------------------------------------
+
+关于 AgentOS-Worker 账户
+
+Orbital 会用一个独立的低权限本地 Windows 账户「AgentOS-Worker」来运行 agent 的命令，这样 agent 读不到你的用户配置、浏览器数据和各类凭据。
+
+- 该账户在安装过程中创建，不会出现在登录界面。
+- 它的密码是随机生成的，没有人知道，也不需要有人知道。
+- 卸载 Orbital 时会一并删除该账户。
+- 让该账户能读取你的开发工具（npm、cargo、Python 等所在的目录）这一步，会在 Orbital 第一次启动时在后台完成，不会拖慢安装。
+
+如果你在「计算机管理 → 本地用户和组 → 用户」里看到 AgentOS-Worker，它的描述栏会写明它属于 Orbital。

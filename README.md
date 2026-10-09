@@ -556,6 +556,19 @@ Orbital is not yet code-signed, so Windows will show a security warning:
 Click **"More info"** then **"Run anyway"**. Code signing will be added in a future release.
 </details>
 
+<details>
+<summary>The AgentOS-Worker account</summary>
+
+Orbital runs agent commands as a separate, low-privilege local Windows account named **AgentOS-Worker**, so an agent cannot read your user profile, your browser data or your credentials. The installer says so before it writes a single file.
+
+- The account is created during installation and does not appear on the sign-in screen.
+- Its password is random; nobody knows it, and nobody needs to.
+- Uninstalling Orbital removes the account.
+- Giving that account read access to your developer tools (the folders holding npm, cargo, Python and so on) happens in the background the first time Orbital starts; it does not slow the installation down.
+
+The AgentOS-Worker you see under Computer Management > Local Users and Groups > Users carries a description saying it belongs to Orbital.
+</details>
+
 ### macOS
 
 1. Download the `Orbital-*-macOS.dmg` from [Releases](https://github.com/zqiren/Orbital/releases/latest)

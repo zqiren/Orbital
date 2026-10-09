@@ -27,6 +27,15 @@ logger = logging.getLogger("agent_os.platform.windows.permissions")
 class PermissionManager:
     """Manages file-system permissions for the sandbox user via icacls."""
 
+    def __init__(self, icacls_timeout: float | None = None) -> None:
+        # Spec 109 D7: a per-call bound on icacls, in seconds. ``None`` (the
+        # daemon and the Folder-access UI) means no bound — a user may
+        # legitimately grant a huge folder behind a visible spinner. The
+        # installer paths (``SetupOrchestrator.run_setup/run_teardown``) set
+        # it for their duration so an unknown slow DACL (network profile,
+        # antivirus hooking icacls) can never wedge Inno's progress bar.
+        self.icacls_timeout: float | None = icacls_timeout
+
     # Standard user folders returned by get_available_folders()
     _STANDARD_FOLDERS = [
         "Desktop",
@@ -67,12 +76,21 @@ class PermissionManager:
         return PermissionResult(success=True, path=resolved)
 
     def revoke_access(self, username: str, path: str) -> PermissionResult:
-        """Revoke all access for *username* on *path*."""
+        """Revoke all access for *username* on *path*.
+
+        Root-only, deliberately no ``/T`` (spec 109 D1): removing the
+        inheritable ACE from the root removes the inherited copies through
+        the same NTFS propagation that put them there. With ``/T`` this was
+        a per-file walk over every toolchain root — the uninstall hang in
+        issue #55. Explicit per-file entries written by pre-109 installs
+        (which used ``/T`` on the grant) are not touched; once the account is
+        deleted they are unresolvable-SID clutter that Windows ignores.
+        """
         resolved = self._resolve_path(path)
         if resolved is None:
             return PermissionResult(success=False, path=path, error="Path does not exist")
 
-        result = self._run_icacls([resolved, "/remove", username, "/T", "/Q"])
+        result = self._run_icacls([resolved, "/remove", username, "/Q"])
         if result.returncode != 0:
             err = result.stderr.strip() or result.stdout.strip()
             logger.error("icacls revoke failed for %s on %s: %s", username, resolved, err)
@@ -199,6 +217,20 @@ class PermissionManager:
         browsers, mail and vaults, and a blanket grant plus deny ACEs for
         secrets would be both invasive and hard to reason about. Non-elevated
         is enough here — the user owns these folders.
+
+        The ACE is **inheritable** (``(OI)(CI)``) and ``/T`` is deliberately
+        absent (spec 109 D1). NTFS propagates an inheritable ACE to the
+        existing subtree in one kernel pass when the root DACL is set;
+        ``/T`` additionally wrote an *explicit* ACE on every descendant, one
+        file at a time, which on a dev machine (``%LOCALAPPDATA%\\Programs``,
+        ``.cargo``, ``.rustup``, ``npm``: 10^5-10^6 files) pinned a CPU for
+        minutes behind the installer's frozen "Configuring agent sandbox"
+        bar (issue #55). Descendants whose DACL has inheritance disabled do
+        not receive the ACE — rare in toolchain trees and acceptable for a
+        best-effort grant that the daemon re-runs at every start.
+
+        Measured numbers (spec 109 V1, to be recorded from the Windows
+        verification run): with ``/T``: <fill in>; without: <fill in>.
         """
         results: list[PermissionResult] = []
         for root in windows_toolchain_roots():
@@ -208,7 +240,7 @@ class PermissionManager:
             if resolved is None:
                 continue
             result = self._run_icacls(
-                [resolved, "/grant", f"{username}:(OI)(CI)RX", "/T", "/Q"]
+                [resolved, "/grant", f"{username}:(OI)(CI)RX", "/Q"]
             )
             if result.returncode != 0:
                 err = result.stderr.strip() or result.stdout.strip()
@@ -308,22 +340,46 @@ class PermissionManager:
             return None
         return os.path.realpath(abs_path)
 
-    @staticmethod
-    def _run_icacls(args: list[str]) -> subprocess.CompletedProcess[str]:
-        """Run icacls with the given arguments."""
+    def _run_icacls(
+        self, args: list[str], timeout: float | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        """Run icacls with the given arguments.
+
+        *timeout* (seconds) overrides :attr:`icacls_timeout` for this call;
+        ``None`` falls back to the attribute. On ``TimeoutExpired`` the child
+        is already killed by ``subprocess.run``; a synthetic
+        ``CompletedProcess`` with ``returncode=-1`` and a ``"timed out"``
+        stderr comes back, so every caller's existing ``returncode != 0``
+        branch reports a failed PermissionResult instead of raising (spec
+        109 D7). A timed-out call can leave propagation partial; every call
+        on the installer path is idempotent and re-runs at daemon start.
+        """
         cmd = ["icacls"] + args
+        bound = timeout if timeout is not None else self.icacls_timeout
         logger.debug("Running: %s", " ".join(cmd))
-        return subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            # icacls emits ANSI-localized text on non-English Windows, which
-            # is invalid UTF-8 — strict decoding would kill the pipe reader
-            # thread and hand back stdout=None (see test_subprocess_encoding).
-            errors="replace",
-            creationflags=win_no_window_flags(),
-        )
+        try:
+            return subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                # icacls emits ANSI-localized text on non-English Windows, which
+                # is invalid UTF-8 — strict decoding would kill the pipe reader
+                # thread and hand back stdout=None (see test_subprocess_encoding).
+                errors="replace",
+                creationflags=win_no_window_flags(),
+                timeout=bound,
+            )
+        except subprocess.TimeoutExpired:
+            target = args[0] if args else "?"
+            logger.warning(
+                "icacls timed out after %ss on %s; child killed, continuing",
+                bound, target,
+            )
+            return subprocess.CompletedProcess(
+                args=cmd, returncode=-1, stdout="",
+                stderr=f"timed out after {bound}s",
+            )
 
 
 def _has_deny_ace(output: str, username: str) -> bool:

@@ -4,6 +4,7 @@
 
 """C6: SetupOrchestrator — first-run elevated setup and teardown."""
 
+import contextlib
 import ctypes
 import json
 import logging
@@ -20,6 +21,13 @@ logger = logging.getLogger("agent_os.platform.windows.setup")
 _SETUP_STATUS_FILENAME = "setup_status.json"
 _ELEVATION_POLL_INTERVAL = 0.5  # seconds
 _ELEVATION_TIMEOUT = 60  # seconds
+
+# Spec 109 D7: per-icacls-call bound on the installer paths (run_setup /
+# run_teardown), in seconds. Insurance, not the fix — with ``/T`` gone every
+# install-path call is sub-second; this only guards against an unknown slow
+# DACL (network profile, antivirus hooking icacls) wedging Inno's progress
+# bar, which the user cannot cancel (the installer is elevated).
+INSTALLER_ICACLS_TIMEOUT: float = 120.0
 
 
 class SetupOrchestrator:
@@ -56,8 +64,30 @@ class SetupOrchestrator:
             issues=issues,
         )
 
+    @contextlib.contextmanager
+    def _bounded_icacls(self):
+        """Apply :data:`INSTALLER_ICACLS_TIMEOUT` to the permission manager
+        for the duration of an installer path, restoring it afterwards."""
+        previous = getattr(self.permission_manager, "icacls_timeout", None)
+        self.permission_manager.icacls_timeout = INSTALLER_ICACLS_TIMEOUT
+        try:
+            yield
+        finally:
+            self.permission_manager.icacls_timeout = previous
+
     def run_setup(self) -> SetupResult:
-        """Run full setup. Must be called from an elevated process."""
+        """Run full setup. Must be called from an elevated process.
+
+        Account + workspace + worker home + control-file denies only. The
+        per-user toolchain grants (spec 077 W1) are NOT here any more: they
+        run in the daemon at every start (spec 109 D2,
+        ``WindowsPlatformProvider.refresh_sandbox_grants``), where a slow
+        folder costs a background thread instead of a frozen installer.
+        """
+        with self._bounded_icacls():
+            return self._run_setup_steps()
+
+    def _run_setup_steps(self) -> SetupResult:
         # Step 1: Create sandbox account
         try:
             account_status = self.account_manager.ensure_account_exists()
@@ -107,39 +137,33 @@ class SetupOrchestrator:
             logger.error("Setup step 4 (worker home) raised: %s", exc)
             return SetupResult(success=False, error=str(exc))
 
-        # Step 5: read+execute on the per-user toolchain roots that exist
-        # (spec 077 W1). Best effort by design — a machine with no nvm and no
-        # cargo simply has fewer roots, and one unwritable root must not fail
-        # an otherwise good install. Anything missed here is one click in
-        # Settings > Folder access, which writes the same ACE.
-        try:
-            grants = self.permission_manager.grant_toolchain_roots(username)
-            failed = [g.path for g in grants if not g.success]
-            logger.info(
-                "Setup step 5 complete: %d toolchain root(s) granted%s",
-                sum(1 for g in grants if g.success),
-                f", {len(failed)} failed: {failed}" if failed else "",
-            )
-        except Exception as exc:
-            logger.warning("Setup step 5 (toolchain grants) raised: %s", exc)
-
-        # Step 6: deny-write ACEs on the workspace's own control files
+        # Step 5: deny-write ACEs on the workspace's own control files
         # (spec 077 W3). Best effort: a fresh workspace holds no repository
         # yet, so this usually applies nothing — the provider re-checks after
         # commands that could have created one.
+        # (The former step 5, the toolchain grants, moved to daemon start —
+        # spec 109 D2.)
         try:
             denies = self.permission_manager.protect_control_files(username, workspace_path)
             logger.info(
-                "Setup step 6 complete: %d control file(s) protected", len(denies),
+                "Setup step 5 complete: %d control file(s) protected", len(denies),
             )
         except Exception as exc:
-            logger.warning("Setup step 6 (control-file denies) raised: %s", exc)
+            logger.warning("Setup step 5 (control-file denies) raised: %s", exc)
 
         logger.info("Setup completed successfully")
         return SetupResult(success=True)
 
     def run_teardown(self) -> SetupResult:
-        """Reverse setup. Must be called from an elevated process."""
+        """Reverse setup. Must be called from an elevated process.
+
+        Every icacls call is bounded (spec 109 D7); a timed-out revoke is
+        logged and skipped, never allowed to block the account deletion.
+        """
+        with self._bounded_icacls():
+            return self._run_teardown_steps()
+
+    def _run_teardown_steps(self) -> SetupResult:
         # Step 1: Revoke ACL entries BEFORE deleting account (while SID is resolvable)
         try:
             username = self.account_manager.get_username()
