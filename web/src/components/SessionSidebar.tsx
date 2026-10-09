@@ -23,6 +23,13 @@
  * still shows its active runs and the selected one, so nothing live or open
  * is ever hidden.
  *
+ * Unread badge (spec 108): a row whose agent replied after the user's last
+ * message, and whose reply this device has not shown yet, carries a dot
+ * (`hasUnseenReply` over the two server timestamps + the per-device seen map
+ * in `useSeenReplies`). The row being viewed never shows it — its reply is
+ * marked seen the moment the list learns of it — and the user's own newer
+ * message clears it without a write.
+ *
  * Selection is CONTROLLED: the highlighted (active) session is driven by the
  * `selectedSessionId` prop, NOT an internal hook. ChatTab owns the single
  * source of truth (route.sessionId, resolved from route → persisted →
@@ -40,9 +47,11 @@
  *                       route and persists.
  */
 
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ChevronDown, ChevronRight, Clock, FolderSearch, ListOrdered } from 'lucide-react';
 import { useSessions } from '../hooks/useSessions';
+import { useSeenReplies } from '../hooks/useSeenReplies';
+import { hasUnseenReply, seenKey } from '../utils/sessionUnread';
 import type { SessionListEntry } from '../types';
 import { SessionListItem } from './SessionListItem';
 import { formatRelativeTime } from '../utils/relativeTime';
@@ -111,6 +120,21 @@ export function SessionSidebar({
   const { sessions, loading, renameSession, pinSession, deleteSession } =
     useSessions(projectId);
   const t = useT();
+
+  // Spec 108: the per-device "which reply have I shown" map. The row being
+  // viewed is marked seen whenever the list carries a newer reply for it, so
+  // a reply that lands while the user is looking never badges later.
+  const { seenAt, markSeen } = useSeenReplies(projectId, sessions);
+  useEffect(() => {
+    if (!selectedSessionId) return;
+    const row = sessions.find((s) => s.session_id === selectedSessionId);
+    if (!row?.last_reply_at) return;
+    const key = seenKey(row);
+    const seen = seenAt(key);
+    if (seen === undefined || Date.parse(row.last_reply_at) > Date.parse(seen)) {
+      markSeen(key, row.last_reply_at);
+    }
+  }, [selectedSessionId, sessions, seenAt, markSeen]);
 
   // One unified list of ALL sessions: pinned rows first (spec 067), then
   // last-activity descending (most recent first) WITHIN each group. Null/
@@ -215,12 +239,17 @@ export function SessionSidebar({
   );
 
   function renderRow(session: SessionListEntry, inGroup = false) {
+    const selected = selectedSessionId === session.session_id;
     return (
       <SessionListItem
         key={session.session_uuid ?? session.session_id}
         session={session}
         hideKindChip={inGroup}
-        selected={selectedSessionId === session.session_id}
+        selected={selected}
+        // The viewed row is never unread (its marker is written by the
+        // effect above, one commit later — this keeps the dot from flashing
+        // in between).
+        unread={!selected && hasUnseenReply(session, seenAt(seenKey(session)))}
         onSelect={handleSelect}
         onRename={handleRename}
         onPin={handlePin}

@@ -688,3 +688,151 @@ describe('SessionSidebar — filter and automation groups', () => {
     expect(screen.queryByTestId('session-automation-group')).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Spec 108 — unread badge: derive from the two server timestamps, remember per
+// device, never on the row being viewed
+// ---------------------------------------------------------------------------
+
+describe('SessionSidebar — unread badge (spec 108)', () => {
+  const SEEN_KEY = 'orbital:seenReplies:proj-1';
+
+  function replied(id: string, replyAt: string, userAt = '2026-10-01T00:00:00Z') {
+    return makeSession({
+      session_id: id,
+      session_uuid: id,
+      name: id,
+      last_activity_at: replyAt,
+      last_user_at: userAt,
+      last_reply_at: replyAt,
+    });
+  }
+
+  function dotIn(id: string) {
+    return within(screen.getByTestId(`session-list-item-${id}`)).queryByTestId('session-unread-dot');
+  }
+
+  it('first visit seeds: historic replies show no dot', () => {
+    resetMocks();
+    localStorage.removeItem(SEEN_KEY);
+    mockSessions = [replied('a', '2026-10-01T00:00:10Z'), replied('b', '2026-10-01T00:00:20Z')];
+    render(<SessionSidebar projectId="proj-1" selectedSessionId="a" />);
+    expect(dotIn('a')).toBeNull();
+    expect(dotIn('b')).toBeNull();
+    expect(JSON.parse(localStorage.getItem(SEEN_KEY) ?? '{}')).toEqual({
+      a: '2026-10-01T00:00:10Z',
+      b: '2026-10-01T00:00:20Z',
+    });
+  });
+
+  it('a non-selected row with a new reply renders the dot; the selected one never does', () => {
+    resetMocks();
+    localStorage.setItem(SEEN_KEY, '{}');
+    mockSessions = [replied('a', '2026-10-01T00:00:10Z'), replied('b', '2026-10-01T00:00:20Z')];
+    render(<SessionSidebar projectId="proj-1" selectedSessionId="a" />);
+    expect(dotIn('a')).toBeNull();
+    expect(dotIn('b')).not.toBeNull();
+    // Viewing "a" marked its reply seen on render.
+    expect(JSON.parse(localStorage.getItem(SEEN_KEY) ?? '{}')).toEqual({ a: '2026-10-01T00:00:10Z' });
+  });
+
+  it('selecting the badged row clears its dot and persists the marker', () => {
+    resetMocks();
+    localStorage.setItem(SEEN_KEY, '{}');
+    mockSessions = [replied('a', '2026-10-01T00:00:10Z'), replied('b', '2026-10-01T00:00:20Z')];
+    const { rerender } = render(<SessionSidebar projectId="proj-1" selectedSessionId="a" />);
+    expect(dotIn('b')).not.toBeNull();
+    rerender(<SessionSidebar projectId="proj-1" selectedSessionId="b" />);
+    expect(dotIn('b')).toBeNull();
+    // Going back to "a": "b" stays read.
+    rerender(<SessionSidebar projectId="proj-1" selectedSessionId="a" />);
+    expect(dotIn('b')).toBeNull();
+    expect(JSON.parse(localStorage.getItem(SEEN_KEY) ?? '{}')).toEqual({
+      a: '2026-10-01T00:00:10Z',
+      b: '2026-10-01T00:00:20Z',
+    });
+  });
+
+  it('a refetch that advances the SELECTED row\'s reply never shows a dot, and marks it', () => {
+    resetMocks();
+    localStorage.setItem(SEEN_KEY, JSON.stringify({ a: '2026-10-01T00:00:10Z' }));
+    mockSessions = [replied('a', '2026-10-01T00:00:10Z')];
+    const { rerender } = render(<SessionSidebar projectId="proj-1" selectedSessionId="a" />);
+    mockSessions = [replied('a', '2026-10-01T00:00:40Z')];
+    rerender(<SessionSidebar projectId="proj-1" selectedSessionId="a" />);
+    expect(dotIn('a')).toBeNull();
+    expect(JSON.parse(localStorage.getItem(SEEN_KEY) ?? '{}')).toEqual({ a: '2026-10-01T00:00:40Z' });
+  });
+
+  it('a refetch that advances a NON-selected row\'s reply lights it', () => {
+    resetMocks();
+    localStorage.setItem(SEEN_KEY, JSON.stringify({ a: '2026-10-01T00:00:10Z', b: '2026-10-01T00:00:20Z' }));
+    mockSessions = [replied('a', '2026-10-01T00:00:10Z'), replied('b', '2026-10-01T00:00:20Z')];
+    const { rerender } = render(<SessionSidebar projectId="proj-1" selectedSessionId="a" />);
+    expect(dotIn('b')).toBeNull();
+    mockSessions = [replied('a', '2026-10-01T00:00:10Z'), replied('b', '2026-10-01T00:00:50Z')];
+    rerender(<SessionSidebar projectId="proj-1" selectedSessionId="a" />);
+    expect(dotIn('b')).not.toBeNull();
+  });
+
+  it('the user\'s own newer message clears the dot without a marker', () => {
+    resetMocks();
+    localStorage.setItem(SEEN_KEY, '{}');
+    mockSessions = [
+      replied('a', '2026-10-01T00:00:10Z'),
+      replied('b', '2026-10-01T00:00:20Z', '2026-10-01T00:00:30Z'),
+    ];
+    render(<SessionSidebar projectId="proj-1" selectedSessionId="a" />);
+    expect(dotIn('b')).toBeNull();
+  });
+
+  it('a running row is never badged; it lights once it rests with a reply', () => {
+    resetMocks();
+    localStorage.setItem(SEEN_KEY, '{}');
+    mockSessions = [
+      replied('a', '2026-10-01T00:00:10Z'),
+      { ...replied('b', '2026-10-01T00:00:20Z'), status: 'running' },
+    ];
+    const { rerender } = render(<SessionSidebar projectId="proj-1" selectedSessionId="a" />);
+    expect(dotIn('b')).toBeNull();
+    mockSessions = [replied('a', '2026-10-01T00:00:10Z'), replied('b', '2026-10-01T00:00:25Z')];
+    rerender(<SessionSidebar projectId="proj-1" selectedSessionId="a" />);
+    expect(dotIn('b')).not.toBeNull();
+  });
+
+  it('rows from an older daemon (no timestamps) never badge', () => {
+    resetMocks();
+    localStorage.setItem(SEEN_KEY, '{}');
+    mockSessions = [
+      makeSession({ session_id: 'a', session_uuid: 'a', last_activity_at: '2026-10-01T00:00:10Z' }),
+      makeSession({ session_id: 'b', session_uuid: 'b', last_activity_at: '2026-10-01T00:00:20Z' }),
+    ];
+    render(<SessionSidebar projectId="proj-1" selectedSessionId="a" />);
+    expect(dotIn('b')).toBeNull();
+  });
+
+  it('a badged resting run stays folded in its collapsed group; expanding shows its dot', async () => {
+    // The badge does not change grouping or visibility: only active and
+    // selected runs escape a collapsed group. The dot rides on the run row.
+    const user = userEvent.setup();
+    resetMocks();
+    localStorage.setItem(SEEN_KEY, '{}');
+    const daily = (id: string, replyAt: string) => ({
+      ...replied(id, replyAt),
+      name: "[Triggered by schedule 'Daily' (9am)]\n\nrun",
+      trigger_type: 'schedule' as const,
+    });
+    mockSessions = [
+      replied('chat', '2026-10-01T00:00:10Z'),
+      daily('run1', '2026-10-01T00:00:20Z'),
+      daily('run2', '2026-10-01T00:00:30Z'),
+    ];
+    render(<SessionSidebar projectId="proj-1" selectedSessionId="chat" />);
+    expect(screen.queryByTestId('session-list-item-run1')).toBeNull();
+    expect(screen.queryByTestId('session-list-item-run2')).toBeNull();
+    await user.click(screen.getByTestId('session-automation-group-toggle'));
+    expect(dotIn('run1')).not.toBeNull();
+    expect(dotIn('run2')).not.toBeNull();
+    expect(dotIn('chat')).toBeNull();
+  });
+});

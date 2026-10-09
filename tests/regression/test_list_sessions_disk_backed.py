@@ -200,3 +200,85 @@ def test_pinned_first_message_log_is_listed(tmp_path):
     assert entry["trigger_type"] is None
     assert entry["pinned_target"] == "claude-code"
     assert entry["last_activity_at"] == ts
+
+
+# ---------------------------------------------------------------------------
+# Spec 108 — every row carries last_user_at / last_reply_at
+# ---------------------------------------------------------------------------
+
+
+def _live_handle(mgr, ws, uuid, sid, messages, running=False):
+    session = MagicMock()
+    session.is_stopped.return_value = False
+    session._paused_for_approval = False
+    session.session_uuid = uuid
+    session._messages = messages
+    task = MagicMock()
+    task.done.return_value = not running
+    mgr._handles[("proj", sid)] = ProjectHandle(
+        session=session, loop=MagicMock(), provider=MagicMock(), registry=MagicMock(),
+        context_manager=MagicMock(), interceptor=MagicMock(), task=task,
+        config_snapshot={"workspace": str(ws)}, started_at="2026-01-01T00:00:00+00:00",
+    )
+
+
+def test_disk_row_carries_user_and_reply_timestamps(tmp_path):
+    ws, sessions, ps = _setup(tmp_path)
+    _write_session(sessions, "proj_disk0001", "proj_disk0001")
+    out = {s["session_uuid"]: s for s in _make_manager(tmp_path, ps).list_sessions("proj")}
+    row = out["proj_disk0001"]
+    assert row["last_user_at"] == "2026-05-25T08:00:00+00:00"
+    assert row["last_reply_at"] == "2026-05-25T08:00:00+00:00"
+
+
+def test_live_row_derives_both_fields_from_the_in_memory_messages(tmp_path):
+    ws, sessions, ps = _setup(tmp_path)
+    mgr = _make_manager(tmp_path, ps)
+    _live_handle(mgr, ws, "proj_live0001", "proj_live0001", [
+        {"role": "user", "content": "one", "timestamp": "2026-05-25T09:00:00+00:00"},
+        {"role": "assistant", "content": "", "tool_calls": [{"id": "c"}],
+         "timestamp": "2026-05-25T09:00:01+00:00"},
+        {"role": "tool", "content": "out", "tool_call_id": "c",
+         "timestamp": "2026-05-25T09:00:02+00:00"},
+        {"role": "assistant", "content": "final", "timestamp": "2026-05-25T09:00:03+00:00"},
+    ])
+    row = {s["session_uuid"]: s for s in mgr.list_sessions("proj")}["proj_live0001"]
+    assert row["status"] == "idle"
+    assert row["last_user_at"] == "2026-05-25T09:00:00+00:00"
+    assert row["last_reply_at"] == "2026-05-25T09:00:03+00:00"
+    assert row["last_activity_at"] == "2026-05-25T09:00:03+00:00"
+
+
+def test_live_row_mid_turn_has_no_newer_reply_than_the_user(tmp_path):
+    ws, sessions, ps = _setup(tmp_path)
+    mgr = _make_manager(tmp_path, ps)
+    _live_handle(mgr, ws, "proj_live0002", "proj_live0002", [
+        {"role": "user", "content": "one", "timestamp": "2026-05-25T09:00:00+00:00"},
+        {"role": "assistant", "content": "a1", "timestamp": "2026-05-25T09:00:01+00:00"},
+        {"role": "user", "content": "two", "timestamp": "2026-05-25T09:00:05+00:00"},
+        {"role": "assistant", "content": "", "tool_calls": [{"id": "c"}],
+         "timestamp": "2026-05-25T09:00:06+00:00"},
+    ], running=True)
+    row = {s["session_uuid"]: s for s in mgr.list_sessions("proj")}["proj_live0002"]
+    assert row["status"] == "running"
+    assert row["last_user_at"] == "2026-05-25T09:00:05+00:00"
+    assert row["last_reply_at"] == "2026-05-25T09:00:01+00:00"
+
+
+def test_live_row_with_no_messages_has_null_fields(tmp_path):
+    ws, sessions, ps = _setup(tmp_path)
+    mgr = _make_manager(tmp_path, ps)
+    _live_handle(mgr, ws, "proj_live0003", "proj_live0003", [])
+    row = {s["session_uuid"]: s for s in mgr.list_sessions("proj")}["proj_live0003"]
+    assert row["last_user_at"] is None and row["last_reply_at"] is None
+
+
+def test_queued_row_dates_the_user_message_and_has_no_reply(tmp_path):
+    ws, sessions, ps = _setup(tmp_path)
+    mgr = _make_manager(tmp_path, ps)
+    mgr.enqueue_pending_inject("proj", "proj_queued01", "first message", nonce="n1")
+    row = {s["session_id"]: s for s in mgr.list_sessions("proj")}["proj_queued01"]
+    assert row["status"] == "queued"
+    assert row["last_reply_at"] is None
+    assert row["last_user_at"] == row["last_activity_at"]
+    assert row["last_user_at"]

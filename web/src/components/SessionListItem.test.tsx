@@ -664,3 +664,89 @@ describe('SessionListItem — context menu and delete', () => {
     expect(screen.queryByTestId('session-delete-confirm')).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Spec 108 — unread badge
+// ---------------------------------------------------------------------------
+
+describe('SessionListItem — unread badge (spec 108)', () => {
+  it('unread → a dot before the time, a bold name and the unread aria-label', () => {
+    render(
+      <SessionListItem
+        session={makeSession({ session_id: 'sess-unread', name: 'Deploy notes' })}
+        selected={false}
+        unread
+        onSelect={vi.fn()}
+      />,
+    );
+    const dot = screen.getByTestId('session-unread-dot');
+    expect(dot).toHaveAttribute('title', 'New reply since you last looked');
+    // The dot sits inside the name+time span, right before the time.
+    const time = screen.getByTestId('session-time');
+    expect(dot.nextElementSibling).toBe(time);
+    expect(screen.getByTestId('session-name').className).toContain('font-medium');
+    expect(screen.getByTestId('session-list-item-sess-unread')).toHaveAttribute(
+      'aria-label',
+      'Session Deploy notes, new reply',
+    );
+  });
+
+  it('not unread (default) → no dot, plain name, plain aria-label', () => {
+    render(
+      <SessionListItem
+        session={makeSession({ session_id: 'sess-read', name: 'Deploy notes' })}
+        selected={false}
+        onSelect={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId('session-unread-dot')).toBeNull();
+    expect(screen.getByTestId('session-name').className).not.toContain('font-medium');
+    expect(screen.getByTestId('session-list-item-sess-read')).toHaveAttribute(
+      'aria-label',
+      'Session Deploy notes',
+    );
+  });
+
+  it('unread + error → the dot AND the ⚠ (different slots)', () => {
+    render(
+      <SessionListItem
+        session={makeSession({
+          session_id: 'sess-err',
+          last_terminal_event: { type: 'error', timestamp: '2026-10-01T00:00:00Z', details: 'boom' },
+        })}
+        selected={false}
+        unread
+        onSelect={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId('session-unread-dot')).toBeInTheDocument();
+    expect(screen.getByTestId('session-error-glyph')).toBeInTheDocument();
+  });
+
+  it('unread + pinned → the dot and the pin glyph both render', () => {
+    render(
+      <SessionListItem
+        session={makeSession({ session_id: 'sess-pin', pinned: true })}
+        selected={false}
+        unread
+        onSelect={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId('session-unread-dot')).toBeInTheDocument();
+    expect(screen.getByTestId('session-pin-glyph')).toBeInTheDocument();
+  });
+
+  it('the dot is not rendered while renaming', async () => {
+    render(
+      <SessionListItem
+        session={makeSession({ session_id: 'sess-ren', name: 'Old' })}
+        selected={false}
+        unread
+        onSelect={vi.fn()}
+      />,
+    );
+    await userEvent.dblClick(screen.getByTestId('session-name'));
+    expect(screen.getByTestId('session-rename-input')).toBeInTheDocument();
+    expect(screen.queryByTestId('session-unread-dot')).toBeNull();
+  });
+});

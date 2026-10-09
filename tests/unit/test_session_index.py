@@ -273,3 +273,146 @@ def test_index_deleted_while_running_is_recreated_on_the_next_write(project, tmp
     finally:
         conn.close()
     assert n == 1
+
+
+# ---------------------------------------------------------------------------
+# Spec 108 — who spoke last: ``last_user_at`` / ``last_reply_at`` on every row
+# ---------------------------------------------------------------------------
+
+_T = "2026-10-01T00:00:0{}+00:00"
+
+
+def _row(i, **fields):
+    return {"timestamp": _T.format(i), **fields}
+
+
+@pytest.mark.parametrize("rec, expected", [
+    # The agent's final text answers the user; a mid-turn tool step does not.
+    ({"role": "assistant", "content": "done", "source": "management"}, True),
+    ({"role": "assistant", "content": "", "source": "management",
+      "tool_calls": [{"id": "c1", "function": {"name": "shell"}}]}, False),
+    # A worker's terminal marker (any kind) and a worker question are replies.
+    ({"role": "system", "source": "daemon", "content": "[Sub-agent] claude-code completed.",
+      "_meta": {"event": "sub_agent_terminal", "kind": "completed"}}, True),
+    ({"role": "system", "source": "daemon", "content": "[Sub-agent] codex stopped with error",
+      "_meta": {"event": "sub_agent_terminal", "kind": "error"}}, True),
+    ({"role": "system", "source": "daemon", "content": "[Sub-agent] codex needs input",
+      "_meta": {"event": "interaction_required"}}, True),
+    # The dispatch ack / started rows carry no event: not a reply.
+    ({"role": "system", "source": "daemon", "content": "[Sub-agent] Message sent to codex",
+      "_meta": {"dispatch_id": "d1"}}, False),
+    ({"role": "system", "source": "daemon", "content": "[Sub-agent] codex started"}, False),
+    # Queue signal and LLM-error rows end the turn with something for the user.
+    ({"role": "system", "source": "queue_signal", "content": "Task completed: x",
+      "signal": "complete"}, True),
+    ({"role": "system", "source": "management",
+      "content": "LLM error after 3 retries: Error code: 404"}, True),
+    # Never the user's own row, never a tool result, never meta.
+    ({"role": "user", "content": "hi", "source": "user"}, False),
+    ({"role": "user", "content": "hi", "target": "claude-code"}, False),
+    ({"role": "tool", "content": "out", "source": "management", "tool_call_id": "c1"}, False),
+    ({"role": "meta", "event": "session_start"}, False),
+    ({}, False),
+])
+def test_is_reply_row(rec, expected):
+    assert si.is_reply_row(rec) is expected
+
+
+def _derive(tmp_path, rows):
+    sessions = tmp_path / "ws" / "orbital" / "sessions"
+    sessions.mkdir(parents=True, exist_ok=True)
+    p = _write(sessions, "p_tail0001", [{"role": "meta", "event": "session_start"}, *rows])
+    return si.derive_disk_entry(str(p), "p_tail0001")
+
+
+def test_derive_tail_assistant_final_row(tmp_path):
+    e = _derive(tmp_path, [
+        _row(1, role="user", content="go", source="user"),
+        _row(2, role="assistant", content="", source="management", tool_calls=[{"id": "c"}]),
+        _row(3, role="tool", content="out", source="management", tool_call_id="c"),
+        _row(4, role="assistant", content="done", source="management"),
+    ])
+    assert e["last_user_at"] == _T.format(1)
+    assert e["last_reply_at"] == _T.format(4)
+    assert e["last_activity_at"] == _T.format(4)
+
+
+def test_derive_tail_queue_signal(tmp_path):
+    e = _derive(tmp_path, [
+        _row(1, role="user", content="[QUEUE ITEM | id=x]", source="user"),
+        _row(2, role="assistant", content="working", source="management"),
+        _row(3, role="system", content="Task completed: x", source="queue_signal", signal="complete"),
+    ])
+    assert e["last_user_at"] == _T.format(1)
+    assert e["last_reply_at"] == _T.format(3)
+
+
+def test_derive_tail_llm_error(tmp_path):
+    e = _derive(tmp_path, [
+        _row(1, role="user", content="go", source="user"),
+        _row(2, role="system", content="LLM error after 3 retries: 404", source="management"),
+    ])
+    assert e["last_user_at"] == _T.format(1)
+    assert e["last_reply_at"] == _T.format(2)
+
+
+def test_derive_tail_pinned_worker_completed(tmp_path):
+    e = _derive(tmp_path, [
+        _row(1, role="user", content="do it", target="claude-code"),
+        _row(2, role="system", content="[Sub-agent] Message sent to claude-code", source="daemon",
+             _meta={"dispatch_id": "d1"}),
+        _row(3, role="system", content="[Sub-agent] claude-code started", source="daemon"),
+        _row(4, role="system", content="[Sub-agent] claude-code completed. Summary: ok",
+             source="daemon", _meta={"event": "sub_agent_terminal", "kind": "completed"}),
+    ])
+    assert e["last_user_at"] == _T.format(1)
+    assert e["last_reply_at"] == _T.format(4)
+
+
+def test_derive_tail_pinned_worker_in_flight_has_no_reply(tmp_path):
+    # User row + ack row only: the ack is not a reply.
+    e = _derive(tmp_path, [
+        _row(1, role="user", content="do it", target="claude-code"),
+        _row(2, role="system", content="[Sub-agent] Message sent to claude-code", source="daemon",
+             _meta={"dispatch_id": "d1"}),
+    ])
+    assert e["last_user_at"] == _T.format(1)
+    assert e["last_reply_at"] is None
+    assert e["last_activity_at"] == _T.format(2)
+
+
+def test_derive_tail_tool_row_keeps_the_earlier_reply(tmp_path):
+    # Interrupted mid-turn after an earlier full exchange: the reply is the
+    # earlier final answer, which the later user row outranks on the client.
+    e = _derive(tmp_path, [
+        _row(1, role="user", content="one", source="user"),
+        _row(2, role="assistant", content="answer one", source="management"),
+        _row(3, role="user", content="two", source="user"),
+        _row(4, role="assistant", content="", source="management", tool_calls=[{"id": "c"}]),
+        _row(5, role="tool", content="out", source="management", tool_call_id="c"),
+    ])
+    assert e["last_user_at"] == _T.format(3)
+    assert e["last_reply_at"] == _T.format(2)
+
+
+def test_derive_tail_bare_user_row(tmp_path):
+    e = _derive(tmp_path, [_row(1, role="user", content="hello", source="user")])
+    assert e["last_user_at"] == _T.format(1)
+    assert e["last_reply_at"] is None
+
+
+def test_derive_tail_legacy_rows_without_timestamps(tmp_path):
+    # Old logs may lack timestamps: the fields are present and null, never
+    # missing, so the index row and the scan row stay identical.
+    e = _derive(tmp_path, [
+        {"role": "user", "content": "hello"},
+        {"role": "assistant", "content": "hi"},
+    ])
+    assert "last_user_at" in e and e["last_user_at"] is None
+    assert "last_reply_at" in e and e["last_reply_at"] is None
+
+
+def test_index_version_is_bumped_for_the_reply_fields():
+    # An index written under "1" (v0.15.0) has rows without the two fields;
+    # the version mismatch empties it and the background build re-derives.
+    assert si.INDEX_VERSION == "2"

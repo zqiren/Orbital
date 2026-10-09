@@ -37,11 +37,43 @@ INDEX_FILENAME = ".session-index.sqlite"
 # Bump whenever ``derive_disk_entry``'s output changes (a new field, a new
 # naming rule): an index written under another version is emptied and rebuilt
 # from the files, so it can never serve rows in an old shape.
-INDEX_VERSION = "1"
+#   "2": ``last_user_at`` / ``last_reply_at`` (spec 108).
+INDEX_VERSION = "2"
+
+# ``_meta.event`` values of the system rows that answer the user (spec 108):
+# a worker's terminal marker (completed / error / failed / stopped /
+# interrupted / queue_dropped, lifecycle_observer) and a worker asking a
+# question (``interaction_required`` — the user has to act). The dispatch ack
+# ("Message sent to …") and "… started" rows carry no ``event`` and are not
+# replies. Keep in step with ``lifecycle_observer.py``.
+REPLY_META_EVENTS = frozenset({"sub_agent_terminal", "interaction_required"})
 
 
 def index_path(sessions_dir: str) -> str:
     return os.path.join(sessions_dir, INDEX_FILENAME)
+
+
+def is_reply_row(rec: dict) -> bool:
+    """A row that answers the user: the agent's final text, a worker's
+    terminal marker, a worker question, a queue signal, or an LLM error.
+    Never the user's own row, a mid-turn tool step, or a dispatch ack.
+
+    The session list exposes the timestamp of the last such row as
+    ``last_reply_at`` (spec 108): "the agent finished / needs you" after the
+    user's last message. A row shape this does not know is not a reply —
+    a missed badge, never a false one.
+    """
+    role = rec.get("role")
+    if role == "assistant":
+        return not rec.get("tool_calls")  # the final answer, not a tool step
+    if role == "system":
+        meta = rec.get("_meta") or {}
+        if isinstance(meta, dict) and meta.get("event") in REPLY_META_EVENTS:
+            return True
+        # Task signal ("Task completed" / "Task blocked") or a management
+        # notice that ends the turn (LLM error, cancelled).
+        return rec.get("source") in ("queue_signal", "management")
+    return False
 
 
 def derive_disk_entry(path: str, uuid: str) -> dict | None:
@@ -67,6 +99,8 @@ def derive_disk_entry(path: str, uuid: str) -> dict | None:
     is_worker = False  # session_kind:"worker" meta (spec 009 fanout)
     first_real = None  # first non-meta (conversation) record
     last_real = None
+    last_user_at = None  # timestamp of the last user row (spec 108)
+    last_reply_at = None  # timestamp of the last reply-class row (spec 108)
     with open(path, "r", encoding="utf-8") as fh:
         for raw in fh:
             raw = raw.strip()
@@ -101,8 +135,12 @@ def derive_disk_entry(path: str, uuid: str) -> dict | None:
                 continue
             if first_real is None:
                 first_real = rec
-            if first_user_content is None and rec.get("role") == "user":
-                first_user_content = rec.get("content")
+            if rec.get("role") == "user":
+                if first_user_content is None:
+                    first_user_content = rec.get("content")
+                last_user_at = rec.get("timestamp")
+            elif is_reply_row(rec):
+                last_reply_at = rec.get("timestamp")
             last_real = rec
     if first_real is None or is_worker:
         return None
@@ -134,6 +172,11 @@ def derive_disk_entry(path: str, uuid: str) -> dict | None:
         "pinned_target": stored_pinned_target,
         "last_terminal_event": None,
         "last_activity_at": last_activity_at,
+        # Spec 108: who spoke last. The client badges a row whose reply is
+        # newer than the user's last message and newer than the reply it
+        # last showed; both are daemon-clock ISO strings.
+        "last_user_at": last_user_at,
+        "last_reply_at": last_reply_at,
     }
 
 
