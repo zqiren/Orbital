@@ -205,5 +205,5 @@ unresolvable-SID rows on deep files (accepted V7 residue). Workspace and user da
 2. V2–V5 and V7 per `109-windows-sandbox-install.md`. Expect the teardown step at roughly the slowest
    populated toolchain root (~35–50 s on this laptop), not "seconds".
 3. Part B walk-through as in the original task list.
-4. Decide on `proposal/windows-install-dir-acl`. If taken, add `icacls C:\Orbitalin\Orbital.exe` (no
+4. Decide on `proposal/windows-install-dir-acl`. If taken, add `icacls C:\Orbital\bin\Orbital.exe` (no
    `(M)` row) to V3.
