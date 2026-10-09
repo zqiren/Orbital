@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Orbital Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import type { ChatMessage, ToolCall, ActivityCategory, FanoutTaskStatus } from '../types';
+import type { ChatMessage, ToolCall, ActivityCategory, FanoutTaskStatus, SubAgentToolRow } from '../types';
 import { translate } from '../i18n/useT';
 import type { StringKey } from '../i18n/strings';
 
@@ -854,7 +854,10 @@ export function transformChatHistory(
     // when the transcript has them (older transcripts: name + duration only),
     // the turn's thinking sits between them, and a dispatch still in flight
     // renders its capsule so far as running — the same capsule the live
-    // events are extending.
+    // events are extending. Spec 104: when the row carries the turn's ordered
+    // stream, the worker's intermediate messages render as bubbles between
+    // its tool capsules — what the live view showed — instead of one capsule
+    // of every row followed by the final text only.
     if (msg.source === 'sub_agent') {
       finalizeCapsule();
       const handle = msg.sub_agent_handle ?? 'sub-agent';
@@ -862,7 +865,132 @@ export function transformChatHistory(
       const toolRows = msg.sub_agent_tool_rows ?? [];
       const thinking = (msg.sub_agent_thinking ?? []).filter((b) => b.content.trim());
       const inFlight = !!msg.sub_agent_in_flight;
+      const stream = msg.sub_agent_stream ?? [];
 
+      // Shared row builders (spec 104 §3.5): the stream path and the legacy
+      // fallback build the same tool_call_row / reasoning_block for a given
+      // row, so a turn looks the same whichever path rendered it. `r` is the
+      // row's index among the turn's tool rows (its synthetic id).
+      const toolCallRow = (row: SubAgentToolRow, r: number): CapsuleChild => {
+        const name = row.name || 'tool';
+        const hasResult = row.result_preview !== undefined;
+        return {
+          type: 'tool_call_row',
+          tool_name: name,
+          // With arguments: the same detail the live row showed. Without
+          // (older transcripts): the per-tool duration ("Write · 1.2s").
+          target_description: row.arguments
+            ? describeWorkerTool(name, row.arguments, workspace, tr)
+            : `${(row.duration_seconds ?? 0).toFixed(1)}s`,
+          tool_call_id: row.tool_call_id || `sub:${handle}:${msg.timestamp}:${r}`,
+          category: workerToolCategory(name),
+          timestamp: row.timestamp || msg.timestamp,
+          result_content: hasResult ? (row.result_preview ?? '') : null,
+          // A call of a finished turn with no result recorded still
+          // expands ("no result"); in flight it is still pending.
+          result_status: hasResult || !inFlight ? 'received' : 'pending',
+          ...(row.result_total_chars !== undefined && row.result_total_lines !== undefined
+            ? { result_totals: { chars: row.result_total_chars, lines: row.result_total_lines } }
+            : {}),
+        };
+      };
+      const reasoningBlock = (content: string, afterTool: number): CapsuleChild => ({
+        type: 'reasoning_block',
+        content,
+        timestamp: msg.timestamp,
+        turn_id: `sub:${handle}:${msg.timestamp}:${afterTool}`,
+      });
+      const headerAnchor = (): DisplayItem => ({
+        type: 'agent_message',
+        content: '',
+        source: handle,
+        timestamp: msg.timestamp,
+        isHeaderOnly: true,
+      });
+
+      if (stream.length > 0) {
+        // Spec 104 stream path. Contiguous tool / thinking rows buffer into
+        // one capsule; a message row flushes the buffer and becomes a bubble
+        // (D1: an `agent_message` under the handle, like the final bubble).
+        // Rows after the last message are a trailing capsule (D2), running
+        // when the dispatch is still in flight. The stream's last message IS
+        // msg.content (last wins), so no separate final bubble is pushed.
+        let buf: CapsuleChild[] = [];
+        let counts: Record<string, number> = {};
+        let bufHasThinking = false;
+        let bufStartTs = '';
+        let bufStartMs = 0;
+        let bufEndMs = 0;
+        let toolIdx = 0;
+        const note = (ts: string, endMs: number) => {
+          if (buf.length === 0) {
+            bufStartTs = ts;
+            bufStartMs = tsToMs(ts);
+            bufEndMs = bufStartMs;
+          }
+          bufEndMs = Math.max(bufEndMs, endMs);
+        };
+        const flushTools = (running: boolean) => {
+          if (buf.length === 0) return;
+          // D1 anchor rule: the capsule needs the worker's header unless the
+          // item before it is already this worker's bubble or capsule.
+          const last = items[items.length - 1];
+          const anchored =
+            !!last &&
+            (last.type === 'agent_message' ||
+              last.type === 'sub_agent_message' ||
+              last.type === 'agent_run') &&
+            last.source === handle;
+          if (!anchored) items.push(headerAnchor());
+          items.push({
+            type: 'agent_run',
+            capsule_id: `sub_agent:${handle}:${bufStartTs}:${capsuleCounter++}`,
+            status: running ? 'running' : 'completed',
+            items: buf,
+            tool_call_count_by_name: counts,
+            has_thinking: bufHasThinking,
+            started_at: bufStartMs,
+            ended_at: running ? null : bufEndMs,
+            defaultExpanded: false,
+            source: handle,
+          });
+          buf = [];
+          counts = {};
+          bufHasThinking = false;
+        };
+        for (const row of stream) {
+          if (row.kind === 'tool') {
+            const ts = row.timestamp || msg.timestamp;
+            note(ts, tsToMs(ts) + Math.round((row.duration_seconds ?? 0) * 1000));
+            const name = row.name || 'tool';
+            counts[name] = (counts[name] ?? 0) + 1;
+            buf.push(toolCallRow(row, toolIdx++));
+          } else if (row.kind === 'thinking') {
+            if (!row.content.trim()) continue;
+            const ts = row.timestamp || msg.timestamp;
+            note(ts, tsToMs(ts));
+            bufHasThinking = true;
+            buf.push(reasoningBlock(row.content, toolIdx));
+          } else if (row.kind === 'message') {
+            flushTools(false);
+            const cleaned = (row.content ?? '').replace(/\x1b\[[0-9;]*m/g, '').trim();
+            if (!cleaned || cleaned === '(no response)') continue;
+            items.push({
+              type: 'agent_message',
+              content: cleaned,
+              source: handle,
+              timestamp: row.timestamp || msg.timestamp,
+            });
+          }
+          // Any other kind (a newer daemon): ignored.
+        }
+        flushTools(inFlight);
+        i++;
+        continue;
+      }
+
+      // Legacy / version-skew fallback (no stream: an older daemon): header +
+      // ONE capsule of every row + the final bubble.
       // 1 & 2. Header + tool capsule, emitted together: the header only
       // exists to anchor the capsule that follows, so no capsule means no
       // header either (D1 — an empty header-only anchor with the response
@@ -870,25 +998,14 @@ export function transformChatHistory(
       // adjacent headers for the same turn). The response bubble (step 3)
       // always carries its own header regardless.
       if (toolRows.length > 0 || thinking.length > 0) {
-        items.push({
-          type: 'agent_message',
-          content: '',
-          source: handle,
-          timestamp: msg.timestamp,
-          isHeaderOnly: true,
-        });
+        items.push(headerAnchor());
 
         const counts: Record<string, number> = {};
         const capsuleItems: CapsuleChild[] = [];
         const pushThinking = (afterTool: number) => {
           for (const block of thinking) {
             if (block.after_tool !== afterTool) continue;
-            capsuleItems.push({
-              type: 'reasoning_block',
-              content: block.content,
-              timestamp: msg.timestamp,
-              turn_id: `sub:${handle}:${msg.timestamp}:${afterTool}`,
-            });
+            capsuleItems.push(reasoningBlock(block.content, afterTool));
           }
         };
         for (let r = 0; r < toolRows.length; r++) {
@@ -896,37 +1013,13 @@ export function transformChatHistory(
           const row = toolRows[r];
           const name = row.name || 'tool';
           counts[name] = (counts[name] ?? 0) + 1;
-          const hasResult = row.result_preview !== undefined;
-          capsuleItems.push({
-            type: 'tool_call_row',
-            tool_name: name,
-            // With arguments: the same detail the live row showed. Without
-            // (older transcripts): the per-tool duration ("Write · 1.2s").
-            target_description: row.arguments
-              ? describeWorkerTool(name, row.arguments, workspace, tr)
-              : `${(row.duration_seconds ?? 0).toFixed(1)}s`,
-            tool_call_id: row.tool_call_id || `sub:${handle}:${msg.timestamp}:${r}`,
-            category: workerToolCategory(name),
-            timestamp: row.timestamp || msg.timestamp,
-            result_content: hasResult ? (row.result_preview ?? '') : null,
-            // A call of a finished turn with no result recorded still
-            // expands ("no result"); in flight it is still pending.
-            result_status: hasResult || !inFlight ? 'received' : 'pending',
-            ...(row.result_total_chars !== undefined && row.result_total_lines !== undefined
-              ? { result_totals: { chars: row.result_total_chars, lines: row.result_total_lines } }
-              : {}),
-          });
+          capsuleItems.push(toolCallRow(row, r));
         }
         pushThinking(toolRows.length);
         // A block placed past the last row (a mismatched count) still shows.
         for (const block of thinking) {
           if (block.after_tool > toolRows.length) {
-            capsuleItems.push({
-              type: 'reasoning_block',
-              content: block.content,
-              timestamp: msg.timestamp,
-              turn_id: `sub:${handle}:${msg.timestamp}:${block.after_tool}`,
-            });
+            capsuleItems.push(reasoningBlock(block.content, block.after_tool));
           }
         }
         const durationMs = Math.round((msg.sub_agent_duration ?? 0) * 1000);

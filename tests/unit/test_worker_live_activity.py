@@ -731,7 +731,8 @@ class TestSummarizeTurn:
             _row("response", "ok", ts=_ts(4)),
         ]
         (row,) = _summarize_turn(rows)["tool_rows"]
-        assert row == {"name": "Write", "timestamp": _ts(0), "duration_seconds": 4.0}
+        # Spec 104: the row is shared with ``stream_rows`` and carries its kind.
+        assert row == {"kind": "tool", "name": "Write", "timestamp": _ts(0), "duration_seconds": 4.0}
 
     def test_thinking_blocks_sit_between_tool_rows(self):
         rows = [
