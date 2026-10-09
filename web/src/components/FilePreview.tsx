@@ -148,6 +148,19 @@ function textOffsetWithin(host: Node, node: Node, offset: number): number | null
 }
 
 /**
+ * Spec 105 — the text views' scroll container paints the sidebar background
+ * so a short file still fills the panel, and the text block itself sizes to
+ * its content. It used to carry `min-h-full` for that fill, but a percent
+ * `min-height` makes WebKit treat the whole file as height-dependent on its
+ * ancestors: every composer auto-resize (two layouts per keystroke) re-wrapped
+ * and re-measured all of it — ~87 ms per key on a 10 KB file in the desktop
+ * app, invisible in Chromium. The scroller is the element that owns the
+ * visible area, so the background moves there at no layout cost.
+ */
+const TEXT_SCROLLER_CLASS = 'flex-1 overflow-auto bg-sidebar';
+const SOURCE_PRE_CLASS = 'font-mono text-sm text-primary p-4 whitespace-pre-wrap break-words';
+
+/**
  * Spec 078 §5.4 — a text-like preview you can quote from. Wraps the existing
  * body untouched and adds a "Quote" pill on mouse-up over a non-empty
  * selection. Only mounted when `quoting` is on, so the non-panel Files tab
@@ -209,7 +222,10 @@ function QuoteRegion({
     }
 
     // Anchor the pill under the selection. jsdom has no Range rect, and a
-    // missing rect just parks the pill at the region's top-left.
+    // missing rect just parks the pill at the region's top-left. The host is
+    // the scroll container for the text views (spec 105), and an absolutely
+    // positioned pill scrolls with the content, so the viewport-relative
+    // offsets are shifted by the host's own scroll position.
     const rect =
       typeof range.getBoundingClientRect === 'function'
         ? range.getBoundingClientRect()
@@ -218,8 +234,8 @@ function QuoteRegion({
     setPill({
       text,
       lines,
-      left: rect ? Math.max(0, rect.left - hostRect.left) : 0,
-      top: rect ? Math.max(0, rect.bottom - hostRect.top + 4) : 0,
+      left: rect ? Math.max(0, rect.left - hostRect.left + host.scrollLeft) : 0,
+      top: rect ? Math.max(0, rect.bottom - hostRect.top + 4 + host.scrollTop) : 0,
     });
   };
 
@@ -795,25 +811,23 @@ export default function FilePreview({
           </div>
         )}
         {showSource ? (
-          <div className="flex-1 overflow-auto">
-            {quoting && onQuote ? (
-              <QuoteRegion
-                source={fileContent.content}
-                exact
-                path={quotePath}
-                onQuote={onQuote}
-                className="min-h-full"
-              >
-                <pre className="font-mono text-sm text-primary bg-sidebar p-4 whitespace-pre-wrap break-words min-h-full">
-                  {fileContent.content}
-                </pre>
-              </QuoteRegion>
-            ) : (
-              <pre className="font-mono text-sm text-primary bg-sidebar p-4 whitespace-pre-wrap break-words min-h-full">
-                {fileContent.content}
-              </pre>
-            )}
-          </div>
+          // Spec 105: the scroller owns the background; the <pre> sizes to
+          // its content (see TEXT_SCROLLER_CLASS).
+          quoting && onQuote ? (
+            <QuoteRegion
+              source={fileContent.content}
+              exact
+              path={quotePath}
+              onQuote={onQuote}
+              className={TEXT_SCROLLER_CLASS}
+            >
+              <pre className={SOURCE_PRE_CLASS}>{fileContent.content}</pre>
+            </QuoteRegion>
+          ) : (
+            <div className={TEXT_SCROLLER_CLASS}>
+              <pre className={SOURCE_PRE_CLASS}>{fileContent.content}</pre>
+            </div>
+          )
         ) : (
           <div className="flex-1 flex flex-col min-h-0">
             <p className="px-4 py-1.5 text-xs text-secondary bg-sidebar border-b border-border shrink-0">
@@ -1032,34 +1046,33 @@ export default function FilePreview({
           />
         )
       ) : (
-        <div className="flex-1 overflow-auto">
-          {(() => {
-            const body = isMarkdown ? (
-              <div className="bg-sidebar p-4 min-h-full">
-                <MarkdownContent content={viewContent} remarkPlugins={PREVIEW_REMARK_PLUGINS} />
-              </div>
-            ) : (
-              <pre className="font-mono text-sm text-primary bg-sidebar p-4 whitespace-pre-wrap break-words min-h-full">
-                {viewContent}
-              </pre>
-            );
-            if (!quoting || !onQuote) return body;
-            // The <pre> renders the file text verbatim, so selection offsets
-            // ARE source offsets. The rendered markdown view is not exact and
-            // falls back to the unique-match rule for line numbers.
-            return (
-              <QuoteRegion
-                source={viewContent}
-                exact={!isMarkdown}
-                path={quotePath}
-                onQuote={onQuote}
-                className="min-h-full"
-              >
-                {body}
-              </QuoteRegion>
-            );
-          })()}
-        </div>
+        (() => {
+          const body = isMarkdown ? (
+            <div className="p-4">
+              <MarkdownContent content={viewContent} remarkPlugins={PREVIEW_REMARK_PLUGINS} />
+            </div>
+          ) : (
+            <pre className={SOURCE_PRE_CLASS}>{viewContent}</pre>
+          );
+          // Spec 105: the scroller owns the background and, when quoting, IS
+          // the quote region, so a mouse-up below a short file still lands in
+          // it (the text block no longer stretches to the bottom).
+          if (!quoting || !onQuote) return <div className={TEXT_SCROLLER_CLASS}>{body}</div>;
+          // The <pre> renders the file text verbatim, so selection offsets
+          // ARE source offsets. The rendered markdown view is not exact and
+          // falls back to the unique-match rule for line numbers.
+          return (
+            <QuoteRegion
+              source={viewContent}
+              exact={!isMarkdown}
+              path={quotePath}
+              onQuote={onQuote}
+              className={TEXT_SCROLLER_CLASS}
+            >
+              {body}
+            </QuoteRegion>
+          );
+        })()
       )}
     </div>
   );

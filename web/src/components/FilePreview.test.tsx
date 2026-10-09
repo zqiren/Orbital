@@ -943,3 +943,134 @@ describe('FilePreview — reveal in the file manager (spec 093)', () => {
     expect(screen.getAllByRole('menuitem').map((i) => i.textContent)).toEqual(['Open in Files']);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Spec 105 — no percent min-height on the text views. A percent `min-height`
+// on the file `<pre>` makes WebKit re-wrap and re-measure the whole file on
+// every composer height change (87 ms per keystroke on a 10 KB file). The
+// scroller owns the background instead, so a short file still paints the
+// sidebar colour to the bottom. jsdom can't measure layout; these pin the
+// class contract and the quoting geometry, the WebKit numbers live in
+// evidence/105-…/.
+// ---------------------------------------------------------------------------
+
+describe('FilePreview — text views carry no percent min-height (spec 105)', () => {
+  const PERCENT_HEIGHT = /(^|\s)(min-h-full|h-full)(\s|$)/;
+
+  function expectScrollerOwnsBackground(scroller: Element | null) {
+    expect(scroller).not.toBeNull();
+    expect(scroller!.className).toMatch(/(^|\s)overflow-auto(\s|$)/);
+    expect(scroller!.className).toMatch(/(^|\s)bg-sidebar(\s|$)/);
+    expect(scroller!.className).not.toMatch(PERCENT_HEIGHT);
+  }
+
+  it('text file, quoting off: the <pre> sizes to content and its scroller paints the background', () => {
+    const { container } = render(
+      <FilePreview fileContent={txtContent()} loading={false} selectedPath="notes.txt" />,
+    );
+    const pre = container.querySelector('pre')!;
+    expect(pre.className).not.toMatch(PERCENT_HEIGHT);
+    expectScrollerOwnsBackground(pre.parentElement);
+    expect(container.querySelectorAll('.min-h-full')).toHaveLength(0);
+  });
+
+  it('text file, quoting on: the quote region IS the scroller, so a mouse-up below a short file still lands in it', () => {
+    const { container } = render(
+      <FilePreview
+        fileContent={txtContent()}
+        loading={false}
+        selectedPath="notes.txt"
+        quoting
+        onQuote={vi.fn()}
+      />,
+    );
+    const region = screen.getByTestId('quote-region');
+    expectScrollerOwnsBackground(region);
+    const pre = container.querySelector('pre')!;
+    expect(pre.parentElement).toBe(region);
+    expect(pre.className).not.toMatch(PERCENT_HEIGHT);
+    expect(container.querySelectorAll('.min-h-full')).toHaveLength(0);
+  });
+
+  it('rendered markdown: the wrapper sizes to content and the scroller paints the background', () => {
+    const md = '# Title\n\nbody text\n';
+    for (const quoting of [false, true]) {
+      const { container, unmount } = render(
+        <FilePreview
+          fileContent={{ path: 'notes.md', content: md, size: md.length, truncated: false, type: 'text' }}
+          loading={false}
+          selectedPath="notes.md"
+          quoting={quoting}
+          onQuote={vi.fn()}
+        />,
+      );
+      const body = container.querySelector('.markdown-content')!;
+      expect(body.parentElement!.className).not.toMatch(PERCENT_HEIGHT);
+      expectScrollerOwnsBackground(body.parentElement!.parentElement);
+      expect(container.querySelectorAll('.min-h-full')).toHaveLength(0);
+      unmount();
+    }
+  });
+
+  it('html source view: same contract as a text file', () => {
+    for (const quoting of [false, true]) {
+      const { container, unmount } = render(
+        <FilePreview
+          fileContent={htmlContent()}
+          loading={false}
+          selectedPath="report.html"
+          quoting={quoting}
+          onQuote={vi.fn()}
+        />,
+      );
+      fireEvent.click(screen.getByRole('button', { name: 'Source' }));
+      const pre = container.querySelector('pre')!;
+      expect(pre.className).not.toMatch(PERCENT_HEIGHT);
+      expectScrollerOwnsBackground(pre.parentElement);
+      if (quoting) expect(pre.parentElement).toBe(screen.getByTestId('quote-region'));
+      expect(container.querySelectorAll('.min-h-full')).toHaveLength(0);
+      unmount();
+    }
+  });
+
+  it('the Quote pill is anchored in scrolled content: the region\'s own scroll offset is added', () => {
+    const onQuote = vi.fn();
+    render(
+      <FilePreview
+        fileContent={txtContent()}
+        loading={false}
+        selectedPath="notes.txt"
+        quoting
+        onQuote={onQuote}
+      />,
+    );
+    const region = screen.getByTestId('quote-region');
+    // The region is the scroll container now, so an absolutely positioned
+    // pill moves with the content: viewport-relative offsets must be shifted
+    // by the scroll position or the pill lands one screen above the selection.
+    Object.defineProperty(region, 'scrollTop', { value: 300, configurable: true });
+    Object.defineProperty(region, 'scrollLeft', { value: 0, configurable: true });
+    vi.spyOn(region, 'getBoundingClientRect').mockReturnValue({
+      left: 10, top: 20, right: 400, bottom: 700, width: 390, height: 680, x: 10, y: 20, toJSON() {},
+    } as DOMRect);
+    // jsdom's Range has no getBoundingClientRect at all; define one for the test.
+    Object.defineProperty(Range.prototype, 'getBoundingClientRect', {
+      configurable: true,
+      value: () => ({
+        left: 50, top: 100, right: 120, bottom: 116, width: 70, height: 16, x: 50, y: 100, toJSON() {},
+      }),
+    });
+    try {
+      selectRange(findTextNode(region, 'line one'), 9, 28);
+      fireEvent.mouseUp(region);
+      const pill = screen.getByRole('button', { name: 'Quote' });
+      expect(pill.style.left).toBe('40px'); // 50 - 10 + scrollLeft 0
+      expect(pill.style.top).toBe('400px'); // 116 - 20 + 4 + scrollTop 300
+      fireEvent.click(pill);
+      expect(onQuote).toHaveBeenCalledWith({ path: 'notes.txt', text: 'line two\nline three', lines: [2, 3] });
+    } finally {
+      delete (Range.prototype as unknown as Record<string, unknown>).getBoundingClientRect;
+      window.getSelection()?.removeAllRanges();
+    }
+  });
+});

@@ -4043,3 +4043,86 @@ describe('Spec 100: a live update re-renders only the row it changed', () => {
     expect(chatMessageRenders.get('delta-unique')).toBeGreaterThan(0);
   });
 });
+
+// ─── Spec 105 P2: the composer auto-resize must not force two layouts per key ──
+
+describe('Spec 105: composer auto-resize writes the height only when it changes', () => {
+  /** Mock the textarea's content height and record every `style.height` write. */
+  function instrumentComposer(initialScrollHeight: number) {
+    const ta = container.querySelector('textarea') as HTMLTextAreaElement;
+    const state = { scrollHeight: initialScrollHeight, height: ta.style.height, writes: [] as string[] };
+    Object.defineProperty(ta, 'scrollHeight', { configurable: true, get: () => state.scrollHeight });
+    Object.defineProperty(ta.style, 'height', {
+      configurable: true,
+      get: () => state.height,
+      set: (v: string) => { state.writes.push(v); state.height = v; },
+    });
+    return state;
+  }
+
+  async function type(text: string) {
+    await act(async () => { typeInComposer(text); });
+  }
+
+  it('a growing single-line keystroke never resets to auto, and an unchanged height writes nothing', async () => {
+    await renderChat({ sessionId: 's1' });
+    await flushEffects();
+    const s = instrumentComposer(24);
+
+    await type('h');
+    expect(s.writes).toEqual(['24px']);
+    s.writes.length = 0;
+
+    await type('he');
+    await type('hel');
+    expect(s.writes).toEqual([]); // same line count → zero layout work
+  });
+
+  it('growth onto a new line is picked up from scrollHeight without the auto reset', async () => {
+    await renderChat({ sessionId: 's1' });
+    await flushEffects();
+    const s = instrumentComposer(24);
+    await type('h');
+    s.writes.length = 0;
+
+    s.scrollHeight = 44; // the text now wraps to two lines
+    await type('he');
+    expect(s.writes).toEqual(['44px']);
+  });
+
+  it('shorter text collapses to auto first so the textarea can shrink back', async () => {
+    await renderChat({ sessionId: 's1' });
+    await flushEffects();
+    const s = instrumentComposer(44);
+    await type('hello world');
+    s.writes.length = 0;
+
+    s.scrollHeight = 24;
+    await type('hello worl'); // one char deleted
+    expect(s.writes).toEqual(['auto', '24px']);
+  });
+
+  it('removing a newline resets even when the text got longer (paste over a multi-line draft)', async () => {
+    await renderChat({ sessionId: 's1' });
+    await flushEffects();
+    const s = instrumentComposer(44);
+    await type('ab\nc');
+    s.writes.length = 0;
+
+    s.scrollHeight = 24;
+    await type('abcde');
+    expect(s.writes).toEqual(['auto', '24px']);
+  });
+
+  it('the height is capped at 160px and a longer draft past the cap writes nothing more', async () => {
+    await renderChat({ sessionId: 's1' });
+    await flushEffects();
+    const s = instrumentComposer(500);
+    await type('x');
+    expect(s.writes).toEqual(['160px']);
+    s.writes.length = 0;
+    s.scrollHeight = 520;
+    await type('xy');
+    expect(s.writes).toEqual([]);
+  });
+});

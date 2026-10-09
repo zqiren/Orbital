@@ -633,6 +633,15 @@ export function __clearChatHistoryCacheForTests() {
 const SLASH_COMMANDS = [
   { name: '/new', description: 'Start a fresh session' },
 ];
+
+/** The composer grows with its text up to this height, then scrolls. */
+const COMPOSER_MAX_HEIGHT_PX = 160;
+
+function countNewlines(text: string): number {
+  let n = 0;
+  for (let i = text.indexOf('\n'); i !== -1; i = text.indexOf('\n', i + 1)) n++;
+  return n;
+}
 import type {
   AgentRunStatus,
   ChatMessage as ChatMessageType,
@@ -2803,17 +2812,37 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     }
   }, [items, scrollToBottom]);
 
-  function adjustTextareaHeight() {
+  /**
+   * Fit the composer to its text (spec 105 P2).
+   *
+   * Collapsing `height` to `auto` before reading `scrollHeight` is the usual
+   * auto-grow trick, but in WebKit the collapse is one synchronous full-page
+   * layout and the pixel write after it is a second one, and both move every
+   * height-dependent block on the page (the docked file preview paid ~87 ms
+   * per keystroke for it). Growth never needs the collapse: against the
+   * current fixed height `scrollHeight` already reports the taller content.
+   * Only a shrink hides behind the fixed height, so callers collapse first
+   * only when the text may have got shorter. The write is skipped when the
+   * height is unchanged, so a same-line keystroke does no layout work at all.
+   */
+  function adjustTextareaHeight({ reset = true }: { reset?: boolean } = {}) {
     const ta = textareaRef.current;
-    if (ta) {
-      ta.style.height = 'auto';
-      ta.style.height = Math.min(ta.scrollHeight, 160) + 'px';
-    }
+    if (!ta) return;
+    if (reset) ta.style.height = 'auto';
+    const next = Math.min(ta.scrollHeight, COMPOSER_MAX_HEIGHT_PX) + 'px';
+    if (ta.style.height !== next) ta.style.height = next;
   }
 
   function handleInputChange(value: string) {
+    // `inputText` is the text before this edit (each onChange commits
+    // synchronously before the next one fires). Growth is detected from
+    // scrollHeight alone; anything that may shrink (shorter text, a newline
+    // gone, a same-length replacement) collapses to `auto` first.
+    const prev = inputText;
+    const mayShrink =
+      value.length <= prev.length || countNewlines(value) < countNewlines(prev);
     setInputText(value);
-    adjustTextareaHeight();
+    adjustTextareaHeight({ reset: mayShrink });
 
     // Check for /command trigger (only when input starts with /)
     if (value.startsWith('/')) {
@@ -4079,6 +4108,9 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
               ref={textareaRef}
               value={inputText}
               onChange={(e) => handleInputChange(e.target.value)}
+              // Safety net for a shrink the onChange rule missed (IME
+              // composition, programmatic edits): one full fit on blur.
+              onBlur={() => adjustTextareaHeight()}
               onKeyDown={handleKeyDown}
               onPaste={handlePaste}
               placeholder={pinnedTarget
