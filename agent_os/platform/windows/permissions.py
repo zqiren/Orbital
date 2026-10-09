@@ -219,18 +219,32 @@ class PermissionManager:
         is enough here — the user owns these folders.
 
         The ACE is **inheritable** (``(OI)(CI)``) and ``/T`` is deliberately
-        absent (spec 109 D1). NTFS propagates an inheritable ACE to the
-        existing subtree in one kernel pass when the root DACL is set;
+        absent (spec 109 D1). Setting an inheritable ACE on the root makes
+        Windows propagate it to the existing subtree as *inherited* entries;
         ``/T`` additionally wrote an *explicit* ACE on every descendant, one
         file at a time, which on a dev machine (``%LOCALAPPDATA%\\Programs``,
         ``.cargo``, ``.rustup``, ``npm``: 10^5-10^6 files) pinned a CPU for
         minutes behind the installer's frozen "Configuring agent sandbox"
-        bar (issue #55). Descendants whose DACL has inheritance disabled do
-        not receive the ACE — rare in toolchain trees and acceptable for a
-        best-effort grant that the daemon re-runs at every start.
+        bar (issue #55). Descendants whose DACL has inheritance disabled
+        (protected) do not receive the ACE — V1 found one, ``Microsoft VS
+        Code``, whose protected DACL grants ``BUILTIN\\Users:(RX)`` anyway,
+        so the worker reads it regardless. Acceptable for a best-effort
+        grant; anything missed is one click in Settings > Folder access.
 
-        Measured numbers (spec 109 V1, to be recorded from the Windows
-        verification run): with ``/T``: <fill in>; without: <fill in>.
+        The propagation is still a walk of the subtree, just a much cheaper
+        one, and it happens on EVERY ``/grant`` — re-granting an ACE that is
+        already there costs the same as the first grant. So a root that
+        already carries the explicit inheritable RX entry is skipped after
+        one single-object ``icacls`` query; files created later inherit at
+        creation time without any walk.
+
+        Measured (spec 109 V1, 2026-10-10, Windows 10 22H2 laptop,
+        ``%LOCALAPPDATA%\\Programs`` with 104,018 entries, NTFS SSD): with
+        ``/T``: 182.3 s grant / 182.0 s remove; without: 23.5 s grant
+        (19.2-19.3 s warm, identical for a repeat grant) / 19.6 s remove. A
+        deep file (``Python\\Python313\\Lib\\encodings\\utf_8.py``) showed
+        ``AgentOS-Worker:(I)(RX)`` after the ``/T``-less grant and lost it
+        after the root-only ``/remove``.
         """
         results: list[PermissionResult] = []
         for root in windows_toolchain_roots():
@@ -238,6 +252,10 @@ class PermissionManager:
                 continue
             resolved = self._resolve_path(root)
             if resolved is None:
+                continue
+            query = self._run_icacls([resolved])
+            if query.returncode == 0 and _has_inheritable_rx_grant(query.stdout, username):
+                results.append(PermissionResult(success=True, path=resolved))
                 continue
             result = self._run_icacls(
                 [resolved, "/grant", f"{username}:(OI)(CI)RX", "/Q"]
@@ -392,6 +410,27 @@ def _has_deny_ace(output: str, username: str) -> bool:
     for line in output.splitlines():
         line_lower = line.lower()
         if username_lower + ":" in line_lower and "(deny)" in line_lower:
+            return True
+    return False
+
+
+def _has_inheritable_rx_grant(output: str, username: str) -> bool:
+    """True when *username* has the explicit ``(OI)(CI)`` read+execute (or
+    wider) allow entry that :meth:`PermissionManager.grant_toolchain_roots`
+    writes, e.g. ``DESKTOP-ABC\\AgentOS-Worker:(OI)(CI)(RX)``.
+
+    An inherited ``(I)`` copy does not count: it would vanish if the parent
+    lost its entry, and the root is where the grant belongs.
+    """
+    username_lower = username.lower()
+    for line in output.splitlines():
+        line_lower = line.lower()
+        if username_lower + ":" not in line_lower:
+            continue
+        flags = {f.upper() for f in re.findall(r"\(([^)]+)\)", line)}
+        if "DENY" in flags or "I" in flags:
+            continue
+        if {"OI", "CI"} <= flags and flags & {"RX", "M", "F"}:
             return True
     return False
 

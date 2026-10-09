@@ -172,18 +172,15 @@ def test_unprotect_removes_the_deny_for_teardown(pm, tmp_path):
 def test_toolchain_grant_is_read_execute_and_skips_absent_roots(pm, tmp_path, monkeypatch):
     """Spec 109 D1 (T1): the grant is inheritable and NOT ``/T``.
 
-    ``(OI)(CI)`` makes the ACE inheritable, and NTFS propagates an inheritable
-    ACE to the existing subtree in one kernel pass when the DACL is set.
+    ``(OI)(CI)`` makes the ACE inheritable, and Windows propagates an
+    inheritable ACE to the existing subtree when the root DACL is set.
     ``/T`` on top of that wrote an explicit ACE on every descendant, one file
     at a time — the minutes-long, CPU-pinned "Configuring agent sandbox"
     install stall on a dev machine (issue #55).
 
-    CAVEAT (spec 109 §0 row 3): the claim that an inheritable ACE set without
-    ``/T`` reaches *existing* descendants is confirmed on a Windows box by
-    verification step V1 (``icacls`` on a deep child shows the
-    ``AgentOS-Worker`` row flagged ``(I)``). Until V1 is recorded, this test
-    pins the intended command shape, not a proven filesystem fact. If V1
-    fails, ``/T`` returns here and the fix falls back to D2 alone.
+    Confirmed on Windows by spec 109 V1 (2026-10-10): after the ``/T``-less
+    grant on ``%LOCALAPPDATA%\\Programs`` (104,018 entries, 23.5 s vs 182.3 s
+    with ``/T``) a deep file showed ``AgentOS-Worker:(I)(RX)``.
     """
     present = tmp_path / "npm"
     present.mkdir()
@@ -280,9 +277,65 @@ def test_one_failing_root_does_not_sink_the_others(pm, tmp_path, monkeypatch):
         "agent_os.platform.windows.permissions.windows_toolchain_roots",
         lambda: [str(a), str(b)],
     )
-    with patch.object(PermissionManager, "_run_icacls", side_effect=[_fail(), _ok()]):
+    # Per root: one query (no entry yet), then the grant.
+    with patch.object(PermissionManager, "_run_icacls",
+                      side_effect=[_ok(), _fail(), _ok(), _ok()]):
         results = pm.grant_toolchain_roots(USER)
     assert [r.success for r in results] == [False, True]
+
+
+_ROOT_WITH_GRANT = (
+    r"C:\Users\dev\AppData\Local\Programs DESKTOP-ABC\AgentOS-Worker:(OI)(CI)(RX)" "\n"
+    r"                                    NT AUTHORITY\SYSTEM:(I)(OI)(CI)(F)" "\n"
+)
+_ROOT_INHERITED_ONLY = r"C:\Users\dev\.cargo DESKTOP-ABC\AgentOS-Worker:(I)(OI)(CI)(RX)" "\n"
+_ROOT_DENY_ONLY = r"C:\Users\dev\.cargo DESKTOP-ABC\AgentOS-Worker:(DENY)(OI)(CI)(W)" "\n"
+
+
+def test_toolchain_grant_skips_a_root_that_already_has_the_entry(pm, tmp_path, monkeypatch):
+    """Spec 109 V1 finding: every ``/grant`` re-walks the subtree to
+    propagate, even when the identical ACE is already there (19 s per call on
+    a 10^5-entry root, measured). The daemon re-runs this at every start, so
+    a root that already carries the entry costs one single-object query."""
+    root = tmp_path / "Programs"
+    root.mkdir()
+    monkeypatch.setattr(
+        "agent_os.platform.windows.permissions.windows_toolchain_roots",
+        lambda: [str(root)],
+    )
+    with patch.object(PermissionManager, "_run_icacls",
+                      return_value=_ok(_ROOT_WITH_GRANT)) as run:
+        results = pm.grant_toolchain_roots(USER)
+    assert len(results) == 1 and results[0].success
+    assert run.call_count == 1, "query only, no /grant"
+    assert "/grant" not in run.call_args[0][0]
+
+
+@pytest.mark.parametrize("existing", [_ROOT_INHERITED_ONLY, _ROOT_DENY_ONLY, ""])
+def test_toolchain_grant_still_grants_without_an_explicit_allow(pm, tmp_path, monkeypatch, existing):
+    root = tmp_path / "cargo"
+    root.mkdir()
+    monkeypatch.setattr(
+        "agent_os.platform.windows.permissions.windows_toolchain_roots",
+        lambda: [str(root)],
+    )
+    with patch.object(PermissionManager, "_run_icacls",
+                      side_effect=[_ok(existing), _ok()]) as run:
+        results = pm.grant_toolchain_roots(USER)
+    assert len(results) == 1 and results[0].success
+    assert "/grant" in run.call_args[0][0]
+
+
+def test_toolchain_grant_still_grants_when_the_query_fails(pm, tmp_path, monkeypatch):
+    root = tmp_path / "npm"
+    root.mkdir()
+    monkeypatch.setattr(
+        "agent_os.platform.windows.permissions.windows_toolchain_roots",
+        lambda: [str(root)],
+    )
+    with patch.object(PermissionManager, "_run_icacls", side_effect=[_fail(), _ok()]) as run:
+        results = pm.grant_toolchain_roots(USER)
+    assert results[0].success and "/grant" in run.call_args[0][0]
 
 
 def test_toolchain_roots_never_include_a_credential_store():
