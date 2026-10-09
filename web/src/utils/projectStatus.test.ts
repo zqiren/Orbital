@@ -6,6 +6,7 @@ import { describe, it, expect, vi } from 'vitest';
 import type { AgentRunStatus } from '../types';
 import {
   createSubAgentsRunningSync,
+  displayRunStatus,
   getProjectDotColor,
 } from './projectStatus';
 
@@ -63,6 +64,25 @@ function manualFetch() {
 async function settle() {
   for (let i = 0; i < 5; i++) await Promise.resolve();
 }
+
+describe('displayRunStatus — header/row status while a worker runs (spec 102)', () => {
+  it('reads running while a worker runs and the manager rests', () => {
+    expect(displayRunStatus('idle', true)).toBe('running');
+    expect(displayRunStatus('new_session', true)).toBe('running');
+  });
+
+  it('stays idle with no worker running', () => {
+    expect(displayRunStatus('idle', false)).toBe('idle');
+    expect(displayRunStatus('new_session', false)).toBe('new_session');
+  });
+
+  it('never masks a manager state that is not resting (D2: manager wins)', () => {
+    for (const status of ['running', 'waiting', 'pending_approval', 'error', 'queued'] as const) {
+      expect(displayRunStatus(status, true)).toBe(status);
+      expect(displayRunStatus(status, false)).toBe(status);
+    }
+  });
+});
 
 describe('createSubAgentsRunningSync', () => {
   it('keeps one request in flight per project and queues exactly one more', async () => {

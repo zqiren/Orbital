@@ -434,6 +434,14 @@ export interface SessionListEntry {
    */
   pinned_target?: string | null;
   /**
+   * A worker (sub-agent) has an open turn in this session (spec 102). Set by
+   * the sessions route from the live adapter slate, never persisted. `status`
+   * keeps its manager-only meaning and stays `idle` for the whole pinned run;
+   * this is the additive signal the row glyph lights on. Missing ⇒ false
+   * (an older daemon — dev Vite often proxies the packaged backend).
+   */
+  worker_running?: boolean;
+  /**
    * Origin of the session, persisted in the session_start meta and emitted by
    * the list API (agent_manager.list_sessions). 'chat' is the default for
    * manually started sessions; 'queue' marks dispatcher-minted sessions and

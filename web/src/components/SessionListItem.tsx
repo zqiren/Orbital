@@ -29,7 +29,7 @@ import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { Pin } from 'lucide-react';
 import type { SessionListEntry } from '../types';
 import { SessionStatusGlyph } from './SessionStatusGlyph';
-import { getStatusDisplay } from './sessionStatus';
+import { getStatusDisplay, rowDisplayStatus } from './sessionStatus';
 import { classifySessionName, type SessionKind } from '../lib/sessionLabel';
 import type { StringKey } from '../i18n/strings';
 import { useT } from '../i18n/useT';
@@ -78,7 +78,9 @@ function SessionListItemBase({
   const inputRef = useRef<HTMLInputElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const t = useT();
-  const display = getStatusDisplay(session.status);
+  // Spec 102: a running worker lights the row even though the manager-only
+  // `status` stays idle for the whole pinned run.
+  const display = getStatusDisplay(rowDisplayStatus(session));
 
   const labelInfo = useMemo(
     () => classifySessionName(session.name, session.origin),

@@ -2366,21 +2366,34 @@ class SubAgentManager:
                 if transport is not None and adapter.is_alive():
                     yield transport
 
+    def running_session_ids(self, project_id: str) -> set[str]:
+        """Session ids (the F1 id the sessions list exposes as ``session_id``)
+        in which a worker has an open turn (spec 102).
+
+        The per-session form of ``has_running_sub_agents``: the session-list
+        row glyph lights for a pinned run the same way the project dot does.
+        ``background-running`` does not count (only an open turn is work in
+        progress); dead adapters are evicted on the way via ``list_active``.
+        Mutates ``_adapters`` through that eviction — call it on the event
+        loop, never from a worker thread.
+        """
+        session_ids = [sid for (pid, sid) in self._adapters if pid == project_id]
+        return {
+            sid
+            for sid in session_ids
+            if any(entry["status"] == "running"
+                   for entry in self.list_active(project_id, session_id=sid))
+        }
+
     def has_running_sub_agents(self, project_id: str) -> bool:
         """True iff a worker in ANY session of the project has an open turn.
 
         The project-list dot's signal for work no management turn brackets —
         a pinned dispatch, a queue item assigned to a worker (spec 095).
-        ``background-running`` does not count: only an open turn is work in
-        progress, and a detached job would hold the dot green indefinitely.
-        Scans through ``list_active`` so dead adapters are evicted on the way.
+        Delegates to ``running_session_ids`` so the project dot and the
+        session rows can never disagree.
         """
-        session_ids = [sid for (pid, sid) in self._adapters if pid == project_id]
-        return any(
-            entry["status"] == "running"
-            for sid in session_ids
-            for entry in self.list_active(project_id, session_id=sid)
-        )
+        return bool(self.running_session_ids(project_id))
 
     # User-facing honesty: what the stop button can and cannot reach
     # (Piece 3 Part D; accepted limitation per

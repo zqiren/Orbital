@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../config';
 import type { SessionListEntry, WebSocketEvent } from '../types';
+import { SUB_AGENTS_RUNNING_EVENTS } from '../utils/projectStatus';
 import { useWebSocket } from './useWebSocket';
 
 // Per-project cache: avoids refetch when the user switches between projects
@@ -15,8 +16,14 @@ const sessionsCache = new Map<string, SessionListEntry[]>();
 // `agent.status` covers every runtime transition of a session that has a
 // handle; the three `chat.pending_*` events cover a session that has none —
 // the spec-081 `queued` row appears, flips and disappears on those alone.
+// The `sub_agent.*` lifecycle events (shared with the project dot's sync,
+// SUB_AGENTS_RUNNING_EVENTS) cover a pinned worker run: it runs zero
+// management turns, so no agent.status ever fires for it — neither when its
+// first message creates the session (spec 106) nor when its `worker_running`
+// flag flips (spec 102). `chat.sub_agent_message` is deliberately NOT here:
+// one fires per worker text chunk.
 const SESSION_LIST_EVENTS: ReadonlyArray<WebSocketEvent['type']> = [
-  'agent.status',
+  ...SUB_AGENTS_RUNNING_EVENTS,
   'chat.pending_enqueued',
   'chat.pending_dispatched',
   'chat.pending_cancelled',
@@ -35,9 +42,9 @@ const SESSION_LIST_EVENTS: ReadonlyArray<WebSocketEvent['type']> = [
 // projects does not trigger an unnecessary blank-loading state (the cached
 // data is shown immediately while a background refresh occurs).
 //
-// WS subscription: any `agent.status` event for this project triggers a
-// refresh, since every session transition (new session, idle, error, stopped,
-// etc.) is reported via that event. This keeps the list live without polling.
+// WS subscription: any `agent.status`, `chat.pending_*` or `sub_agent.*`
+// lifecycle event for this project triggers a (coalesced) refresh — see
+// SESSION_LIST_EVENTS. This keeps the list live without polling.
 //
 // Phase 1B's SessionSidebar / SessionListItem are the primary consumers.
 export function useSessions(projectId: string | null) {
@@ -52,6 +59,14 @@ export function useSessions(projectId: string | null) {
   // Keep a stable ref to the latest projectId for use in WS handler.
   const projectIdRef = useRef(projectId);
   projectIdRef.current = projectId;
+  // Coalescing state for WS-triggered refreshes (spec 106 Q1 / 102 step 8):
+  // one list request in flight per hook instance; a burst of events while it
+  // runs collapses into exactly one trailing refetch. A pinned turn yields up
+  // to three events (dispatched, started, completed) and three hook
+  // instances are mounted per project — without this a large project would
+  // issue nine full list scans per worker turn.
+  const wsInFlightRef = useRef(false);
+  const wsQueuedRef = useRef(false);
 
   const refresh = useCallback(async () => {
     if (!projectId) {
@@ -80,6 +95,33 @@ export function useSessions(projectId: string | null) {
     }
   }, [projectId]);
 
+  // Always the latest `refresh` (it is rebound per projectId) so a trailing
+  // coalesced refetch that fires after a project switch fetches the project
+  // now selected, never the one the burst started under.
+  const refreshRef = useRef(refresh);
+  refreshRef.current = refresh;
+
+  // The WS-triggered refresh. The explicit `refresh()` returned to callers is
+  // NOT routed through this: the rename/pin/delete revert paths rely on an
+  // immediate authoritative fetch.
+  const coalescedRefresh = useCallback(() => {
+    const run = () => {
+      wsInFlightRef.current = true;
+      void refreshRef.current().finally(() => {
+        wsInFlightRef.current = false;
+        if (wsQueuedRef.current) {
+          wsQueuedRef.current = false;
+          if (projectIdRef.current) run();
+        }
+      });
+    };
+    if (wsInFlightRef.current) {
+      wsQueuedRef.current = true;
+      return;
+    }
+    run();
+  }, []);
+
   // On projectId change: load from cache immediately (no blank flash), then
   // kick off a background refresh.
   useEffect(() => {
@@ -105,19 +147,26 @@ export function useSessions(projectId: string | null) {
   // message dispatches, and disappears when it is cancelled. None of those
   // three emits an agent.status, so without these triggers the row would only
   // appear on the next unrelated refresh.
+  //
+  // The sub_agent.* lifecycle events (spec 106 / 102) are the fourth case: a
+  // pinned worker send persists the session and runs the worker with no
+  // management turn at all, so the only events it ever emits are the
+  // worker's own. A session whose FIRST message is a pinned send would
+  // otherwise never be listed until some unrelated agent.status refetched —
+  // and a running worker's row glyph (`worker_running`) would never flip.
   useEffect(() => {
     if (!projectId) return;
     const handler = (event: WebSocketEvent) => {
       if (!SESSION_LIST_EVENTS.includes(event.type)) return;
       // Every one of these events carries project_id; ignore other projects'.
       if ((event as { project_id?: string }).project_id !== projectIdRef.current) return;
-      void refresh();
+      coalescedRefresh();
     };
     for (const type of SESSION_LIST_EVENTS) ws.on(type, handler);
     return () => {
       for (const type of SESSION_LIST_EVENTS) ws.off(type, handler);
     };
-  }, [projectId, refresh, ws]);
+  }, [projectId, coalescedRefresh, ws]);
 
   // Rename a session (display label only). Optimistically updates the local
   // list + cache so the new name shows immediately, then PATCHes the backend.

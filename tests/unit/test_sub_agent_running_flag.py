@@ -316,3 +316,192 @@ class TestDeleteSessionWorkerGuard:
 
         assert resp.status_code == 409, resp.text
         assert jsonl.exists()
+
+
+# ---------------------------------------------------------------------------
+# Spec 102: SubAgentManager.running_session_ids — the per-session form of the
+# same signal, feeding the session-list row glyph.
+# ---------------------------------------------------------------------------
+
+class TestRunningSessionIds:
+    def test_empty_with_no_adapters(self):
+        assert _manager().running_session_ids(PID) == set()
+
+    def test_only_sessions_with_an_open_turn(self):
+        mgr = _manager()
+        _plant(mgr, PID, SID_A, "codex", _adapter(idle=True))
+        _plant(mgr, PID, SID_B, "claude-code", _adapter(idle=False))
+        assert mgr.running_session_ids(PID) == {SID_B}
+
+    def test_background_running_is_excluded(self):
+        mgr = _manager(background_live=True)
+        _plant(mgr, PID, SID_A, "claude-code",
+               _adapter(idle=True, supports_background=True))
+        assert mgr.list_active(PID, session_id=SID_A)[0]["status"] == (
+            "background-running")
+        assert mgr.running_session_ids(PID) == set()
+
+    def test_dead_adapter_is_excluded_and_evicted(self):
+        mgr = _manager()
+        _plant(mgr, PID, SID_A, "codex", _adapter(alive=False, idle=False))
+        assert mgr.running_session_ids(PID) == set()
+        assert make_session_key(PID, SID_A) not in mgr._adapters
+
+    def test_other_projects_are_excluded(self):
+        mgr = _manager()
+        _plant(mgr, "proj_other", SID_A, "codex", _adapter(idle=False))
+        _plant(mgr, PID, SID_B, "codex", _adapter(idle=False))
+        assert mgr.running_session_ids(PID) == {SID_B}
+        assert mgr.running_session_ids("proj_other") == {SID_A}
+
+    def test_has_running_sub_agents_agrees(self):
+        mgr = _manager()
+        assert mgr.has_running_sub_agents(PID) is False
+        _plant(mgr, PID, SID_A, "codex", _adapter(idle=False))
+        assert mgr.has_running_sub_agents(PID) is (
+            bool(mgr.running_session_ids(PID)))
+        assert mgr.has_running_sub_agents(PID) is True
+
+
+# ---------------------------------------------------------------------------
+# Spec 102: GET /projects/{pid}/sessions → worker_running, via the REAL
+# inject-route target branch (seam-3 key-shape check: the adapter slate key
+# send() resolves must be the same F1 id the list entry exposes as
+# ``session_id``).
+# ---------------------------------------------------------------------------
+
+def _fake_check_all_factory(installed_slugs):
+    from agent_os.agents.setup_types import AgentSetupStatus
+
+    def _fake():
+        statuses = [AgentSetupStatus(
+            slug="built-in", name="Built-in",
+            installed=True, binary_path=None, version=None,
+            dependencies_met=True, missing_dependencies=[],
+            credentials_configured=True, missing_credentials=[],
+            setup_actions=[],
+        )]
+        for slug in installed_slugs:
+            statuses.append(AgentSetupStatus(
+                slug=slug, name=slug, installed=True,
+                binary_path="/fake/" + slug, version="1.0.0",
+                dependencies_met=True, missing_dependencies=[],
+                credentials_configured=True, missing_credentials=[],
+                setup_actions=[],
+            ))
+        return statuses
+
+    return _fake
+
+
+class _FakeTransport:
+    def __init__(self):
+        self.dispatched = None
+
+    async def dispatch(self, message):
+        self.dispatched = message
+
+
+class _FakeAdapter:
+    """A live worker with an open turn and no subprocess behind it."""
+
+    def __init__(self, handle):
+        self._transport = _FakeTransport()
+        self.display_name = handle
+
+    def is_alive(self):
+        return True
+
+    def is_idle(self):
+        return False
+
+
+@pytest.fixture
+def real_app_client(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
+    os.makedirs(str(tmp_path / "home"), exist_ok=True)
+    from fastapi.testclient import TestClient
+    from agent_os.api.app import create_app
+    app = create_app(data_dir=str(tmp_path / "data"))
+    from agent_os.api.routes import agents_v2
+    agents_v2._setup_engine.check_all = _fake_check_all_factory(["claude-code"])
+    return TestClient(app)
+
+
+def _write_user_only_log(ws: str, stem: str, content: str) -> None:
+    from agent_os.agent.session import Session
+    s = Session.new(stem, ws)
+    s.append({"role": "user", "content": content, "source": "user"})
+
+
+class TestSessionsRouteWorkerRunning:
+    def test_true_only_on_the_dispatching_session(
+            self, real_app_client, tmp_path, monkeypatch):
+        from agent_os.api.routes import agents_v2
+        client = real_app_client
+        ws = str(tmp_path / "ws_wr")
+        os.makedirs(ws, exist_ok=True)
+        resp = client.post("/api/v2/projects", json={
+            "name": "wr", "workspace": ws,
+            "model": "gpt-4", "api_key": "test-key",
+        })
+        assert resp.status_code == 201, resp.text
+        pid = resp.json()["project_id"]
+        _write_user_only_log(ws, "wr_sess_pinned001", "earlier")
+        _write_user_only_log(ws, "wr_sess_other0002", "other chat")
+
+        sam = agents_v2._sub_agent_manager
+        assert isinstance(sam, SubAgentManager)
+        # Spawn-on-demand stub: the REAL send() computes the slate key and
+        # calls start() with the session id it resolved; register the live
+        # worker under exactly that id, never one built by the test.
+        started: list[str] = []
+
+        async def _fake_start(project_id, handle, *, session_id=None, **kw):
+            started.append(session_id)
+            sam._adapters.setdefault(
+                make_session_key(project_id, session_id), {},
+            )[handle] = _FakeAdapter(handle)
+            return f"Started {handle}"
+
+        monkeypatch.setattr(sam, "start", _fake_start)
+        am = agents_v2._agent_manager
+        monkeypatch.setattr(am, "start_agent", AsyncMock())
+        monkeypatch.setattr(am, "_start_loop", AsyncMock())
+
+        resp = client.post(f"/api/v2/agents/{pid}/inject", json={
+            "content": "write the essay", "target": "claude-code",
+            "session_id": "wr_sess_pinned001",
+        })
+        assert resp.status_code == 200, resp.text
+        assert started == ["wr_sess_pinned001"]
+
+        listed = client.get(f"/api/v2/projects/{pid}/sessions").json()["sessions"]
+        by_id = {s["session_id"]: s for s in listed}
+        assert set(by_id) >= {"wr_sess_pinned001", "wr_sess_other0002"}
+        assert by_id["wr_sess_pinned001"]["worker_running"] is True
+        # Manager-only status vocabulary untouched (spec 095/102 §4).
+        assert by_id["wr_sess_pinned001"]["status"] == "idle"
+        assert by_id["wr_sess_other0002"]["worker_running"] is False
+        assert all("worker_running" in s for s in listed)
+
+    def test_false_everywhere_without_a_sub_agent_manager(self, tmp_path):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from agent_os.api.routes import agents_v2
+
+        agent_manager = MagicMock()
+        agent_manager.list_sessions.return_value = [
+            {"session_id": SID_A, "status": "idle", "session_uuid": SID_A},
+        ]
+        agents_v2.configure(
+            project_store=MagicMock(), agent_manager=agent_manager,
+            ws_manager=MagicMock(), sub_agent_manager=None,
+            setup_engine=MagicMock(), settings_store=MagicMock(),
+            credential_store=MagicMock(),
+        )
+        app = FastAPI()
+        app.include_router(agents_v2.router)
+        body = TestClient(app).get(f"/api/v2/projects/{PID}/sessions").json()
+        assert body["sessions"][0]["worker_running"] is False

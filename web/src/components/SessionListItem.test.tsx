@@ -8,7 +8,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, cleanup } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SessionListItem } from './SessionListItem';
-import { getStatusDisplay } from './sessionStatus';
+import { getStatusDisplay, rowDisplayStatus } from './sessionStatus';
 import type { AgentRunStatus, SessionListEntry } from '../types';
 
 afterEach(() => cleanup());
@@ -57,6 +57,42 @@ describe('SessionListItem — status glyph rendering', () => {
     const glyph = screen.getByTestId('session-status-glyph');
     expect(glyph.textContent).toBe('⟳');
     expect(glyph).toHaveStyle({ color: '#539AF8' });
+  });
+
+  // Spec 102 — a pinned worker runs zero management turns, so the backend's
+  // manager-only `status` stays idle; the additive `worker_running` field
+  // lights the row exactly like a manager run.
+  it('idle + worker_running → the running glyph ◐', () => {
+    render(
+      <SessionListItem
+        session={makeSession({ session_id: 'sess-worker', status: 'idle', worker_running: true })}
+        selected={false}
+        onSelect={vi.fn()}
+      />,
+    );
+    const glyph = screen.getByTestId('session-status-glyph');
+    expect(glyph.textContent).toBe('◐');
+    expect(glyph).toHaveStyle({ color: '#22C55E' });
+  });
+
+  it('idle + worker_running keeps the status glyph over the pin glyph', () => {
+    render(
+      <SessionListItem
+        session={makeSession({ session_id: 'sess-wp', status: 'idle', worker_running: true, pinned: true })}
+        selected={false}
+        onSelect={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId('session-status-glyph').textContent).toBe('◐');
+    expect(screen.queryByTestId('session-pin-glyph')).toBeNull();
+  });
+
+  it('rowDisplayStatus: missing worker_running reads as false; manager state wins', () => {
+    expect(rowDisplayStatus(makeSession({ status: 'idle' }))).toBe('idle');
+    expect(rowDisplayStatus(makeSession({ status: 'idle', worker_running: true }))).toBe('running');
+    expect(rowDisplayStatus(makeSession({ status: 'new_session', worker_running: true }))).toBe('running');
+    expect(rowDisplayStatus(makeSession({ status: 'error', worker_running: true }))).toBe('error');
+    expect(rowDisplayStatus(makeSession({ status: 'pending_approval', worker_running: true }))).toBe('pending_approval');
   });
 
   it('pending_approval (Blocked) → glyph ⚠ with warning color', () => {

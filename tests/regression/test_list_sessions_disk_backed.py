@@ -167,3 +167,36 @@ def test_meta_only_log_and_disk_cache_unchanged_with_pending_merge(tmp_path):
     assert cache_key in mgr._disk_entry_cache
     second = mgr.list_sessions("proj")
     assert [s["session_id"] for s in second] == ids
+
+
+def test_pinned_first_message_log_is_listed(tmp_path):
+    """Spec 106 contract pin: a log whose only conversation row is a pinned
+    send (``role:"user"`` + ``target``) is a listed, idle chat session named
+    from the text. The field bug was a missing frontend refetch, not the
+    list; this guards ``derive_disk_entry`` against a future "skip
+    non-conversation rows" rule silently reopening it."""
+    ws, sessions, ps = _setup(tmp_path)
+    ts = "2026-10-09T07:04:49+00:00"
+    rows = [
+        {"role": "meta", "event": "session_start", "session_id": "proj_pinned0001",
+         "session_uuid": "proj_pinned0001", "origin": "chat",
+         "pinned_target": "claude-code", "timestamp": ts},
+        {"role": "user", "content": "介绍一下你自己", "target": "claude-code",
+         "session_id": "proj_pinned0001", "timestamp": ts},
+    ]
+    (sessions / "proj_pinned0001.jsonl").write_text(
+        "\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n",
+        encoding="utf-8",
+    )
+    mgr = _make_manager(tmp_path, ps)
+
+    out = mgr.list_sessions("proj")
+    entries = [s for s in out if s["session_id"] == "proj_pinned0001"]
+    assert len(entries) == 1, out
+    entry = entries[0]
+    assert entry["status"] == "idle"
+    assert entry["name"] == "介绍一下你自己"
+    assert entry["origin"] == "chat"
+    assert entry["trigger_type"] is None
+    assert entry["pinned_target"] == "claude-code"
+    assert entry["last_activity_at"] == ts

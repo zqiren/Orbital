@@ -80,6 +80,42 @@ function renderProjectDetail(
   );
 }
 
+describe('ProjectDetail — header badge while a worker runs (spec 102)', () => {
+  function renderBadge(agentStatus: 'idle' | 'error' | 'running', subAgentsRunning?: boolean) {
+    return render(
+      <ProjectDetail
+        project={mockProject}
+        agentStatus={agentStatus}
+        subAgentsRunning={subAgentsRunning}
+        route={baseRoute}
+        setRoute={vi.fn()}
+      />,
+    );
+  }
+
+  it('reads Active with the manager idle and a worker running', () => {
+    renderBadge('idle', true);
+    expect(screen.getByText('Active')).toBeInTheDocument();
+    expect(screen.queryByText('Idle')).toBeNull();
+  });
+
+  it('reads Idle with the manager idle and no worker running', () => {
+    renderBadge('idle', false);
+    expect(screen.getByText('Idle')).toBeInTheDocument();
+  });
+
+  it('reads Idle when the prop is omitted (older callers)', () => {
+    renderBadge('idle');
+    expect(screen.getByText('Idle')).toBeInTheDocument();
+  });
+
+  it('keeps a manager error over a running worker', () => {
+    renderBadge('error', true);
+    expect(screen.getByText('Error')).toBeInTheDocument();
+    expect(screen.queryByText('Active')).toBeNull();
+  });
+});
+
 describe('ProjectDetail — gear icon in header', () => {
   it('renders the gear icon button in the project header', () => {
     renderProjectDetail();
