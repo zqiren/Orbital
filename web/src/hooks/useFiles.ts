@@ -51,9 +51,15 @@ export function useFileBytes(url: string | null): FileBytesState {
  * The file-content route for a client that renders documents (spec 090). The
  * `document_preview=1` opt-in gets PDF / Office / CSV back as a `document`
  * envelope; without it the daemon keeps the pre-090 shapes for older UIs.
+ *
+ * Spec 103: `ifRevision` is the revision the caller already holds. A daemon
+ * that knows the param answers `{ path, revision, unchanged: true }` when it
+ * still matches, without reading the file; an older daemon ignores it and
+ * sends the full body, which the caller's revision compare already absorbs.
  */
-export function fileContentPath(projectId: string, path: string): string {
-  return `/api/v2/projects/${encodeURIComponent(projectId)}/files/content?path=${encodeURIComponent(path)}&document_preview=1`;
+export function fileContentPath(projectId: string, path: string, ifRevision?: string): string {
+  const base = `/api/v2/projects/${encodeURIComponent(projectId)}/files/content?path=${encodeURIComponent(path)}&document_preview=1`;
+  return ifRevision ? `${base}&if_revision=${encodeURIComponent(ifRevision)}` : base;
 }
 
 /**
@@ -103,11 +109,11 @@ export function useFiles() {
   );
 
   const getFileContent = useCallback(
-    async (projectId: string, path: string) => {
+    async (projectId: string, path: string, ifRevision?: string) => {
       setLoading(true);
       setError(null);
       try {
-        const data = await api<FileContent>(fileContentPath(projectId, path));
+        const data = await api<FileContent>(fileContentPath(projectId, path, ifRevision));
         setFileContent(data);
         return data;
       } catch (e) {

@@ -117,6 +117,13 @@ def _resolve_path(project_id: str, path: str):
 
 @router.get("/projects/{project_id}/files")
 async def list_files(project_id: str, path: str = ""):
+    # Spec 103 (R4): listdir + a stat per entry off the event loop, which is
+    # also streaming the running agent's output. An HTTPException raised in
+    # the worker propagates through ``to_thread`` unchanged.
+    return await asyncio.to_thread(_list_files_sync, project_id, path)
+
+
+def _list_files_sync(project_id: str, path: str):
     _workspace, target = _resolve_path(project_id, path)
 
     if not os.path.isdir(target):
@@ -161,6 +168,11 @@ async def resolve_file(project_id: str, path: str):
     whose relative path ends with the requested path on a whole-segment
     boundary, letting the client open a unique match instead of toasting.
     """
+    # Spec 103 (R4): the bounded os.walk runs off the event loop.
+    return await asyncio.to_thread(_resolve_file_sync, project_id, path)
+
+
+def _resolve_file_sync(project_id: str, path: str):
     workspace, target = _resolve_path(project_id, path)
 
     rel = path.replace("\\", "/")
@@ -203,8 +215,50 @@ async def resolve_file(project_id: str, path: str):
     return {"path": path, "matches": sorted(matches)}
 
 
+def _read_text_capped(target: str) -> str:
+    """The text / HTML preview body: at most ``MAX_PREVIEW_BYTES`` *bytes*.
+
+    Spec 103 (R5). Reading in text mode counted characters, so a CJK-heavy
+    file sent up to three times the cap. Read bytes instead and decode after
+    the cut. When the cap lands inside a multibyte sequence, drop that
+    partial tail (at most 3 bytes); a decode error anywhere else, or at the
+    true end of a file the cap did not touch, is the caller's binary branch,
+    exactly as before. Newlines fold like the old text-mode read did
+    (``\r\n`` and ``\r`` → ``\n``) so the body stays byte-identical.
+    """
+    with open(target, "rb") as f:
+        data = f.read(MAX_PREVIEW_BYTES)
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as e:
+        cut_by_cap = len(data) == MAX_PREVIEW_BYTES
+        incomplete_tail = (
+            e.end == len(data)
+            and len(data) - e.start <= 3
+            and e.reason == "unexpected end of data"
+        )
+        if not (cut_by_cap and incomplete_tail):
+            raise
+        text = data[: e.start].decode("utf-8")
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
 @router.get("/projects/{project_id}/files/content")
-async def get_file_content(project_id: str, path: str, document_preview: bool = False):
+async def get_file_content(
+    project_id: str,
+    path: str,
+    document_preview: bool = False,
+    if_revision: str | None = None,
+):
+    # Spec 103 (R4): the read + base64 run off the event loop.
+    return await asyncio.to_thread(
+        _get_file_content_sync, project_id, path, document_preview, if_revision
+    )
+
+
+def _get_file_content_sync(
+    project_id: str, path: str, document_preview: bool, if_revision: str | None
+):
     _workspace, target = _resolve_path(project_id, path)
 
     if not os.path.isfile(target):
@@ -216,6 +270,16 @@ async def get_file_content(project_id: str, path: str, document_preview: bool = 
     # it to tell a changed file from an unchanged one when it re-reads the
     # open file after each tool result, so an unchanged file never re-renders.
     revision = f"{stat.st_mtime_ns:x}-{stat.st_size:x}"
+
+    # Spec 103 (P2): conditional re-read. The panel's silent refresh sends the
+    # revision it already holds; a match answers ~100 bytes without opening
+    # the file, so an unchanged image or binary no longer travels again on
+    # every tool result. OPT-IN (a query param, so it survives the relay
+    # tunnel): a client that never sends it — the relay's own SPA build, a
+    # cached bundle — keeps getting the full envelopes below, byte for byte.
+    if if_revision is not None and if_revision == revision:
+        return {"path": path, "revision": revision, "unchanged": True}
+
     ext = os.path.splitext(target)[1].lower()
     mime_type = mimetypes.guess_type(target)[0] or "application/octet-stream"
 
@@ -268,8 +332,7 @@ async def get_file_content(project_id: str, path: str, document_preview: bool = 
     # the client renders them in a sandboxed iframe rather than as a <pre> blob.
     if ext in HTML_EXTENSIONS:
         try:
-            with open(target, "r", encoding="utf-8") as f:
-                content = f.read(MAX_PREVIEW_BYTES)
+            content = _read_text_capped(target)
         except (UnicodeDecodeError, ValueError, OSError) as e:
             raise HTTPException(status_code=400, detail=f"Cannot read file: {e}")
         return {
@@ -284,8 +347,7 @@ async def get_file_content(project_id: str, path: str, document_preview: bool = 
 
     # Try reading as text
     try:
-        with open(target, "r", encoding="utf-8") as f:
-            content = f.read(MAX_PREVIEW_BYTES)
+        content = _read_text_capped(target)
         truncated = size > MAX_PREVIEW_BYTES
         return {
             "path": path,

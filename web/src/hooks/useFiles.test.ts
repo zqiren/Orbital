@@ -56,6 +56,45 @@ describe('file content requests opt in to the document envelope (spec 090)', () 
   });
 });
 
+describe('conditional re-read (spec 103)', () => {
+  it('fileContentPath appends if_revision only when a revision is given', () => {
+    expect(fileContentPath('p1', 'a.md')).not.toContain('if_revision');
+    expect(fileContentPath('p1', 'a.md', '1a2b-3c')).toBe(
+      '/api/v2/projects/p1/files/content?path=a.md&document_preview=1&if_revision=1a2b-3c',
+    );
+  });
+
+  it('useFiles().getFileContent forwards the revision and returns the unchanged envelope as-is', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ path: 'a.md', revision: '1a2b-3c', unchanged: true }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    const { result } = renderHook(() => useFiles());
+    let data: Awaited<ReturnType<typeof result.current.getFileContent>> = null;
+    await act(async () => {
+      data = await result.current.getFileContent('p1', 'a.md', '1a2b-3c');
+    });
+    expect(String(fetchMock.mock.calls[0][0])).toContain('&if_revision=1a2b-3c');
+    expect(data).toEqual({ path: 'a.md', revision: '1a2b-3c', unchanged: true });
+  });
+
+  it('a first read never sends if_revision', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ path: 'a.md', content: 'x', size: 1, truncated: false }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    const { result } = renderHook(() => useFiles());
+    await act(async () => {
+      await result.current.getFileContent('p1', 'a.md');
+    });
+    expect(String(fetchMock.mock.calls[0][0])).not.toContain('if_revision');
+  });
+});
+
 describe('revealPath (spec 093)', () => {
   it('POSTs the workspace-relative path to the reveal route', async () => {
     fetchMock.mockResolvedValue(

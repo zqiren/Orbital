@@ -21,7 +21,7 @@ import type { TouchedFile } from '../../utils/panelSelectors';
 // ---------------------------------------------------------------------------
 
 const listDirectory = vi.fn<(projectId: string, path?: string) => Promise<DirectoryListing | null>>();
-const getFileContent = vi.fn<(projectId: string, path: string) => Promise<FileContent | null>>();
+const getFileContent = vi.fn<(projectId: string, path: string, ifRevision?: string) => Promise<FileContent | null>>();
 const resolvePath = vi.fn<(projectId: string, path: string) => Promise<string[] | null>>();
 const revealPath = vi.fn<(projectId: string, path: string) => Promise<boolean>>();
 
@@ -481,6 +481,53 @@ describe('FilesView — live refresh', () => {
     expect(getFileContent).toHaveBeenCalledTimes(1);
   });
 
+  // Spec 103 (P2): the re-read is conditional. The panel sends the revision
+  // it holds; a matching daemon answers ~100 bytes instead of the file.
+  it('sends the held revision on a refresh, never on the first open', async () => {
+    getFileContent.mockImplementation(async (_projectId, path) => ({
+      path, content: 'hello', size: 5, truncated: false, type: 'text', revision: 'r1',
+    }));
+    renderView({ file: 'plan.md' });
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(getFileContent).toHaveBeenCalledTimes(1);
+    expect(getFileContent.mock.calls[0][2]).toBeUndefined();
+
+    await emit('agent.activity', { category: 'tool_result' });
+    expect(getFileContent).toHaveBeenCalledTimes(2);
+    expect(getFileContent.mock.calls[1]).toEqual(['proj-1', 'plan.md', 'r1']);
+  });
+
+  it('an unchanged answer keeps the content already shown', async () => {
+    getFileContent.mockImplementation(async (_projectId, path) => ({
+      path, content: 'hello', size: 5, truncated: false, type: 'text', revision: 'r1',
+    }));
+    renderView({ file: 'plan.md' });
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    const before = lastFilePreviewProps.fileContent;
+
+    getFileContent.mockImplementation(async (_projectId, path) =>
+      ({ path, revision: 'r1', unchanged: true }) as unknown as FileContent,
+    );
+    await emit('agent.activity', { category: 'tool_result' });
+
+    expect(lastFilePreviewProps.fileContent).toBe(before);
+    expect((lastFilePreviewProps.fileContent as FileContent).content).toBe('hello');
+    expect(lastFilePreviewProps.loading).toBe(false);
+  });
+
+  it('a new selection reads in full even though the previous file had a revision', async () => {
+    getFileContent.mockImplementation(async (_projectId, path) => ({
+      path, content: 'hello', size: 5, truncated: false, type: 'text', revision: 'r1',
+    }));
+    const { rerender, props } = renderView({ file: 'plan.md' });
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    rerender(<FilesView {...props} file="other.md" />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    const last = getFileContent.mock.calls.at(-1);
+    expect(last?.[1]).toBe('other.md');
+    expect(last?.[2]).toBeUndefined();
+  });
+
   it('collapses a burst of results into one refresh', async () => {
     renderView({ file: 'plan.md' });
     await act(async () => { await vi.advanceTimersByTimeAsync(0); });
@@ -493,5 +540,82 @@ describe('FilesView — live refresh', () => {
       await vi.advanceTimersByTimeAsync(300);
     });
     expect(getFileContent).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Spec 103 (R3) — the tree refresh re-lists what is on screen, nothing more:
+// the root plus the expanded folders, and nothing at all while the view is
+// in preview state (the tree is not even mounted). Coming back to the tree
+// refreshes it once.
+// ---------------------------------------------------------------------------
+
+describe('FilesView — refresh scope (spec 103)', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  async function emit(type: string, event: Record<string, unknown>) {
+    await act(async () => {
+      wsHandlers.get(type)?.({ type, project_id: 'proj-1', ...event });
+      await vi.advanceTimersByTimeAsync(300);
+    });
+  }
+
+  function listedPaths(): (string | undefined)[] {
+    return listDirectory.mock.calls.map((call) => call[1]);
+  }
+
+  it('lists no directory while in preview state', async () => {
+    renderView({ file: 'README.md', touched: [{ path: 'src/deep/x.ts', op: 'read' }] });
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    listDirectory.mockClear();
+
+    await emit('agent.activity', { category: 'tool_result' });
+    await emit('agent.status', { status: 'idle' });
+
+    expect(listDirectory).not.toHaveBeenCalled();
+    // The open file still refreshes.
+    expect(getFileContent.mock.calls.length).toBeGreaterThan(1);
+  });
+
+  it('refreshes the tree once on returning from the preview', async () => {
+    const { rerender, props } = renderView({ file: 'README.md' });
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    listDirectory.mockClear();
+
+    rerender(<FilesView {...props} file={null} />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+
+    expect(listedPaths()).toEqual([undefined]);
+  });
+
+  it('a tick re-lists only the root and the expanded folders', async () => {
+    renderView();
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    fireEvent.click(screen.getByText('src'));
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    fireEvent.click(screen.getByText('deep'));
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(screen.getByText('x.ts')).toBeInTheDocument();
+    // Collapse src/deep again: it has been listed, but it is no longer open.
+    fireEvent.click(screen.getByText('deep'));
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    listDirectory.mockClear();
+
+    await emit('agent.activity', { category: 'tool_result' });
+
+    expect(listedPaths().sort()).toEqual([undefined, 'src'].sort());
+  });
+
+  it('a failed listing keeps what is shown', async () => {
+    renderView();
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(screen.getByText('README.md')).toBeInTheDocument();
+    listDirectory.mockResolvedValue(null);
+
+    await emit('agent.activity', { category: 'tool_result' });
+
+    expect(screen.getByText('README.md')).toBeInTheDocument();
+    expect(screen.getByText('src')).toBeInTheDocument();
   });
 });
