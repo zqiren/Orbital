@@ -70,6 +70,21 @@ Root: HKLM; Subkey: "SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\Speci
     Flags: uninsdeletevalue; Check: not IsWin64
 
 [Run]
+; Lock the install dir down BEFORE anything runs from it. DefaultDirName is
+; C:\Orbital, not Program Files, so {app} inherits the drive root's
+; "Authenticated Users:(OI)(CI)(IO)(M)" — every authenticated account,
+; AgentOS-Worker included, could replace bin\Orbital.exe: a sandboxed agent
+; could rewrite the binary the human launches and the elevated uninstaller
+; (UninstallRun section) executes. Replace the inherited DACL with the Program Files
+; shape: SYSTEM + Administrators full, Users + Authenticated Users read/execute.
+; Runs on upgrades too (UsePreviousAppDir keeps old installs at C:\Orbital).
+; Root-only: the bundle's files carry only inherited ACEs, which Windows
+; recomputes from the new root DACL (spec 109 V1). Nothing writes to {app} at
+; runtime — logs, browsers and data live under the per-user data dir.
+Filename: "{sys}\icacls.exe"; \
+    Parameters: """{app}"" /inheritance:r /grant:r *S-1-5-18:(OI)(CI)F *S-1-5-32-544:(OI)(CI)F *S-1-5-32-545:(OI)(CI)RX *S-1-5-11:(OI)(CI)RX /Q"; \
+    StatusMsg: "Securing the Orbital install folder..."; \
+    Flags: runhidden waituntilterminated
 ; Install the WebView2 runtime FIRST when it's missing — must precede any
 ; Orbital launch (the app cannot render without it).
 Filename: "{tmp}\MicrosoftEdgeWebView2Setup.exe"; Parameters: "/silent /install"; \

@@ -62,3 +62,17 @@ class TestInnoSetupScript:
         assert setup_pos > 0, "Sandbox setup not found"
         assert launch_pos > 0, "App launch not found"
         assert setup_pos < launch_pos, "Sandbox setup must run before app launch"
+
+
+def test_install_dir_dacl_is_locked_before_anything_runs_from_it(iss_content):
+    """C:\Orbital inherits Authenticated Users:(M) from the drive root, so the
+    sandbox account could replace bin\Orbital.exe. The installer resets the
+    DACL to the Program Files shape before the first Orbital.exe [Run] entry."""
+    run = iss_content.split("[Run]", 1)[1].split("[UninstallRun]", 1)[0]
+    lock = run.index("icacls.exe")
+    assert lock < run.index("--setup-sandbox")
+    line = run[lock:run.index("StatusMsg", lock)]
+    assert "/inheritance:r" in line and "/grant:r" in line
+    assert "*S-1-5-11:(OI)(CI)RX" in line, "Authenticated Users read/execute only"
+    assert "(M)" not in line and ":(OI)(CI)M" not in line
+    assert "/T" not in line, "root-only; children recompute inherited ACEs"
