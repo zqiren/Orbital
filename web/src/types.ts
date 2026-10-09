@@ -437,6 +437,18 @@ export interface SessionListEntry {
   /** ISO timestamp of the last activity in this session, or null. Added in Phase 1B. */
   last_activity_at?: string | null;
   /**
+   * ISO timestamp (daemon clock) of the user's last message in this session,
+   * or null (spec 108). Absent on an older daemon → the row is never unread.
+   */
+  last_user_at?: string | null;
+  /**
+   * ISO timestamp (daemon clock) of the last row that answers the user: the
+   * agent's final text, a worker's terminal marker or question, a queue
+   * signal, or an LLM error (spec 108). null when nothing has answered the
+   * user yet (a dispatch ack is not a reply). Absent on an older daemon.
+   */
+  last_reply_at?: string | null;
+  /**
    * Pinned to the top of the session sidebar (spec 067). Persisted on the
    * session_start meta record alongside `name`. Absent on pre-067 logs, which
    * read as false — ordering only, never an identifier.

@@ -4030,6 +4030,9 @@ class AgentManager:
         callers that have never set an explicit session_id will see at most
         one entry under ``session_id == DEFAULT_SESSION_ID``.
         """
+        # Local import, as the disk path does: the index module is pulled in
+        # only where it is used.
+        from agent_os.daemon_v2.session_index import is_reply_row
         sessions = []
         for (pid, sid), handle in self._handles.items():
             if pid != project_id:
@@ -4052,6 +4055,18 @@ class AgentManager:
             # Falls back to None if the session has no messages yet.
             msgs = getattr(handle.session, "_messages", None) or []
             last_activity_at = msgs[-1].get("timestamp") if msgs else None
+            # Spec 108: the same two fields derive_disk_entry emits, from the
+            # in-memory rows; walk from the tail and stop once both are known.
+            last_user_at = last_reply_at = None
+            for rec in reversed(msgs):
+                if not isinstance(rec, dict):
+                    continue
+                if last_user_at is None and rec.get("role") == "user":
+                    last_user_at = rec.get("timestamp")
+                elif last_reply_at is None and is_reply_row(rec):
+                    last_reply_at = rec.get("timestamp")
+                if last_user_at is not None and last_reply_at is not None:
+                    break
 
             sessions.append({
                 "session_id": sid,
@@ -4080,6 +4095,8 @@ class AgentManager:
                     (pid, sid),
                 ),
                 "last_activity_at": last_activity_at,
+                "last_user_at": last_user_at,
+                "last_reply_at": last_reply_at,
                 # Cross-project read scope (Spec 12 §2c) — the scope chip's
                 # canonical source is the dedicated GET endpoint, but the list
                 # entry carries it too so the sidebar can render it inline.
@@ -4176,6 +4193,9 @@ class AgentManager:
                 # The disk entry — with its stored name and history — is the
                 # row, exactly as it will be after dispatch.
                 continue
+            enqueued_at = datetime.fromtimestamp(
+                p.enqueued_at, tz=timezone.utc,
+            ).isoformat()
             entries.append({
                 "session_id": sid,
                 "status": "queued",
@@ -4192,9 +4212,11 @@ class AgentManager:
                 "last_terminal_event": None,
                 # D4: the enqueue time is this session's newest activity, so
                 # the sidebar sorts the queued row to the top.
-                "last_activity_at": datetime.fromtimestamp(
-                    p.enqueued_at, tz=timezone.utc,
-                ).isoformat(),
+                "last_activity_at": enqueued_at,
+                # Spec 108: the queued message is the user's last word and
+                # nothing has answered it yet.
+                "last_user_at": enqueued_at,
+                "last_reply_at": None,
                 "scope": self.get_session_scope(project_id, sid),
             })
         return entries

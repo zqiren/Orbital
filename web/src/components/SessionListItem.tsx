@@ -14,6 +14,10 @@
  *   - Display name (cleaned label → per-kind fallback → session_id).
  *   - last_activity_at as a short relative time (or "—" if null).
  *   - SessionStatusGlyph error indicator (amber ⚠ when last_terminal_event.type === 'error').
+ *   - Unread badge (spec 108): a 6 px accent dot before the time + a bolder
+ *     name while `unread` — the agent replied after the user's last message
+ *     and this device has not shown that reply yet. Its own slot: an errored
+ *     session can be both unread and errored, a pinned one unread and pinned.
  *   - Hover-revealed three-dot menu with Rename + Delete (real handlers).
  *
  * Inline rename: double-click the name (or pick Rename from the menu) → editable
@@ -52,6 +56,12 @@ export interface SessionListItemProps {
    * squeezes the name. The chip still feeds the accessible label.
    */
   hideKindChip?: boolean;
+  /**
+   * The agent replied after the user's last message and this device has not
+   * shown that reply (spec 108, derived by the sidebar from the two server
+   * timestamps + the per-device seen map). A boolean so `memo` stays effective.
+   */
+  unread?: boolean;
 }
 
 /** i18n key for each machine-session chip; attachment/plain render no chip. */
@@ -69,6 +79,7 @@ function SessionListItemBase({
   onPin,
   onDelete,
   hideKindChip = false,
+  unread = false,
 }: SessionListItemProps) {
   const [hovered, setHovered] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -155,7 +166,7 @@ function SessionListItemBase({
       role="button"
       tabIndex={0}
       aria-selected={selected}
-      aria-label={t('sessionItem.aria', { label: ariaLabel })}
+      aria-label={t(unread ? 'sessionItem.ariaUnread' : 'sessionItem.aria', { label: ariaLabel })}
       data-testid={`session-list-item-${session.session_id}`}
       onClick={() => {
         if (editing) return;
@@ -258,7 +269,7 @@ function SessionListItemBase({
           <>
             <span
               data-testid="session-name"
-              className="text-xs text-primary truncate"
+              className={`text-xs text-primary truncate${unread ? ' font-medium' : ''}`}
               style={{ fontSize: '11.5px' }}
               onDoubleClick={(e) => {
                 e.stopPropagation();
@@ -267,6 +278,16 @@ function SessionListItemBase({
             >
               {label}
             </span>
+            {/* Unread dot (spec 108) — the "something for you" accent blue the
+                waiting/queued glyphs use. Not in the glyph slot (status and
+                pin own it) and not where ⚠ sits. */}
+            {unread && (
+              <span
+                data-testid="session-unread-dot"
+                title={t('sessionItem.unread')}
+                className="w-1.5 h-1.5 rounded-full bg-accent shrink-0 self-center"
+              />
+            )}
             <span
               data-testid="session-time"
               className="text-2xs text-secondary shrink-0"
