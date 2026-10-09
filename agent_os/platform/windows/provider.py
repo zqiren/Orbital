@@ -7,6 +7,7 @@
 import asyncio
 import logging
 import os
+import time
 from typing import Literal
 
 from agent_os.platform.base import PlatformProvider
@@ -82,18 +83,40 @@ class WindowsPlatformProvider(PlatformProvider):
         each is an ``icacls`` query that writes only when the ACE is missing.
 
         Never raises: a daemon must start even when one folder is unreadable.
+
+        Since spec 109 D2 this is the ONLY place the toolchain grants run
+        (the installer no longer does), scheduled by ``create_app`` in a
+        background thread — it is blocking subprocess work. The one INFO
+        line with root count and elapsed ms is what makes a slow machine
+        diagnosable from the daemon log.
         """
+        started = time.monotonic()
         try:
             username = self._account_manager.get_username()
+            # A source install that has not run setup yet has no account:
+            # every icacls grant would fail with "no mapping between account
+            # names and SIDs", one warning per toolchain root, every start.
+            if not self._account_manager.validate_account().exists:
+                logger.info("refresh_sandbox_grants(): sandbox account absent; skipped")
+                return
         except Exception as exc:
             logger.warning("refresh_sandbox_grants(): no sandbox account: %s", exc)
             return
+        granted = failed = 0
         try:
-            self._permission_manager.grant_toolchain_roots(username)
+            grants = self._permission_manager.grant_toolchain_roots(username)
+            granted = sum(1 for g in grants if g.success)
+            failed = len(grants) - granted
         except Exception as exc:
             logger.warning("refresh_sandbox_grants(): toolchain grants failed: %s", exc)
         for workspace in workspaces or []:
             self._protect_control_files(workspace)
+        logger.info(
+            "refresh_sandbox_grants(): %d toolchain root(s) granted, %d failed, "
+            "%d workspace(s) checked in %d ms",
+            granted, failed, len(workspaces or []),
+            int((time.monotonic() - started) * 1000),
+        )
 
     def _protect_control_files(self, root: str) -> None:
         """Deny-write the control files of every repository under *root* (W3).

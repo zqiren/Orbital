@@ -170,6 +170,21 @@ def test_unprotect_removes_the_deny_for_teardown(pm, tmp_path):
 
 
 def test_toolchain_grant_is_read_execute_and_skips_absent_roots(pm, tmp_path, monkeypatch):
+    """Spec 109 D1 (T1): the grant is inheritable and NOT ``/T``.
+
+    ``(OI)(CI)`` makes the ACE inheritable, and NTFS propagates an inheritable
+    ACE to the existing subtree in one kernel pass when the DACL is set.
+    ``/T`` on top of that wrote an explicit ACE on every descendant, one file
+    at a time — the minutes-long, CPU-pinned "Configuring agent sandbox"
+    install stall on a dev machine (issue #55).
+
+    CAVEAT (spec 109 §0 row 3): the claim that an inheritable ACE set without
+    ``/T`` reaches *existing* descendants is confirmed on a Windows box by
+    verification step V1 (``icacls`` on a deep child shows the
+    ``AgentOS-Worker`` row flagged ``(I)``). Until V1 is recorded, this test
+    pins the intended command shape, not a proven filesystem fact. If V1
+    fails, ``/T`` returns here and the fix falls back to D2 alone.
+    """
     present = tmp_path / "npm"
     present.mkdir()
     monkeypatch.setattr(
@@ -181,7 +196,81 @@ def test_toolchain_grant_is_read_execute_and_skips_absent_roots(pm, tmp_path, mo
     assert len(results) == 1 and results[0].success
     args = run.call_args[0][0]
     assert f"{USER}:(OI)(CI)RX" in args, "read+execute, never write"
-    assert "/grant" in args
+    assert "/grant" in args and "/Q" in args
+    assert "/T" not in args, "per-file walk is the install stall (spec 109 D1)"
+
+
+def test_revoke_has_no_recursive_flag(pm, tmp_path):
+    """Spec 109 D1 (T6): uninstall hung the same way in reverse (#55).
+
+    Removing the inheritable ACE from the root removes the inherited copies
+    through the same propagation; same V1/V5 caveat as the grant above.
+    """
+    with patch.object(PermissionManager, "_run_icacls", return_value=_ok()) as run:
+        assert pm.revoke_access(USER, str(tmp_path)).success
+    args = run.call_args[0][0]
+    assert "/remove" in args and USER in args and "/Q" in args
+    assert "/T" not in args
+
+
+def test_folder_access_grant_keeps_the_recursive_flag(pm, tmp_path):
+    """Spec 109 D1 keeps ``/T`` on ``grant_access``: the Folder-access UI
+    grants arbitrary user folders behind a visible action (with a spinner),
+    and the workspace + worker home are empty at setup — no stall to fix."""
+    with patch.object(PermissionManager, "_run_icacls", return_value=_ok()) as run:
+        assert pm.grant_access(USER, str(tmp_path), "read_only").success
+    args = run.call_args[0][0]
+    assert f"{USER}:(OI)(CI)R" in args and "/T" in args
+
+
+def test_icacls_timeout_returns_failure_not_exception(pm, tmp_path, monkeypatch):
+    """Spec 109 D7 (T7): a bounded manager turns ``TimeoutExpired`` into a
+    failed PermissionResult so the installer step logs and continues."""
+    root = tmp_path / "Programs"
+    root.mkdir()
+    monkeypatch.setattr(
+        "agent_os.platform.windows.permissions.windows_toolchain_roots",
+        lambda: [str(root)],
+    )
+    pm.icacls_timeout = 0.5
+    seen: dict = {}
+
+    def slow_run(cmd, **kwargs):
+        seen.update(kwargs)
+        raise subprocess.TimeoutExpired(cmd, kwargs.get("timeout"))
+
+    with patch("agent_os.platform.windows.permissions.subprocess.run", side_effect=slow_run):
+        results = pm.grant_toolchain_roots(USER)
+    assert seen["timeout"] == 0.5, "the bound reaches subprocess.run"
+    assert len(results) == 1 and not results[0].success
+    assert "timed out" in (results[0].error or "")
+
+
+def test_icacls_has_no_timeout_by_default(pm, tmp_path):
+    """Default ``None``: unchanged behaviour for the daemon and the
+    Folder-access UI, which may legitimately grant a huge folder."""
+    seen: dict = {}
+
+    def run(cmd, **kwargs):
+        seen.update(kwargs)
+        return _ok()
+
+    with patch("agent_os.platform.windows.permissions.subprocess.run", side_effect=run):
+        pm.grant_access(USER, str(tmp_path), "read_only")
+    assert seen["timeout"] is None
+
+
+def test_explicit_timeout_argument_overrides_the_manager_bound(pm, tmp_path):
+    seen: dict = {}
+
+    def run(cmd, **kwargs):
+        seen.update(kwargs)
+        return _ok()
+
+    pm.icacls_timeout = 120
+    with patch("agent_os.platform.windows.permissions.subprocess.run", side_effect=run):
+        pm._run_icacls([str(tmp_path)], timeout=3)
+    assert seen["timeout"] == 3
 
 
 def test_one_failing_root_does_not_sink_the_others(pm, tmp_path, monkeypatch):

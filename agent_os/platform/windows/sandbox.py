@@ -25,6 +25,21 @@ UF_PASSWD_CANT_CHANGE = 0x0040
 NERR_Success = 0
 ERROR_ACCESS_DENIED = 5
 
+# Spec 109 D4: what Computer Management > Users shows next to the account,
+# instead of a bare "AgentOS-Worker" a user would reasonably mistake for
+# malware. Also returned by ``net user AgentOS-Worker`` as "Comment".
+SANDBOX_ACCOUNT_COMMENT = (
+    "Orbital agent sandbox account. Agents run as this low-privilege user. "
+    "Removed by the Orbital uninstaller."
+)
+
+# Spec 109 D3: Windows lists every enabled local account on the sign-in
+# screen unless it is named here with DWORD 0. The installer writes the same
+# value from its [Registry] section (which also reaches upgrade installs,
+# where setup short-circuits); the Python side is belt-and-braces for source
+# installs that call POST /platform/setup.
+_USERLIST_KEY = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\SpecialAccounts\UserList"
+
 netapi32 = ctypes.windll.netapi32
 
 
@@ -45,6 +60,11 @@ class _USER_INFO_1(ctypes.Structure):
 class _USER_INFO_1003(ctypes.Structure):
     """Win32 USER_INFO_1003 for password-only update."""
     _fields_ = [("usri1003_password", wintypes.LPWSTR)]
+
+
+class _USER_INFO_1007(ctypes.Structure):
+    """Win32 USER_INFO_1007 for comment-only update (NetUserSetInfo level 1007)."""
+    _fields_ = [("usri1007_comment", wintypes.LPWSTR)]
 
 
 class SandboxAccountManager:
@@ -69,6 +89,12 @@ class SandboxAccountManager:
 
         if self._account_exists():
             logger.info("Sandbox account '%s' already exists", SANDBOX_USERNAME)
+            if is_admin:
+                # Spec 109 D3/D4, idempotent and best-effort: a pre-109
+                # account gets its description and sign-in hide on the next
+                # elevated setup that reaches here (a re-install).
+                self._set_comment(SANDBOX_ACCOUNT_COMMENT)
+                self._hide_from_sign_in()
             status = self.validate_account()
 
             # If password is invalid and we're admin, reset it
@@ -117,6 +143,9 @@ class SandboxAccountManager:
 
         # Add to Users group (may already be a member — ignore errors)
         self._run_cmd(["net", "localgroup", "Users", SANDBOX_USERNAME, "/add"])
+
+        # Keep it off the sign-in screen (spec 109 D3). Cosmetic: never fatal.
+        self._hide_from_sign_in()
 
         # Store the password in the credential store
         self._credential_store.store(SANDBOX_PASSWORD_KEY, password)
@@ -176,6 +205,11 @@ class SandboxAccountManager:
 
         logger.info("Deleted sandbox account '%s'", SANDBOX_USERNAME)
 
+        # The hide entry outlives the account otherwise (spec 109 D3). The
+        # uninstaller's [Registry] uninsdeletevalue covers installer-made
+        # installs; this covers source installs.
+        self._unhide_from_sign_in()
+
         self._credential_store.delete(SANDBOX_PASSWORD_KEY)
         logger.info("Removed sandbox password from credential store")
 
@@ -196,7 +230,7 @@ class SandboxAccountManager:
         user_info.usri1_password_age = 0
         user_info.usri1_priv = USER_PRIV_USER
         user_info.usri1_home_dir = None
-        user_info.usri1_comment = None
+        user_info.usri1_comment = SANDBOX_ACCOUNT_COMMENT  # spec 109 D4
         user_info.usri1_flags = UF_SCRIPT | UF_DONT_EXPIRE_PASSWD | UF_PASSWD_CANT_CHANGE
         user_info.usri1_script_path = None
 
@@ -219,6 +253,85 @@ class SandboxAccountManager:
         if rc != NERR_Success:
             logger.error("NetUserSetInfo failed with code %d", rc)
             return False
+        return True
+
+    def _set_comment(self, text: str) -> bool:
+        """Set the account description via NetUserSetInfo level 1007 (spec 109 D4).
+
+        Best-effort: a failure is logged and the setup continues — the
+        description is for a human reading Computer Management, nothing
+        in the sandbox depends on it.
+        """
+        info = _USER_INFO_1007()
+        info.usri1007_comment = text
+        parm_err = wintypes.DWORD(0)
+        try:
+            rc = netapi32.NetUserSetInfo(
+                None, SANDBOX_USERNAME, 1007,
+                ctypes.byref(info), ctypes.byref(parm_err),
+            )
+        except Exception as exc:
+            logger.warning("Could not set the sandbox account description: %s", exc)
+            return False
+        if rc != NERR_Success:
+            logger.warning("NetUserSetInfo(1007) failed with code %s", rc)
+            return False
+        return True
+
+    @staticmethod
+    def _hide_from_sign_in() -> bool:
+        """Name the account under ``Winlogon\\SpecialAccounts\\UserList`` = 0 (spec 109 D3).
+
+        Hides it from the sign-in screen only; no logon right changes, so
+        CreateProcessWithLogonW and LogonUserW are unaffected. Opens the
+        64-bit registry view explicitly — Winlogon reads that one. Needs
+        admin; ``OSError`` (access denied, missing hive) is logged, never
+        raised. Off Windows (no ``winreg``) it is a no-op.
+        """
+        try:
+            import winreg
+        except ImportError:
+            logger.info("winreg unavailable; sandbox account sign-in hide skipped")
+            return False
+        try:
+            key = winreg.CreateKeyEx(
+                winreg.HKEY_LOCAL_MACHINE, _USERLIST_KEY, 0,
+                access=winreg.KEY_SET_VALUE | winreg.KEY_WOW64_64KEY,
+            )
+            try:
+                winreg.SetValueEx(key, SANDBOX_USERNAME, 0, winreg.REG_DWORD, 0)
+            finally:
+                winreg.CloseKey(key)
+        except OSError as exc:
+            logger.warning("Could not hide '%s' from the sign-in screen: %s",
+                           SANDBOX_USERNAME, exc)
+            return False
+        logger.info("Hidden '%s' from the sign-in screen", SANDBOX_USERNAME)
+        return True
+
+    @staticmethod
+    def _unhide_from_sign_in() -> bool:
+        """Reverse :meth:`_hide_from_sign_in`; a missing value is success."""
+        try:
+            import winreg
+        except ImportError:
+            return False
+        try:
+            key = winreg.OpenKey(
+                winreg.HKEY_LOCAL_MACHINE, _USERLIST_KEY, 0,
+                winreg.KEY_SET_VALUE | winreg.KEY_WOW64_64KEY,
+            )
+            try:
+                winreg.DeleteValue(key, SANDBOX_USERNAME)
+            finally:
+                winreg.CloseKey(key)
+        except FileNotFoundError:
+            return True
+        except OSError as exc:
+            logger.warning("Could not remove the sign-in hide for '%s': %s",
+                           SANDBOX_USERNAME, exc)
+            return False
+        logger.info("Removed the sign-in hide for '%s'", SANDBOX_USERNAME)
         return True
 
     def _run_cmd(self, cmd: list[str]) -> tuple[int, str, str]:

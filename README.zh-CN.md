@@ -230,6 +230,19 @@ Orbital 的 Windows 安装包暂未做代码签名，Windows 会提示安全警�
 点击 **「更多信息」**，然后点 **「仍要运行」**。代码签名会在后续版本加上。
 </details>
 
+<details>
+<summary>AgentOS-Worker 账户</summary>
+
+Orbital 会用一个独立的低权限本地 Windows 账户 **AgentOS-Worker** 来运行 agent 的命令，这样 agent 读不到你的用户配置、浏览器数据和各类凭据。安装程序会在写入任何文件之前先说明这一点。
+
+- 该账户在安装过程中创建，不会出现在登录界面。
+- 它的密码是随机生成的，没有人知道，也不需要有人知道。
+- 卸载 Orbital 时会一并删除该账户。
+- 让该账户能读取你的开发工具（npm、cargo、Python 等所在的目录）这一步，会在 Orbital 第一次启动时在后台完成，不会拖慢安装。
+
+在「计算机管理 → 本地用户和组 → 用户」里看到的 AgentOS-Worker，描述栏会写明它属于 Orbital。
+</details>
+
 ### macOS
 
 1. 从 [Releases](https://github.com/zqiren/Orbital/releases/latest) 下载最新的 `Orbital-*-macOS.dmg`

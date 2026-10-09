@@ -153,6 +153,34 @@ def _configure_file_logging(data_dir: str) -> None:
     logger.info("Daemon file logging enabled at %s", log_path)
 
 
+def schedule_sandbox_grant_refresh(platform_provider, workspaces: list[str]):
+    """Spec 109 D2: re-apply the Windows sandbox ACLs at daemon start, off the loop.
+
+    Only ``WindowsPlatformProvider`` defines ``refresh_sandbox_grants`` (the
+    macOS and null providers regenerate policy per command and have nothing
+    to refresh), so the attribute's presence is the platform check. The
+    method is blocking ``icacls`` work — minutes on a dev machine with large
+    toolchain trees before spec 109, seconds after — and must never run on
+    the event loop; it goes to the default executor, fire-and-forget, with a
+    done-callback that logs instead of leaving an unretrieved exception.
+
+    Returns the executor future (for tests) or ``None`` when skipped.
+    """
+    refresh = getattr(platform_provider, "refresh_sandbox_grants", None)
+    if refresh is None:
+        return None
+    loop = asyncio.get_running_loop()
+    future = loop.run_in_executor(None, refresh, list(workspaces))
+
+    def _done(fut):
+        exc = fut.exception()
+        if exc is not None:
+            logger.warning("Sandbox grant refresh failed: %s", exc)
+
+    future.add_done_callback(_done)
+    return future
+
+
 def create_app(data_dir: str | None = None) -> FastAPI:
     """Create and configure the FastAPI application."""
     app = FastAPI(title="Orbital", version="2.0")
@@ -409,6 +437,17 @@ def create_app(data_dir: str | None = None) -> FastAPI:
     @app.on_event("startup")
     async def _start_triggers():
         await trigger_manager.start()
+
+    # 6b2. Spec 109 D2: the Windows toolchain grants (spec 077 W1) run here,
+    # in a background thread, on every start — no longer in the installer.
+    # A toolchain installed after Orbital gets its read grant on the next
+    # start instead of never.
+    @app.on_event("startup")
+    async def _refresh_sandbox_grants():
+        workspaces = [
+            w for w in ((p.get("workspace") or "") for p in project_store.list_projects()) if w
+        ]
+        schedule_sandbox_grant_refresh(platform_provider, workspaces)
 
     # 6c. Start the project-store flush task: runtime fields (budget spend in
     # particular) are batch-written on a fixed interval instead of per-turn.
