@@ -1170,6 +1170,10 @@ export interface FileContent {
   preview_url?: string;
   /** Spec 090 — the daemon will not serve preview bytes (above the 50 MB ceiling). */
   preview_unavailable?: 'too_large';
+  /** Spec 103 — the answer to a conditional re-read (`if_revision`) that
+   *  matched: only `path` and `revision` are present, the caller keeps what it
+   *  already holds. Older daemons ignore the param and send the full body. */
+  unchanged?: boolean;
 }
 
 export interface PlatformStatus {

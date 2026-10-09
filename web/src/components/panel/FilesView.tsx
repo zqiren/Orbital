@@ -188,16 +188,25 @@ export default function FilesView({
     };
   }, [projectId, on, off]);
 
-  // Re-list every directory already on screen. Read through a ref so the
-  // effect depends on the tick alone — not on the map it is about to update.
+  // Re-list what is on screen: the root and the folders currently expanded
+  // (spec 103 R3 — not every folder ever listed, and nothing at all in preview
+  // state, where the tree is not mounted). Read through refs so the effect
+  // depends on the tick alone — not on the state it is about to update.
   const dirsRef = useRef(dirs);
+  const expandedRef = useRef(expanded);
+  const fileRef = useRef(file);
   useEffect(() => {
     dirsRef.current = dirs;
+    expandedRef.current = expanded;
+    fileRef.current = file;
   });
   useEffect(() => {
-    if (refreshTick === 0) return;
+    if (refreshTick === 0 || fileRef.current !== null) return;
     let cancelled = false;
-    for (const path of dirsRef.current.keys()) {
+    const onScreen = [...dirsRef.current.keys()].filter(
+      (path) => path === '' || expandedRef.current.has(path),
+    );
+    for (const path of onScreen) {
       void listDirectory(projectId, path || undefined).then((listing) => {
         // A failed listing keeps what is shown rather than blanking the tree.
         if (cancelled || !listing) return;
@@ -209,6 +218,14 @@ export default function FilesView({
       cancelled = true;
     };
   }, [refreshTick, listDirectory, projectId]);
+
+  // Leaving the preview: the tree sat out every tick meanwhile, so give it one.
+  const prevFileRef = useRef(file);
+  useEffect(() => {
+    const was = prevFileRef.current;
+    prevFileRef.current = file;
+    if (was !== null && file === null) setRefreshTick((n) => n + 1);
+  }, [file]);
 
   // Switching project throws the whole tree away.
   useEffect(() => {
@@ -289,10 +306,22 @@ export default function FilesView({
   // is only replaced when the file actually changed, so an unchanged file
   // costs one small request and zero renders. An edit in progress is safe —
   // FilePreview's draft is its own state and survives a content swap.
+  //
+  // Spec 103 (P2): the re-read is conditional. It carries the revision of the
+  // content on screen; a daemon that knows `if_revision` answers ~100 bytes
+  // when it still matches, so an unchanged image or binary never travels
+  // again. Only the first read of a selection (the effect above) is sent
+  // bare. An older daemon ignores the param and the revision compare below
+  // absorbs the full body as before.
+  const contentRef = useRef(content);
+  useEffect(() => {
+    contentRef.current = content;
+  });
   useEffect(() => {
     if (refreshTick === 0 || file === null) return;
+    const held = contentRef.current;
     void fetchPathWithFallback(
-      (p) => getFileContent(projectId, p),
+      (p) => getFileContent(projectId, p, held !== null && held.path === p ? held.revision : undefined),
       (p) => resolvePath(projectId, p),
       file,
     ).then((outcome) => {
@@ -301,6 +330,8 @@ export default function FilesView({
       const next = outcome.status === 'ok' ? outcome.content : null;
       // A transient miss (file mid-rename, mid-write) keeps the last good view.
       if (next === null) return;
+      // Nothing moved on disk: keep what is shown, touch nothing.
+      if (next.unchanged) return;
       setContentLoading(false);
       setContent((prev) => (sameContent(prev, next) ? prev : next));
     });
