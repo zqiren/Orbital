@@ -41,7 +41,8 @@ class TestInnoSetupScript:
         # Inno Setup uses \ for line continuation — join them
         joined = iss_content.replace("\\\n", " ")
         lines = joined.split("\n")
-        setup_lines = [l for l in lines if "--setup-sandbox" in l]
+        # Skip Inno comment lines (``;``): a comment may name the flag too.
+        setup_lines = [l for l in lines if "--setup-sandbox" in l and not l.lstrip().startswith(";")]
         assert len(setup_lines) >= 1
         assert "runhidden" in setup_lines[0].lower()
 
@@ -49,7 +50,8 @@ class TestInnoSetupScript:
         """Installer must wait for sandbox setup to finish before proceeding."""
         joined = iss_content.replace("\\\n", " ")
         lines = joined.split("\n")
-        setup_lines = [l for l in lines if "--setup-sandbox" in l]
+        # Skip Inno comment lines (``;``): a comment may name the flag too.
+        setup_lines = [l for l in lines if "--setup-sandbox" in l and not l.lstrip().startswith(";")]
         assert len(setup_lines) >= 1
         assert "waituntilterminated" in setup_lines[0].lower()
 

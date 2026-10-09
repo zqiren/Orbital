@@ -277,7 +277,8 @@ def test_run_icacls_passes_the_no_window_flag():
     original = perms.subprocess.run
     perms.subprocess.run = _fake_run
     try:
-        perms.PermissionManager._run_icacls(["C:\\ws", "/grant", "u:(OI)(CI)F"])
+        # Instance method since spec 109 (it carries the per-manager icacls timeout).
+        perms.PermissionManager()._run_icacls(["C:\\ws", "/grant", "u:(OI)(CI)F"])
     finally:
         perms.subprocess.run = original
 

@@ -28,11 +28,34 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-for _name in ("windll", "GetLastError", "FormatError", "get_last_error", "set_last_error"):
-    if not hasattr(ctypes, _name):
-        setattr(ctypes, _name, MagicMock())
-if not hasattr(ctypes, "WinError"):
-    ctypes.WinError = OSError
+_WIN32_NAMES = ("windll", "GetLastError", "FormatError", "get_last_error", "set_last_error")
+
+
+def _install_win32_stubs() -> list[str]:
+    """Stub the ctypes Win32 surface off Windows; return the names added."""
+    added = []
+    for name in _WIN32_NAMES:
+        if not hasattr(ctypes, name):
+            setattr(ctypes, name, MagicMock())
+            added.append(name)
+    if not hasattr(ctypes, "WinError"):
+        ctypes.WinError = OSError
+        added.append("WinError")
+    return added
+
+
+def _remove_win32_stubs(added: list[str]) -> None:
+    for name in added:
+        if isinstance(getattr(ctypes, name, None), MagicMock) or name == "WinError":
+            delattr(ctypes, name)
+
+
+# The stubs are needed for the imports below, then removed again: a fake
+# ``ctypes.windll`` left on a macOS runner from collection time makes any
+# Windows-only code path that probes for it run for real (the desktop icon
+# thread did, and segfaulted the pytest process). The autouse fixture
+# re-installs them for exactly this module's tests.
+_IMPORT_STUBS = _install_win32_stubs()
 
 from agent_os.platform.types import PermissionResult, SANDBOX_USERNAME  # noqa: E402
 from agent_os.platform.windows import sandbox as sandbox_mod  # noqa: E402
@@ -42,6 +65,16 @@ from agent_os.platform.windows.setup import (  # noqa: E402
     INSTALLER_ICACLS_TIMEOUT,
     SetupOrchestrator,
 )
+
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _win32_stubs_for_this_module():
+    added = _install_win32_stubs()
+    try:
+        yield
+    finally:
+        _remove_win32_stubs(added)
 
 USER = SANDBOX_USERNAME
 
@@ -322,6 +355,8 @@ def test_inno_script_discloses_hides_and_names_the_step():
 # ---------------------------------------------------------------------------
 
 from agent_os.platform.windows.provider import WindowsPlatformProvider  # noqa: E402
+
+_remove_win32_stubs(_IMPORT_STUBS)  # every module-level import is done
 
 
 def _bare_provider(account_exists: bool):

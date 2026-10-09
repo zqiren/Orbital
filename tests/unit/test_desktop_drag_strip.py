@@ -390,7 +390,13 @@ def opened_window(band_cache_reset):
     previous = main._window
     main._window = None
     try:
-        with patch.dict(sys.modules, {"webview": fake_webview}):
+        # open_window() starts the Windows icon thread (_set_window_icon) as a
+        # daemon. Off Windows it exits on the missing ctypes.windll — unless a
+        # later-collected Windows test module has stubbed windll, in which
+        # case the still-running thread hands PIL mock sizes and the whole
+        # pytest process segfaults. Keep the thread out of the test process.
+        with patch.dict(sys.modules, {"webview": fake_webview}), \
+                patch.object(main, "_set_window_icon", lambda: None):
             main.open_window(8000)
         yield window, content
     finally:
