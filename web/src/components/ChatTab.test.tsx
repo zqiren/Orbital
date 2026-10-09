@@ -29,6 +29,7 @@ import type {
 import type { Route } from '../route';
 import { __resetPanelState } from '../hooks/usePanelState';
 import { __resetAnnotationsStore } from '../hooks/useAnnotations';
+import { consumeFreshSession } from '../utils/freshSession';
 
 afterEach(() => cleanup());
 
@@ -648,6 +649,49 @@ describe('ChatTab — "+ new session" creates a genuinely blank session', () => 
       sessionId: 'sess_minted_new',
     });
     expect(updated.name === 'project' && updated.sessionId).not.toBe('sess-old');
+  });
+
+  it('marks the minted id as fresh BEFORE navigating to it (spec 107 FE-1)', async () => {
+    // ChatView's load effect runs as soon as the route flips to the minted id.
+    // The mark must already be there at that moment, or the pane fetches
+    // /chat for an id it knows is empty and shows a skeleton while the backend
+    // scans every session log for a session that cannot exist.
+    mockSessions = [
+      makeSession({ session_id: 'sess-old', last_activity_at: '2026-06-01T00:00:00Z' }),
+    ];
+    mockActiveSessionId = 'sess-old';
+
+    let freshAtSetRoute: boolean | null = null;
+    const setRoute = vi.fn(() => {
+      // Consuming here proves the mark preceded the navigation.
+      freshAtSetRoute = consumeFreshSession('proj-1', 'sess_minted_new');
+    });
+    const route = makeRoute({ sessionId: 'sess-old' });
+
+    await act(async () => {
+      render(
+        <ChatTab
+          project={PROJECT}
+          agentStatus="idle"
+          agents={[]}
+          route={route}
+          setRoute={setRoute}
+        />,
+      );
+    });
+    setRoute.mockClear();
+
+    const onNewSession = lastSessionSidebarProps.onNewSession as () => void;
+    await act(async () => {
+      onNewSession();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(setRoute).toHaveBeenCalled();
+    expect(freshAtSetRoute).toBe(true);
+    // Consumed once: nothing lingers for a later visit to the same id.
+    expect(consumeFreshSession('proj-1', 'sess_minted_new')).toBe(false);
   });
 
   it('tolerates a route.sessionId that is not in the sessions list (blank session, no re-resolve)', async () => {

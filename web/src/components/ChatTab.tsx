@@ -46,6 +46,7 @@ import { useAgent } from '../hooks/useAgent';
 import { useFiles } from '../hooks/useFiles';
 import { useChatHistory } from '../hooks/useChatHistory';
 import { useSessionMessages } from '../utils/sessionMessagesStore';
+import { markFreshSession } from '../utils/freshSession';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { useAnnotations } from '../hooks/useAnnotations';
 import { usePanelDockable, usePanelState } from '../hooks/usePanelState';
@@ -391,6 +392,11 @@ export default function ChatTab({
           console.error('newSession returned no session_id', result);
           return;
         }
+        // Spec 107 FE-1: tell ChatView's load effect this id was minted here
+        // and has no history yet — BEFORE the route flips, so the effect skips
+        // the /chat fetch (and its skeleton) for a session that cannot exist
+        // on disk until the first message.
+        markFreshSession(projectId, newId);
         setRoute((prev) =>
           prev.name === 'project' && prev.projectId === projectId
             ? { ...prev, sessionId: newId }

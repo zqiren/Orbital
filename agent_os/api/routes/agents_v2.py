@@ -2803,39 +2803,20 @@ def _find_session_uuid_on_disk(sessions_dir: str, session_id: str) -> str | None
     """Resolve an F1 ``session_id`` to its F2 JSONL stem by scanning disk.
 
     Fallback for the chat ``session_id`` filter when no live handle exists
-    (e.g. a stopped/popped session). Scans each ``*.jsonl`` for a record whose
-    ``session_id`` field matches, returning the filename stem (F2). Runs in a
-    thread — does blocking disk I/O, must not be called on the event loop.
+    (e.g. a stopped/popped session, or a freshly minted id whose file does not
+    exist yet). Runs in a thread — does blocking disk I/O, must not be called
+    on the event loop.
 
-    Accepts either identifier: if ``session_id`` is itself an F2 stem (the
-    sidebar addresses disk-only sessions by uuid), the matching
-    ``{session_id}.jsonl`` is returned directly. Otherwise it is treated as an
-    F1 chat id and the records are scanned. Returns the F2 stem, or None.
+    Accepts either identifier: an F2 stem (the sidebar addresses disk-only
+    sessions by uuid) matches its ``{session_id}.jsonl`` directly; otherwise a
+    legacy F1 chat id is resolved by reading the HEAD of each log only, with
+    the newest-mtime match winning on duplicates (spec 107 BE-1 — one shared
+    resolver with hydrate-on-inject, see ``session_index.resolve_session_uuid``).
+    Cost is O(files), never O(bytes): landing on a minted id reads one record
+    per log, where it used to ``json.loads`` every line of every log.
     """
-    if not os.path.isdir(sessions_dir):
-        return None
-    # Direct F2 match: the identifier names a file (uuid addressing).
-    if os.path.isfile(os.path.join(sessions_dir, f"{session_id}.jsonl")):
-        return session_id
-    for fname in os.listdir(sessions_dir):
-        if not fname.endswith(".jsonl"):
-            continue
-        fpath = os.path.join(sessions_dir, fname)
-        try:
-            with open(fpath, "r", encoding="utf-8") as fh:
-                for raw in fh:
-                    raw = raw.strip()
-                    if not raw:
-                        continue
-                    try:
-                        rec = json.loads(raw)
-                    except json.JSONDecodeError:
-                        continue
-                    if rec.get("session_id") == session_id:
-                        return fname[:-6]  # strip .jsonl
-        except OSError:
-            pass
-    return None
+    from agent_os.daemon_v2.session_index import resolve_session_uuid
+    return resolve_session_uuid(sessions_dir, session_id)
 
 
 @router.get("/agents/{project_id}/chat")

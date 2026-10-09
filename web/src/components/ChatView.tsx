@@ -29,6 +29,7 @@ import type { ChatMessage as ChatMessageRow, AgentStatusEvent } from '../types';
 import AgentErrorNotice from './AgentErrorNotice';
 import { parseProviderError, providerErrorKey } from '../utils/providerError';
 import { consumeOnboardingKickoff } from '../utils/onboardingKickoff';
+import { markFreshSession, consumeFreshSession } from '../utils/freshSession';
 import AttachmentChip from './AttachmentChip';
 import { useAttachments } from '../hooks/useAttachments';
 import { useAnnotations } from '../hooks/useAnnotations';
@@ -1591,6 +1592,26 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     const sessionParam = `&session_id=${encodeURIComponent(sessionId)}`;
     const cacheKey = `${projectId}:${sessionId}`;
 
+    // Spec 107 FE-1: this tab just minted this id ("+ new session" / `/new`).
+    // Its history is empty by construction — the file does not exist until
+    // the first message — so seed the empty state directly instead of
+    // fetching /chat and sitting on a skeleton while the backend looks
+    // through every session log for a session that cannot be there. Live
+    // state is still cleared and the pending overlay still reconciled, as on
+    // the fetch path. Consumed once: a later visit to the same id (by then
+    // the file may exist) takes the normal fetch below.
+    if (consumeFreshSession(projectId, sessionId)) {
+      setRawMessages([]);
+      setItems([]);
+      setStream(null);
+      setApprovals(new Map());
+      setTotalMessages(0);
+      setLoadedOffset(CHAT_PAGE_SIZE);
+      setLoading(false);
+      reconcilePending();
+      return;
+    }
+
     async function loadData() {
       // Bug #48 (fix C): on a cache hit, paint the last-known transcript
       // immediately and revalidate in the background — no skeleton flash on
@@ -2845,6 +2866,9 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
     try {
       const result = await newSession(projectId, sessionId);
+      // Spec 107 FE-1: the minted id has no history until its first message;
+      // mark it so the load effect seeds the empty state instead of fetching.
+      if (result.session_id) markFreshSession(projectId, result.session_id);
       if (result.status === 'no_active_session') {
         setItems((prev) => [...prev, {
           type: 'agent_notify' as const,

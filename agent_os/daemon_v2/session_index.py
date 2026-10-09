@@ -44,6 +44,77 @@ def index_path(sessions_dir: str) -> str:
     return os.path.join(sessions_dir, INDEX_FILENAME)
 
 
+def read_session_f1(path: str) -> str | None:
+    """Head-only read of a session log's original F1 ``session_id``.
+
+    The ``session_start`` meta carries it and every non-meta record stamps it
+    too, so the first record with a ``session_id`` field IS the F1 — reading
+    past it never changes the answer. Stops there; never parses the rest of
+    the file (spec 107: the chat route's fallback used to, which made landing
+    on a freshly minted id cost O(total session bytes) — 4 s on a 225 MB
+    project). Torn lines before the first match are skipped. ``None`` when
+    the file cannot be read or carries no ``session_id`` at all.
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            for raw in fh:
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    rec = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(rec, dict):
+                    continue
+                sid = rec.get("session_id")
+                if sid:
+                    return sid
+    except OSError:
+        return None
+    return None
+
+
+def resolve_session_uuid(sessions_dir: str, identifier: str) -> str | None:
+    """Resolve an F1 or F2 identifier to its JSONL stem (the F2 uuid), or None.
+
+    The one resolver behind the chat read path (``_find_session_uuid_on_disk``)
+    and hydrate-on-inject (``_load_session_from_disk``), so both answer the
+    same question the same way:
+
+    * ``{identifier}.jsonl`` exists → ``identifier`` (uuid addressing — how the
+      sidebar names disk-only sessions; the common case, one ``stat``).
+    * otherwise ``identifier`` is a legacy F1 chat id (``sess_*``/``default``)
+      → scan every log by its HEAD only (``read_session_f1``) and return the
+      stem of the newest-mtime match. F1 is not unique across rotated legacy
+      logs, so "newest wins" is the tie-break; the first-in-listdir-order
+      answer the chat route used to give was arbitrary on APFS.
+
+    Cost is O(files), never O(bytes): a freshly minted id (no file yet) reads
+    one record per log. Blocking disk I/O — call off the event loop.
+    """
+    if not os.path.isdir(sessions_dir):
+        return None
+    if os.path.isfile(os.path.join(sessions_dir, f"{identifier}.jsonl")):
+        return identifier
+    best: str | None = None
+    best_mtime = -1.0
+    for fname in os.listdir(sessions_dir):
+        if not fname.endswith(".jsonl"):
+            continue
+        fpath = os.path.join(sessions_dir, fname)
+        if read_session_f1(fpath) != identifier:
+            continue
+        try:
+            mtime = os.path.getmtime(fpath)
+        except OSError:
+            continue
+        if mtime > best_mtime:
+            best_mtime = mtime
+            best = fname[:-6]  # strip .jsonl
+    return best
+
+
 def derive_disk_entry(path: str, uuid: str) -> dict | None:
     """The idle session-list row for one on-disk session log, or None.
 
