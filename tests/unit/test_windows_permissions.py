@@ -402,3 +402,81 @@ def test_find_repository_roots_is_depth_bounded(pm, tmp_path):
 
 def test_find_repository_roots_tolerates_a_missing_root(pm, tmp_path):
     assert pm.find_repository_roots(str(tmp_path / "gone")) == []
+
+
+def test_toolchain_revoke_skips_a_root_without_an_explicit_entry(pm, tmp_path, monkeypatch):
+    """Spec 109 V1 follow-up: ``/remove`` walks the subtree even when the
+    account has no entry (34.8 s on an npm root, measured), inside the
+    uninstaller's frozen-bar step. No explicit entry -> query only."""
+    root = tmp_path / "npm"
+    root.mkdir()
+    monkeypatch.setattr(
+        "agent_os.platform.windows.permissions.windows_toolchain_roots",
+        lambda: [str(root)],
+    )
+    with patch.object(PermissionManager, "_run_icacls",
+                      return_value=_ok(_ROOT_INHERITED_ONLY)) as run:
+        results = pm.revoke_toolchain_roots(USER)
+    assert len(results) == 1 and results[0].success
+    assert run.call_count == 1 and "/remove" not in run.call_args[0][0]
+
+
+@pytest.mark.parametrize("existing", [_ROOT_WITH_GRANT, _ROOT_DENY_ONLY])
+def test_toolchain_revoke_removes_any_explicit_entry(pm, tmp_path, monkeypatch, existing):
+    root = tmp_path / "Programs"
+    root.mkdir()
+    monkeypatch.setattr(
+        "agent_os.platform.windows.permissions.windows_toolchain_roots",
+        lambda: [str(root)],
+    )
+    with patch.object(PermissionManager, "_run_icacls",
+                      side_effect=[_ok(existing), _ok()]) as run:
+        results = pm.revoke_toolchain_roots(USER)
+    assert results[0].success
+    args = run.call_args[0][0]
+    assert "/remove" in args and "/T" not in args
+
+
+def test_toolchain_revoke_still_revokes_when_the_query_fails(pm, tmp_path, monkeypatch):
+    root = tmp_path / "uv"
+    root.mkdir()
+    monkeypatch.setattr(
+        "agent_os.platform.windows.permissions.windows_toolchain_roots",
+        lambda: [str(root)],
+    )
+    with patch.object(PermissionManager, "_run_icacls", side_effect=[_fail(), _ok()]) as run:
+        assert pm.revoke_toolchain_roots(USER)[0].success
+    assert "/remove" in run.call_args[0][0]
+
+
+def test_toolchain_revokes_run_concurrently_and_keep_root_order(pm, tmp_path, monkeypatch):
+    """Wall clock is the slowest root, not the sum: every root's /remove is
+    in flight at once (a barrier no sequential loop could pass)."""
+    import threading
+
+    roots = [tmp_path / n for n in ("npm", "Programs", "pnpm")]
+    for r in roots:
+        r.mkdir()
+    monkeypatch.setattr(
+        "agent_os.platform.windows.permissions.windows_toolchain_roots",
+        lambda: [str(r) for r in roots],
+    )
+    barrier = threading.Barrier(len(roots), timeout=5)
+
+    def fake(args, timeout=None):
+        if "/remove" not in args:
+            return _ok(f"{args[0]} DESKTOP-ABC\\{USER}:(OI)(CI)(RX)\n")
+        barrier.wait()  # raises BrokenBarrierError if the removes are serial
+        return _ok()
+
+    with patch.object(PermissionManager, "_run_icacls", side_effect=fake):
+        results = pm.revoke_toolchain_roots(USER)
+    assert [r.success for r in results] == [True, True, True]
+    assert [os.path.basename(r.path) for r in results] == ["npm", "Programs", "pnpm"]
+
+
+def test_toolchain_revoke_with_no_roots_is_a_no_op(pm, monkeypatch):
+    monkeypatch.setattr(
+        "agent_os.platform.windows.permissions.windows_toolchain_roots", lambda: [],
+    )
+    assert pm.revoke_toolchain_roots(USER) == []

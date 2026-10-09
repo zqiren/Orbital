@@ -8,6 +8,7 @@ import logging
 import os
 import re
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from typing import Literal
 
 from agent_os.platform.types import (
@@ -269,12 +270,35 @@ class PermissionManager:
         return results
 
     def revoke_toolchain_roots(self, username: str) -> list[PermissionResult]:
-        """Reverse :meth:`grant_toolchain_roots` (teardown)."""
-        results: list[PermissionResult] = []
-        for root in windows_toolchain_roots():
-            if os.path.isdir(root):
-                results.append(self.revoke_access(username, root))
-        return results
+        """Reverse :meth:`grant_toolchain_roots` (teardown).
+
+        A root-only ``/remove`` still walks the whole subtree to re-propagate
+        inheritance — and it does so even when the account has no entry on
+        the root (spec 109 V1 follow-up, measured on a dev machine: npm 34.8
+        s, ``%LOCALAPPDATA%\\Programs`` 19.3 s, pnpm 4.9 s; 59 s in total
+        with or without the ACE present). This runs inside one hidden
+        uninstaller step whose progress bar does not move, so: a root with no
+        explicit entry for *username* is skipped after a single-object
+        query, and the remaining roots are revoked concurrently. The roots
+        never nest, so the concurrent propagations touch disjoint trees.
+        Measured on the same machine: 49.7 s concurrent vs 58.8 s sequential
+        with the ACE on all five roots (disk-bound, so not the ideal max of
+        the roots), 0.04 s vs 59 s with no ACE to remove.
+        """
+        roots = [r for r in windows_toolchain_roots() if os.path.isdir(r)]
+        if not roots:
+            return []
+        with ThreadPoolExecutor(max_workers=len(roots)) as pool:
+            return list(pool.map(lambda r: self._revoke_toolchain_root(username, r), roots))
+
+    def _revoke_toolchain_root(self, username: str, root: str) -> PermissionResult:
+        resolved = self._resolve_path(root)
+        if resolved is None:
+            return PermissionResult(success=False, path=root, error="Path does not exist")
+        query = self._run_icacls([resolved])
+        if query.returncode == 0 and not _has_explicit_entry(query.stdout, username):
+            return PermissionResult(success=True, path=resolved)
+        return self.revoke_access(username, resolved)
 
     def setup_worker_home(self, username: str) -> PermissionResult:
         """Create the worker's own home under ProgramData and hand it over (W2)."""
@@ -410,6 +434,19 @@ def _has_deny_ace(output: str, username: str) -> bool:
     for line in output.splitlines():
         line_lower = line.lower()
         if username_lower + ":" in line_lower and "(deny)" in line_lower:
+            return True
+    return False
+
+
+def _has_explicit_entry(output: str, username: str) -> bool:
+    """True when *username* has any non-inherited entry (allow or deny) in
+    ``icacls`` output — something a root-only ``/remove`` would take off."""
+    username_lower = username.lower()
+    for line in output.splitlines():
+        if username_lower + ":" not in line.lower():
+            continue
+        flags = {f.upper() for f in re.findall(r"\(([^)]+)\)", line)}
+        if "I" not in flags:
             return True
     return False
 

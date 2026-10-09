@@ -176,8 +176,10 @@ def test_run_teardown_still_revokes_toolchain_roots_without_recursion(tmp_path, 
     account.get_username.return_value = USER
     perms = PermissionManager()
     orch = SetupOrchestrator(account, perms)
-    with patch.object(PermissionManager, "_run_icacls", return_value=subprocess.CompletedProcess(
-            args=["icacls"], returncode=0, stdout="", stderr="")) as run:
+    granted = subprocess.CompletedProcess(
+        args=["icacls"], returncode=0, stderr="",
+        stdout=f"{root} DESKTOP-ABC\\{USER}:(OI)(CI)(RX)\n")
+    with patch.object(PermissionManager, "_run_icacls", return_value=granted) as run:
         assert orch.run_teardown().success
     shapes = [c[0][0] for c in run.call_args_list]
     assert any("/remove" in a and USER in a for a in shapes)
