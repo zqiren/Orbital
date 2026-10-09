@@ -963,3 +963,45 @@ class TestBlockedCountWsEvent:
         )
         payload = global_calls[-1].args[0]
         assert payload["blocked_count"] == 0
+
+
+class TestChatRouteFallbackIsHeadOnly:
+    """Spec 107 BE-1: through the HTTP route, the F1 fallback resolves by the
+    head record of each log only. A decoy F1 deeper in a file is never a hit,
+    so a freshly minted id costs one head read per file, never a full parse."""
+
+    def test_decoy_session_id_deep_in_a_log_is_not_resolved(self, tmp_path):
+        client, project_store, _am, workspace = (
+            TestChatSessionIdFilter._make_api_app(TestChatSessionIdFilter(), tmp_path))
+        project_store._projects["proj_head_only"] = {
+            "project_id": "proj_head_only",
+            "name": "Head Only",
+            "workspace": workspace,
+            "model": "claude-sonnet-4-20250514",
+            "api_key": "sk-test",
+            "provider": "anthropic",
+        }
+        from agent_os.agent.project_paths import ProjectPaths
+        sessions_dir = ProjectPaths(workspace).sessions_dir
+        os.makedirs(sessions_dir, exist_ok=True)
+        with open(os.path.join(sessions_dir, "proj_head_only_uuid.jsonl"), "w") as f:
+            f.write(json.dumps({"role": "meta", "event": "session_start",
+                                "session_id": "sess_head", "session_uuid": "proj_head_only_uuid",
+                                "timestamp": "2026-01-01T00:00:00+00:00"}) + "\n")
+            f.write(json.dumps({"role": "user", "content": "first",
+                                "session_id": "sess_head", "session_uuid": "proj_head_only_uuid",
+                                "timestamp": "2026-01-01T00:00:01+00:00"}) + "\n")
+            f.write(json.dumps({"role": "user", "content": "decoy row",
+                                "session_id": "sess_decoy_late", "session_uuid": "proj_head_only_uuid",
+                                "timestamp": "2026-01-01T00:00:02+00:00"}) + "\n")
+
+        # The head F1 resolves and returns the file's rows.
+        resp = client.get("/api/v2/agents/proj_head_only/chat?session_id=sess_head")
+        assert resp.status_code == 200
+        assert [m["content"] for m in resp.json() if m.get("role") != "meta"] == ["first", "decoy row"]
+
+        # The decoy carried only by a later line is NOT a session.
+        resp = client.get("/api/v2/agents/proj_head_only/chat?session_id=sess_decoy_late")
+        assert resp.status_code == 200
+        assert resp.json() == []
+        assert resp.headers["x-total-count"] == "0"

@@ -32,6 +32,7 @@ from agent_os.config.provider_registry import ProviderRegistry
 from agent_os.daemon_v2.default_skills_installer import install_default_skills
 from agent_os.daemon_v2.autonomy import AutonomyInterceptor
 from agent_os.daemon_v2.sub_agent_visibility import resolve_visible_sub_agent_slugs
+from agent_os.daemon_v2.session_index import read_session_f1, resolve_session_uuid
 from agent_os.daemon_v2.provider_errors import (
     ProviderConfigError,
     classify_llm_error,
@@ -2038,23 +2039,9 @@ class AgentManager:
     def _read_session_f1(self, filepath: str) -> str | None:
         """Read a session JSONL's original F1 ``session_id`` from its first
         record. The ``session_start`` meta carries it; non-meta records stamp
-        it too — so the first record with a ``session_id`` field is the F1."""
-        try:
-            with open(filepath, "r", encoding="utf-8") as fh:
-                for raw in fh:
-                    raw = raw.strip()
-                    if not raw:
-                        continue
-                    try:
-                        rec = json.loads(raw)
-                    except json.JSONDecodeError:
-                        continue
-                    sid = rec.get("session_id")
-                    if sid:
-                        return sid
-        except OSError:
-            return None
-        return None
+        it too — so the first record with a ``session_id`` field is the F1.
+        Delegates to the shared head-only reader (spec 107)."""
+        return read_session_f1(filepath)
 
     def _load_session_from_disk(self, project_id: str, identifier: str):
         """Resolve an F1 or F2 identifier to an on-disk session and load it.
@@ -2073,25 +2060,14 @@ class AgentManager:
         if not os.path.isdir(sessions_dir):
             return None
         # Fast path: identifier is the F2 stem (the sidebar's address for a
-        # disk-only session) → the file is ``{identifier}.jsonl``.
-        target = os.path.join(sessions_dir, f"{identifier}.jsonl")
-        if not os.path.isfile(target):
-            # Slow path: identifier is an F1 chat id → scan for the JSONL whose
-            # records carry that F1. F1 is not unique across rotated logs
-            # (legacy "default"), so prefer the most recently modified match.
-            target = None
-            best_mtime = -1.0
-            for fname in os.listdir(sessions_dir):
-                if not fname.endswith(".jsonl"):
-                    continue
-                fpath = os.path.join(sessions_dir, fname)
-                if self._read_session_f1(fpath) == identifier:
-                    m = os.path.getmtime(fpath)
-                    if m > best_mtime:
-                        best_mtime = m
-                        target = fpath
-            if target is None:
-                return None
+        # disk-only session) → the file is ``{identifier}.jsonl``. Slow path:
+        # identifier is a legacy F1 chat id → head-only scan, newest-mtime
+        # match wins (F1 is not unique across rotated "default" logs). Same
+        # resolver as the chat read path (spec 107).
+        stem = resolve_session_uuid(sessions_dir, identifier)
+        if stem is None:
+            return None
+        target = os.path.join(sessions_dir, f"{stem}.jsonl")
         session = Session.load(target)
         # Session.load sets session_id to the filename stem (F2); recover the
         # original F1 from the records so identity survives hydration.
@@ -3815,41 +3791,24 @@ class AgentManager:
         sessions_dir = ProjectPaths(workspace).sessions_dir
         if not os.path.isdir(sessions_dir):
             return None
-        # Direct F2 match.
-        direct = os.path.join(sessions_dir, f"{identifier}.jsonl")
-        if os.path.isfile(direct):
-            return identifier, direct
-        # F1 scan.
-        for fname in os.listdir(sessions_dir):
-            if not fname.endswith(".jsonl"):
-                continue
-            fpath = os.path.join(sessions_dir, fname)
-            try:
-                with open(fpath, "r", encoding="utf-8") as fh:
-                    for raw in fh:
-                        raw = raw.strip()
-                        if not raw:
-                            continue
-                        try:
-                            rec = json.loads(raw)
-                        except json.JSONDecodeError:
-                            continue
-                        if rec.get("session_id") == identifier:
-                            resolved_uuid = fname[:-6]
-                            # Seam 3 / decision D4: the F1-scan fallback is kept
-                            # for back-compat (a persisted F1/"default" id that
-                            # isn't a filename) but INSTRUMENTED so we can confirm
-                            # it goes cold before deleting it in a later pass.
-                            logger.info(
-                                "f1_scan_fallback fired: project=%s identifier=%s "
-                                "resolved_uuid=%s (legacy F1 addressing — should "
-                                "trend to zero post canonicalization)",
-                                project_id, identifier, resolved_uuid,
-                            )
-                            return resolved_uuid, fpath
-            except OSError:
-                continue
-        return None
+        # Direct F2 match, else a head-only F1 scan with newest-mtime
+        # preference — the shared resolver (spec 107).
+        stem = resolve_session_uuid(sessions_dir, identifier)
+        if stem is None:
+            return None
+        fpath = os.path.join(sessions_dir, f"{stem}.jsonl")
+        if stem != identifier:
+            # Seam 3 / decision D4: the F1-scan fallback is kept for
+            # back-compat (a persisted F1/"default" id that isn't a filename)
+            # but INSTRUMENTED so we can confirm it goes cold before deleting
+            # it in a later pass.
+            logger.info(
+                "f1_scan_fallback fired: project=%s identifier=%s "
+                "resolved_uuid=%s (legacy F1 addressing — should "
+                "trend to zero post canonicalization)",
+                project_id, identifier, stem,
+            )
+        return stem, fpath
 
     async def delete_session(self, project_id: str, session_id: str) -> dict:
         """Delete a single session: remove its JSONL from disk.

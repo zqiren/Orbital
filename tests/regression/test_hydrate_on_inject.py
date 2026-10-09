@@ -165,3 +165,117 @@ def test_find_session_uuid_on_disk_accepts_f1_and_f2(tmp_path):
     assert _find_session_uuid_on_disk(sdir, "proj_dddd4444") == "proj_dddd4444"
     # unknown → None
     assert _find_session_uuid_on_disk(sdir, "nope") is None
+
+
+# ── Spec 107: F1 resolution reads only the HEAD of each session log ──────
+#
+# "+ new session" lands the pane on a freshly minted id that no file carries.
+# The chat route's fallback used to open every session log and json.loads
+# every line looking for it (O(total bytes): 4.2 s on a 225 MB project). The
+# hydrate resolver already stopped at the first session_id-bearing record of
+# each file; both paths now share one head-only resolver that prefers the
+# newest mtime when a legacy F1 ("default") is carried by several logs.
+
+def _write_rows(ws, uuid, lines):
+    """Write raw lines (already-serialised or deliberately torn) to a log."""
+    sdir = ProjectPaths(str(ws)).sessions_dir
+    os.makedirs(sdir, exist_ok=True)
+    p = os.path.join(sdir, f"{uuid}.jsonl")
+    with open(p, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+    return p
+
+
+def _meta(f1, uuid):
+    return json.dumps({"role": "meta", "event": "session_start", "session_id": f1,
+                       "session_uuid": uuid, "timestamp": "2026-05-26T00:00:00+00:00"})
+
+
+def _row(role, content, f1, uuid):
+    return json.dumps({"role": role, "content": content, "session_id": f1,
+                       "session_uuid": uuid, "timestamp": "2026-05-26T00:00:01+00:00"})
+
+
+def test_find_session_uuid_on_disk_reads_only_the_head(tmp_path):
+    """The chat-route fallback stops at the first session_id-bearing record of
+    each file (the contract ``_load_session_from_disk`` already had). A decoy
+    F1 deeper in a file is never seen, and a torn line after the head is never
+    parsed."""
+    from agent_os.api.routes.agents_v2 import _find_session_uuid_on_disk
+    ws = tmp_path / "ws"
+    _write_rows(ws, "proj_eeee5555", [
+        _meta("sess_head", "proj_eeee5555"),
+        '{"role": "user", "content": "torn line, never valid',
+        _row("user", "hi", "sess_decoy", "proj_eeee5555"),
+    ])
+    sdir = ProjectPaths(str(ws)).sessions_dir
+    assert _find_session_uuid_on_disk(sdir, "sess_head") == "proj_eeee5555"
+    assert _find_session_uuid_on_disk(sdir, "sess_decoy") is None
+
+
+def test_find_session_uuid_on_disk_unknown_id_costs_one_record_per_file(tmp_path, monkeypatch):
+    """A minted id matches nothing, so the scan must visit every file — but
+    only its head: at most one JSON decode per file, not one per line."""
+    import time
+    from agent_os.api.routes import agents_v2
+    from agent_os.daemon_v2 import session_index
+
+    ws = tmp_path / "ws"
+    n_files, n_lines = 200, 500
+    for i in range(n_files):
+        uuid = f"proj_{i:08x}"
+        lines = [_meta(f"sess_{i}", uuid)]
+        lines += [_row("user" if k % 2 else "assistant", f"line {k}", f"sess_{i}", uuid)
+                  for k in range(n_lines - 1)]
+        _write_rows(ws, uuid, lines)
+    sdir = ProjectPaths(str(ws)).sessions_dir
+
+    decodes = {"n": 0}
+    real_loads = json.loads
+
+    def counting_loads(s, *a, **kw):
+        decodes["n"] += 1
+        return real_loads(s, *a, **kw)
+
+    # Count decodes wherever the resolver lives (route module or shared helper).
+    monkeypatch.setattr(agents_v2.json, "loads", counting_loads)
+    monkeypatch.setattr(session_index.json, "loads", counting_loads)
+
+    t0 = time.perf_counter()
+    assert agents_v2._find_session_uuid_on_disk(sdir, "proj_unknown_fresh") is None
+    elapsed = time.perf_counter() - t0
+
+    assert decodes["n"] <= n_files, (
+        f"decoded {decodes['n']} records for {n_files} files — the fallback is "
+        f"parsing whole files, not heads")
+    # 200 × 500 lines = 100k records: a full parse takes ~1 s here; heads only
+    # take tens of ms. Generous bound so CI noise never flakes it.
+    assert elapsed < 0.75, f"unknown-id resolution took {elapsed:.2f}s"
+
+
+def test_duplicate_f1_newest_mtime_wins_in_both_resolvers(tmp_path, monkeypatch):
+    """Legacy logs share the F1 "default". The chat route used to take the
+    first match in listdir order while the hydrate resolver preferred the
+    newest mtime; both must agree on the newest."""
+    import time
+    from agent_os.api.routes.agents_v2 import _find_session_uuid_on_disk
+    ws = tmp_path / "ws"
+    old = _write_rows(ws, "aaaa_old", [_meta("default", "aaaa_old"),
+                                       _row("user", "old", "default", "aaaa_old")])
+    new = _write_rows(ws, "zzzz_new", [_meta("default", "zzzz_new"),
+                                       _row("user", "new", "default", "zzzz_new")])
+    now = time.time()
+    os.utime(old, (now - 1000, now - 1000))
+    os.utime(new, (now, now))
+    # Pin listdir to alphabetical so the old first-match behaviour would return
+    # the OLD file deterministically.
+    real_listdir = os.listdir
+    monkeypatch.setattr(os, "listdir", lambda p=".": sorted(real_listdir(p)))
+
+    sdir = ProjectPaths(str(ws)).sessions_dir
+    assert _find_session_uuid_on_disk(sdir, "default") == "zzzz_new"
+
+    mgr = _make_manager(tmp_path, ws)
+    s = mgr._load_session_from_disk("p1", "default")
+    assert s is not None and s.session_uuid == "zzzz_new"
+    assert s.session_id == "default"

@@ -17,7 +17,7 @@
 // here), mount ChatView, wait for the mount effect, then inspect the call
 // log and rendered DOM.
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vitest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 
@@ -261,6 +261,8 @@ import {
 } from '../hooks/useAnnotations';
 import type { Annotation } from '../utils/annotations';
 import { formatQuotes } from '../utils/annotations';
+import { markFreshSession, consumeFreshSession } from '../utils/freshSession';
+import { useAgent } from '../hooks/useAgent';
 import type { DisplayItem } from '../utils/chatTransform';
 import type { Project } from '../types';
 // Producer↔renderer parity fixture (backlog #23 D2 / #27) — the same file the
@@ -2753,6 +2755,68 @@ describe('credential-error surfacing (AgentErrorNotice)', () => {
 // a project stays pure navigation (the open-time auto-start removed in
 // 0722d5fa made agents with goals invent their own work).
 // --------------------------------------------------------------------------
+describe('Spec 107 FE-1: a freshly minted session id does not fetch history', () => {
+  const SKELETON = '.animate-pulse.h-12';
+  const chatFetchesFor = (sid: string) =>
+    apiWithTotalCalls.filter((p) => p.includes('/chat?limit=') && p.includes(`session_id=${sid}`));
+
+  it('a marked id renders the empty state with no /chat request and no skeleton', async () => {
+    // Hold any history fetch open forever: if the load effect still issues
+    // one for the minted id, the pane would sit on the skeleton (the bug).
+    chatResponseGate = new Promise<void>(() => {});
+    markFreshSession('p1', 'fresh_1');
+    await renderChat({ sessionId: 'fresh_1' });
+    // Right after commit, before any fetch could settle: no skeleton.
+    expect(container.querySelector(SKELETON)).toBeNull();
+    await flushEffects();
+    expect(container.querySelector(SKELETON)).toBeNull();
+    expect(chatFetchesFor('fresh_1').length).toBe(0);
+    expect(container.textContent ?? '').toContain('No messages yet');
+  });
+
+  it('the mark is consumed: switching away and back fetches normally', async () => {
+    markFreshSession('p1', 'fresh_2');
+    await renderChat({ sessionId: 'fresh_2' });
+    await flushEffects();
+    expect(chatFetchesFor('fresh_2').length).toBe(0);
+
+    await renderChat({ sessionId: 's_other' });
+    await flushEffects();
+    await renderChat({ sessionId: 'fresh_2' });
+    await flushEffects();
+    // By now the file may exist on disk — the normal fetch runs.
+    expect(chatFetchesFor('fresh_2').length).toBe(1);
+  });
+
+  it('an unmarked unknown id still fetches (today\'s behaviour)', async () => {
+    await renderChat({ sessionId: 'unknown_9' });
+    await flushEffects();
+    expect(chatFetchesFor('unknown_9').length).toBe(1);
+  });
+
+  it('the /new slash command marks the id it mints', async () => {
+    const { newSession } = useAgent();
+    (newSession as unknown as Mock).mockResolvedValueOnce({
+      status: 'ok',
+      session_id: 'sess_from_slash',
+      session_uuid: 'sess_from_slash',
+    });
+    await renderChat({ sessionId: 's1' });
+    await flushEffects();
+
+    await act(async () => {
+      typeInComposer('/new');
+    });
+    await act(async () => {
+      pressKey('Enter');
+    });
+    await flushEffects();
+
+    expect(newSession).toHaveBeenCalledWith('p1', 's1');
+    expect(consumeFreshSession('p1', 'sess_from_slash')).toBe(true);
+  });
+});
+
 describe('ChatView: onboarding kickoff', () => {
   async function renderProject(isEmpty: boolean) {
     await act(async () => {
