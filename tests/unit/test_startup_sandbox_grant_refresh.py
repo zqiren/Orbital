@@ -96,3 +96,16 @@ def test_only_the_windows_provider_exposes_the_refresh():
     except Exception:  # pragma: no cover - macOS module absent on other hosts
         return
     assert not hasattr(MacOSPlatformProvider, "refresh_sandbox_grants")
+
+
+def test_the_suite_never_runs_the_real_startup_refresh():
+    """``tests/conftest.py`` patches the hook's target for every test.
+
+    Without it, any ``with TestClient(create_app(...))`` test on a Windows
+    machine with the sandbox account ran the real ``icacls /grant`` over the
+    developer's toolchain roots (found during spec 109 V1: a unit-suite run
+    re-granted ``AgentOS-Worker`` on ``%LOCALAPPDATA%\\Programs``).
+    """
+    import agent_os.api.app as app_module
+
+    assert isinstance(app_module.schedule_sandbox_grant_refresh, MagicMock)

@@ -11,6 +11,14 @@ Also enforces the resource markers declared in pyproject.toml: marked tests
 are skipped by default unless the resource is present or explicitly opted
 into via env var. See docs/TESTING-markers.md for the run commands.
 
+Autouse: patches ``agent_os.api.app.schedule_sandbox_grant_refresh`` so a
+test that enters the ``create_app()`` lifespan (``with TestClient(...)``) on a
+Windows machine where the ``AgentOS-Worker`` account exists does not run the
+REAL spec 109 startup refresh — ``icacls /grant`` on the developer's own
+``%LOCALAPPDATA%\\Programs``, npm, uv ... roots, a ~20 s subtree walk per root
+in a background thread. ``test_startup_sandbox_grant_refresh.py`` imports the
+function directly and is unaffected.
+
 Session-scoped autouse: sets ``AGENT_OS_TELEMETRY_DISABLED`` so no test
 process posts a ping to the production telemetry endpoint (spec 063 §2 — test
 runs produced ~98% of the stored install fleet).
@@ -81,4 +89,11 @@ def _disable_telemetry_sends():
 def _bypass_daemon_pid_guard():
     """Bypass the create_app() singleton daemon PID guard for the whole suite."""
     with patch("agent_os.api.app.acquire_pid_file"):
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _no_real_sandbox_grant_refresh():
+    """Keep create_app()'s startup hook off the real Windows ACLs (spec 109 D2)."""
+    with patch("agent_os.api.app.schedule_sandbox_grant_refresh"):
         yield
