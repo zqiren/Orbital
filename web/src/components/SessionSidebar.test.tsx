@@ -598,6 +598,19 @@ describe('SessionSidebar — filter and automation groups', () => {
     expect(screen.queryByTestId('session-list-item-run-3')).toBeNull();
   });
 
+  it('a collapsed group still shows a run whose worker is running (spec 102)', () => {
+    resetMocks();
+    mockSessions = [
+      ...mixed(),
+      daily('run-worker', '2026-07-02T00:00:00Z', { status: 'idle', worker_running: true }),
+    ];
+    render(<SessionSidebar projectId="p1" selectedSessionId="chat-new" />);
+
+    expect(screen.getByTestId('session-automation-group-toggle')).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.getByTestId('session-list-item-run-worker')).toBeInTheDocument();
+    expect(screen.queryByTestId('session-list-item-run-3')).toBeNull();
+  });
+
   it('Chats shows only conversations; Automations shows only automation sessions', async () => {
     const user = userEvent.setup();
     resetMocks();

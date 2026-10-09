@@ -1862,6 +1862,17 @@ async def list_project_sessions(project_id: str):
     # that has no live handle, which must not run on the event loop (this
     # endpoint is refetched on every agent.status WS event).
     sessions = await asyncio.to_thread(_agent_manager.list_sessions, project_id)
+    # ``worker_running`` (spec 102, additive): a worker has an open turn in
+    # this session while the manager-only ``status`` reads idle (a pinned
+    # dispatch runs zero management turns). Computed HERE on the event loop,
+    # not inside list_sessions: ``running_session_ids`` evicts dead adapters
+    # by mutating the manager's slate, which must not happen off-loop.
+    running = (
+        _sub_agent_manager.running_session_ids(project_id)
+        if _sub_agent_manager is not None else set()
+    )
+    for entry in sessions:
+        entry["worker_running"] = entry.get("session_id") in running
     return {"project_id": project_id, "sessions": sessions}
 
 

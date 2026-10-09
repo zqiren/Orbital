@@ -41,6 +41,28 @@ export function getProjectDotColor(
 }
 
 /**
+ * Status a surface should DISPLAY given the manager's status and whether a
+ * worker is running (spec 102). A pinned dispatch runs zero management turns,
+ * so the manager reads `idle` for the whole run; the header badge and the
+ * session-list row glyph show `running` instead. The manager always wins
+ * when it has something to say (running / waiting / pending_approval /
+ * error / queued) — the worker signal only replaces the resting states, the
+ * same precedence as the project dot, so a surfaced fault is never masked.
+ *
+ * Display-only: `AgentRunStatus` consumers that gate behaviour (composer
+ * Stop/Queue, ChatTab run gating) keep reading the raw manager status.
+ */
+export function displayRunStatus(
+  status: AgentRunStatus,
+  workersRunning: boolean,
+): AgentRunStatus {
+  if (workersRunning && (status === 'idle' || status === 'new_session')) {
+    return 'running';
+  }
+  return status;
+}
+
+/**
  * WS events after which a project's `sub_agents_running` may have changed:
  * every worker dispatch and terminal, plus manager status changes (a
  * management Stop tears its workers down without a worker event of its own).

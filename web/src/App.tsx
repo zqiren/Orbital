@@ -755,6 +755,7 @@ export default function App() {
               <ProjectDetail
                 project={selectedProject}
                 agentStatus={agentStatuses[selectedProject.project_id] ?? 'idle'}
+                subAgentsRunning={subAgentsRunning[selectedProject.project_id] ?? false}
                 statusSummary={statusSummaries[selectedProject.project_id]}
                 route={route}
                 setRoute={setRoute}

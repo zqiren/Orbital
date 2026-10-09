@@ -281,6 +281,172 @@ describe('useSessions', () => {
     });
   }
 
+  // Spec 106 / 102 §4.2 step 8 — a pinned dispatch runs zero management
+  // turns, so no agent.status ever fires for it; the worker lifecycle events
+  // are the only signal that its row appeared or its worker_running flipped.
+  const WORKER_EVENTS = [
+    'sub_agent.dispatched',
+    'sub_agent.started',
+    'sub_agent.completed',
+    'sub_agent.error',
+    'sub_agent.failed',
+    'sub_agent.stopped',
+    'sub_agent.turn_interrupted',
+  ] as const;
+
+  for (const type of WORKER_EVENTS) {
+    it(`subscribes to ${type} and refreshes on it for the same project`, async () => {
+      const initial: SessionListEntry[] = [makeSession({ session_id: 's1' })];
+      const updated: SessionListEntry[] = [
+        makeSession({ session_id: 's1' }),
+        makeSession({ session_id: 's2', status: 'idle', worker_running: true }),
+      ];
+      apiFn.mockResolvedValueOnce(initial).mockResolvedValueOnce(updated);
+
+      const { result } = renderHook(() => useSessions('proj-worker'));
+      await waitFor(() => expect(result.current.loading).toBe(false));
+      expect(result.current.sessions).toEqual(initial);
+
+      const handlerCall = onMock.mock.calls.find((c) => c[0] === type);
+      expect(handlerCall).toBeDefined();
+      const handler = handlerCall![1] as (e: unknown) => void;
+
+      await act(async () => {
+        handler({ type, project_id: 'proj-worker', session_id: 's2', handle: 'claude-code' });
+      });
+
+      await waitFor(() => {
+        expect(result.current.sessions).toEqual(updated);
+      });
+      expect(result.current.sessions[1].worker_running).toBe(true);
+    });
+
+    it(`ignores ${type} for a different project`, async () => {
+      apiFn.mockResolvedValueOnce([makeSession({ session_id: 's1' })]);
+
+      const { result } = renderHook(() => useSessions('proj-mine'));
+      await waitFor(() => expect(result.current.loading).toBe(false));
+      const before = apiFn.mock.calls.length;
+
+      const handler = onMock.mock.calls.find((c) => c[0] === type)![1] as (e: unknown) => void;
+      await act(async () => {
+        handler({ type, project_id: 'proj-OTHER', session_id: 's2', handle: 'claude-code' });
+      });
+
+      expect(apiFn.mock.calls.length).toBe(before);
+    });
+
+    it(`calls off() for ${type} on unmount`, async () => {
+      apiFn.mockResolvedValue([]);
+
+      const { unmount } = renderHook(() => useSessions('proj-worker-cleanup'));
+      await waitFor(() => {
+        expect(onMock.mock.calls.map((c) => c[0])).toContain(type);
+      });
+
+      unmount();
+
+      expect(offMock.mock.calls.map((c) => c[0])).toContain(type);
+    });
+  }
+
+  it('does not refetch on chat.sub_agent_message (one per worker text chunk)', async () => {
+    apiFn.mockResolvedValue([]);
+    renderHook(() => useSessions('proj-chunks'));
+    await waitFor(() => expect(onMock.mock.calls.length).toBeGreaterThan(0));
+    expect(onMock.mock.calls.map((c) => c[0])).not.toContain('chat.sub_agent_message');
+  });
+
+  it('coalesces a burst of WS-triggered refreshes into one in flight + one trailing', async () => {
+    const initial: SessionListEntry[] = [makeSession({ session_id: 's1' })];
+    const final: SessionListEntry[] = [
+      makeSession({ session_id: 's1' }),
+      makeSession({ session_id: 's2', name: 'write the essay' }),
+    ];
+    const pending: Array<(v: SessionListEntry[]) => void> = [];
+    apiFn = vi.fn(
+      () =>
+        new Promise<SessionListEntry[]>((resolve) => {
+          pending.push(resolve);
+        }),
+    );
+
+    const { result } = renderHook(() => useSessions('proj-burst'));
+    await waitFor(() => expect(pending.length).toBe(1));
+    await act(async () => {
+      pending[0](initial);
+    });
+    await waitFor(() => expect(result.current.sessions).toEqual(initial));
+    const baseline = apiFn.mock.calls.length; // the initial load
+
+    const handlerFor = (type: string) =>
+      onMock.mock.calls.find((c) => c[0] === type)![1] as (e: unknown) => void;
+
+    // dispatched → one request goes out and stays pending.
+    await act(async () => {
+      handlerFor('sub_agent.dispatched')({ type: 'sub_agent.dispatched', project_id: 'proj-burst', session_id: 's2' });
+    });
+    expect(apiFn.mock.calls.length - baseline).toBe(1);
+
+    // started + completed land while it is still in flight → no new request.
+    await act(async () => {
+      handlerFor('sub_agent.started')({ type: 'sub_agent.started', project_id: 'proj-burst', session_id: 's2' });
+      handlerFor('sub_agent.completed')({ type: 'sub_agent.completed', project_id: 'proj-burst', session_id: 's2' });
+    });
+    expect(apiFn.mock.calls.length - baseline).toBe(1);
+
+    // The first settles with a stale snapshot; exactly one trailing refetch follows.
+    await act(async () => {
+      pending[1](initial);
+    });
+    await waitFor(() => expect(apiFn.mock.calls.length - baseline).toBe(2));
+    await act(async () => {
+      pending[2](final);
+    });
+    await waitFor(() => expect(result.current.sessions).toEqual(final));
+
+    // Settled: no further requests.
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(apiFn.mock.calls.length - baseline).toBe(2);
+  });
+
+  it('the explicit refresh() is not coalesced (rename/pin revert paths need an immediate fetch)', async () => {
+    const pending: Array<(v: SessionListEntry[]) => void> = [];
+    apiFn = vi.fn(
+      () =>
+        new Promise<SessionListEntry[]>((resolve) => {
+          pending.push(resolve);
+        }),
+    );
+    const { result } = renderHook(() => useSessions('proj-explicit'));
+    await waitFor(() => expect(pending.length).toBe(1));
+    await act(async () => {
+      pending[0]([]);
+    });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    const baseline = apiFn.mock.calls.length;
+
+    const handler = onMock.mock.calls.find((c) => c[0] === 'sub_agent.dispatched')![1] as (e: unknown) => void;
+    await act(async () => {
+      handler({ type: 'sub_agent.dispatched', project_id: 'proj-explicit', session_id: 's2' });
+    });
+    expect(apiFn.mock.calls.length - baseline).toBe(1);
+
+    let explicit: Promise<SessionListEntry[]> | undefined;
+    await act(async () => {
+      explicit = result.current.refresh();
+    });
+    // The explicit call went out immediately despite the in-flight WS refetch.
+    expect(apiFn.mock.calls.length - baseline).toBe(2);
+    await act(async () => {
+      pending[1]([]);
+      pending[2]([makeSession({ session_id: 'fresh' })]);
+    });
+    await expect(explicit!).resolves.toEqual([makeSession({ session_id: 'fresh' })]);
+  });
+
   it('surfaces the name field on returned session entries', async () => {
     const sessions: SessionListEntry[] = [
       makeSession({ session_id: 's1', name: 'My Login Flow' }),

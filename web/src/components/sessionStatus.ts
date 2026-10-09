@@ -13,8 +13,9 @@
  *   idle    → #A1A1AA   (idle)
  */
 
-import type { AgentRunStatus } from '../types';
+import type { AgentRunStatus, SessionListEntry } from '../types';
 import type { StringKey } from '../i18n/strings';
+import { displayRunStatus } from '../utils/projectStatus';
 
 export interface StatusDisplay {
   glyph: string;
@@ -70,4 +71,16 @@ const FALLBACK_STATUS: StatusDisplay = { glyph: '⏸', color: '#A1A1AA', label: 
 
 export function getStatusDisplay(status: AgentRunStatus): StatusDisplay {
   return STATUS_DISPLAY_MAP[status] ?? FALLBACK_STATUS;
+}
+
+/**
+ * The status a session-list row displays (spec 102): the manager's `status`,
+ * or `running` while a worker has an open turn in that session and the
+ * manager rests. `worker_running` is additive and may be absent (older
+ * daemon) — absent reads as false, so every pre-102 entry renders as before.
+ */
+export function rowDisplayStatus(
+  entry: Pick<SessionListEntry, 'status' | 'worker_running'>,
+): AgentRunStatus {
+  return displayRunStatus(entry.status, entry.worker_running ?? false);
 }

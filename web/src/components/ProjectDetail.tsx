@@ -19,12 +19,20 @@ import { usePanelDockable } from '../hooks/usePanelState';
 import { fetchPathWithFallback } from '../utils/openPathWithFallback';
 import { useT } from '../i18n/useT';
 import { projectDisplayName } from '../utils/projectDisplayName';
+import { displayRunStatus } from '../utils/projectStatus';
 import { useCredentialCards, resolveCard } from '../hooks/useCredentialCards';
 import type { StringKey } from '../i18n/strings';
 
 interface ProjectDetailProps {
   project: Project;
   agentStatus: AgentRunStatus;
+  /**
+   * run-status's `sub_agents_running` for this project (spec 095/102): a
+   * worker has an open turn in some session while the manager rests. Only
+   * the header badge reads it — `agentStatus` itself keeps manager semantics
+   * for everything else. Default false (older callers).
+   */
+  subAgentsRunning?: boolean;
   statusSummary?: string;
   route: Extract<Route, { name: 'project' }>;
   setRoute: Dispatch<SetStateAction<Route>>;
@@ -75,6 +83,7 @@ const QUEUE_PANES: { key: QueuePaneKey; labelKey: StringKey }[] = [
 export default function ProjectDetail({
   project,
   agentStatus,
+  subAgentsRunning = false,
   statusSummary,
   route,
   setRoute,
@@ -236,7 +245,9 @@ export default function ProjectDetail({
               name points at nothing. */}
           <div data-tour="project-header" className="flex items-center gap-3 min-w-0">
           <h1 className="text-lg font-semibold tracking-[-0.01em] text-primary truncate min-w-0">{projectDisplayName(project, t)}</h1>
-          <StatusBadge status={agentStatus} />
+          {/* Spec 102: Active while a pinned worker runs with the manager idle;
+              a manager error/approval/waiting state is shown as-is. */}
+          <StatusBadge status={displayRunStatus(agentStatus, subAgentsRunning)} />
           </div>
         </div>
         <div className="flex items-center gap-3 min-w-0 shrink">

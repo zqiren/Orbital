@@ -46,7 +46,7 @@ import { useSessions } from '../hooks/useSessions';
 import type { SessionListEntry } from '../types';
 import { SessionListItem } from './SessionListItem';
 import { formatRelativeTime } from '../utils/relativeTime';
-import { getStatusDisplay } from './sessionStatus';
+import { getStatusDisplay, rowDisplayStatus } from './sessionStatus';
 import {
   buildSessionList,
   type AutomationGroup,
@@ -232,11 +232,14 @@ export function SessionSidebar({
   function renderGroup(group: AutomationGroup) {
     const open = openGroups.has(group.key);
     // Collapsed hides only resting runs: a running/waiting/blocked run and the
-    // session being viewed always stay visible.
+    // session being viewed always stay visible. A run whose worker is working
+    // (spec 102) counts as running, exactly like a manager-running run.
     const visibleRuns = open
       ? group.runs
       : group.runs.filter(
-          (r) => r.session_id === selectedSessionId || !getStatusDisplay(r.status).resting,
+          (r) =>
+            r.session_id === selectedSessionId ||
+            !getStatusDisplay(rowDisplayStatus(r)).resting,
         );
     const kindLabel = t(GROUP_KIND_KEY[group.kind]);
     const KindIcon = GROUP_KIND_ICON[group.kind];
