@@ -258,16 +258,6 @@ export default function ChatTab({
     wasRunningRef.current = running;
   }, [agentStatus, onRunStart, onRunEnd]);
 
-  // A chat path click (route.previewPath) opens the panel's Files preview
-  // instead of the overlay drawer while the panel is docked (§9.10).
-  const previewPath = route.previewPath;
-  useEffect(() => {
-    if (!docked || !previewPath) return;
-    setPanelView('files');
-    setPanelFile(previewPath);
-    expandPanel();
-  }, [docked, previewPath, setPanelView, setPanelFile, expandPanel]);
-
   const clearPreviewPath = useCallback(() => {
     setRoute((prev) =>
       prev.name === 'project' && prev.projectId === projectId && prev.previewPath !== undefined
@@ -275,6 +265,21 @@ export default function ChatTab({
         : prev,
     );
   }, [projectId, setRoute]);
+
+  // A chat path click (route.previewPath) opens the panel's Files preview
+  // instead of the overlay drawer while the panel is docked (§9.10).
+  // The path is a request, not panel state: consume it once it has acted
+  // (spec 110). Otherwise a repeat click on the same card writes the same
+  // string, the deps never change, and the card is dead after the first
+  // open once the panel has been hidden or switched to Browser.
+  const previewPath = route.previewPath;
+  useEffect(() => {
+    if (!docked || !previewPath) return;
+    setPanelView('files');
+    setPanelFile(previewPath);
+    expandPanel();
+    clearPreviewPath();
+  }, [docked, previewPath, setPanelView, setPanelFile, expandPanel, clearPreviewPath]);
 
   const handlePanelSelectFile = useCallback(
     (path: string | null) => {

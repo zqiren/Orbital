@@ -94,7 +94,7 @@ function PathCard({
       type="button"
       onClick={() => onOpen(path)}
       aria-label={t('chat.path.openAria', { path })}
-      className="my-2 flex w-full items-center gap-3 rounded-lg border border-border bg-sidebar px-3 py-2.5 text-left transition-colors hover:bg-card-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+      className="my-2 flex w-full cursor-pointer items-center gap-3 rounded-lg border border-border bg-sidebar px-3 py-2.5 text-left transition-colors hover:bg-card-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
     >
       <FileText size={18} className="shrink-0 text-secondary" />
       <span className="min-w-0 flex-1">

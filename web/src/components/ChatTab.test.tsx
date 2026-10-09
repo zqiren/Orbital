@@ -1059,4 +1059,116 @@ describe('ChatTab — route.previewPath opens the panel, not the overlay (§9.10
     expect(updated.tab).toBe('files');
     expect(updated.previewPath).toBeUndefined();
   });
+
+  // Spec 110 — route.previewPath is a request, consumed once by the docked
+  // panel. A repeat click on the same card (same string) must reopen the
+  // file whatever the user did with the panel in between.
+
+  /** Re-render the mounted ChatTab with a NEW route object (what a card click produces). */
+  function rerenderRoute(
+    view: ReturnType<typeof renderChatTab>,
+    override: Partial<Extract<Route, { name: 'project' }>>,
+  ) {
+    view.rerender(
+      <ChatTab
+        project={PROJECT}
+        agentStatus="idle"
+        agents={[]}
+        route={makeRoute({ sessionId: 'sess-x', ...override })}
+        setRoute={view.setRoute}
+      />,
+    );
+  }
+
+  /** Apply every setRoute updater ChatTab issued, in order, to `route`. */
+  function applyUpdaters(setRoute: ReturnType<typeof vi.fn>, route: Route): Route {
+    return setRoute.mock.calls.reduce<Route>((acc, call) => {
+      const arg = call[0] as Route | ((prev: Route) => Route);
+      return typeof arg === 'function' ? arg(acc) : arg;
+    }, route);
+  }
+
+  it('a consumed previewPath is cleared from the route (spec 110 §3.1)', async () => {
+    const { setRoute, route } = await act(async () =>
+      renderChatTab({ previewPath: 'docs/plan.md' }),
+    );
+    expect(screen.getByTestId('workspace-panel-column')).toBeInTheDocument();
+    expect(lastFilesViewProps.file).toBe('docs/plan.md');
+
+    expect(setRoute).toHaveBeenCalled();
+    const updater = setRoute.mock.calls[setRoute.mock.calls.length - 1][0] as (prev: Route) => Route;
+    const updated = updater(route) as Extract<Route, { name: 'project' }>;
+    expect(updated.previewPath).toBeUndefined();
+    // Consuming never clears a path that belongs to another project.
+    const other = updater(makeRoute({ projectId: 'proj-other', previewPath: 'x.md' }));
+    expect((other as Extract<Route, { name: 'project' }>).previewPath).toBe('x.md');
+  });
+
+  /**
+   * Model a second card click on the SAME file. App first re-renders with the
+   * route ChatTab's own setRoute calls produced (post-fix: previewPath gone;
+   * pre-fix: unchanged), then ProjectDetail.handleOpenPath writes the path
+   * again. Pre-fix both renders carry the same string, so the effect never
+   * fires and the card is dead — that is the production sequence this guards.
+   */
+  async function clickSameCardAgain(view: ReturnType<typeof renderChatTab>, path: string) {
+    const held = applyUpdaters(view.setRoute, view.route) as Extract<Route, { name: 'project' }>;
+    await act(async () => {
+      rerenderRoute(view, { previewPath: held.previewPath });
+    });
+    await act(async () => {
+      rerenderRoute(view, { previewPath: path });
+    });
+  }
+
+  it('re-clicking the same card after "Hide workspace" reopens the file (spec 110)', async () => {
+    const view = await act(async () => renderChatTab({ previewPath: 'docs/plan.md' }));
+    expect(lastFilesViewProps.file).toBe('docs/plan.md');
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Hide workspace' }));
+    });
+    expect(screen.queryByTestId('workspace-panel-column')).toBeNull();
+    expect(screen.getByTestId('panel-handle')).toBeInTheDocument();
+
+    lastFilesViewProps = {};
+    await clickSameCardAgain(view, 'docs/plan.md');
+    expect(screen.getByTestId('workspace-panel-column')).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Files' })).toHaveAttribute('aria-selected', 'true');
+    expect(lastFilesViewProps.file).toBe('docs/plan.md');
+    // Consumed again: the route the app holds afterwards carries no path.
+    const final = applyUpdaters(view.setRoute, view.route) as Extract<Route, { name: 'project' }>;
+    expect(final.previewPath).toBeUndefined();
+  });
+
+  it('re-clicking while the panel is on Browser lands on Files with the file (spec 110)', async () => {
+    const view = await act(async () => renderChatTab({ previewPath: 'docs/plan.md' }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('tab', { name: 'Browser' }));
+    });
+    expect(screen.getByRole('tab', { name: 'Browser' })).toHaveAttribute('aria-selected', 'true');
+
+    lastFilesViewProps = {};
+    await clickSameCardAgain(view, 'docs/plan.md');
+    expect(screen.getByRole('tab', { name: 'Files' })).toHaveAttribute('aria-selected', 'true');
+    expect(lastFilesViewProps.file).toBe('docs/plan.md');
+  });
+
+  it('re-clicking after picking another file in the tree shows the card file again (spec 110)', async () => {
+    const view = await act(async () => renderChatTab({ previewPath: 'docs/plan.md' }));
+    act(() => {
+      (lastFilesViewProps.onSelectFile as (path: string | null) => void)('src/other.ts');
+    });
+    expect(lastFilesViewProps.file).toBe('src/other.ts');
+
+    await clickSameCardAgain(view, 'docs/plan.md');
+    expect(lastFilesViewProps.file).toBe('docs/plan.md');
+  });
+
+  it('overlay mode (narrow viewport) never consumes the route path (spec 110 §3.2)', async () => {
+    setViewportWidth(1000);
+    const { setRoute } = await act(async () => renderChatTab({ previewPath: 'docs/plan.md' }));
+    expect(screen.queryByTestId('workspace-panel-column')).toBeNull();
+    expect(setRoute).not.toHaveBeenCalled();
+  });
 });
