@@ -14,6 +14,7 @@ from typing import AsyncIterator, Callable
 from agent_os.agent.transports.base import AgentTransport, TransportEvent
 from agent_os.agent.prompt_builder import Autonomy
 from agent_os.agent.transports.tool_risk import should_auto_approve
+from agent_os.utils.subprocess_flags import CREATE_NO_WINDOW
 
 try:
     from claude_agent_sdk import (
@@ -67,6 +68,51 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+class _NoWindowAnyio:
+    """``anyio`` as the SDK's subprocess transport sees it, except that
+    ``open_process`` always adds ``CREATE_NO_WINDOW``."""
+
+    _orbital_no_window = True
+
+    def __init__(self, real) -> None:
+        self._real = real
+
+    def __getattr__(self, name: str):
+        return getattr(self._real, name)
+
+    async def open_process(self, command, **kwargs):
+        kwargs["creationflags"] = kwargs.get("creationflags", 0) | CREATE_NO_WINDOW
+        return await self._real.open_process(command, **kwargs)
+
+
+def install_sdk_no_window_spawn(*, windows: bool | None = None) -> None:
+    """Make the SDK start ``claude.exe`` without a console window (Windows).
+
+    The packaged Orbital.exe is a windowed app with no console, so Windows
+    gives every console child started without ``CREATE_NO_WINDOW`` a new,
+    visible console: an empty "claude" window on every Claude Code dispatch
+    (and a flash for the SDK's ``claude -v`` version check). Orbital's own
+    spawns pass the flag (``agent_os/utils/subprocess_flags.py``), but the
+    SDK starts the CLI itself through ``anyio.open_process`` and offers no
+    option for it. Its module-level ``anyio`` reference is swapped for a
+    proxy that adds the flag; nothing else in anyio changes, and no other
+    module sees the proxy. ``test_sdk_still_spawns_through_anyio_open_process``
+    fails if an SDK release stops spawning that way. Idempotent.
+    """
+    if windows is None:
+        windows = sys.platform == "win32"
+    if not windows:
+        return
+    try:
+        from claude_agent_sdk._internal.transport import subprocess_cli
+    except ImportError:
+        return
+    current = getattr(subprocess_cli, "anyio", None)
+    if current is None or getattr(current, "_orbital_no_window", False):
+        return
+    subprocess_cli.anyio = _NoWindowAnyio(current)
+
+
 def _is_batch_file(path: str) -> bool:
     return path.lower().endswith((".cmd", ".bat"))
 
@@ -106,6 +152,10 @@ def native_claude_cli(
                         candidate, command)
             return candidate
     return command
+
+
+if HAS_SDK:
+    install_sdk_no_window_spawn()
 
 
 class SDKTransport(AgentTransport):

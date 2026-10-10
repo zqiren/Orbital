@@ -110,3 +110,64 @@ async def test_start_hands_the_sdk_the_native_exe(tmp_path, monkeypatch):
         client.return_value.connect = AsyncMock()
         await transport.start(str(shim), [], str(tmp_path))
     assert options.call_args[1]["cli_path"] == str(exe)
+
+
+# ---------------------------------------------------------------------------
+# No console window for claude.exe (the windowed Orbital.exe has no console;
+# a console child started without CREATE_NO_WINDOW gets a new visible one —
+# an empty "claude" window on every Claude Code dispatch, v0.16.0 Windows).
+# ---------------------------------------------------------------------------
+
+
+def test_sdk_still_spawns_through_anyio_open_process():
+    """The no-window fix wraps exactly this call. If an SDK release stops
+    making it, the wrapper silently does nothing — fail here instead."""
+    import inspect
+
+    from claude_agent_sdk._internal.transport import subprocess_cli
+
+    source = inspect.getsource(subprocess_cli)
+    assert "anyio.open_process(" in source
+
+
+@pytest.mark.asyncio
+async def test_sdk_spawns_get_create_no_window(monkeypatch):
+    from claude_agent_sdk._internal.transport import subprocess_cli
+
+    from agent_os.agent.transports import sdk_transport
+    from agent_os.utils.subprocess_flags import CREATE_NO_WINDOW
+
+    calls = []
+
+    class _FakeAnyio:
+        sentinel = object()
+
+        async def open_process(self, command, **kwargs):
+            calls.append((command, kwargs))
+            return "process"
+
+    fake = _FakeAnyio()
+    monkeypatch.setattr(subprocess_cli, "anyio", fake)
+    sdk_transport.install_sdk_no_window_spawn(windows=True)
+
+    wrapped = subprocess_cli.anyio
+    assert await wrapped.open_process(["claude.exe", "-v"], stdout=-1) == "process"
+    assert await wrapped.open_process(["claude.exe"], creationflags=0x10) == "process"
+    assert calls[0] == (["claude.exe", "-v"],
+                        {"stdout": -1, "creationflags": CREATE_NO_WINDOW})
+    assert calls[1][1]["creationflags"] == 0x10 | CREATE_NO_WINDOW
+    assert wrapped.sentinel is fake.sentinel, "everything else is the real anyio"
+
+    sdk_transport.install_sdk_no_window_spawn(windows=True)
+    assert subprocess_cli.anyio is wrapped, "idempotent: never double-wrapped"
+
+
+def test_off_windows_the_sdk_is_left_alone(monkeypatch):
+    from claude_agent_sdk._internal.transport import subprocess_cli
+
+    from agent_os.agent.transports import sdk_transport
+
+    original = object()
+    monkeypatch.setattr(subprocess_cli, "anyio", original)
+    sdk_transport.install_sdk_no_window_spawn(windows=False)
+    assert subprocess_cli.anyio is original
