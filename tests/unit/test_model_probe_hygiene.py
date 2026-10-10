@@ -28,7 +28,7 @@ import time
 import psutil
 import pytest
 
-from agent_os.agent.transports import claude_models, codex_models
+from agent_os.agent.transports import claude_models, codex_models, codex_transport
 
 
 class _Writer:
@@ -163,7 +163,8 @@ def _assert_gone(pid: int) -> None:
 @pytest.mark.parametrize("fetch", [
     lambda b: claude_models.fetch_claude_models(b, timeout=3),
     lambda b: codex_models.fetch_codex_models(b, timeout=3),
-], ids=["claude", "codex"])
+    lambda b: codex_transport.fetch_codex_rate_limits(b, timeout=3),
+], ids=["claude", "codex", "codex-usage"])
 def test_a_timed_out_probe_kills_the_whole_cli_tree(tmp_path, fetch):
     wrapper, pidfile = _wrapper_with_grandchild(tmp_path)
 

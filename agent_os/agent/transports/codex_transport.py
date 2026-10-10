@@ -43,6 +43,7 @@ from agent_os.agent.transports.jsonl_stream import (
     LineTooLongError,
     read_jsonl_line,
 )
+from agent_os.agent.transports.process_kill import kill_spawned_tree
 from agent_os.agent.transports.tool_risk import should_auto_approve
 from agent_os.utils.subprocess_flags import win_no_window_flags
 
@@ -1135,12 +1136,6 @@ async def fetch_codex_rate_limits(binary: str = "codex", *,
                     type(exc).__name__, exc)
         return None
     finally:
-        if proc is not None and proc.returncode is None:
-            try:
-                proc.kill()
-            except ProcessLookupError:
-                pass
-            try:
-                await asyncio.wait_for(proc.wait(), 2.0)
-            except Exception:  # noqa: BLE001
-                pass
+        # The whole tree: on Windows `codex` is npm's codex.CMD, and killing
+        # only cmd.exe left node + codex.exe running after every usage read.
+        await kill_spawned_tree(proc, label="codex rate-limit probe")
