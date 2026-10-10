@@ -6,8 +6,10 @@
 import asyncio
 import logging
 import os
+import shutil
+import sys
 import uuid
-from typing import AsyncIterator
+from typing import AsyncIterator, Callable
 
 from agent_os.agent.transports.base import AgentTransport, TransportEvent
 from agent_os.agent.prompt_builder import Autonomy
@@ -63,6 +65,47 @@ except ImportError:
     _MessageParseError = ()
 
 logger = logging.getLogger(__name__)
+
+
+def _is_batch_file(path: str) -> bool:
+    return path.lower().endswith((".cmd", ".bat"))
+
+
+def native_claude_cli(
+    command: str | None,
+    *,
+    windows: bool | None = None,
+    home: str | None = None,
+    which: Callable[[str], str | None] = shutil.which,
+) -> str | None:
+    """Swap npm's ``claude.cmd`` shim for a native ``claude.exe`` on Windows.
+
+    claude-agent-sdk 0.2.x refuses to spawn a ``.bat``/``.cmd`` file as the
+    CLI (cmd.exe re-parses the argv; no escaping is reliable), and PATH
+    resolution of ``claude`` lands on ``%APPDATA%\\npm\\claude.CMD`` for an
+    npm install — so every Claude Code dispatch failed at adapter start. The
+    shim only runs ``node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe``
+    beside it. Order: that exe, then ``claude.exe`` on PATH, then the native
+    installer's ``~\\.local\\bin\\claude.exe``. With none of them the shim is
+    returned unchanged, so the SDK's own refusal explains what to install.
+    """
+    if windows is None:
+        windows = sys.platform == "win32"
+    if not windows or not command or not _is_batch_file(command):
+        return command
+    candidates = [os.path.join(os.path.dirname(command), "node_modules",
+                               "@anthropic-ai", "claude-code", "bin", "claude.exe")]
+    on_path = which("claude.exe")
+    if on_path and not _is_batch_file(on_path):
+        candidates.append(on_path)
+    candidates.append(os.path.join(home or os.path.expanduser("~"),
+                                   ".local", "bin", "claude.exe"))
+    for candidate in candidates:
+        if candidate.lower().endswith(".exe") and os.path.isfile(candidate):
+            logger.info("Claude Code CLI: using native %s instead of shim %s",
+                        candidate, command)
+            return candidate
+    return command
 
 
 class SDKTransport(AgentTransport):
@@ -173,7 +216,7 @@ class SDKTransport(AgentTransport):
             cwd=workspace,
             permission_mode="default",
             can_use_tool=self._handle_permission,
-            cli_path=command or None,
+            cli_path=native_claude_cli(command) or None,
             env=sdk_env,
             # The SDK's 1 MiB default refuses a single stdout line above it
             # and kills its reader (spec 098): a Read of a ~660 KB PNG comes
