@@ -188,3 +188,31 @@ async def kill_process_tree(
             tag, parent_pid, surviving_pids,
         )
     return KillOutcome(parent_dead=parent_dead, surviving_pids=surviving_pids)
+
+
+async def kill_spawned_tree(proc, *, label: str = "") -> None:
+    """Kill an ``asyncio.subprocess.Process`` together with its descendants.
+
+    For the short-lived CLI probes (model lists). On Windows ``claude`` and
+    ``codex`` resolve to npm's ``.CMD`` shims, so ``proc.kill()`` ends only
+    ``cmd.exe`` and the real CLI (``claude.exe``, ``node`` + ``codex.exe``)
+    outlives every probe. Never raises; no-op once the process has exited.
+    """
+    if proc is None or proc.returncode is not None:
+        return
+    try:
+        tree = psutil.Process(proc.pid)
+    except psutil.Error:
+        tree = None
+    if tree is not None:
+        await kill_process_tree(tree, term_grace=0.5, kill_grace=1.0,
+                                reap_parent=False, label=label)
+    else:
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+    try:
+        await asyncio.wait_for(proc.wait(), 2.0)
+    except Exception:  # noqa: BLE001 — best-effort reap
+        pass

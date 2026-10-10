@@ -30,6 +30,7 @@ import logging
 import time
 
 from agent_os.agent.transports.jsonl_stream import read_jsonl_line
+from agent_os.agent.transports.process_kill import kill_spawned_tree
 from agent_os.utils.subprocess_flags import win_no_window_flags
 
 logger = logging.getLogger(__name__)
@@ -111,11 +112,7 @@ async def fetch_codex_models(binary: str = "codex", *,
                     type(exc).__name__, exc)
         return None
     finally:
-        if proc is not None and proc.returncode is None:
-            try:
-                proc.kill()
-            except ProcessLookupError:
-                pass
+        await kill_spawned_tree(proc, label="codex model probe")
 
 
 async def get_codex_models_cached(binary: str = "codex", *,

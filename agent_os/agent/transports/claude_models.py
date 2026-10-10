@@ -22,10 +22,12 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import tempfile
 import time
 
 from agent_os.agent.transports.jsonl_stream import read_jsonl_line
+from agent_os.agent.transports.process_kill import kill_spawned_tree
 from agent_os.utils.subprocess_flags import win_no_window_flags
 
 logger = logging.getLogger(__name__)
@@ -85,11 +87,40 @@ async def read_models(reader, writer, *, timeout: float = _DEFAULT_TIMEOUT
             if (not isinstance(value, str) or not value
                     or value in _SKIP_VALUES or value in seen):
                 continue
-            label = entry.get("displayName")
             seen.add(value)
-            out.append({"value": value,
-                        "label": label if isinstance(label, str) and label else value})
+            out.append({"value": value, "label": _label_for(entry, value)})
         return out
+
+
+_MAX_LABEL = 40
+# "<Family> <version>" — "Opus 5.5", "Haiku 4.5"; not "Opus (1M context)".
+_VERSIONED = re.compile(r"^\S+ \d+(\.\d+)*\b")
+
+
+def _label_for(entry: dict, value: str) -> str:
+    """The dropdown label: the CLI's ``displayName``, made to carry a version.
+
+    Recent CLIs answer with unversioned names ("Opus", "Opus (1M context)")
+    and put the version only in ``description`` ("Opus 5.5 · Best for ...").
+    Which model an alias runs depends on the installed CLI — on 2.1.235
+    "opus[1m]" is Opus 5, on 2.1.293 "opus" is Opus 5.5 — so a bare "Opus"
+    hides it. When the name carries no version, the description's head is
+    used if it names the same family, carries one and is label-sized.
+    """
+    name = entry.get("displayName")
+    name = name if isinstance(name, str) and name else None
+    if name is None:
+        return value
+    if _VERSIONED.match(name):
+        return name
+    description = entry.get("description")
+    if isinstance(description, str):
+        head = description.split(" · ", 1)[0].strip()
+        family = name.split()[0]
+        if (head.lower().startswith(family.lower() + " ")
+                and _VERSIONED.match(head) and len(head) <= _MAX_LABEL):
+            return head
+    return name
 
 
 async def fetch_claude_models(binary: str = "claude", *,
@@ -117,15 +148,7 @@ async def fetch_claude_models(binary: str = "claude", *,
                     "back to the static whitelist", type(exc).__name__, exc)
         return None
     finally:
-        if proc is not None and proc.returncode is None:
-            try:
-                proc.kill()
-            except ProcessLookupError:
-                pass
-            try:
-                await asyncio.wait_for(proc.wait(), 2.0)
-            except Exception:  # noqa: BLE001
-                pass
+        await kill_spawned_tree(proc, label="claude model probe")
 
 
 async def get_claude_models_cached(binary: str = "claude", *,
