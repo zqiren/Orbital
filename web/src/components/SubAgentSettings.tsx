@@ -11,6 +11,7 @@ import { useT } from '../i18n/useT';
 import { LabelWithHint } from './SettingsSection';
 import type { WebSocketEvent } from '../types';
 import Select from './Select';
+import { pickLoginUrl } from '../utils/loginUrl';
 
 // ---------------------------------------------------------------------------
 // Types — wire shape of /api/v2/settings/sub-agents
@@ -125,7 +126,8 @@ function paramOptionLabel(
   return value;
 }
 
-// Sub-agents that accept an API key via stdin (vs. an interactive OAuth flow).
+// Sub-agents that ALSO accept an API key via stdin. They keep the interactive
+// login too: for codex that is the ChatGPT sign-in most people use.
 const API_KEY_LOGIN_SLUGS = new Set<string>(['codex']);
 
 // The credential key that can be copied from the global LLM provider settings
@@ -423,12 +425,12 @@ function SubAgentCard({ entry, onChanged }: CardProps) {
   // Login job events. Daemon-global and slug-carrying, same shape as the
   // install trio above. The progress lines are already ANSI/OSC-stripped by the
   // daemon (the CLI prints its URL wrapped in an OSC-8 hyperlink), so the first
-  // bare URL we see is directly linkable.
+  // non-loopback URL we see is directly linkable (see pickLoginUrl).
   useEffect(() => {
     const onLoginProgress = (event: WebSocketEvent) => {
       if (event.type !== 'login.progress') return;
       if (event.slug !== entry.slug) return;
-      const url = event.line.match(/https?:\/\/\S+/)?.[0];
+      const url = pickLoginUrl(event.line);
       if (url) setLoginUrl(prev => prev ?? url);
     };
     const onLoginComplete = (event: WebSocketEvent) => {
@@ -689,7 +691,7 @@ function SubAgentCard({ entry, onChanged }: CardProps) {
 
       {/* Login / Logout */}
       <div className="flex flex-wrap items-center gap-2 mt-3 mb-3">
-        {!entry.credentials_configured && !isApiKeyFlow && supportsLogin && (
+        {!entry.credentials_configured && supportsLogin && (
           <button
             onClick={handleLogin}
             disabled={loginBusy || !entry.installed}

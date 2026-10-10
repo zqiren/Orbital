@@ -939,3 +939,57 @@ describe('SubAgentSettings — managed credentials', () => {
     expect(screen.queryByTestId('sub-agent-silent-note-dsh')).not.toBeInTheDocument();
   });
 });
+
+// Codex used to be API-key-only in the UI: `codex login` (ChatGPT sign-in, the
+// way most people use Codex) was advertised by the daemon but no button ever
+// called it. Found on Windows v0.16.0: a signed-out codex could only be fixed
+// from a terminal.
+describe('SubAgentSettings — Codex sign-in', () => {
+  async function renderSignedOutCodex() {
+    api.mockResolvedValue([
+      makeEntry({
+        slug: 'codex',
+        name: 'Codex',
+        installed: true,
+        credentials_configured: false,
+        supports_login: true,
+      }),
+    ]);
+    render(<SubAgentSettings />);
+    await waitFor(() => expect(screen.getByText('Codex')).toBeInTheDocument());
+  }
+
+  it('offers ChatGPT login alongside the API key', async () => {
+    await renderSignedOutCodex();
+    expect(screen.getByRole('button', { name: 'Login' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Set API Key' })).toBeInTheDocument();
+  });
+
+  it('links the sign-in page, not the local callback server', async () => {
+    await renderSignedOutCodex();
+    emit('login.progress', {
+      slug: 'codex', job_id: 'job-c',
+      line: 'Starting local login server on http://localhost:1455.',
+    });
+    expect(screen.queryByTestId('sub-agent-login-url-codex')).not.toBeInTheDocument();
+    emit('login.progress', {
+      slug: 'codex', job_id: 'job-c',
+      line: 'https://auth.openai.com/oauth/authorize?response_type=code&client_id=app_X.',
+    });
+    expect(screen.getByTestId('sub-agent-login-url-codex')).toHaveAttribute(
+      'href',
+      'https://auth.openai.com/oauth/authorize?response_type=code&client_id=app_X',
+    );
+  });
+
+  it('does not show Login once codex is signed in', async () => {
+    api.mockResolvedValue([
+      makeEntry({ slug: 'codex', name: 'Codex', installed: true,
+                  credentials_configured: true, supports_login: true }),
+    ]);
+    render(<SubAgentSettings />);
+    await waitFor(() => expect(screen.getByText('Codex')).toBeInTheDocument());
+    expect(screen.queryByRole('button', { name: 'Login' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Set API Key' })).not.toBeInTheDocument();
+  });
+});
