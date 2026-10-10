@@ -92,10 +92,18 @@ def test_off_windows_nothing_changes(tmp_path):
 
 @pytest.mark.asyncio
 async def test_start_hands_the_sdk_the_native_exe(tmp_path, monkeypatch):
+    import functools
+
+    from agent_os.agent.transports import sdk_transport
+
     shim = _npm_shim(tmp_path)
     exe = _npm_exe(tmp_path)
-    monkeypatch.setattr(
-        "agent_os.agent.transports.sdk_transport.sys.platform", "win32")
+    # Force the Windows branch of the helper only: faking sys.platform would
+    # also send shutil.which down its Windows path, which needs _winapi and
+    # crashes on the macOS CI runner.
+    monkeypatch.setattr(sdk_transport, "native_claude_cli", functools.partial(
+        native_claude_cli, windows=True, home=str(tmp_path / "home"),
+        which=lambda _: None))
     transport = SDKTransport()
     with patch("agent_os.agent.transports.sdk_transport.ClaudeSDKClient") as client, \
          patch("agent_os.agent.transports.sdk_transport.ClaudeAgentOptions") as options:
