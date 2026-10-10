@@ -35,6 +35,7 @@ import sys
 import time
 from unittest.mock import patch
 
+import psutil
 import pytest
 
 from agent_os.agents.setup_engine import SetupEngine
@@ -341,8 +342,10 @@ class TestLoginIdleTimeout:
                                                         tmp_path, monkeypatch):
         ws, _engine = login_env
         monkeypatch.setattr(settings_routes, "LOGIN_IDLE_TIMEOUT_SECONDS", 0.5)
+        pidfile = tmp_path / "cli.pid"
         body = (
-            'import time\n'
+            'import os, time\n'
+            f'open(r"{pidfile}", "w").write(str(os.getpid()))\n'
             'print("Paste code here if prompted >", flush=True)\n'
             'time.sleep(60)\n'
         )
@@ -358,6 +361,17 @@ class TestLoginIdleTimeout:
         assert final["type"] == "login.failed"
         assert final.get("timed_out") is True
         assert settings_routes._login_jobs["job1"]["status"] == "failed"
+        # The job spawns through the shell, so the CLI is the shell's CHILD.
+        # Killing only the shell (cmd.exe on Windows) left `claude auth login`
+        # running after every abandoned login.
+        cli_pid = int(pidfile.read_text())
+        try:
+            alive = psutil.Process(cli_pid).status() != psutil.STATUS_ZOMBIE
+        except psutil.NoSuchProcess:
+            alive = False
+        if alive:
+            psutil.Process(cli_pid).kill()
+        assert not alive, "the timed-out login left the CLI process running"
 
     def test_output_resets_the_idle_clock(self, login_env, tmp_path,
                                           monkeypatch):

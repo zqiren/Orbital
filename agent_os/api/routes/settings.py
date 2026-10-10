@@ -15,6 +15,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from agent_os import telemetry
+from agent_os.agent.transports.process_kill import kill_spawned_tree
 from agent_os.agents.installer import (
     InstallInProgress,
     InstallUnsupported,
@@ -986,11 +987,11 @@ async def _run_login_job(slug: str, job_id: str, command: str) -> None:
             })
 
     if timed_out:
-        try:
-            proc.kill()
-        except ProcessLookupError:
-            pass
-        await proc.wait()
+        # The command runs through the shell, so the CLI is the shell's
+        # child: proc.kill() alone ended only cmd.exe on Windows and left
+        # `claude auth login` running (and holding the pipe open, so this
+        # wait blocked until it exited on its own).
+        await kill_spawned_tree(proc, label=f"{slug} login")
         _login_jobs[job_id]["status"] = "failed"
         _login_jobs[job_id]["timed_out"] = True
         telemetry.emit("login_failed", {"agent": slug})
