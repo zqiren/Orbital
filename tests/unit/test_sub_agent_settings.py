@@ -398,10 +398,25 @@ class TestSubAgentSettingsRoutes:
         if "codex" in by_slug:
             assert by_slug["codex"]["supports_login"] is True
 
-    def test_login_endpoint_does_not_store_tokens(self, client, tmp_path):
+    def test_login_endpoint_does_not_store_tokens(self, client, tmp_path,
+                                                  monkeypatch):
         """POST /login starts the CLI's own subprocess; orbital never sees
         a token. Verifies that ~/.orbital/credentials.* never contains
-        sub-agent tokens after a login attempt."""
+        sub-agent tokens after a login attempt.
+
+        The job itself is stubbed: on a machine with Claude Code installed
+        the route resolves the REAL `claude auth login`, which opened a
+        browser sign-in and was left running by every suite run (five found
+        on the Windows verification box). The storage invariant does not
+        need a live CLI."""
+        from agent_os.api.routes import settings as settings_routes
+
+        started: list[str] = []
+
+        async def _no_real_login(slug, job_id, command):
+            started.append(command)
+
+        monkeypatch.setattr(settings_routes, "_run_login_job", _no_real_login)
         # Trigger a login. The fake claude binary may not be installed, so
         # this returns 400 (no setup_command) — that's fine; what matters is
         # that orbital storage is untouched either way.
