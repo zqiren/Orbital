@@ -267,3 +267,25 @@ def test_resolve_icon_path_stays_png_for_hicon_source():
     resolve_window_icon_path() (webview.start only)."""
     from agent_os.desktop.main import resolve_icon_path
     assert resolve_icon_path().lower().endswith(".png")
+
+
+def test_webview_keeps_its_storage_in_the_data_dir(tmp_path):
+    """pywebview defaults to private mode: a fresh temporary WebView2 profile
+    on every launch (seen on Windows v0.16.0: ``%TEMP%\tmp8oiiifj3`` then
+    ``%TEMP%\tmpp_m13uth``), so localStorage was empty after every restart:
+    the language choice (``orbital.locale``) and the first-journey tour state
+    were forgotten each time."""
+    from agent_os.desktop import main
+    kwargs = main.webview_storage_kwargs(str(tmp_path))
+    assert kwargs == {"private_mode": False,
+                      "storage_path": os.path.join(str(tmp_path), "webview")}
+
+
+def test_open_window_starts_webview_with_persistent_storage():
+    import inspect
+
+    from agent_os.desktop import main
+    source = inspect.getsource(main.open_window)
+    assert "webview_storage_kwargs(" in source
+    # rindex: the name also appears in an earlier comment; the call is last.
+    assert source.index("webview_storage_kwargs(") < source.rindex("webview.start(")

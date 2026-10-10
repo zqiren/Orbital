@@ -863,6 +863,18 @@ def _fail_missing_webview2() -> None:
     sys.exit(1)
 
 
+def webview_storage_kwargs(data_dir: str) -> dict:
+    """``webview.start`` options that keep the window's web storage.
+
+    pywebview defaults to private mode, whose WebView2 profile is a fresh
+    temporary folder each launch, so localStorage did not survive a restart:
+    the language choice (``orbital.locale``) and the first-journey tour state
+    were forgotten every time. Persisted under the app's data dir instead.
+    """
+    return {"private_mode": False,
+            "storage_path": os.path.join(data_dir, "webview")}
+
+
 def open_window(port: int):
     global _window
     import webview
@@ -1116,7 +1128,8 @@ def open_window(port: int):
     # which is harmless here: a minimized window is never fullscreen.
     window.events.maximized += lambda: _set_chrome_mode("fullscreen")
     window.events.restored += lambda: _set_chrome_mode("mac-inline")
-    start_kwargs = {}
+    from agent_os.desktop.migration import DATA_DIR
+    start_kwargs = webview_storage_kwargs(DATA_DIR)
     localization = _os_localization()
     if localization:
         start_kwargs["localization"] = localization
