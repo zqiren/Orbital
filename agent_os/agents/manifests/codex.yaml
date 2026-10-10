@@ -65,19 +65,19 @@ setup:
     # credential's setup_command (`codex login`), which opens the browser flow.
     #
     # `codex login status` emits PLAIN TEXT ("Logged in using ChatGPT") and
-    # exits 0 when authenticated / non-zero when not — there is no --json flag
-    # (verified on codex-cli 0.125.0). SetupEngine._check_cli_auth always
-    # JSON-parses check_command stdout, so we wrap the status check in a shell
-    # expression that converts its exit code into parseable JSON. The leading
-    # `codex` token is what SetupEngine._substitute_binary swaps for the
-    # resolved absolute binary path; the rest of the line is untouched.
+    # exits 0 when authenticated / non-zero when not; there is no --json flag
+    # (verified on codex-cli 0.125.0). With no check_field, SetupEngine decides
+    # by the exit code alone. It used to be wrapped as `... >/dev/null 2>&1 &&
+    # echo '{...}' || echo '{...}'` to fake JSON, which is POSIX shell: on
+    # Windows (cmd.exe) /dev/null does not exist and echo keeps the quotes, so
+    # a signed-in Codex always read as signed out there and its usage was
+    # never fetched. The leading `codex` token is what
+    # SetupEngine._substitute_binary swaps for the resolved binary path.
     - key: "codex_auth"
       label: "Codex (ChatGPT) Account"
       type: oauth_cli
       required: true
-      check_command: "codex login status >/dev/null 2>&1 && echo '{\"loggedIn\":\"true\"}' || echo '{\"loggedIn\":\"false\"}'"
-      check_field: "loggedIn"
-      check_value: "true"
+      check_command: "codex login status"
       setup_command: "codex login"
       setup_label: "Log in to Codex"
     # Alternative path: API key handed to the CLI via stdin

@@ -465,6 +465,12 @@ class SetupEngine:
             )
             if result.returncode != 0:
                 return False
+            if not cred.check_field:
+                # Exit-code mode: a CLI whose status command prints plain
+                # text (`codex login status`) and signals via its exit code.
+                # Shell-neutral, unlike wrapping it in `&& echo '{...}'`,
+                # which cmd.exe cannot run.
+                return True
             data = _json.loads(result.stdout)
             actual = str(data.get(cred.check_field, ""))
             return actual.lower() == cred.check_value.lower()
