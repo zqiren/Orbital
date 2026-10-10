@@ -1522,6 +1522,31 @@ async def inject_message(project_id: str, req: InjectRequest):
         except Exception:
             raise HTTPException(status_code=404, detail="No active session for project")
         if result.startswith("Error"):
+            # The reason used to travel only in this 404: no log line and no
+            # chat row, so after a reload the user's message just sat there
+            # unanswered (every Claude Code send on Windows, v0.16.0).
+            logger.warning("Pinned dispatch to %s failed for %s/%s: %s",
+                           req.target, project_id, mention_session_id, result)
+            failure_row = {
+                "role": "system",
+                "source": "daemon",
+                "content": f"[Sub-agent] {req.target} could not start: {result}",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "_meta": {
+                    "event": "sub_agent_dispatch_failed",
+                    "handle": req.target,
+                    "dispatch_id": dispatch_id,
+                    "suppress_wake": True,
+                },
+            }
+            try:
+                await _retry_session_lock(
+                    lambda: _agent_manager.persist_mention_message(
+                        project_id, mention_session_id, failure_row,
+                    ))
+            except Exception:
+                logger.warning("could not record the dispatch failure in %s/%s",
+                               project_id, mention_session_id, exc_info=True)
             raise HTTPException(status_code=404, detail=f"Failed to dispatch to {req.target}: {result}")
 
         # Broadcast acknowledgement so ChatView knows the message was sent

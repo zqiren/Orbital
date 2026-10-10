@@ -483,3 +483,46 @@ class TestPinnedInjectLockContention:
         assert stub.sends == []
         rows = _session_rows(ws, sid)
         assert all(r.get("content") != "never lands" for r in rows)
+
+
+class _FailingSubAgentManager(_StubSubAgentManager):
+    async def send(self, project_id, handle, message, **kwargs):
+        await super().send(project_id, handle, message, **kwargs)
+        return ("Error: adapter start failed: Refusing to execute batch "
+                "script 'claude.CMD'")
+
+
+class TestPinnedInjectFailure:
+    """A pinned send whose dispatch fails used to leave only the user's row:
+    the reason went back as an HTTP 404 and nowhere else — not the daemon
+    log, not the chat (found on the installed v0.16.0, where every Claude
+    Code send failed this way and looked like silence after a reload)."""
+
+    def test_failure_is_logged_and_recorded_in_the_chat(
+            self, client, tmp_path, caplog):
+        import logging
+
+        routes_mod = _routes_mod()
+        routes_mod._sub_agent_manager = _FailingSubAgentManager()
+        routes_mod._pinned_consolidation = MagicMock()
+        pid, ws = _make_project(client, tmp_path, "dispatchfail")
+        sid = _make_session(ws)
+
+        with caplog.at_level(logging.WARNING, logger="agent_os.api.routes.agents_v2"):
+            resp = client.post(f"/api/v2/agents/{pid}/inject", json={
+                "content": "hi", "target": "claude-code", "session_id": sid,
+            })
+        assert resp.status_code == 404
+        assert "Refusing to execute batch script" in resp.json()["detail"]
+        assert any("claude-code" in r.getMessage() and "Refusing" in r.getMessage()
+                   for r in caplog.records), "the reason reaches the daemon log"
+
+        rows = _session_rows(ws, sid)
+        assert rows[-2]["role"] == "user" and rows[-2]["content"] == "hi"
+        failure = rows[-1]
+        assert failure["role"] == "system"
+        assert failure["source"] == "daemon"
+        assert "claude-code" in failure["content"]
+        assert "Refusing to execute batch script" in failure["content"]
+        assert failure["_meta"]["handle"] == "claude-code"
+        assert failure["_meta"]["suppress_wake"] is True
