@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -526,9 +527,10 @@ class TestRunningJobsCount:
         mgr._job_registry = reg
         return mgr, reg
 
-    def _spawn(self, reg, tmp_path, session, project=PID, command="sleep 60"):
+    def _spawn(self, reg, tmp_path, session, project=PID):
         group = reg.open_group(project, session, str(tmp_path), batch_key=session)
-        return reg.spawn_job(group, command, ["/bin/sh", "-c", command])
+        return reg.spawn_job(group, "sleep 60",
+                             [sys.executable, "-c", "import time; time.sleep(60)"])
 
     def test_a_running_job_lights_its_session_and_the_project(self, tmp_path):
         mgr, reg = self._with_jobs(tmp_path)
