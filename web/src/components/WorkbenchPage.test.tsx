@@ -292,71 +292,20 @@ describe('WorkbenchPage — prefill doorway (spec 2026-07-24, round 3 final revi
     expect(setRoute).not.toHaveBeenCalled();
   });
 
-  it('the prefilled draft matches the exact spec format: section + quoted text, due suffix, two trailing newlines', async () => {
-    mockApi({
-      entries: [
-        entry({
-          text: 'Send Simon the invoice draft',
-          section: 'Blockers',
-          due: '2026-08-01',
-        }),
-      ],
-    });
+  it('opens the ask quoted in the composer, so a reply answers it (spec 146)', async () => {
+    mockApi({ entries: [entry()], newSessionId: 'sess-tap-minted' });
     const setRoute = vi.fn();
     render(<WorkbenchPage setRoute={setRoute} />);
     await waitFor(() => expect(screen.getByTestId('workbench-card-entry-proj-a-e1')).toBeInTheDocument());
 
-    fireEvent.click(screen.getByTestId('workbench-card-entry-proj-a-e1'));
-    await waitFor(() => expect(setRoute).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole('button', { name: 'Reply' }));
 
+    await waitFor(() => expect(setRoute).toHaveBeenCalledTimes(1));
     const routeArg = setRoute.mock.calls[0][0];
-    expect(routeArg.draft).toBe(
-      'Workbench · Blockers: "Send Simon the invoice draft" (due 2026-08-01)\n\n',
-    );
+    expect(routeArg.askReply).toEqual({ id: 'e1', text: 'Send Simon the invoice draft' });
+    expect(routeArg.draft).toBeUndefined();
   });
 
-  it('omits the "{section}: " part when section is null', async () => {
-    mockApi({ entries: [entry({ section: null, due: null })] });
-    const setRoute = vi.fn();
-    render(<WorkbenchPage setRoute={setRoute} />);
-    await waitFor(() => expect(screen.getByTestId('workbench-card-entry-proj-a-e1')).toBeInTheDocument());
-
-    fireEvent.click(screen.getByTestId('workbench-card-entry-proj-a-e1'));
-    await waitFor(() => expect(setRoute).toHaveBeenCalledTimes(1));
-
-    const routeArg = setRoute.mock.calls[0][0];
-    expect(routeArg.draft).toBe('Workbench · "Send Simon the invoice draft"\n\n');
-  });
-
-  it('omits the due suffix when absent', async () => {
-    mockApi({ entries: [entry({ section: 'Blockers', due: null })] });
-    const setRoute = vi.fn();
-    render(<WorkbenchPage setRoute={setRoute} />);
-    await waitFor(() => expect(screen.getByTestId('workbench-card-entry-proj-a-e1')).toBeInTheDocument());
-
-    fireEvent.click(screen.getByTestId('workbench-card-entry-proj-a-e1'));
-    await waitFor(() => expect(setRoute).toHaveBeenCalledTimes(1));
-
-    const routeArg = setRoute.mock.calls[0][0];
-    expect(routeArg.draft).toBe('Workbench · Blockers: "Send Simon the invoice draft"\n\n');
-  });
-
-  it('the prefill never contains an Evidence line (receipt/evidence removed 2026-07-24)', async () => {
-    mockApi({ entries: [entry({ section: 'Blockers', due: '2026-08-01' })] });
-    const setRoute = vi.fn();
-    render(<WorkbenchPage setRoute={setRoute} />);
-    await waitFor(() => expect(screen.getByTestId('workbench-card-entry-proj-a-e1')).toBeInTheDocument());
-
-    fireEvent.click(screen.getByTestId('workbench-card-entry-proj-a-e1'));
-    await waitFor(() => expect(setRoute).toHaveBeenCalledTimes(1));
-
-    const routeArg = setRoute.mock.calls[0][0];
-    expect(routeArg.draft as string).not.toMatch(/Evidence/);
-    // Exactly two trailing newlines, nothing appended after the due suffix.
-    expect(routeArg.draft as string).toBe(
-      'Workbench · Blockers: "Send Simon the invoice draft" (due 2026-08-01)\n\n',
-    );
-  });
 });
 
 describe('WorkbenchPage — project filter (round 3, item 2)', () => {

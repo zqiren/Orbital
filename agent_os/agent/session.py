@@ -54,13 +54,18 @@ _QUEUE_CONTRACT_END = "Do not end with plain text.\n"
 _UPLOAD_TS_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{6}-")
 
 
+# Spec 146: the wire form of a message answering an ask (web utils/askAnswer.ts).
+_ASK_ANSWER_RE = re.compile(r'^\[Answer to ask [0-9a-f]{6}, already closed: "[\s\S]*?"\]\n')
+
+
 def _strip_machine_prefixes(text: str) -> tuple[str, str | None]:
     """Strip leading machine blocks from a first user message.
 
     Returns ``(remainder, attachment_fallback)`` where the fallback is the
     first attached file's basename (upload timestamp stripped), else the
     picked skill's name — used as the name when nothing human-typed remains.
-    Order: attach block, then the skill block, then the queue wrapper.
+    Order: attach block, then the skill block, then the queue wrapper, then
+    the ask-answer prefix.
     """
     fallback = None
     m = _ATTACHED_BLOCK_RE.match(text)
@@ -93,6 +98,7 @@ def _strip_machine_prefixes(text: str) -> tuple[str, str | None]:
             end = text.find(_QUEUE_CONTRACT_END)
             if end >= 0:
                 text = text[end + len(_QUEUE_CONTRACT_END):]
+    text = _ASK_ANSWER_RE.sub("", text, count=1)
     return text, fallback
 
 

@@ -17,16 +17,14 @@
  * `newSession()` primitive the "+ new session" sidebar button already uses
  * (POST `/new-session`, no `session_id` — fresh-create), then navigates to
  * the project's chat tab with that session id and the card's context
- * prefilled into the composer draft, for the user to edit and send
- * themselves. Two earlier iterations of this doorway tried to avoid minting
+ * quoted in the composer, so what the user sends answers it (spec 146). Two earlier iterations of this doorway tried to avoid minting
  * at tap time (a route suppression flag; a mint deferred to the user's own
  * send) to avoid littering an empty session on a casual card peek — both
  * added inference machinery to answer "which session did my action affect?"
  * and were reverted; the product decision is that a tap is a genuine "open
  * this" action, exactly like clicking "+ new session" would be, and litter
- * cost is an acceptable trade for zero inference. See `buildPrefillDraft`
- * below for the exact draft format, and ChatTab.tsx/ChatView.tsx for how
- * `route.draft` is consumed once the composer mounts.
+ * cost is an acceptable trade for zero inference. See ChatTab.tsx/ChatView.tsx
+ * for how `route.askReply` is consumed once the composer mounts.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -63,23 +61,6 @@ function todayRangeISO(): { start: string; end: string } {
   const end = new Date(start);
   end.setDate(end.getDate() + 1);
   return { start: start.toISOString(), end: end.toISOString() };
-}
-
-/**
- * Composer prefill text for the card-tap doorway (spec 2026-07-24 §5.3,
- * design-pinned format — do not reflow; Evidence line dropped in the
- * mid-task amendment that removed the receipt, since `evidence` no longer
- * exists on `WorkbenchEntry`):
- *   `Workbench · {section}: "{text}"` — `{section}: ` omitted when
- *   `section` is null — then ` (due {due})` when `due` is set, then two
- *   trailing newlines (cursor lands on the blank line after, composer
- *   focused).
- */
-function buildPrefillDraft(entry: WorkbenchEntry): string {
-  const sectionPart = entry.section ? `${entry.section}: ` : '';
-  let line = `Workbench · ${sectionPart}"${entry.text}"`;
-  if (entry.due) line += ` (due ${entry.due})`;
-  return line + '\n\n';
 }
 
 export default function WorkbenchPage({ projectId, setRoute }: WorkbenchPageProps) {
@@ -175,10 +156,9 @@ export default function WorkbenchPage({ projectId, setRoute }: WorkbenchPageProp
   // session" sidebar button uses (POST /new-session, no session_id —
   // fresh-create; ChatTab's handleNewSession is the other caller of this
   // exact function), then navigate to the project's chat tab with that
-  // session id and the card's context prefilled into the composer draft. On
+  // session id and the ask quoted in the composer, ready to reply to (spec 146). On
   // mint failure, surface it via the existing `openError` banner and do NOT
-  // navigate — mirrors `handleMigrate`'s error handling below. See
-  // buildPrefillDraft's docstring for the exact draft format.
+  // navigate — mirrors `handleMigrate`'s error handling below.
   async function handleCardTap(entry: WorkbenchEntry) {
     setOpenError(null);
     try {
@@ -191,7 +171,7 @@ export default function WorkbenchPage({ projectId, setRoute }: WorkbenchPageProp
         name: 'project',
         projectId: entry.project_id,
         sessionId: minted.session_id,
-        draft: buildPrefillDraft(entry),
+        ...(entry.id ? { askReply: { id: entry.id, text: entry.text } } : { draft: `${entry.text}\n\n` }),
       });
     } catch {
       setOpenError(t('workbench.error.open'));

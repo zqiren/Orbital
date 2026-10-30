@@ -416,7 +416,7 @@ export default function ChatTab({
   function handleDraftConsumed() {
     setRoute((prev) =>
       prev.name === 'project' && prev.projectId === projectId
-        ? { ...prev, draft: undefined, draftSkill: undefined }
+        ? { ...prev, draft: undefined, draftSkill: undefined, askReply: undefined }
         : prev,
     );
   }
@@ -520,6 +520,7 @@ export default function ChatTab({
             sessionId={routeSessionId}
             initialDraft={route.draft}
             initialSkill={route.draftSkill}
+            initialAskReply={route.askReply}
             onDraftConsumed={handleDraftConsumed}
             onRefreshProject={onRefreshProject}
             onOpenSession={selectSession}

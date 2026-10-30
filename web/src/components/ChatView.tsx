@@ -5,7 +5,7 @@
 import { memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   Send, Loader2, Plus, ChevronRight, ChevronDown, ArrowDown,
-  Clock, CornerDownLeft, FolderSearch, ListChecks, MessageSquareQuote, type LucideIcon,
+  Clock, CornerDownLeft, FolderSearch, ListChecks, MessageSquareQuote, X, type LucideIcon,
 } from 'lucide-react';
 import ExamplePrompt from './ExamplePrompt';
 import LeftOffCards from './LeftOffCards';
@@ -772,6 +772,9 @@ interface ChatViewProps {
    * on a later remount (e.g. tab switch away and back).
    */
   initialDraft?: string;
+  /** Spec 146: open with this ask quoted in the composer (a Workbench card's
+   *  Reply). Consumed once, through `onDraftConsumed`. */
+  initialAskReply?: { id: string; text: string };
   /**
    * Spec 137: a built-in skill to have picked along with `initialDraft`
    * (Tasks → "New automation" opens chat with `/automate` chipped). Same
@@ -831,7 +834,7 @@ interface PendingApproval {
   reason?: string;
 }
 
-export default function ChatView({ projectId, project, agentStatus, statusTick, agents, sessionId, initialDraft, initialSkill, onDraftConsumed, onRefreshProject, onOpenSession }: ChatViewProps) {
+export default function ChatView({ projectId, project, agentStatus, statusTick, agents, sessionId, initialAskReply, initialDraft, initialSkill, onDraftConsumed, onRefreshProject, onOpenSession }: ChatViewProps) {
   const t = useT();
   const { locale } = useLocale();
   // Chrome-only translator for the annotation chip's fallback label (the
@@ -3263,9 +3266,19 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   const { asks: sessionAsks, close: closeAsk } = useSessionAsks(projectId, sessionId, agentStatus);
   const [askIndex, setAskIndex] = useState(0);
   const [asksLaterSession, setAsksLaterSession] = useState<string | undefined>(undefined);
+  // The ask being replied to, quoted in the composer. Only pressing Reply (here
+  // or on a Workbench card) makes a message an answer; plain typing never does.
+  const [askReply, setAskReply] = useState<{ id: string; text: string; sessionId?: string } | null>(null);
+  const replyingTo = askReply && askReply.sessionId === sessionId ? askReply : null;
   const trayIndex = Math.min(askIndex, Math.max(0, sessionAsks.length - 1));
-  const trayVisible = sessionAsks.length > 0 && asksLaterSession !== sessionId;
-  const trayAsk = trayVisible ? sessionAsks[trayIndex] : undefined;
+  const trayVisible = sessionAsks.length > 0 && asksLaterSession !== sessionId && !replyingTo;
+  useEffect(() => {
+    if (!initialAskReply) return;
+    setAskReply({ ...initialAskReply, sessionId });
+    onDraftConsumed?.();
+    textareaRef.current?.focus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialAskReply]);
 
   const canSend =
     !anyUploading &&
@@ -3331,9 +3344,10 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         : resolvedPin;
     const target = resolved.target;
     let content = resolved.content;
-    // Spec 146: typed under the tray, this answers the ask showing there.
-    const answering = trayAsk && text ? { id: trayAsk.id, words: text } : undefined;
-    if (answering && trayAsk) content = formatAskAnswer(trayAsk.id, trayAsk.text, content);
+    // Spec 146: a reply answers the quoted ask and closes it.
+    const answering = replyingTo && text ? { id: replyingTo.id, words: text } : undefined;
+    if (answering && replyingTo) content = formatAskAnswer(replyingTo.id, replyingTo.text, content);
+    if (answering) setAskReply(null);
 
     // Generate nonce so we can deduplicate the WS echo of our own message
     // crypto.randomUUID() requires secure context (HTTPS/localhost) — use fallback for LAN HTTP
@@ -4593,7 +4607,29 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
               onDone={(id) => void closeAsk(id, 'fulfilled')}
               onNotNeeded={(id) => void closeAsk(id, 'irrelevant')}
               onLater={() => setAsksLaterSession(sessionId)}
+              onReply={(ask) => {
+                setAskReply({ id: ask.id, text: ask.text, sessionId });
+                textareaRef.current?.focus();
+              }}
             />
+          )}
+          {replyingTo && (
+            <div
+              className="flex items-start gap-2 mb-2 px-2.5 py-1.5 rounded-md bg-sidebar text-xs text-secondary"
+              data-testid="ask-reply-quote"
+            >
+              <span className="flex-1 min-w-0 line-clamp-2 break-words">
+                {t('chat.ask.replying', { text: replyingTo.text })}
+              </span>
+              <button
+                type="button"
+                aria-label={t('chat.ask.cancelReply')}
+                onClick={() => setAskReply(null)}
+                className="shrink-0 text-muted hover:text-primary"
+              >
+                <X size={14} />
+              </button>
+            </div>
           )}
           <div className="flex items-center gap-2">
             {/* Spec 074 — the logo-only pin mark fused to the row's left edge
@@ -4660,7 +4696,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
               onPaste={handlePaste}
               // No placeholder under a capsule: the capsule already says what
               // the message is about, and the hint would sit behind it.
-              placeholder={trayVisible ? t('chat.ask.placeholder') : hasCapsule
+              placeholder={replyingTo ? t('chat.ask.placeholder') : hasCapsule
                 ? ''
                 : pinnedTarget
                   ? t('chat.composer.placeholderPinned', { agent: pinnedTarget })

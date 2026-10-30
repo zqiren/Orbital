@@ -67,6 +67,8 @@ export type Route =
        * picked). Same one-shot lifetime as `draft`, cleared with it.
        */
       draftSkill?: BuiltinSkillKey;
+      /** One-shot: open with this ask quoted in the composer (spec 146). */
+      askReply?: { id: string; text: string };
     };
 
 /** Spec 137: the project's sub-pages. Chat (undefined) is the home. */

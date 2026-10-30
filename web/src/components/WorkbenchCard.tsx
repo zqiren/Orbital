@@ -209,6 +209,16 @@ export default function WorkbenchCard({
       <div className="mt-0.5 flex items-center gap-2">
         <button
           type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onOpen();
+          }}
+          className={QUIET_BTN}
+        >
+          {t('chat.ask.reply')}
+        </button>
+        <button
+          type="button"
           data-testid="workbench-card-exit-fulfilled"
           onClick={(e) => {
             e.stopPropagation();

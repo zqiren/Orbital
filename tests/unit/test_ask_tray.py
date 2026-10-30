@@ -152,3 +152,10 @@ def test_answering_an_unknown_or_closed_ask_never_blocks_the_message(tmp_path, p
     workbench.close_answered_ask(project, ask_id, "second")
     a = [x for x in asks.read_asks(_orbital(tmp_path)) if x.id == ask_id][0]
     assert "first" in a.note
+
+
+def test_a_session_started_by_answering_an_ask_is_named_by_the_answer():
+    from agent_os.agent.session import _derive_name
+
+    wire = '[Answer to ask bdb0a2, already closed: "Send the letter"]\nIt is in the folder now'
+    assert _derive_name(wire) == "It is in the folder now"

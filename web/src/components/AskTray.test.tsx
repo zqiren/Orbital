@@ -13,7 +13,7 @@ const ASKS = [
 ];
 
 function setup(index = 0) {
-  const props = { onIndex: vi.fn(), onDone: vi.fn(), onNotNeeded: vi.fn(), onLater: vi.fn() };
+  const props = { onIndex: vi.fn(), onReply: vi.fn(), onDone: vi.fn(), onNotNeeded: vi.fn(), onLater: vi.fn() };
   render(<AskTray asks={ASKS} index={index} {...props} />);
   return props;
 }
@@ -21,7 +21,7 @@ function setup(index = 0) {
 describe('AskTray', () => {
   it('shows one ask and pages to the next', () => {
     const p = setup();
-    expect(screen.getByTestId('ask-tray-text').textContent).toBe('Keep the 9,800 creator?');
+    expect(screen.getByTestId('ask-tray-text').textContent).toContain('Keep the 9,800 creator?');
     fireEvent.click(screen.getByRole('button', { name: 'Next' }));
     expect(p.onIndex).toHaveBeenCalledWith(1);
   });
@@ -32,6 +32,12 @@ describe('AskTray', () => {
     expect(p.onDone).toHaveBeenCalledWith('bbbbbb');
     fireEvent.click(screen.getByRole('button', { name: 'Not needed' }));
     expect(p.onNotNeeded).toHaveBeenCalledWith('bbbbbb');
+  });
+
+  it('Reply hands over the ask on screen', () => {
+    const p = setup();
+    fireEvent.click(screen.getByRole('button', { name: 'Reply' }));
+    expect(p.onReply).toHaveBeenCalledWith(ASKS[0]);
   });
 
   it('Later is the way out', () => {

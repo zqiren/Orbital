@@ -110,6 +110,9 @@ vi.mock('../config', () => ({
     if (path.includes('/pending-approval')) {
       return pendingApprovalResponder(path);
     }
+    if (path.includes('/session-asks')) {
+      return sessionAsksResponse;
+    }
     // /chat?limit=N (the idle catch-up / REST fallback).
     if (!opts?.method && /\/chat\?limit=\d+/.test(path)) {
       return chatLatestResponse;
@@ -184,6 +187,7 @@ const injectCalls: unknown[][] = [];
 // on a session switch.
 const startAgentCalls: string[] = [];
 // Pending-input queue (spec 006): GET /pending recovery + cancelPendingInput.
+let sessionAsksResponse: { asks: unknown[] } = { asks: [] };
 let getPendingMock: (projectId: string) => Promise<unknown> = async () => ({
   holder: null,
   pending: [],
@@ -344,6 +348,7 @@ beforeEach(() => {
   injectMessageMock = async () => undefined;
   cancelMessageMock = async () => undefined;
   getPendingMock = async () => ({ holder: null, pending: [] });
+  sessionAsksResponse = { asks: [] };
   cancelPendingInputMock = async () => ({ status: 'cancelled', removed: true });
   coldStartScanMock = async () => ({ status: 'ok' });
   startOnboardingCalls.length = 0;
@@ -2094,6 +2099,58 @@ describe('ChatView: pending-input queue (spec 006)', () => {
     const body = container.querySelector('[data-testid="pending-input-notice-body"]');
     expect(body?.textContent ?? '').toContain('Waiting for the current response to finish.');
     expect(container.querySelector('[data-testid="pending-input-notice-run-now"]')).toBeNull();
+  });
+});
+
+describe('spec 146: the composer stays free until Reply', () => {
+  const ASK = { id: 'abc123', text: 'Keep the 9,800 creator?', due: null };
+
+  let sent: unknown[] = [];
+  function sendCall() {
+    return { content: sent[1] as string, answering: sent[8] as { id: string; words: string } | undefined };
+  }
+
+  async function withAsk(sessionAsks = [ASK]) {
+    sessionAsksResponse = { asks: sessionAsks };
+    sent = [];
+    injectMessageMock = async (...args: unknown[]) => { sent = args; return undefined; };
+    await renderChat({ agentStatus: 'idle', sessionId: 's1' });
+    await flushEffects();
+  }
+
+  async function type(text: string) {
+    const box = container.querySelector('textarea') as HTMLTextAreaElement;
+    await act(async () => {
+      const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!;
+      set.call(box, text);
+      box.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => {
+      box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+    });
+    await flushEffects();
+  }
+
+  it('plain typing is a normal message and closes nothing', async () => {
+    await withAsk();
+    expect(container.querySelector('[data-testid="ask-tray"]')).toBeTruthy();
+    await type('something else entirely');
+    const body = sendCall();
+    expect(body.content).toBe('something else entirely');
+    expect(body.answering).toBeUndefined();
+  });
+
+  it('Reply quotes the ask, and what is sent answers it', async () => {
+    await withAsk();
+    const reply = [...container.querySelectorAll('button')].find((b) => b.textContent === 'Reply')!;
+    await act(async () => { reply.click(); });
+    expect(container.querySelector('[data-testid="ask-reply-quote"]')?.textContent).toContain('Keep the 9,800 creator?');
+    expect(container.querySelector('[data-testid="ask-tray"]')).toBeNull();
+    await type('Keep them');
+    const body = sendCall();
+    expect(body.answering).toEqual({ id: 'abc123', words: 'Keep them' });
+    expect(body.content).toContain('Keep them');
+    expect(body.content).toContain('already closed');
   });
 });
 
