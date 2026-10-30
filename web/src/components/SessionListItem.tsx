@@ -11,7 +11,7 @@
  *     (queue / schedule trigger / file-watch trigger), classified from the
  *     auto-derived name + origin field by lib/sessionLabel.ts. Attachment-
  *     first sessions get no chip — their label becomes the file basename.
- *   - Display name (cleaned label → per-kind fallback → session_id).
+ *   - Display name (cleaned label → per-kind fallback → "New session").
  *   - last_activity_at as a short relative time (or "—" if null).
  *   - SessionStatusGlyph error indicator (amber ⚠ when last_terminal_event.type === 'error').
  *   - Unread badge (spec 108): a 6 px accent dot before the time + a bolder
@@ -116,14 +116,15 @@ function SessionListItemBase({
   const chipKey = KIND_CHIP_KEY[labelInfo.kind];
   const chipText = chipKey ? t(chipKey) : null;
   // Fallback chain: cleaned label → "Attachment" for basename-less attachment
-  // sessions → '' for chip-carried machine sessions → session_id for plain.
+  // sessions → '' for chip-carried machine sessions → "New session" for plain
+  // (a raw id means nothing to the user).
   const label =
     labelInfo.displayName ??
     (labelInfo.kind === 'attachment'
       ? t('sessionItem.kind.attachment')
       : chipText
         ? ''
-        : session.session_id);
+        : t('sessionHeading.new'));
   // Session import: a native Claude Code / Codex conversation. The agent comes
   // from the import block, else the pin the daemon gives every imported row.
   const isImported = session.origin === 'imported' || session.imported !== undefined;

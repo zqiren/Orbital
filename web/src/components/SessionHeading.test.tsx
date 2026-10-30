@@ -55,6 +55,11 @@ describe('SessionHeading', () => {
     expect(screen.queryByTestId('session-heading-eyebrow')).toBeNull();
   });
 
+  it('a chat with no name yet never shows its raw id', () => {
+    render(<SessionHeading session={entry({ name: '', origin: 'chat' })} />);
+    expect(screen.getByTestId('session-heading-title').textContent).toBe('New session');
+  });
+
   it('no session yet: "New session"', () => {
     render(<SessionHeading session={undefined} />);
     expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('New session');

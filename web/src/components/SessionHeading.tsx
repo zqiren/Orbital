@@ -67,7 +67,7 @@ export default function SessionHeading({ session }: SessionHeadingProps) {
       eyebrow = [importedText, kindText].filter(Boolean).join(' · ') || null;
     } else {
       // A machine session with no name of its own: the kind is the title.
-      title = kindText ?? session.session_id;
+      title = kindText ?? t('sessionHeading.new');
       eyebrow = importedText;
     }
   }

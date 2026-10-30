@@ -174,7 +174,7 @@ describe('SessionListItem — name and time', () => {
     expect(screen.getByTestId('session-name')).toHaveTextContent('Implement login flow');
   });
 
-  it('falls back to session_id when name is null', () => {
+  it('never shows the raw id when name is null', () => {
     render(
       <SessionListItem
         session={makeSession({ session_id: 'my-cool-session', name: null })}
@@ -182,14 +182,14 @@ describe('SessionListItem — name and time', () => {
         onSelect={vi.fn()}
       />,
     );
-    expect(screen.getByTestId('session-name')).toHaveTextContent('my-cool-session');
+    expect(screen.getByTestId('session-name')).toHaveTextContent('New session');
   });
 
-  it('falls back to session_id when name is undefined', () => {
+  it('never shows the raw id when name is undefined', () => {
     const session = makeSession({ session_id: 'sess-no-name' });
     delete session.name;
     render(<SessionListItem session={session} selected={false} onSelect={vi.fn()} />);
-    expect(screen.getByTestId('session-name')).toHaveTextContent('sess-no-name');
+    expect(screen.getByTestId('session-name')).toHaveTextContent('New session');
   });
 
   it('renders "—" when last_activity_at is null', () => {
