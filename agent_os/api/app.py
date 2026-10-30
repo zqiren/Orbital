@@ -680,7 +680,7 @@ def _assemble_app(app: FastAPI, data_dir: str | None) -> FastAPI:
     # exits. Shares the agent manager's dispatch seam for /migrate and
     # refreshes the calendar hub after every write.
     from agent_os.api.routes import workbench as workbench_routes
-    workbench_routes.configure(project_store, agent_manager, calendar_hub)
+    workbench_routes.configure(project_store, agent_manager, calendar_hub, ws_manager=ws_manager)
     app.include_router(workbench_routes.router)
 
     # 7c5. Onboarding import-discovery routes (backlog #34): read-only scan of

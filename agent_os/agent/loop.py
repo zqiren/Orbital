@@ -142,7 +142,9 @@ _EMPTY_RESPONSE_NUDGE_LIMIT = 2
 # user is already persisted and broadcast by then; every row the record turn
 # produces carries ``_kind: MEMORY_RECORD_KIND`` so it never replaces it.
 # ---------------------------------------------------------------------------
-from agent_os.agent.context import MEMORY_RECORD_KIND  # noqa: E402 — re-exported
+from agent_os.agent import asks as asks_mod  # noqa: E402
+from agent_os.agent.context import MEMORY_RECORD_KIND, ask_card_row  # noqa: E402 — re-exported
+from agent_os.agent.project_paths import ProjectPaths  # noqa: E402
 MEMORY_RECORD_MAX_LLM_CALLS = 3
 MEMORY_RECORD_MAX_TOOL_CALLS = 6
 # The four Layer-1 files, by on-disk name (agent_os.agent.context._LAYER1_FILES
@@ -475,6 +477,7 @@ class AgentLoop:
         self._run_memory_written: bool = False
         self._memory_record_done: bool = False
         self._memory_record_active: bool = False
+        self._open_asks_seen: dict | None = None
 
         # Spec 124 §3.7 — the Memory session's loop. ``tool_guard(tc)`` is a
         # deterministic check run before any interceptor: an error string is
@@ -1146,6 +1149,7 @@ class AgentLoop:
             # run_terminal disposition compares against this to detect a turn
             # that appended nothing.
             rows_at_run_start = len(self._session._messages)
+            self._open_asks_seen = self._read_open_asks()
 
             while True:
                 # Drain queued user messages before preparing context
@@ -1943,6 +1947,7 @@ class AgentLoop:
                         error_tracker.pop(tc["name"], None)
 
                 _tool_batch.reset(_batch_token)
+                self._note_ask_changes()
 
                 # Drain deferred messages (lifecycle notifications)
                 for msg in self._session.pop_deferred_messages():
@@ -2337,6 +2342,38 @@ class AgentLoop:
             return False
         return bool(getattr(base, "workspace", None))
 
+    def _read_open_asks(self) -> dict | None:
+        """Open asks by id, or None without a workspace or on a read failure."""
+        workspace = self._workspace()
+        if not workspace:
+            return None
+        try:
+            found = asks_mod.read_asks(ProjectPaths(workspace).orbital_dir)
+        except OSError:
+            return None
+        return {a.id: a for a in found if a.is_open}
+
+    def _note_ask_changes(self) -> None:
+        """Spec 146: compare the folded file, not the tool, so edit, write and a
+        shell append all count, and a rejected open never shows. Each new ask
+        gets one row the model never sees. Never raises into the run."""
+        before = self._open_asks_seen
+        if before is None:
+            return
+        try:
+            now = self._read_open_asks()
+            if now is None or now.keys() == before.keys():
+                return
+            self._open_asks_seen = now
+            for ask_id, ask in now.items():
+                if ask_id not in before:
+                    self._session.append(ask_card_row(ask))
+            notify = getattr(self._session, "on_asks_changed", None)
+            if callable(notify):
+                notify()
+        except Exception:  # noqa: BLE001 — display only; the run carries on
+            logger.warning("ask change check failed", exc_info=True)
+
     def yield_memory_record(self) -> bool:
         """Cancel the record turn's in-flight call so a user message just held
         doesn't wait for it (spec 142). True if a call was cancelled; a no-op
@@ -2524,6 +2561,7 @@ class AgentLoop:
         finally:
             self._session.row_kind = None
             self._memory_record_active = False
+            self._note_ask_changes()
             try:
                 self._context_manager.include_memory_record_rows = False
             except AttributeError:

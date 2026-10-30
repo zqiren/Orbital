@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Orbital Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import { parseAskAnswer } from '../utils/askAnswer';
 import { useState, type CSSProperties } from 'react';
 import type { DisplayItem } from '../utils/chatTransform';
 import { parseAttachmentsBlock } from '../lib/attachment-parsing';
@@ -100,7 +101,9 @@ export default function ChatMessage({ message, agentName, workspace, onOpenPath 
     const { strippedContent: afterAttachments, attachments } = parseAttachmentsBlock(message.content);
     // Spec 132: a `/`-picked skill's block follows the attachments block.
     const { strippedContent, skill } = parseSkillBlock(afterAttachments);
-    const { text: bodyText, quotes, count: annotationCount } = splitQuotesBlock(strippedContent);
+    // Spec 146: a message answering an ask shows the question above the words.
+    const { question: askQuestion, rest: afterAsk } = parseAskAnswer(strippedContent);
+    const { text: bodyText, quotes, count: annotationCount } = splitQuotesBlock(afterAsk);
     const hasChips = attachments.length > 0 || skill !== null;
     const hasText = bodyText.length > 0;
     const senderLabel = message.target
@@ -131,6 +134,11 @@ export default function ChatMessage({ message, agentName, workspace, onOpenPath 
             className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity"
           />
         </div>
+        {askQuestion && (
+          <p className="m-0 mb-1 max-w-[84%] text-xs text-muted line-clamp-2" data-testid="user-message-ask">
+            {askQuestion}
+          </p>
+        )}
         {/* The tint block is capped rather than allowed to run the pane's full
             width: the chat pane reaches ~1200px on a maximised window, and an
             uncapped right-aligned "ok" would sit that far from the agent reply

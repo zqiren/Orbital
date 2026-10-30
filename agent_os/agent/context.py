@@ -145,6 +145,20 @@ def compaction_threshold_tokens(
 # pinned worker's reminder and its lifecycle rows). Defined here, where the
 # window is cut, and re-exported by agent_os.agent.loop.
 MEMORY_RECORD_KIND = "memory_record"
+# Spec 146: the row recording that an ask opened in this conversation. It only
+# feeds the chat line and the composer tray; the model never sees it.
+ASK_CARD_KIND = "ask_card"
+
+
+def ask_card_row(ask) -> dict:
+    return {
+        "role": "system",
+        "content": ask.text,
+        "source": "daemon",
+        "_kind": ASK_CARD_KIND,
+        "_meta": {"event": "ask_opened", "ask_id": ask.id, "due": ask.due},
+    }
+
 
 # Spec 124 §3.7 follow-up (2026-10-21): the one row a tidy pass leaves in the
 # session that triggered it ("Memory tidied: …"). Bookkeeping like the record
@@ -641,8 +655,8 @@ class ContextManager:
         sliding_window = self._session.get_recent(
             remaining,
             exclude_kind=(
-                {MEMORY_TIDY_KIND} if self.include_memory_record_rows
-                else {MEMORY_RECORD_KIND, MEMORY_TIDY_KIND}
+                {MEMORY_TIDY_KIND, ASK_CARD_KIND} if self.include_memory_record_rows
+                else {MEMORY_RECORD_KIND, MEMORY_TIDY_KIND, ASK_CARD_KIND}
             ),
         )
 

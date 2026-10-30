@@ -20,7 +20,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from agent_os.agent.context import MEMORY_TIDY_KIND, ContextManager
+from agent_os.agent import asks as asks_mod
+from agent_os.agent.context import ASK_CARD_KIND, MEMORY_TIDY_KIND, ContextManager, ask_card_row
 from agent_os.agent.loop import (
     AgentLoop,
     MEMORY_RECORD_KIND,
@@ -273,6 +274,7 @@ class AgentManager:
         # callers route through ``DEFAULT_SESSION_ID`` automatically via
         # ``_resolve_session_id`` + ``make_session_key``.
         self._handles: dict[SessionKey, ProjectHandle] = {}
+        self._worker_asks_seen: dict[tuple[str, str], set[str]] = {}
         # ``_idle_poll_tasks`` is keyed by ``SessionKey`` so each session in
         # a project has its own poll task. Under the single-slot invariant
         # only one entry per project is ever alive at a time, but keying by
@@ -1069,6 +1071,9 @@ class AgentManager:
         session.on_append = self._on_message(project_id, session_id)
         session.on_stream = self._on_stream(project_id, session_id)
         session.on_queue_drained = self._on_queue_drained(project_id, session_id)
+        session.on_asks_changed = lambda: self._broadcast(project_id, {
+            "type": "workbench.changed", "project_id": project_id,
+        }, session_id=session_id)
 
     def _touch_card(self, config: AgentConfig) -> None:
         """Stamp ``last_used_at`` on the card this run resolved to (§3.5).
@@ -2777,6 +2782,39 @@ class AgentManager:
                 return False
         return True
 
+    def note_worker_asks_baseline(self, project_id: str, session_id: str,
+                                  workspace: str) -> None:
+        """Before a pinned send: what is open now, so the worker's turn end can
+        tell which asks it opened (spec 146)."""
+        try:
+            self._worker_asks_seen[(project_id, session_id)] = {
+                a.id for a in asks_mod.read_asks(ProjectPaths(workspace).orbital_dir)
+                if a.is_open}
+        except OSError:
+            self._worker_asks_seen.pop((project_id, session_id), None)
+
+    def _note_worker_ask_changes(self, project_id: str, session_id: str | None,
+                                 session, row: dict) -> None:
+        meta = row.get("_meta") or {}
+        before = self._worker_asks_seen.get((project_id, session_id or ""))
+        if before is None or not isinstance(meta, dict) or meta.get("event") != "sub_agent_terminal":
+            return
+        project = self._project_store.get_project(project_id) if self._project_store else None
+        workspace = (project or {}).get("workspace")
+        if not workspace:
+            return
+        now = {a.id: a for a in asks_mod.read_asks(ProjectPaths(workspace).orbital_dir)
+               if a.is_open}
+        if now.keys() == before:
+            return
+        self._worker_asks_seen[(project_id, session_id or "")] = set(now)
+        for ask_id, ask in now.items():
+            if ask_id not in before:
+                session.append(ask_card_row(ask))
+        notify = getattr(session, "on_asks_changed", None)
+        if callable(notify):
+            notify()
+
     def _maybe_schedule_worker_memory_record(self, project_id: str,
                                              session_id: str | None,
                                              session, row: dict) -> None:
@@ -2799,6 +2837,7 @@ class AgentManager:
         turn since the last record row.
         """
         try:
+            self._note_worker_ask_changes(project_id, session_id, session, row)
             meta = row.get("_meta") or {}
             if (not isinstance(meta, dict)
                     or meta.get("event") != "sub_agent_terminal"
@@ -6692,7 +6731,7 @@ class AgentManager:
             # file as a collapsed activity line; nothing streams or
             # broadcasts while it runs, so the reply the user already has
             # stays the reply.
-            if msg.get("_kind") in ("memory_record", MEMORY_TIDY_KIND):
+            if msg.get("_kind") in ("memory_record", MEMORY_TIDY_KIND, ASK_CARD_KIND):
                 return
             self._activity_translator.on_message(msg, project_id, session_id=session_id)
         return callback

@@ -1206,8 +1206,15 @@ export interface BudgetSpendUpdatedEvent {
   currency: string;
 }
 
+/** Spec 146: open asks changed in a project. */
+export interface WorkbenchChangedEvent {
+  type: 'workbench.changed';
+  project_id: string;
+}
+
 export type WebSocketEvent =
   | AgentStatusEvent
+  | WorkbenchChangedEvent
   | BudgetSpendUpdatedEvent
   | StreamDeltaEvent
   | ActivityEvent

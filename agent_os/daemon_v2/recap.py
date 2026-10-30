@@ -112,7 +112,7 @@ def _visible_line(row: dict, handle: str, *, fresh: bool) -> str | None:
     # model's edits and its "nothing to record", a pinned worker's reminder
     # and its reply) is bookkeeping, not conversation. The reply before it
     # is what the chat said.
-    if row.get("_kind") in ("memory_record", "memory_tidy"):
+    if row.get("_kind") in ("memory_record", "memory_tidy", "ask_card"):
         return None
     role = row.get("role")
     content = row.get("content")
@@ -184,7 +184,7 @@ def _dispatch_marker_paths(messages: list[dict]) -> dict[str, list[str]]:
     are bookkeeping (spec 112 A6) and never a source."""
     paths: dict[str, list[str]] = {}
     for row in messages:
-        if row.get("_kind") in ("memory_record", "memory_tidy"):
+        if row.get("_kind") in ("memory_record", "memory_tidy", "ask_card"):
             continue
         meta = row.get("_meta")
         if (

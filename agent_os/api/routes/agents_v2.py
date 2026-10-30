@@ -293,6 +293,10 @@ class InjectRequest(BaseModel):
     # so a cached older SPA — which sends it, or omits it on an old @mention —
     # never gets a 422.
     pinned: bool = False
+    # Spec 146: this message answers the ask showing in the composer. The
+    # client builds the row's wording; the daemon closes the ask.
+    ask_id: str | None = None
+    ask_answer: str | None = None  # the user's own words, without the wire prefix
     attachments: list[InjectAttachment] | None = None
     # Spec 132: one skill per message, sent as a ``<use_skill>`` block after
     # the attachments block. An old SPA never sends it; an old daemon ignores
@@ -1853,6 +1857,10 @@ async def inject_message(project_id: str, req: InjectRequest):
     # hands the raw text to send().
     inject_session_id = req.session_id
 
+    if req.ask_id:
+        from agent_os.api.routes.workbench import close_answered_ask
+        close_answered_ask(project, req.ask_id, req.ask_answer or req.content)
+
     # Single-slot enforcement now lives at the MANAGER level: start_agent()
     # raises ValueError("Slot held by session …") when a different session
     # holds the project's active-loop slot, so every caller is covered (HTTP,
@@ -1947,6 +1955,8 @@ async def inject_message(project_id: str, req: InjectRequest):
         # send() — see below) carries this same id in its meta.
         from uuid import uuid4
         dispatch_id = f"{mention_session_id}:{uuid4().hex[:8]}"
+        _agent_manager.note_worker_asks_baseline(
+            project_id, mention_session_id, project.get("workspace", ""))
 
         # send() spawns-on-demand (TASK-collapse-dispatch-to-send): the
         # manual try-send -> on-error-start -> re-send dance that used to

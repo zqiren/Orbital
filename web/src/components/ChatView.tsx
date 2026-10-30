@@ -57,6 +57,9 @@ import {
   type SkillCatalogEntry,
 } from '../lib/skill-catalog';
 import ComposerDisabledPrompt from './ComposerDisabledPrompt';
+import AskTray from './AskTray';
+import { useSessionAsks } from '../hooks/useSessionAsks';
+import { formatAskAnswer } from '../utils/askAnswer';
 import PinTargetSelect, { resolveSendTarget } from './PinTargetSelect';
 import { useSessions } from '../hooks/useSessions';
 import { StopGlyph } from './StopGlyph';
@@ -3076,6 +3079,9 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     if (item.type === 'fanout_summary') {
       return `fanout_summary:${item.fanout_id}`;
     }
+    if (item.type === 'ask_line') {
+      return `ask_line:${item.timestamp}:${item.text.slice(0, 32)}`;
+    }
     if (item.type === 'daemon_row') {
       return `daemon_row:${item.event}:${item.timestamp}:${item.handle}`;
     }
@@ -3253,6 +3259,14 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   // A staged annotation is sendable on its own: the quote block + the note
   // carry the whole question ("this one, not the ad") without typed text.
   // A picked skill is sendable on its own too ("run this skill").
+  // Spec 146: the asks this conversation opened, one at a time in the composer.
+  const { asks: sessionAsks, close: closeAsk } = useSessionAsks(projectId, sessionId, agentStatus);
+  const [askIndex, setAskIndex] = useState(0);
+  const [asksLaterSession, setAsksLaterSession] = useState<string | undefined>(undefined);
+  const trayIndex = Math.min(askIndex, Math.max(0, sessionAsks.length - 1));
+  const trayVisible = sessionAsks.length > 0 && asksLaterSession !== sessionId;
+  const trayAsk = trayVisible ? sessionAsks[trayIndex] : undefined;
+
   const canSend =
     !anyUploading &&
     !allError &&
@@ -3317,6 +3331,9 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         : resolvedPin;
     const target = resolved.target;
     let content = resolved.content;
+    // Spec 146: typed under the tray, this answers the ask showing there.
+    const answering = trayAsk && text ? { id: trayAsk.id, words: text } : undefined;
+    if (answering && trayAsk) content = formatAskAnswer(trayAsk.id, trayAsk.text, content);
 
     // Generate nonce so we can deduplicate the WS echo of our own message
     // crypto.randomUUID() requires secure context (HTTPS/localhost) — use fallback for LAN HTTP
@@ -3420,6 +3437,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         sessionId,
         resolved.pinned,
         skillPayload,
+        answering,
       );
       // A pinned send materialized the session on the backend — if the pin
       // PATCH had failed earlier (brand-new session, 404 before the first
@@ -4059,6 +4077,12 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                   <span className="truncate">{label}</span>
                 </div>
               );
+            } else if (item.type === 'ask_line') {
+              rendered = (
+                <p key={`ask-${index}`} className="m-0 pl-9 text-[13px] text-muted break-words" data-testid="ask-line">
+                  {t('chat.ask.title')} · {item.text}
+                </p>
+              );
             } else if (item.type === 'daemon_row') {
               // Keyless onboarding / session import divider: the session
               // separator's shape at full strength, translated here from the
@@ -4561,6 +4585,16 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
               ))}
             </div>
           )}
+          {trayVisible && (
+            <AskTray
+              asks={sessionAsks}
+              index={trayIndex}
+              onIndex={setAskIndex}
+              onDone={(id) => void closeAsk(id, 'fulfilled')}
+              onNotNeeded={(id) => void closeAsk(id, 'irrelevant')}
+              onLater={() => setAsksLaterSession(sessionId)}
+            />
+          )}
           <div className="flex items-center gap-2">
             {/* Spec 074 — the logo-only pin mark fused to the row's left edge
                 IS the sub-agent pin (Orbital's mark at rest, the worker's
@@ -4626,7 +4660,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
               onPaste={handlePaste}
               // No placeholder under a capsule: the capsule already says what
               // the message is about, and the hint would sit behind it.
-              placeholder={hasCapsule
+              placeholder={trayVisible ? t('chat.ask.placeholder') : hasCapsule
                 ? ''
                 : pinnedTarget
                   ? t('chat.composer.placeholderPinned', { agent: pinnedTarget })

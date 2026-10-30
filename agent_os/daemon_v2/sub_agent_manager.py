@@ -1574,7 +1574,7 @@ class SubAgentManager:
             for row in reversed(messages):
                 if row.get("role") == "user" and row.get("target") == handle \
                         and row.get("content") == message:
-                    if row.get("_kind") in ("memory_record", "memory_tidy"):
+                    if row.get("_kind") in ("memory_record", "memory_tidy", "ask_card"):
                         return ""
                     break
         chat_log_path = getattr(session, "filepath", None)

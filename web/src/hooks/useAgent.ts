@@ -158,6 +158,8 @@ export function useAgent() {
       // Spec 132: the skill picked in the `/` menu; the backend re-resolves
       // `path` against the project's skill catalog and adds the block.
       skill?: { key: string; path: string },
+      // Spec 146: this message answers the ask in the composer's tray.
+      answering?: { id: string; words: string },
     ) => {
       return api<InjectResult>(
         `/api/v2/agents/${encodeURIComponent(projectId)}/inject`,
@@ -171,6 +173,7 @@ export function useAgent() {
             ...(sessionId !== undefined && { session_id: sessionId }),
             ...(pinned && { pinned: true }),
             ...(skill && { skill }),
+            ...(answering && { ask_id: answering.id, ask_answer: answering.words }),
           }),
         },
       );

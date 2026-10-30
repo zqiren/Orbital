@@ -141,7 +141,7 @@ def is_reply_row(rec: dict) -> bool:
     # Spec 112 A6: rows the end-of-run memory record turn produced (and the
     # row that asked for it) never answer the user — the reply before them
     # is the reply.
-    if rec.get("_kind") in ("memory_record", "memory_tidy"):
+    if rec.get("_kind") in ("memory_record", "memory_tidy", "ask_card"):
         return False
     role = rec.get("role")
     if role == "assistant":

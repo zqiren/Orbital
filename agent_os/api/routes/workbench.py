@@ -23,6 +23,8 @@ Injected via ``configure`` (app factory): the project store, the agent manager
 60s cache never serves pre-edit state).
 """
 
+import asyncio
+import json
 import logging
 import os
 import sys
@@ -43,16 +45,18 @@ router = APIRouter(prefix="/api/v2/workbench")
 _project_store = None
 _agent_manager = None
 _calendar_hub = None
+_ws_manager = None
 _now_fn = None
 
 
-def configure(project_store, agent_manager, calendar_hub, *, now_fn=None):
+def configure(project_store, agent_manager, calendar_hub, *, now_fn=None, ws_manager=None):
     """Called by the app factory to inject dependencies.
 
     ``now_fn`` (tz-aware ``datetime``) is overridable for deterministic tests;
     it drives age/overdue math and the dates of appended events.
     """
-    global _project_store, _agent_manager, _calendar_hub, _now_fn
+    global _project_store, _agent_manager, _calendar_hub, _now_fn, _ws_manager
+    _ws_manager = ws_manager
     _project_store = project_store
     _agent_manager = agent_manager
     _calendar_hub = calendar_hub
@@ -250,6 +254,58 @@ def _append(project: dict, kind: str, ask_id: str, note: str) -> None:
         raise HTTPException(status_code=404, detail=f"No ask with id {ask_id}")
     if _calendar_hub is not None:
         _calendar_hub.refresh()
+    _announce_change(project)
+
+
+def _announce_change(project: dict) -> None:
+    if _ws_manager is not None:
+        project_id = project.get("project_id", "")
+        _ws_manager.broadcast(project_id, {"type": "workbench.changed", "project_id": project_id})
+
+
+def close_answered_ask(project: dict, ask_id: str, words: str) -> None:
+    """The user answered this ask from the composer: it closes in their words.
+    An unknown or already closed ask never blocks the message itself."""
+    try:
+        _append(project, "done", ask_id, " ".join(words.split())[:200])
+    except HTTPException:
+        logger.info("answered ask %s is not in this project", ask_id)
+
+
+def _session_ask_ids(workspace: str, session_id: str) -> list[str]:
+    """Ids of the asks opened in this conversation, oldest first."""
+    if not session_id or any(c in session_id for c in ("/", "\\", "..")):
+        return []
+    try:
+        with open(ProjectPaths(workspace).session_file(session_id), encoding="utf-8",
+                  errors="replace") as f:
+            lines = [line for line in f if '"ask_opened"' in line]
+    except OSError:
+        return []
+    ids: list[str] = []
+    for line in lines:
+        try:
+            ask_id = (json.loads(line).get("_meta") or {}).get("ask_id")
+        except ValueError:
+            continue
+        if ask_id and ask_id not in ids:
+            ids.append(ask_id)
+    return ids
+
+
+@router.get("/{project_id}/session-asks")
+async def session_asks(project_id: str, session_id: str = Query(...)):
+    """The open asks this conversation opened: what its composer shows."""
+    workspace = _require_project(project_id).get("workspace", "")
+    ids = await asyncio.to_thread(_session_ask_ids, workspace, session_id)
+    if not ids:
+        return {"asks": []}
+    open_asks = {
+        a.id: a for a in await asyncio.to_thread(asks.read_asks, _orbital_dir(workspace))
+        if a.is_open
+    }
+    return {"asks": [{"id": i, "text": open_asks[i].text, "due": open_asks[i].due}
+                     for i in ids if i in open_asks]}
 
 
 @router.post("/{project_id}/entries/{mem_id}/exit")

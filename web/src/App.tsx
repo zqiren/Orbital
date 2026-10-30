@@ -334,6 +334,14 @@ export default function App() {
     };
   }, [ws, subAgentsSync]);
 
+  // Spec 146: asks changed in a project. The sidebar badge, an open Workbench
+  // and the composer's tray all listen for this window event already.
+  useEffect(() => {
+    const onChanged = () => window.dispatchEvent(new Event('orbital:workbench-changed'));
+    ws.on('workbench.changed', onChanged);
+    return () => ws.off('workbench.changed', onChanged);
+  }, [ws]);
+
   // WebSocket event handlers
   const handleAgentStatus = useCallback((event: WebSocketEvent) => {
     const e = event as AgentStatusEvent;

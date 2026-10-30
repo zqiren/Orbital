@@ -124,6 +124,13 @@ export type DisplayItem =
    * Orbital's own agent has no key.
    */
   | {
+      /** Spec 146: an ask opened here. The tray in the composer acts on it; the
+       *  chat keeps this line. */
+      type: 'ask_line';
+      text: string;
+      timestamp: string;
+    }
+  | {
       type: 'daemon_row';
       event: 'imported_transcript' | 'worker_onboarding';
       /** Sub-agent slug ('codex', 'claude-code', …). */
@@ -1530,6 +1537,12 @@ export function transformChatHistory(
           content: displayContent,
           timestamp: msg.timestamp,
         });
+        i++;
+        continue;
+      }
+      if (msg._kind === 'ask_card') {
+        finalizeCapsule();
+        items.push({ type: 'ask_line', text: typeof msg.content === 'string' ? msg.content : '', timestamp: msg.timestamp });
         i++;
         continue;
       }

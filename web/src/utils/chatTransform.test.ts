@@ -2906,3 +2906,14 @@ describe('transformChatHistory — spec 112 memory record turn (_kind: memory_re
     expect(items.map((i) => i.type)).toEqual(['user_message']);
   });
 });
+
+describe('spec 146: ask rows', () => {
+  it('an ask row becomes one line outside the capsule', () => {
+    const items = transformChatHistory([
+      { role: 'user', content: 'go', timestamp: 't0' },
+      { role: 'system', source: 'daemon', _kind: 'ask_card', content: 'Keep them?', _meta: { event: 'ask_opened', ask_id: 'abc123' }, timestamp: 't1' },
+    ] as never);
+    expect(items.map((i) => i.type)).toEqual(['user_message', 'ask_line']);
+    expect((items[1] as { text: string }).text).toBe('Keep them?');
+  });
+});
