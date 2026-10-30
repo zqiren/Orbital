@@ -75,11 +75,59 @@ def _parse_data_url(data_url: str) -> tuple[str, str]:
 # Outbound: OpenAI format -> Anthropic API format
 # ---------------------------------------------------------------------------
 
+_EPHEMERAL = {"type": "ephemeral"}
+_UNCACHEABLE_BLOCKS = ("thinking", "redacted_thinking")
+
+
+def _mark_last_block_before_runtime(messages: list[dict]) -> None:
+    """Put the rolling breakpoint on the last block before the per-call runtime
+    tail, in place. The tail changes on every call, so a marker after it would
+    write the whole conversation each call and never read it."""
+    from agent_os.agent.context import _RUNTIME_MARKER, _RUNTIME_SEP
+
+    folded_tail = _RUNTIME_SEP + _RUNTIME_MARKER
+    for msg in reversed(messages):
+        content = msg.get("content")
+        if isinstance(content, str):
+            if not content or content.startswith(_RUNTIME_MARKER):
+                continue
+            head, sep, tail = content.rpartition(folded_tail)
+            if sep:
+                # Next call this row has no tail, so the head's bytes are what
+                # the cached prefix must hold.
+                msg["content"] = [
+                    {"type": "text", "text": head, "cache_control": _EPHEMERAL},
+                    {"type": "text", "text": sep + tail},
+                ]
+            else:
+                msg["content"] = [
+                    {"type": "text", "text": content, "cache_control": _EPHEMERAL},
+                ]
+            return
+        if not isinstance(content, list):
+            continue
+        for i in range(len(content) - 1, -1, -1):
+            block = content[i]
+            if block.get("type") in _UNCACHEABLE_BLOCKS:
+                continue
+            if block.get("type") == "text" and (
+                    not block.get("text") or block["text"].startswith(_RUNTIME_MARKER)):
+                continue
+            content[i] = {**block, "cache_control": _EPHEMERAL}
+            return
+
+
 def translate_messages_to_anthropic(
     messages: list[dict],
     tools: list[dict] | None = None,
+    *,
+    cache: bool = False,
 ) -> dict:
     """Convert OpenAI-format messages and tool schemas to Anthropic API format.
+
+    ``cache`` adds prompt-cache breakpoints: the static prompt, the end of the
+    leading system rows (they change per run), and the conversation's last
+    block before the runtime tail. ``system`` is then a list of text blocks.
 
     Returns a dict with keys:
         system   -- str or None (extracted from system-role messages)
@@ -88,6 +136,7 @@ def translate_messages_to_anthropic(
     """
     system_parts: list[str] = []
     anthropic_messages: list[dict] = []
+    leading_system = 0
 
     i = 0
     while i < len(messages):
@@ -99,6 +148,8 @@ def translate_messages_to_anthropic(
             content = msg.get("content", "")
             if content:
                 system_parts.append(content)
+                if not anthropic_messages:
+                    leading_system = len(system_parts)
             i += 1
             continue
 
@@ -154,8 +205,17 @@ def translate_messages_to_anthropic(
                 "input_schema": func.get("parameters", {}),
             })
 
+    if cache:
+        system: str | list | None = [{"type": "text", "text": p} for p in system_parts] or None
+        if leading_system:
+            system[0]["cache_control"] = _EPHEMERAL
+            system[leading_system - 1]["cache_control"] = _EPHEMERAL
+        _mark_last_block_before_runtime(anthropic_messages)
+    else:
+        system = "\n".join(system_parts) if system_parts else None
+
     return {
-        "system": "\n".join(system_parts) if system_parts else None,
+        "system": system,
         "messages": anthropic_messages,
         "tools": anthropic_tools,
     }

@@ -917,7 +917,7 @@ class LLMProvider:
             StreamState,
         )
 
-        translated = translate_messages_to_anthropic(messages, tools)
+        translated = translate_messages_to_anthropic(messages, tools, cache=True)
 
         kwargs: dict = {
             "model": self.model,

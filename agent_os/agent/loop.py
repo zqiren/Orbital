@@ -308,6 +308,14 @@ def normalize_tool_call(tc_raw: dict) -> dict:
     return {"id": tc_raw.get("id", ""), "name": tc_raw.get("name", ""), "arguments": args}
 
 
+def _whole_prompt_tokens(provider, usage) -> int:
+    """The prompt's full size. Anthropic's ``input_tokens`` excludes the cached
+    part; every other provider's includes it."""
+    if getattr(provider, "sdk", None) == "anthropic":
+        return usage.input_tokens + usage.cache_read_tokens + usage.cache_write_tokens
+    return usage.input_tokens
+
+
 class AgentLoop:
     """Core agent execution loop."""
 
@@ -1466,14 +1474,15 @@ class AgentLoop:
 
                 # Track token usage
                 if response.usage:
-                    cumulative_tokens += response.usage.input_tokens + response.usage.output_tokens
+                    _prompt_tokens = _whole_prompt_tokens(active_provider, response.usage)
+                    cumulative_tokens += _prompt_tokens + response.usage.output_tokens
                     # Per-session cache-hit aggregation (Part 4D)
-                    self._prompt_input_tokens_total += response.usage.input_tokens
+                    self._prompt_input_tokens_total += _prompt_tokens
                     self._cache_read_tokens_total += response.usage.cache_read_tokens
                     self._llm_call_count += 1
                     stats = self.last_run_stats
                     stats["llm_calls"] += 1
-                    stats["input_tokens"] += response.usage.input_tokens
+                    stats["input_tokens"] += _prompt_tokens
                     stats["cached_tokens"] += response.usage.cache_read_tokens
                     stats["output_tokens"] += response.usage.output_tokens
 
@@ -2442,7 +2451,7 @@ class AgentLoop:
                     break
                 self._inflight_stream = None
                 if response.usage:
-                    self._prompt_input_tokens_total += response.usage.input_tokens
+                    self._prompt_input_tokens_total += _whole_prompt_tokens(provider, response.usage)
                     self._cache_read_tokens_total += response.usage.cache_read_tokens
                     self._llm_call_count += 1
                     self._emit_ledger_event(provider, response.usage)
