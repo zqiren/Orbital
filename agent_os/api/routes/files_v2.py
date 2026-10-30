@@ -630,7 +630,7 @@ async def preview_file(project_id: str, path: str, request: Request):
 _REVEAL_PLATFORMS = ("darwin", "win32")
 
 
-def _reveal_argv(target: str, is_root: bool, platform: str) -> list[str] | None:
+def _reveal_argv(target: str, is_root: bool, platform: str) -> list[str] | str | None:
     """The command that shows ``target`` in the OS file manager.
 
     A file or directory is revealed SELECTED in its parent folder; the
@@ -644,9 +644,10 @@ def _reveal_argv(target: str, is_root: bool, platform: str) -> list[str] | None:
     if platform == "win32":
         # `/select,` splits its argument on commas, so a path containing one
         # opens a default folder instead (spec 093 R1). The robust fix, if it
-        # ever matters, is SHOpenFolderAndSelectItems via ctypes. Spaces are
-        # fine: list2cmdline quotes the whole `/select,<path>` argument.
-        return None if is_root else ["explorer", f"/select,{target}"]
+        # ever matters, is SHOpenFolderAndSelectItems via ctypes. A raw command
+        # line, not an argv: list2cmdline would quote the whole `/select,<path>`
+        # when the path has a space, and Explorer then opens Documents (#63).
+        return None if is_root else f'explorer /select,"{target}"'
     raise ValueError(f"reveal is not supported on {platform}")
 
 

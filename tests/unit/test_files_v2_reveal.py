@@ -75,9 +75,12 @@ class TestRevealArgv:
         assert files_v2._reveal_argv("/ws", True, "darwin") == ["open", "/ws"]
 
     def test_windows_file_uses_explorer_select(self):
-        assert files_v2._reveal_argv(r"C:\ws\a b.md", False, "win32") == [
-            "explorer", r"/select,C:\ws\a b.md",
-        ]
+        """A raw command line, quoting only the path. As an argv, list2cmdline
+        quotes `/select,<path>` as one token when the path has a space, and
+        Explorer answers that by opening Documents (GitHub #63)."""
+        assert files_v2._reveal_argv(r"C:\ws\a b.md", False, "win32") == (
+            r'explorer /select,"C:\ws\a b.md"'
+        )
 
     def test_windows_root_is_left_to_startfile(self):
         assert files_v2._reveal_argv(r"C:\ws", True, "win32") is None
@@ -114,7 +117,7 @@ class TestSpawnReveal:
         """explorer.exe exits 1 even when the window opened fine (spec R1)."""
         captured = self._capture_run(monkeypatch, returncode=1)
         files_v2._spawn_reveal(r"C:\ws\a.md", False, "win32")  # must not raise
-        assert captured["argv"] == ["explorer", r"/select,C:\ws\a.md"]
+        assert captured["argv"] == r'explorer /select,"C:\ws\a.md"'
 
     def test_windows_root_goes_through_startfile(self, monkeypatch):
         opened = []
