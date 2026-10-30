@@ -2880,7 +2880,9 @@ class SubAgentManager:
 
     def running_session_ids(self, project_id: str) -> set[str]:
         """Session ids (the F1 id the sessions list exposes as ``session_id``)
-        in which a worker has an open turn (spec 102).
+        with work in flight: a worker has an open turn (spec 102) or a
+        background job is running (spec 147). Display only; the manager's status
+        and the slot don't read it.
 
         The per-session form of ``has_running_sub_agents``: the session-list
         row glyph lights for a pinned run the same way the project dot does.
@@ -2890,15 +2892,23 @@ class SubAgentManager:
         loop, never from a worker thread.
         """
         session_ids = [sid for (pid, sid) in self._adapters if pid == project_id]
-        return {
+        running = {
             sid
             for sid in session_ids
             if any(entry["status"] == "running"
                    for entry in self.list_active(project_id, session_id=sid))
         }
+        registry = getattr(self, "_job_registry", None)
+        if registry is not None:
+            running.update(
+                job["session_id"] for job in registry.list_jobs(project_id)
+                if job["state"] == "running" and job["session_id"]
+            )
+        return running
 
     def has_running_sub_agents(self, project_id: str) -> bool:
-        """True iff a worker in ANY session of the project has an open turn.
+        """True iff ANY session of the project has work in flight: a worker's
+        open turn or a running background job (spec 147).
 
         The project-list dot's signal for work no management turn brackets —
         a pinned dispatch, a queue item assigned to a worker (spec 095).

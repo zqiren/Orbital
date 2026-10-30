@@ -505,3 +505,57 @@ class TestSessionsRouteWorkerRunning:
         app.include_router(agents_v2.router)
         body = TestClient(app).get(f"/api/v2/projects/{PID}/sessions").json()
         assert body["sessions"][0]["worker_running"] is False
+
+
+# ---------------------------------------------------------------------------
+# Spec 147: a running background job counts as work in flight, display only
+# ---------------------------------------------------------------------------
+
+class TestRunningJobsCount:
+    def _with_jobs(self, tmp_path):
+        from agent_os.daemon_v2.jobs import JobRegistry
+
+        async def _inject(*a, **k):
+            return "ok"
+
+        reg = JobRegistry(inject=_inject, broadcast=lambda *a, **k: None,
+                          dispatch_worker=None,
+                          workspaces=lambda: [(PID, str(tmp_path))],
+                          poll_interval_s=3600)
+        mgr = _manager()
+        mgr._job_registry = reg
+        return mgr, reg
+
+    def _spawn(self, reg, tmp_path, session, project=PID, command="sleep 60"):
+        group = reg.open_group(project, session, str(tmp_path), batch_key=session)
+        return reg.spawn_job(group, command, ["/bin/sh", "-c", command])
+
+    def test_a_running_job_lights_its_session_and_the_project(self, tmp_path):
+        mgr, reg = self._with_jobs(tmp_path)
+        try:
+            self._spawn(reg, tmp_path, "sess-job")
+            assert mgr.running_session_ids(PID) == {"sess-job"}
+            assert mgr.has_running_sub_agents(PID) is True
+        finally:
+            reg.stop_all()
+
+    def test_an_ended_job_no_longer_counts(self, tmp_path):
+        mgr, reg = self._with_jobs(tmp_path)
+        try:
+            job = self._spawn(reg, tmp_path, "sess-job")
+            reg.cancel(PID, job.id)
+            assert mgr.running_session_ids(PID) == set()
+            assert mgr.has_running_sub_agents(PID) is False
+        finally:
+            reg.stop_all()
+
+    def test_a_job_in_another_project_does_not_count(self, tmp_path):
+        mgr, reg = self._with_jobs(tmp_path)
+        try:
+            self._spawn(reg, tmp_path, "sess-job", project="proj_other")
+            assert mgr.has_running_sub_agents(PID) is False
+        finally:
+            reg.stop_all()
+
+    def test_no_registry_keeps_the_old_answer(self):
+        assert _manager().running_session_ids(PID) == set()

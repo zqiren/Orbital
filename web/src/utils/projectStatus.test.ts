@@ -5,6 +5,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { AgentRunStatus } from '../types';
 import {
+  SUB_AGENTS_RUNNING_EVENTS,
   createSubAgentsRunningSync,
   displayRunStatus,
   getProjectDotColor,
@@ -152,5 +153,27 @@ describe('createSubAgentsRunningSync', () => {
     pending[1].resolve(true);
     await settle();
     expect(apply.mock.calls).toEqual([['p', true]]);
+  });
+});
+
+describe('spec 147: background jobs refresh the running flag', () => {
+  it('refetches on the events a job start and end send', async () => {
+    // A launcher job is adopted on the registry's next poll, after the worker's
+    // turn-end refetch already read false, so fanout.started is the only "now
+    // running" signal; the end events cover a wake the guards suppressed.
+    const flags = [true, false];
+    const fetchFlag = vi.fn(async () => flags.shift() ?? false);
+    const apply = vi.fn();
+    const sync = createSubAgentsRunningSync(fetchFlag, apply);
+    const handlers = new Map<string, () => void>(
+      (SUB_AGENTS_RUNNING_EVENTS as readonly string[]).map((t) => [t, () => sync.refresh('p')]),
+    );
+
+    handlers.get('fanout.started')?.();
+    await vi.waitFor(() => expect(apply).toHaveBeenLastCalledWith('p', true));
+    handlers.get('fanout.completed')?.();
+    await vi.waitFor(() => expect(apply).toHaveBeenLastCalledWith('p', false));
+    expect(fetchFlag).toHaveBeenCalledTimes(2);
+    expect(handlers.has('fanout.task_update')).toBe(true);
   });
 });

@@ -64,8 +64,9 @@ export function displayRunStatus(
 
 /**
  * WS events after which a project's `sub_agents_running` may have changed:
- * every worker dispatch and terminal, plus manager status changes (a
- * management Stop tears its workers down without a worker event of its own).
+ * every worker dispatch and terminal, a background job starting or ending,
+ * plus manager status changes (a management Stop tears its workers down
+ * without a worker event of its own).
  */
 export const SUB_AGENTS_RUNNING_EVENTS = [
   'agent.status',
@@ -77,6 +78,10 @@ export const SUB_AGENTS_RUNNING_EVENTS = [
   'sub_agent.failed',
   'sub_agent.stopped',
   'sub_agent.turn_interrupted',
+  // Background jobs count as work in flight (spec 147).
+  'fanout.started',
+  'fanout.task_update',
+  'fanout.completed',
 ] as const;
 
 export interface SubAgentsRunningSync {
