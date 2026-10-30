@@ -19,6 +19,7 @@ import uuid
 import re
 from datetime import datetime, timezone
 from typing import AsyncIterator
+from urllib.parse import quote
 
 import openai
 
@@ -668,7 +669,11 @@ class LLMProvider:
         for every provider without a registry ``session_header``."""
         if not self.session_header:
             return None
-        return {self.session_header: self.request_session_id()}
+        sid = self.request_session_id()
+        # Session ids start with the project name, and httpx refuses a non-ASCII
+        # header value before any network call. ASCII ids go out unchanged, so
+        # existing conversations keep their routing key.
+        return {self.session_header: sid if sid.isascii() else quote(sid, safe="")}
 
     @property
     def reasoning_locked_on(self) -> bool:

@@ -453,3 +453,32 @@ async def test_start_agent_gives_only_trigger_loops_the_routing_project(
         MockLoop.return_value.run = AsyncMock()
         await mgr.start_agent("p1", config, session=session, trigger_source=trigger_source)
         assert MockLoop.call_args.kwargs["routing_project_id"] == expected
+
+
+# ---- non-ASCII conversation ids (GitHub #61) ----
+
+def _bound(sid):
+    p = LLMProvider("m", "k", "https://example.com/v1", sdk="openai", session_header=HDR)
+    p.bind_session_id(lambda: sid)
+    return p
+
+
+def test_a_chinese_project_session_id_becomes_a_legal_header_value():
+    """Session ids start with the project name, and httpx refuses a non-ASCII
+    header value before any network call ('ascii' codec can't encode)."""
+    value = _bound("新项目_1a2b3c4d")._request_headers()[HDR]
+    assert value.isascii()
+    value.encode("ascii")  # what httpx does
+
+
+def test_the_encoded_id_is_stable_and_distinct_per_conversation():
+    """The gateway routes (and caches) on this value."""
+    a = _bound("新项目_1a2b3c4d")
+    assert a._request_headers() == a._request_headers()
+    assert a._request_headers() != _bound("新项目_ffffffff")._request_headers()
+    assert a._request_headers() != _bound("旧项目_1a2b3c4d")._request_headers()
+
+
+def test_an_ascii_session_id_is_sent_byte_for_byte():
+    """Existing conversations keep their routing key across the upgrade."""
+    assert _bound("my-proj_1a2b3c4d")._request_headers()[HDR] == "my-proj_1a2b3c4d"
