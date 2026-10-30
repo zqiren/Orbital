@@ -764,6 +764,17 @@ describe('SubAgentSettings — expired sign-in (1018 bench item 9)', () => {
     expect(screen.queryByTestId('sub-agent-auth-expired-claude-code')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^logout$/i })).toBeInTheDocument();
   });
+
+  it('a logout the CLI refused says so (GitHub #50)', async () => {
+    api.mockImplementation(async (path: string, opts?: { method?: string }) => (
+      opts?.method === 'POST' && path.endsWith('/logout')
+        ? { slug: 'claude-code', return_code: 1, stdout: '', stderr: 'not logged in here' }
+        : [expired({ auth_expired: false })]
+    ));
+    render(<SubAgentSettings />);
+    fireEvent.click(await screen.findByRole('button', { name: /^logout$/i }));
+    expect(await screen.findByText('not logged in here')).toBeInTheDocument();
+  });
 });
 
 describe('SubAgentSettings — Pi', () => {

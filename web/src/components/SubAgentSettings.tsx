@@ -829,10 +829,16 @@ function SubAgentCard({ entry, onChanged, onChangeLocation }: CardProps) {
     setLogoutBusy(true);
     setActionError(null);
     try {
-      await api(`/api/v2/settings/sub-agents/${encodeURIComponent(entry.slug)}/logout`, {
-        method: 'POST',
-      });
+      const result = await api<{ return_code: number; stderr?: string }>(
+        `/api/v2/settings/sub-agents/${encodeURIComponent(entry.slug)}/logout`,
+        { method: 'POST' },
+      );
       await onChanged();
+      // The route answers 200 with the CLI's exit code, so a refused logout
+      // only shows up here.
+      if (result.return_code !== 0) {
+        setActionError(result.stderr?.trim() || t('subAgentCard.logoutFailed'));
+      }
     } catch (e) {
       setActionError(e instanceof Error ? e.message : String(e));
     } finally {

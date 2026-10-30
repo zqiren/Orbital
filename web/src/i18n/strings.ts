@@ -1189,6 +1189,7 @@ export const STRINGS = {
   "subAgentCard.loggingOut": { en: "Logging out...", zh: "正在退出登录…" },
   "subAgentCard.login": { en: "Login", zh: "登录" },
   "subAgentCard.logout": { en: "Logout", zh: "退出登录" },
+  "subAgentCard.logoutFailed": { en: "Couldn't log out. The agent's CLI refused it.", zh: "退出登录失败：该 agent 的命令行工具拒绝了操作。" },
   "subAgentCard.missingDeps": { en: "Missing dependencies: {list}", zh: "缺少依赖：{list}" },
   "subAgentCard.noParams": { en: "No daemon-level parameters available for this sub-agent.", zh: "该子Agent没有可用的参数。" },
   "subAgentCard.notDetected": { en: "Not detected", zh: "未检测到" },
