@@ -2097,6 +2097,38 @@ describe('ChatView: pending-input queue (spec 006)', () => {
   });
 });
 
+describe('spec 142: a held message survives switching back', () => {
+  it('draws the row /pending restores while this session holds the slot and items are seeded', async () => {
+    chatInitialResponse = {
+      data: [
+        { role: 'user', content: 'first question', source: 'user', timestamp: '2026-10-30T00:00:00Z' },
+        { role: 'assistant', content: 'first answer', source: 'management', timestamp: '2026-10-30T00:00:01Z' },
+      ],
+      total: 2,
+    };
+    runStatusHolder = 's1';
+    // /pending answers only after history is drawn and the seed guard is armed.
+    let releasePending!: () => void;
+    const gate = new Promise<void>((r) => { releasePending = r; });
+    getPendingMock = async () => {
+      await gate;
+      return {
+        holder: 's1',
+        pending: [{ session_id: 's1', nonce: 'n-held', content: 'held message', position: 0, kind: 'same' }],
+      };
+    };
+    await renderChat({ agentStatus: 'running', sessionId: 's1' });
+    await flushEffects();
+    expect(container.textContent ?? '').toContain('first answer');
+    expect(container.textContent ?? '').not.toContain('held message');
+
+    releasePending();
+    await flushEffects();
+    expect(container.textContent ?? '').toContain('held message');
+    expect(container.querySelector('[data-testid="pending-input-notice"]')).toBeTruthy();
+  });
+});
+
 // ─────────────────────────────────────────────────────────────────────────
 // Bug29 D2: a message sent WHILE the agent is mid-turn pushes the optimistic
 // user bubble into rawMessages. That recomputes historyItems and (before this

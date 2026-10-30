@@ -1780,6 +1780,25 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
           }
           return next;
         });
+        // Spec 142: the seed effect skips its reseed while this session's turn
+        // is in flight (it protects live capsules), so the row rawMessages just
+        // got would never be drawn. Draw it the way the composer's send does.
+        setItems((prev) => {
+          let next = prev;
+          for (const [, entry] of rebuilt) {
+            if (entry.sessionId !== viewed) continue;
+            const has = next.some(
+              (it) => it.type === 'user_message' && it.content === entry.content,
+            );
+            if (!has) {
+              next = [
+                ...next,
+                { type: 'user_message', content: entry.content, timestamp: entry.timestamp },
+              ];
+            }
+          }
+          return next;
+        });
       })
       .catch(() => {
         // best effort — leave the prior overlay in place

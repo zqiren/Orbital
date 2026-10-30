@@ -3175,6 +3175,8 @@ class AgentManager:
             # not recallable). Spec 006 §12, diff-review Finding 1.
             logger.info("inject_message(%s): loop running, queuing message", project_id)
             handle.session.queue_message(content, nonce=nonce)
+            if handle.loop.yield_memory_record():
+                logger.info("inject_message(%s): memory record turn yielded", project_id)
             return "queued_same_session"
 
         # Case 1b: loop done but paused for approval — auto-deny the

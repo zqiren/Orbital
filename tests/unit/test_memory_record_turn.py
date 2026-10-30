@@ -601,18 +601,68 @@ async def test_deferred_terminal_lands_after_the_record_turn(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_queued_user_message_waits_for_the_record_turn(tmp_path):
-    llm = _ScriptedLLM([_reply("reply"), _reply("nothing to record")], gate_call=1)
+async def test_a_message_held_when_the_reply_ends_skips_the_record_turn(tmp_path):
+    """Spec 142: the user's message goes ahead of Orbital's note-taking."""
+    llm = _ScriptedLLM([_reply("reply"), _reply("should not run")], gate_call=0)
     session, tools, loop = _rig(tmp_path, llm)
     task = asyncio.create_task(loop.run())
     await asyncio.wait_for(llm.in_flight.wait(), timeout=2)
     session.queue_message("and another thing", nonce="n1")
     llm.release.set()
     await task
-    # Not drained into the record turn: it is still queued for the next run.
+    assert _memory_rows(session) == []
+    assert session.list_queued() == [("and another thing", "n1")]
+    assert session.get_messages()[-1]["content"] == "reply"
+
+
+@pytest.mark.asyncio
+async def test_a_message_held_during_a_record_call_cancels_that_call(tmp_path):
+    """Spec 142: without the cancel the message waits out one slow silent call.
+    The turn ends quietly: no Stop marker, the message still queued for the
+    next run (never drained into the record turn)."""
+    llm = _ScriptedLLM([_reply("reply"), _reply("nothing to record")], gate_call=1)
+    session, tools, loop = _rig(tmp_path, llm)
+    task = asyncio.create_task(loop.run())
+    await asyncio.wait_for(llm.in_flight.wait(), timeout=2)
+    session.queue_message("and another thing", nonce="n1")
+    assert loop.yield_memory_record() is True
+    await asyncio.wait_for(task, timeout=2)
     assert session.list_queued() == [("and another thing", "n1")]
     assert llm.calls == 2
-    assert session.get_messages()[-1]["content"] == "nothing to record"
+    assert not session.is_stopped()
+    assert not any("cancel" in str(m.get("content", "")).lower()
+                   for m in session.get_messages() if m.get("role") != "system")
+
+
+@pytest.mark.asyncio
+async def test_a_message_held_between_record_calls_ends_the_turn(tmp_path):
+    llm = _ScriptedLLM(
+        [_reply("reply"), _edit_state_call(), _reply("should not run")], gate_call=None)
+    session, tools, loop = _rig(tmp_path, llm)
+    real_execute = tools.execute
+
+    def queue_then_execute(name, args):
+        session.queue_message("and another thing", nonce="n1")
+        return real_execute(name, args)
+
+    tools.execute = queue_then_execute
+    await asyncio.wait_for(loop.run(), timeout=5)
+    assert llm.calls == 2
+    assert session.list_queued() == [("and another thing", "n1")]
+
+
+@pytest.mark.asyncio
+async def test_yield_touches_nothing_outside_a_record_turn(tmp_path):
+    """The user's own turn must never be cancelled by a held message."""
+    llm = _ScriptedLLM([_reply("reply"), _reply("nothing to record")], gate_call=0)
+    session, tools, loop = _rig(tmp_path, llm)
+    task = asyncio.create_task(loop.run())
+    await asyncio.wait_for(llm.in_flight.wait(), timeout=2)
+    assert loop.yield_memory_record() is False
+    assert not loop._inflight_stream.cancelled()
+    llm.release.set()
+    await asyncio.wait_for(task, timeout=2)
+    assert any(m.get("content") == "reply" for m in session.get_messages())
 
 
 # ---------------------------------------------------------------------------

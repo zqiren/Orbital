@@ -2314,6 +2314,9 @@ class AgentLoop:
             return False
         if self._memory_record_done or self._memory_record_active:
             return False
+        # Spec 142: a held user message goes first. That run stays unrecorded.
+        if self._session.list_queued():
+            return False
         if self._run_memory_written:
             return False
         if getattr(self._session, "origin", None) == "memory":
@@ -2324,6 +2327,17 @@ class AgentLoop:
         if base is None or getattr(base, "is_scratch", False):
             return False
         return bool(getattr(base, "workspace", None))
+
+    def yield_memory_record(self) -> bool:
+        """Cancel the record turn's in-flight call so a user message just held
+        doesn't wait for it (spec 142). True if a call was cancelled; a no-op
+        outside a record turn, so a normal turn is never interrupted. The turn
+        catches the cancel itself and ends quietly, with no Stop marker."""
+        stream = self._inflight_stream
+        if not self._memory_record_active or stream is None or stream.done():
+            return False
+        stream.cancel()
+        return True
 
     def _sub_agent_results_this_run(self, rows_at_run_start) -> list[str]:
         """Terminal rows that reached this run: the rows that triggered it
@@ -2375,7 +2389,8 @@ class AgentLoop:
         result); the turn ends on the first text-only reply. Every row is
         tagged ``_kind: memory_record`` through ``session.row_kind``; queued
         user messages and deferred lifecycle rows are NOT drained here — they
-        follow the turn, exactly as they followed the run before. Never
+        follow the turn, exactly as they followed the run before. A held user
+        message ends the turn early (spec 142, ``yield_memory_record``). Never
         raises into the run: a failing record turn is logged and the run
         ends as it would have.
         """
@@ -2402,6 +2417,9 @@ class AgentLoop:
                 "_meta": {"event": "memory_record", "trigger": trigger},
             })
             while llm_calls < MEMORY_RECORD_MAX_LLM_CALLS:
+                if self._session.list_queued():
+                    outcome = "yielded"
+                    break
                 llm_calls += 1
                 context = self._context_manager.prepare()
                 tool_schemas = self._tool_registry.schemas()
