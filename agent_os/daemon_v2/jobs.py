@@ -587,7 +587,9 @@ class JobRegistry:
             f"Output: {job.rel_log_path}\n"
             f"Orbital will send you a message when it finishes, and check in every "
             f"{_fmt_interval(checkin_interval_s())} while it runs. Your turn ends "
-            f"after this message's tool calls; do not wait, sleep or poll for it.\n"
+            f"after this message's tool calls; do not wait, sleep or poll for it. "
+            f"Orbital tracks only the process this call started: anything it "
+            f"detaches gets no message, so don't promise the user one.\n"
             f"To check early: read the output file. To stop it: {kill_command(job.pid or 0)}"
         )
 
@@ -722,6 +724,8 @@ class JobRegistry:
             job.state = state
             job.exit_code = code
             job.ended_at = time.time()
+        logger.info("job %s ended: state=%s code=%s session=%s",
+                    job.id, state, code, job.session_id)
         for path in job.scratch:
             try:
                 os.remove(path)
@@ -847,6 +851,10 @@ class JobRegistry:
             body.append("You will get another message when the jobs still running end. "
                         "To stop one: " + "; ".join(
                             f"{j.id}: {kill_command(j.pid or 0)}" for j in running) + ".")
+        else:
+            body.append("These jobs have ended. Orbital isn't tracking anything they "
+                        "left running, so don't tell the user you'll be notified "
+                        "about it.")
         body.append("Read the full output in the files above if you need more than "
                     "these lines. The user has not seen this message; tell them the "
                     "outcome.")
@@ -984,7 +992,10 @@ class JobRegistry:
             logger.info("job message with no session to deliver to: %s", content[:200])
             return None
         try:
-            return await self._inject(project_id, content, session_id=session_id, meta=meta)
+            result = await self._inject(project_id, content, session_id=session_id, meta=meta)
+            logger.info("job message delivered: event=%s session=%s result=%s",
+                        meta.get("event"), session_id, result)
+            return result
         except Exception:
             logger.warning("job message delivery failed (project=%s session=%s)",
                            project_id, session_id, exc_info=True)

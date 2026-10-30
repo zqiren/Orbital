@@ -572,3 +572,26 @@ async def test_a_worker_that_refuses_the_dispatch_gets_it_in_the_session_instead
     group = reg.open_group(PROJECT, SID, str(tmp_path), agent="codex")
     await reg._deliver(group, "job ended", {"event": jobs.EVENT_TERMINAL})
     assert [r["content"] for r in rec.injected] == ["job ended"]
+
+
+# ---- spec 148: what the agent is told it can rely on ----
+
+@pytest.mark.asyncio
+async def test_start_text_says_detached_work_gets_no_message(registry, tmp_path):
+    job = _spawn(registry, tmp_path, "true")
+    assert "detaches gets no message" in registry.start_text(job)
+
+
+@pytest.mark.asyncio
+async def test_the_ended_line_is_only_on_a_join_with_nothing_running(registry, tmp_path):
+    a = _spawn(registry, tmp_path, "true", batch="ended-line")
+    group = registry._groups[a.group_id]
+    b = registry.spawn_job(group, "sleep 60", ["/bin/sh", "-c", "sleep 60"])
+    await _tick_until(registry, lambda: a.state != "running")
+    early, _ = registry._compose_join(group, [])
+    assert "isn't tracking anything they left running" not in early
+    assert "You will get another message" in early
+
+    registry.cancel(PROJECT, b.id, notify=False)
+    final, _ = registry._compose_join(group, [])
+    assert "isn't tracking anything they left running" in final

@@ -710,3 +710,33 @@ async def test_fanout_join_summary_carries_the_wake_tag(worker_kind):
     assert meta["display_content"].startswith(f"[Fanout f] {succeeded}/2")
     assert "Synthesize these results" not in meta["display_content"]
     assert "Synthesize these results" in content
+
+
+async def test_a_job_end_deferred_during_the_record_turn_still_wakes(manager, tmp_path):
+    """Spec 148: end to end through a real run and the real ``_on_loop_done``.
+    A job's end lands while the hidden record turn's call streams; the run has
+    already replied, so only the wake can get the agent back."""
+    wake = _spy_wake(manager)
+    llm = _ScriptedLLM([_reply("the reply"), _reply("nothing to record")], gate_call=1)
+    session = Session.new(SID, str(tmp_path))
+    tools = _SlowTool()
+    ctx = ContextManager(session, _PromptBuilder(), _prompt_context(str(tmp_path)))
+    loop = AgentLoop(session, llm, tools, ctx, project_dir=str(tmp_path),
+                     max_iterations=10, memory_record_enabled=True)
+    persist_user_row(session, "hello")
+    handle = ProjectHandle(session=session, loop=loop, provider=llm, registry=tools,
+                           context_manager=ctx, interceptor=None, task=None)
+    manager._handles[make_session_key(PROJECT, SID)] = handle
+    _run_turn(manager, handle)
+    await asyncio.wait_for(llm.in_flight.wait(), timeout=2)
+
+    content = "[Background jobs grp_x] 1 background job finished."
+    status = await manager.inject_system_message(
+        PROJECT, content, session_id=SID,
+        meta={"event": "job_terminal", "display_content": content})
+    assert status == "deferred"
+
+    llm.release.set()
+    await _turn_ended(handle)
+    assert llm.calls == 2
+    wake.assert_called_once_with(PROJECT, session_id=SID)

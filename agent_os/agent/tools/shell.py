@@ -48,7 +48,11 @@ _BACKGROUND_DESCRIPTION = (
     "`background: true`: the call returns at once with a job id and its output "
     "file, your turn ends after this message's tool calls, and Orbital sends you "
     "the exit code and the last output lines when it ends (and checks in every "
-    "15 minutes while it runs). Do not sleep or poll to wait for it."
+    "15 minutes while it runs). Do not sleep or poll to wait for it. Orbital "
+    "tracks only the process this call starts. Anything it detaches (`nohup`, "
+    "`&`, a daemon, work left running on a server after `ssh` returns) is not "
+    "tracked and gets no message, so keep the work in the foreground of this "
+    "command. A foreground call that detaches something isn't tracked either."
 )
 _BACKGROUND_PARAM = {
     "type": "boolean",
