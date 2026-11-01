@@ -4,6 +4,7 @@
 
 """Regression tests: /agents/available must not block the async event loop."""
 
+from types import SimpleNamespace
 import asyncio
 import os
 import time
@@ -122,16 +123,6 @@ def api_app(data_dir, workspace):
     }
 
 
-@pytest.fixture(autouse=True)
-def reset_cache():
-    """Reset the available-agents cache before and after each test."""
-    agents_v2._available_cache["result"] = None
-    agents_v2._available_cache["expires_at"] = 0.0
-    yield
-    agents_v2._available_cache["result"] = None
-    agents_v2._available_cache["expires_at"] = 0.0
-
-
 # ======================================================================
 # Test 1: /agents/available does not block concurrent requests
 # ======================================================================
@@ -147,7 +138,7 @@ async def test_available_does_not_block_chat(api_app):
     pid = project_store.create_project({"name": "test", "workspace": workspace})
 
     # Make check_all sleep 2 seconds to simulate a slow subprocess
-    def slow_check_all():
+    def slow_check_all(**_kw):
         import time as _time
         _time.sleep(2)
         return []
@@ -181,64 +172,37 @@ async def test_available_does_not_block_chat(api_app):
 # Test 2: Cache prevents repeated subprocess calls
 # ======================================================================
 
-def test_cache_prevents_repeated_calls(api_app):
-    """After the first call, subsequent calls within the TTL must use cached results."""
+def test_available_shows_what_the_engine_knows_at_once(api_app):
+    """The caching lives in SetupEngine.check_all, whose cache a login, a
+    locate or an install drops. A second one in the route kept the pin menu
+    stale for up to a minute after those."""
     app, deps = api_app
 
-    call_count = 0
-
-    def counting_check_all():
-        nonlocal call_count
-        call_count += 1
-        return []
-    deps["mock_setup_engine"].check_all = counting_check_all
+    statuses: list = []
+    deps["mock_setup_engine"].check_all = lambda **_kw: list(statuses)
 
     client = TestClient(app)
+    assert client.get("/api/v2/agents/available").json() == []
 
-    # Three sequential calls
-    r1 = client.get("/api/v2/agents/available")
-    r2 = client.get("/api/v2/agents/available")
-    r3 = client.get("/api/v2/agents/available")
-
-    assert r1.status_code == 200
-    assert r2.status_code == 200
-    assert r3.status_code == 200
-    assert call_count == 1, (
-        f"check_all() was called {call_count} times — expected 1. "
-        f"The cache is not preventing repeated subprocess invocations."
-    )
+    statuses.append(SimpleNamespace(
+        slug="codex", name="Codex", installed=True, binary_path="/x/codex",
+        version="1", dependencies_met=True, missing_dependencies=[],
+        credentials_configured=True, missing_credentials=[], setup_actions=[],
+    ))
+    assert [e["slug"] for e in client.get("/api/v2/agents/available").json()] == ["codex"]
 
 
-def test_cache_expires_after_ttl(api_app):
-    """After manually expiring the cache, the next call must invoke check_all() again."""
-    app, deps = api_app
+def test_reading_available_never_starts_a_scan():
+    """Opening the pin menu reads the last sweep, however old. Expired, it is
+    still served: no probe runs and no background sweep starts."""
+    from agent_os.agents.registry import AgentRegistry
+    from agent_os.agents.setup_engine import SetupEngine
 
-    call_count = 0
+    engine = SetupEngine(AgentRegistry())
+    last_sweep = [SimpleNamespace(slug="codex")]
+    engine._check_all_cache = (last_sweep, 0.0)  # expired long ago
+    engine._probe_all = lambda **_kw: pytest.fail("the menu read started a scan")
+    engine._refresh_in_background = lambda: pytest.fail(
+        "the menu read started a background scan")
 
-    def counting_check_all():
-        nonlocal call_count
-        call_count += 1
-        return []
-    deps["mock_setup_engine"].check_all = counting_check_all
-
-    client = TestClient(app)
-
-    # First call — populates cache
-    resp = client.get("/api/v2/agents/available")
-    assert resp.status_code == 200
-    assert call_count == 1
-
-    # Second call — should hit cache
-    resp = client.get("/api/v2/agents/available")
-    assert resp.status_code == 200
-    assert call_count == 1
-
-    # Expire the cache
-    agents_v2._available_cache["expires_at"] = 0.0
-
-    # Third call — cache expired, must call check_all() again
-    resp = client.get("/api/v2/agents/available")
-    assert resp.status_code == 200
-    assert call_count == 2, (
-        f"check_all() was called {call_count} times — expected 2 after cache expiry."
-    )
+    assert engine.check_all(allow_stale=True, refresh_if_stale=False) is last_sweep

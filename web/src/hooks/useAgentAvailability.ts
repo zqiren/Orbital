@@ -15,7 +15,12 @@ import { useSyncExternalStore } from 'react';
 import { api } from '../config';
 import type { AgentAvailability, QuotaSnapshot } from '../types';
 
+export interface InstalledAgent { slug: string; name: string }
+
 let bySlug: Record<string, AgentAvailability> = {};
+// The pin menu's rows. Null until the first answer; a new array only when the
+// set changes, so quota pushes don't re-render the app root.
+let installedAgents: InstalledAgent[] | null = null;
 const listeners = new Set<() => void>();
 let inflight: Promise<AgentAvailability[]> | null = null;
 
@@ -38,6 +43,12 @@ export function setAgentAvailability(list: AgentAvailability[]): void {
     next[entry.slug] = keep ? { ...entry, quota: prev } : entry;
   }
   bySlug = next;
+  const installed = list
+    .filter((a) => a.slug !== 'built-in' && a.installed)
+    .map((a) => ({ slug: a.slug, name: a.name }));
+  if (JSON.stringify(installed) !== JSON.stringify(installedAgents)) {
+    installedAgents = installed;
+  }
   emit();
 }
 
@@ -81,9 +92,25 @@ export function useAgentAvailability(): Record<string, AgentAvailability> {
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 
+/** The installed agents, refreshed by every fetch: the pin menu opening, the
+ *  settings page changing one, the daemon's sweep finding a change. Null until
+ *  the first answer. */
+export function useInstalledAgents(): InstalledAgent[] | null {
+  const get = () => installedAgents;
+  return useSyncExternalStore(subscribe, get, get);
+}
+
+/** A first load that failed settles on empty; a failed refetch keeps the list. */
+export function settleInstalledAgents(): void {
+  if (installedAgents !== null) return;
+  installedAgents = [];
+  emit();
+}
+
 /** Test seam: reset module state between tests. */
 export function __resetAgentAvailability(): void {
   bySlug = {};
+  installedAgents = null;
   inflight = null;
   emit();
 }

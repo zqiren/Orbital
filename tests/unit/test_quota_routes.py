@@ -50,7 +50,7 @@ class _FakeEngine:
     def __init__(self, statuses):
         self.statuses = statuses
 
-    def check_all(self):
+    def check_all(self, **_kw):
         return self.statuses
 
 
@@ -59,8 +59,6 @@ def route_env(monkeypatch, tmp_path):
     store = QuotaStore(str(tmp_path / "quota.json"))
     prev = qs.get_quota_store()
     qs.install(store)
-    monkeypatch.setattr(agents_v2, "_available_cache",
-                        {"result": None, "expires_at": 0.0})
     monkeypatch.setattr(agents_v2, "_sub_agent_manager", None)
     probes = []
 

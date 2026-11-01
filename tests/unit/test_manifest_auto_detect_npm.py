@@ -61,3 +61,11 @@ def test_npm_cli_lists_macos_only_locations(manifest):
 def test_claude_code_windows_lists_the_native_installer_location():
     m = ManifestLoader.load(os.path.join(_MANIFESTS_DIR, "claude_code.yaml"))
     assert r"%USERPROFILE%\.local\bin\claude.exe" in m.setup.auto_detect["windows"]
+
+
+def test_codex_windows_lists_the_desktop_apps_hash_versioned_cli():
+    """A field report: %LOCALAPPDATA%\\OpenAI\\Codex\\bin\\<hash>\\codex.exe, with
+    <hash> different after an app update, so no fixed path can name it."""
+    codex = next(m for m in _npm_manifests() if m.slug == "codex")
+    assert ("%LOCALAPPDATA%\\OpenAI\\Codex\\bin\\*\\codex.exe"
+            in codex.setup.auto_detect["windows"])

@@ -685,7 +685,8 @@ class SetupEngine:
         return dict(probe) if probe is not None else None
 
     def check_all(self, allow_stale: bool = False, *,
-                  handshake_wait: float = 0.0) -> list[AgentSetupStatus]:
+                  handshake_wait: float = 0.0,
+                  refresh_if_stale: bool = True) -> list[AgentSetupStatus]:
         """Status check for all registered agents.
 
         Cached for ``CHECK_ALL_CACHE_TTL_SECONDS``. Use ``invalidate_cache()``
@@ -695,6 +696,10 @@ class SetupEngine:
         start, spec 101): an expired result is returned at once and a single
         background sweep refreshes it. Only a cache that was never filled, or
         was invalidated, still probes before returning.
+
+        ``refresh_if_stale=False`` (with ``allow_stale``) is a pure read for
+        the pin menu: opening a menu never starts a scan. Sweeps come from
+        Settings and turn starts, and announce changes over the WS.
         """
         cached = self._check_all_cache
         if cached is not None:
@@ -702,7 +707,8 @@ class SetupEngine:
             if time.monotonic() < expires_at:
                 return results
             if allow_stale:
-                self._refresh_in_background()
+                if refresh_if_stale:
+                    self._refresh_in_background()
                 return results
         return self._probe_all(handshake_wait=handshake_wait)
 
@@ -970,8 +976,10 @@ class SetupEngine:
         """Find the agent binary.
 
         Strategy:
-        0. The user-chosen location (the locate card). Its file gone → None,
-           reported as ``override_missing``; never a fallback to the rest.
+        0. The user-chosen location (the locate card). Its file gone → the
+           rest of the strategies, because vendor updates move their CLI (the
+           Codex desktop app keeps it under ``bin/<hash>/``); only when they
+           find nothing either is it reported as ``override_missing``.
         1. A vendor desktop app declared ``order: before_cli`` (the vendor's
            primary distribution — DSH Desktop).
         2. shutil.which(command) — works if PATH is correct
@@ -1026,10 +1034,19 @@ class SetupEngine:
                 for directory in override.get("path_prepend") or []:
                     _append_to_daemon_path(directory)
                 return chosen
-            self._override_missing[slug] = chosen
             self._override_hits.discard(slug)
-            return None
+            found = self._detect(manifest)
+            if found is None:
+                self._override_missing[slug] = chosen
+            else:
+                self._override_missing.pop(slug, None)
+            return found
 
+        return self._detect(manifest)
+
+    def _detect(self, manifest: AgentManifest) -> str | None:
+        """``resolve_binary``'s strategies 1-5: finding the agent unaided."""
+        slug = manifest.slug
         current_os = detect_os()
 
         # Strategy 1: the vendor's desktop app, when it is the primary route.
