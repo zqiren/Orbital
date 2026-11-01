@@ -3397,34 +3397,13 @@ class AgentManager:
                 session_id=session_id, queue_state=queue_state,
             )
 
-        # WAIT-STATE QUEUE: if the management agent is in the "waiting" state —
-        # it dispatched a sub-agent, yielded its turn, and the idle-poll is
-        # alive while the sub-agent works — a new user message must NOT start a
-        # loop. The agent is busy; on_completed owns the restart and will
-        # surface this message when the sub-agent finishes. Append it and
-        # return "queued". See TASK-yield-turn-dispatch-and-push-coordination.md.
-        poll_task = self._idle_poll_tasks.get(make_session_key(project_id, session_id))
-        if poll_task is not None and not poll_task.done():
-            user_msg = {
-                "role": "user",
-                "content": content,
-                "source": "user",
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            }
-            if nonce:
-                user_msg["nonce"] = nonce
-            # ``session.append`` fires ``on_append`` → ActivityTranslator →
-            # the canonical ``chat.user_message`` echo (with nonce + timestamp
-            # + session_id). That single broadcast is the FE's echo; a second
-            # hand-rolled broadcast here (no nonce) used to render a duplicate
-            # bubble because the FE only dedups on nonce (D1).
-            handle.session.append(user_msg)
-            logger.info(
-                "inject_message(%s): queued user message during waiting state",
-                project_id,
-            )
-            return {"status": "queued", "session_id": session_id}
-
+        # A running worker never holds a message addressed to the manager: the
+        # composer's recipient answers now. Holding it until the worker ended
+        # left the user talking to nobody when the worker hung, and stranded it
+        # for good when the worker was pinned (its finish never wakes). A worker
+        # that ends during this turn wakes one more (spec 091 §4); the idle-poll
+        # sees the new task and exits; the loop's exit starts another if the
+        # worker is still busy. Sends to a worker never come through here.
         if handle.task is not None and handle.task.done():
             try:
                 exc = handle.task.exception()
@@ -6600,6 +6579,12 @@ class AgentManager:
                     "status": "waiting",
                     "source": "management",
                 }, session_id=session_id)
+                # A poll from before this turn may not have seen the turn at
+                # all when it was short; this one replaces it.
+                previous_poll = self._idle_poll_tasks.get(
+                    make_session_key(project_id, session_id))
+                if previous_poll is not None:
+                    previous_poll.cancel()
                 poll_task = asyncio.ensure_future(
                     self._check_sub_agents_done(project_id, session_id=session_id)
                 )

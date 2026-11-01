@@ -162,6 +162,9 @@ class _ScriptedLLM:
         self.in_flight = asyncio.Event()
         self.release = asyncio.Event()
 
+    def update_api_key(self, _key):
+        pass
+
     async def stream(self, messages, tools=None):
         idx = self.calls
         self.calls += 1
@@ -740,3 +743,133 @@ async def test_a_job_end_deferred_during_the_record_turn_still_wakes(manager, tm
     await _turn_ended(handle)
     assert llm.calls == 2
     wake.assert_called_once_with(PROJECT, session_id=SID)
+
+
+# ---------------------------------------------------------------------------
+# A message to the manager while a worker runs (field report 2026-11-01): the
+# composer's recipient answers now. The message used to be held until the
+# worker ended, so a hung worker left the user talking to nobody, and a pinned
+# worker's finish (which never wakes) stranded it for good.
+# ---------------------------------------------------------------------------
+
+
+async def _yielded_to_a_running_worker(manager, tmp_path, llm):
+    """The first turn is over, a worker is busy, and the session reads waiting."""
+    # The live provider resolve is not the subject: keep the scripted LLM.
+    manager._abuild_agent_config_from_project = AsyncMock(
+        side_effect=RuntimeError("no project in this test"))
+    manager._credential_store = MagicMock()
+    manager._credential_store.get_api_key.return_value = "test-key"
+    manager._sub_agent_manager.list_active.return_value = [
+        {"handle": "codex", "status": "running"}]
+    handle, session = _start_real_turn(manager, tmp_path, llm)
+    await _wait_until(lambda: make_session_key(PROJECT, SID) in manager._idle_poll_tasks)
+    return handle, session
+
+
+def _read_by(llm, call: int, text: str) -> bool:
+    return any(text in str(m.get("content")) for m in llm.sent[call])
+
+
+@pytest.mark.asyncio
+async def test_message_during_a_worker_run_gets_a_turn_now(manager, tmp_path):
+    llm = _ScriptedLLM([_reply("dispatched"), _reply("still on it")])
+    handle, _session = await _yielded_to_a_running_worker(manager, tmp_path, llm)
+
+    result = await manager.inject_message(PROJECT, "are you there?", session_id=SID)
+
+    assert result == "delivered"
+    await _wait_until(lambda: llm.calls == 2)
+    assert _read_by(llm, 1, "are you there?")
+    await handle.task
+    manager._idle_poll_tasks[make_session_key(PROJECT, SID)].cancel()
+
+
+@pytest.mark.asyncio
+async def test_every_message_gets_a_turn_while_the_worker_stays_busy(manager, tmp_path):
+    """Back in waiting after the answer, and the next message still lands.
+    Exactly one poll is left: the one the answered turn replaced is gone."""
+    llm = _ScriptedLLM([_reply("dispatched"), _reply("one"), _reply("two")])
+    handle, _session = await _yielded_to_a_running_worker(manager, tmp_path, llm)
+    key = make_session_key(PROJECT, SID)
+    first_poll = manager._idle_poll_tasks[key]
+
+    await manager.inject_message(PROJECT, "first", session_id=SID)
+    await _wait_until(lambda: handle.task.done() and llm.calls == 2)
+    await _wait_until(lambda: manager._idle_poll_tasks[key] is not first_poll)
+    await _wait_until(first_poll.done)
+    second_poll = manager._idle_poll_tasks[key]
+    assert not second_poll.done()
+
+    await manager.inject_message(PROJECT, "second", session_id=SID)
+    await _wait_until(lambda: llm.calls == 3)
+    assert _read_by(llm, 2, "second")
+    await handle.task
+    manager._idle_poll_tasks[key].cancel()
+
+
+@pytest.mark.asyncio
+async def test_worker_finishing_during_the_answer_wakes_one_more_turn(manager, tmp_path):
+    llm = _ScriptedLLM([_reply("dispatched"), _reply("answering"), _reply("read it")],
+                       gate_call=1)
+    handle, _session = await _yielded_to_a_running_worker(manager, tmp_path, llm)
+    await manager.inject_message(PROJECT, "status?", session_id=SID)
+    await asyncio.wait_for(llm.in_flight.wait(), 2)
+
+    manager._sub_agent_manager.list_active.return_value = []
+    outcome = await manager.inject_system_message(
+        PROJECT, "[Sub-agent] codex completed.", session_id=SID,
+        meta=_terminal_meta("completed"))
+    assert outcome == "deferred"
+    llm.release.set()
+
+    await _wait_until(lambda: llm.calls == 3)
+    assert _read_by(llm, 2, "[Sub-agent] codex completed.")
+    await handle.task
+
+
+@pytest.mark.asyncio
+async def test_message_and_worker_finish_at_the_same_moment_share_one_turn(manager, tmp_path):
+    llm = _ScriptedLLM([_reply("dispatched"), _reply("both read")])
+    handle, _session = await _yielded_to_a_running_worker(manager, tmp_path, llm)
+    manager._sub_agent_manager.list_active.return_value = []
+
+    async def resolve_takes_a_moment(*_a, **_kw):
+        # Both resumes are inside _start_loop's off-loop config build at once,
+        # the window its "another resume started a run" guard exists for.
+        await asyncio.sleep(0)
+        raise RuntimeError("no project in this test")
+    manager._abuild_agent_config_from_project = resolve_takes_a_moment
+
+    await asyncio.gather(
+        manager.inject_message(PROJECT, "any news?", session_id=SID),
+        manager.inject_system_message(
+            PROJECT, "[Sub-agent] codex completed.", session_id=SID,
+            meta=_terminal_meta("completed")),
+    )
+    await _wait_until(lambda: llm.calls == 2)
+    await handle.task
+    await asyncio.sleep(0.05)
+
+    assert llm.calls == 2, "one turn must answer both"
+    assert _read_by(llm, 1, "any news?")
+    assert _read_by(llm, 1, "[Sub-agent] codex completed.")
+
+
+@pytest.mark.asyncio
+async def test_pinned_worker_finishing_after_the_answer_stays_silent(manager, tmp_path):
+    """A pinned worker's finish still never wakes the manager, and nothing it
+    was waiting on is left unanswered: the message already had its turn."""
+    llm = _ScriptedLLM([_reply("hello"), _reply("answered")])
+    handle, session = await _yielded_to_a_running_worker(manager, tmp_path, llm)
+    await manager.inject_message(PROJECT, "hi orbital", session_id=SID)
+    await _wait_until(lambda: handle.task.done() and llm.calls == 2)
+
+    manager._sub_agent_manager.list_active.return_value = []
+    outcome = await manager.inject_system_message(
+        PROJECT, "[Sub-agent] codex completed.", session_id=SID,
+        meta=_terminal_meta("completed", suppress_wake=True))
+
+    assert outcome == "suppressed"
+    await asyncio.sleep(0.05)
+    assert llm.calls == 2

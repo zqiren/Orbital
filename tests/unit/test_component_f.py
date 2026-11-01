@@ -945,9 +945,11 @@ class TestAgentManager:
         poll.done.return_value = False
         mgr._idle_poll_tasks[make_session_key("proj_1", SID)] = poll
 
+        mgr._start_loop = AsyncMock()
         result = await mgr.inject_message(
             "proj_1", "hello there", nonce="n-123", session_id=SID)
-        assert result == {"status": "queued", "session_id": SID}
+        assert result == "delivered"
+        mgr._start_loop.assert_awaited_once()
 
         user_echoes = [
             c[0][1] for c in ws.broadcast.call_args_list
