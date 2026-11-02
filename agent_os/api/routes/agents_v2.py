@@ -2529,6 +2529,95 @@ async def patch_session(project_id: str, session_id: str, req: SessionPatchReque
     return result
 
 
+class SubAgentParamsRequest(BaseModel):
+    """Spec 149: one worker's model / thinking for this conversation. Tri-state
+    per field via ``model_fields_set``: absent → untouched; ``null`` or ``""``
+    → back to the Settings value; a value → this conversation uses it."""
+    slug: str
+    model: str | None = None
+    effort: str | None = None
+
+
+async def _session_params_extra_allowed(slug: str, model: str) -> dict | None:
+    """The live model lists a Settings save validates against (the same probes,
+    reused from the settings routes) — so a pick here is held to the same
+    rule as a pick there."""
+    from agent_os.api.routes import settings as settings_routes
+    if not model:
+        return None
+    if slug == "codex":
+        live = await settings_routes._codex_live_models()
+        if live is not None and model not in live:
+            raise HTTPException(status_code=400, detail=(
+                f"invalid value for codex.model: '{model}'. This account's "
+                f"codex CLI accepts: {live}"))
+        return None
+    if slug == "claude-code":
+        live_claude = await settings_routes._claude_live_models()
+        return {"model": [m["value"] for m in live_claude]} if live_claude else None
+    if settings_routes._offers_live_acp_models(slug):
+        live_acp = await settings_routes._acp_live_options(slug)
+        if live_acp and live_acp.get("models"):
+            return {"model": [c["value"] for c in live_acp["models"]]}
+    return None
+
+
+@router.get("/agents/{project_id}/sessions/{session_id}/sub-agent-params")
+async def get_session_sub_agent_params(project_id: str, session_id: str):
+    """Spec 149: this conversation's per-worker model / thinking overrides
+    (``{slug: {model?, effort?}}``; a slug absent follows Settings). The pin
+    menu lays them over ``GET /settings/sub-agents``'s values and choices."""
+    if _project_store is not None and _project_store.get_project(project_id) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if _sub_agent_manager is None:
+        return {"session_id": session_id, "params": {}}
+    params = await asyncio.to_thread(
+        _sub_agent_manager.session_params, project_id, session_id)
+    return {"session_id": session_id, "params": params}
+
+
+@router.patch("/agents/{project_id}/sessions/{session_id}/sub-agent-params")
+async def patch_session_sub_agent_params(project_id: str, session_id: str,
+                                         req: SubAgentParamsRequest):
+    """Spec 149: set or clear one worker's model / thinking for this
+    conversation. Validated like a Settings save; stored on the session
+    beside its pin. A live worker uses it from its next message (rebuilt with
+    resume, so the conversation continues). Returns the slug's overrides and
+    whether they reached the session file (``persisted: false`` for a session
+    whose first message has not been sent; the first send writes them)."""
+    from agent_os.daemon_v2.sub_agent_config_store import (
+        SubAgentConfigError, validate_session_params,
+    )
+    if _project_store is not None and _project_store.get_project(project_id) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if _sub_agent_manager is None:
+        raise HTTPException(status_code=503, detail="Sub-agents not available")
+    current = await asyncio.to_thread(
+        _sub_agent_manager.session_params, project_id, session_id, req.slug)
+    merged = dict(current)
+    for field in ("model", "effort"):
+        if field in req.model_fields_set:
+            merged[field] = (getattr(req, field) or "").strip()
+    try:
+        extra = await _session_params_extra_allowed(
+            req.slug, merged.get("model", ""))
+        cleaned = validate_session_params(req.slug, merged, extra_allowed=extra)
+    except SubAgentConfigError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    try:
+        persisted = await _retry_session_lock(
+            lambda: asyncio.to_thread(
+                _sub_agent_manager.set_session_params,
+                project_id, session_id, req.slug, cleaned))
+    except FileLockError:
+        raise HTTPException(
+            status_code=503, detail="Chat session is busy — please retry")
+    logger.info("session %s/%s: %s conversation params -> %s (persisted=%s)",
+                project_id, session_id, req.slug, cleaned, persisted)
+    return {"session_id": session_id, "slug": req.slug, "params": cleaned,
+            "persisted": bool(persisted)}
+
+
 @router.delete("/agents/{project_id}/sessions/{session_id}")
 async def delete_session(project_id: str, session_id: str):
     """Delete a single session (removes its JSONL from disk).

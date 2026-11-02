@@ -178,7 +178,8 @@ class SDKTransport(AgentTransport):
     supports_background_status = True
 
     def __init__(self, autonomy: "Autonomy | None" = None, system_prompt: str | None = None,
-                 resume_session_id: str | None = None, model: str | None = None):
+                 resume_session_id: str | None = None, model: str | None = None,
+                 effort: str | None = None):
         if not HAS_SDK:
             raise ImportError("claude-agent-sdk is not installed")
         self._client: "ClaudeSDKClient | None" = None
@@ -191,6 +192,9 @@ class SDKTransport(AgentTransport):
         # mid-thread switch wire-verified coherent; AMENDS piece 2).
         self._resume_session_id: str | None = resume_session_id
         self._model: str | None = model
+        # Thinking level (spec 149): Settings' claude-code effort, or this
+        # conversation's override. Config like the model; None = CLI default.
+        self._effort: str | None = effort
         # Last model observed on an AssistantMessage this turn — captured so
         # the thread record can persist it (turn_complete carries it).
         self._last_model: str | None = model
@@ -323,6 +327,13 @@ class SDKTransport(AgentTransport):
             options_kwargs["resume"] = self._resume_session_id
         if self._model is not None:
             options_kwargs["model"] = self._model
+        if self._effort is not None and "effort" in getattr(
+                ClaudeAgentOptions, "__dataclass_fields__", {}):
+            # The SDK renders this as ``--effort <value>``; an SDK too old to
+            # know the field keeps the CLI default rather than failing.
+            options_kwargs["effort"] = self._effort
+        logger.info("SDKTransport.start: model=%s effort=%s resume=%s",
+                    self._model, self._effort, bool(self._resume_session_id))
         options = ClaudeAgentOptions(**options_kwargs)
         self._client = ClaudeSDKClient(options=options)
         self._session_cost_seen = 0.0

@@ -98,6 +98,11 @@ class SubAgentManager:
         # holding an AgentManager reference. None => resume disabled
         # (every spawn is fresh/first_spawn).
         self._session_resolver = None
+        # Spec 149: per-conversation model/effort overrides, read through
+        # from the session meta once per (project, session) and kept here so
+        # a minted-but-unwritten session can hold a pick until its first send.
+        self._session_params: dict[tuple[str, str], dict[str, dict[str, str]]] = {}
+        self._session_params_unsaved: set[tuple[str, str]] = set()
         # ``_adapters`` is keyed by ``SessionKey == (project_id, session_id)``
         # so each chat session within a project owns an independent slate of
         # active sub-agents. Single-loop callers route through
@@ -375,6 +380,124 @@ class SubAgentManager:
                 return args[i + 1]
         return None
 
+    # ------------------------------------------------------------------
+    # Spec 149: per-conversation model / thinking overrides
+    # ------------------------------------------------------------------
+
+    def _load_session_params(self, project_id: str, session_id: str
+                             ) -> dict[str, dict[str, str]]:
+        """Every slug's overrides for the conversation (cached; the first read
+        per session goes through the session resolver, which may load the
+        JSONL from disk — call off the loop)."""
+        key = (project_id, session_id)
+        cached = self._session_params.get(key)
+        if cached is not None:
+            return cached
+        loaded: dict[str, dict[str, str]] = {}
+        resolver = self._session_resolver
+        try:
+            session = resolver(project_id, session_id) if resolver else None
+        except Exception:
+            logger.warning("session params read failed for %s/%s",
+                           project_id, session_id, exc_info=True)
+            session = None
+        raw = getattr(session, "sub_agent_params", None)
+        if isinstance(raw, dict):
+            loaded = {s: dict(p) for s, p in raw.items() if isinstance(p, dict)}
+        if session is not None:
+            # Only cache what a real session said: a session not written yet
+            # is read again once its first send creates it.
+            self._session_params[key] = loaded
+        return loaded
+
+    def session_params(self, project_id: str, session_id: str,
+                       slug: str | None = None):
+        """``slug``'s overrides for the conversation (``{}`` = follow
+        Settings), or every slug's when ``slug`` is None."""
+        every = self._load_session_params(project_id, session_id)
+        if slug is None:
+            return {s: dict(p) for s, p in every.items()}
+        return dict(every.get(slug) or {})
+
+    def set_session_params(self, project_id: str, session_id: str, slug: str,
+                           params: dict[str, str]) -> bool:
+        """Replace ``slug``'s overrides for the conversation (validated by the
+        caller; ``{}`` clears). Returns whether they reached the session file:
+        False for a minted session with no file yet — the pick then lives
+        here and is written by the first dispatch that finds the file. A live
+        worker picks the change up on its next message (``send`` sees the
+        spawn as stale and rebuilds it with resume)."""
+        key = (project_id, session_id)
+        current = {s: dict(p) for s, p in
+                   self._load_session_params(project_id, session_id).items()}
+        if params:
+            current[slug] = dict(params)
+        else:
+            current.pop(slug, None)
+        self._session_params[key] = current
+        persisted = self._persist_session_params(project_id, session_id, slug)
+        if persisted:
+            self._session_params_unsaved.discard(key)
+        else:
+            self._session_params_unsaved.add(key)
+        return persisted
+
+    def _persist_session_params(self, project_id: str, session_id: str,
+                                slug: str | None = None) -> bool:
+        resolver = self._session_resolver
+        try:
+            session = resolver(project_id, session_id) if resolver else None
+        except Exception:
+            session = None
+        setter = getattr(session, "set_sub_agent_params", None)
+        if not callable(setter):
+            return False
+        every = self._session_params.get((project_id, session_id)) or {}
+        slugs = [slug] if slug is not None else sorted(
+            set(every) | set(getattr(session, "sub_agent_params", None) or {}))
+        for s in slugs:
+            setter(s, dict(every.get(s) or {}))
+        return True
+
+    def _flush_unsaved_session_params(self, project_id: str, session_id: str) -> None:
+        """A pick made before the session had a file: write it now."""
+        key = (project_id, session_id)
+        if key not in self._session_params_unsaved:
+            return
+        try:
+            if self._persist_session_params(project_id, session_id):
+                self._session_params_unsaved.discard(key)
+        except Exception:
+            logger.warning("could not persist session params for %s/%s",
+                           project_id, session_id, exc_info=True)
+
+    def _layer_session_params(self, manifest, handle: str, config_dict: dict,
+                              params: dict[str, str]) -> dict:
+        """``config_dict`` with the conversation's overrides in place of the
+        Settings values: argv rebuilt from the manifest's own args plus the
+        store's flags (so a param's flag appears once), ACP options likewise.
+        """
+        store = getattr(self._setup_engine, "sub_agent_config_store", None)
+        if not params or store is None:
+            return config_dict
+        from agent_os.daemon_v2.sub_agent_config_store import resolve_params
+        layered = dict(config_dict)
+        layered["args"] = (list(getattr(manifest.runtime, "args", None) or [])
+                           + list(store.build_extra_args(handle, overrides=params)))
+        options = dict(config_dict.get("acp_config_options") or {})
+        build_options = getattr(store, "build_acp_config_options", None)
+        if callable(build_options):
+            options.update(build_options(handle, overrides=params) or {})
+        if params.get("model") and getattr(manifest.runtime, "config_mirror", None):
+            # dsh: the model is an ACP session option, not argv.
+            from agent_os.agents.composition import acp_model_value, effective_model
+            pair = effective_model(manifest, resolve_params(handle, store, params))
+            if pair is not None:
+                options["model"] = acp_model_value(pair)
+        layered["acp_config_options"] = options
+        logger.info("spawn %s with conversation overrides %s", handle, params)
+        return layered
+
     def _render_spawn_composition(self, manifest, handle: str, workspace: str,
                                   persona: str | None) -> str:
         """Render this spawn's composition file and return its absolute path.
@@ -454,6 +577,9 @@ class SubAgentManager:
                         # session's last-used model (wire-verified).
                         model=self._argv_value(
                             (config_dict or {}).get("args"), "--model"),
+                        # Spec 149: the thinking level travels the same way.
+                        effort=self._argv_value(
+                            (config_dict or {}).get("args"), "--effort"),
                     )
             except ImportError:
                 pass
@@ -940,6 +1066,14 @@ class SubAgentManager:
         # Taken before anything below appends to argv (the rendered
         # composition's per-spawn path would make every spawn look changed).
         spawn_fp = self._fingerprint_of(handle, config_dict)
+        # Spec 149: this conversation's model / thinking over Settings'.
+        # Recorded beside the fingerprint (which stays Settings-only) so a
+        # change in either rebuilds the worker on its next message.
+        session_params = await asyncio.to_thread(
+            self.session_params, project_id, session_id, handle)
+        if session_params:
+            config_dict = self._layer_session_params(
+                manifest, handle, config_dict, session_params)
 
         # Spec 116 D5 then spec 113 A6: refuse what the CLI cannot serve
         # before any process is spawned or network rule written.
@@ -1153,6 +1287,7 @@ class SubAgentManager:
         # What this process was launched with — send() rebuilds it once the
         # user's settings have moved on (see _spawn_config_stale).
         adapter._spawn_fingerprint = spawn_fp
+        adapter._session_params = dict(session_params)
         # Codex takes no system prompt: the launcher paragraph rides on the
         # first dispatch of this process instead (spec 134 Part B).
         adapter._orbital_jobs_hint = (
@@ -1256,14 +1391,21 @@ class SubAgentManager:
         return value if isinstance(value, str) else None
 
     async def _spawn_config_stale(self, project_id: str, handle: str,
-                                  adapter) -> bool:
+                                  adapter, session_id: str | None = None) -> bool:
         """True when ``adapter`` was spawned with settings that have since
-        changed — a credential saved, the model or location switched.
+        changed — a credential saved, the model or location switched, or
+        (spec 149) this conversation's model / thinking picked in the menu.
 
         Unknown is never stale: no recorded fingerprint (a path that records
         none) or no current one (the binary vanished, the config can't be
         built) keeps the live process, which is the best thing there is.
         """
+        recorded_params = getattr(adapter, "_session_params", None)
+        if session_id is not None and isinstance(recorded_params, dict):
+            current_params = await asyncio.to_thread(
+                self.session_params, project_id, session_id, handle)
+            if current_params != recorded_params:
+                return True
         recorded = getattr(adapter, "_spawn_fingerprint", None)
         current_of = getattr(self._setup_engine, "spawn_fingerprint", None)
         if not isinstance(recorded, str) or current_of is None:
@@ -1335,6 +1477,11 @@ class SubAgentManager:
             dispatch_id = f"{session_id}:{uuid4().hex[:8]}"
         sk = make_session_key(project_id, session_id)
         prompt_key = (project_id, session_id, handle)
+        # Spec 149: a model pick made before this session had a file — the
+        # send that created it can now persist it.
+        if (project_id, session_id) in self._session_params_unsaved:
+            await asyncio.to_thread(
+                self._flush_unsaved_session_params, project_id, session_id)
 
         # §4d reset: drop any live adapter for this handle so the spawn-on-
         # demand block below actually re-spawns fresh (the default branch only
@@ -1365,7 +1512,8 @@ class SubAgentManager:
         if (existing is not None
                 and getattr(existing, "_broken", False) is not True
                 and prompt_key not in self._prompt_active
-                and await self._spawn_config_stale(project_id, handle, existing)):
+                and await self._spawn_config_stale(project_id, handle, existing,
+                                                    session_id=session_id)):
             logger.info(
                 "send: %s/%s was spawned with settings that have since "
                 "changed — rebuilding it with resume before dispatch",
@@ -1781,7 +1929,7 @@ class SubAgentManager:
             # the user's settings moved on while it ran (a key saved
             # mid-turn): the queued prompts must reach a rebuilt process.
             if transport_dead or await self._spawn_config_stale(
-                    project_id, handle, adapter):
+                    project_id, handle, adapter, session_id=session_id):
                 # Rebuilding takes stop()/start(), which need this lock and
                 # cancel the consumer task we are running in, so hand off.
                 task = asyncio.create_task(

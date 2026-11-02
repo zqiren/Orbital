@@ -147,6 +147,8 @@ class CodexTransport(AgentTransport):
         # omitted and the provider serves the thread's last-used model
         # (wire-verified on both transports).
         self._model: str | None = None
+        # Spec 149: reasoning effort from argv, sent on each turn/start.
+        self._effort: str | None = None
         self._autonomy: Autonomy | None = autonomy
         self._external_sandbox = external_sandbox
         self._alive = False
@@ -641,6 +643,18 @@ class CodexTransport(AgentTransport):
                 return args[i + 1]
         return None
 
+    @staticmethod
+    def _argv_effort(args: list[str]) -> str | None:
+        """Extract ``-c model_reasoning_effort=<v>`` (the config store's codex
+        effort flag_template, spec 149). Sent per turn as ``turn/start``'s
+        ``effort`` — the app-server's own knob — never on argv."""
+        prefix = "model_reasoning_effort="
+        for i, a in enumerate(args or []):
+            if a == "-c" and i + 1 < len(args) and args[i + 1].startswith(prefix):
+                value = args[i + 1][len(prefix):].strip().strip('"\'')
+                return value or None
+        return None
+
     def _thread_open_request(self, workspace: str) -> tuple[str, dict]:
         """(method, params) opening the thread — fresh or resume.
 
@@ -744,6 +758,7 @@ class CodexTransport(AgentTransport):
             self._drain_stderr(), name=f"codex-stderr-{id(self)}")
 
         self._model = self._argv_model(args)
+        self._effort = self._argv_effort(args)
 
         # clientInfo flows into the rollout `originator` (FINDINGS A6).
         init = await self._request("initialize", {"clientInfo": {
@@ -906,6 +921,13 @@ class CodexTransport(AgentTransport):
             # skips internal enforcement. Tagged-object form exists ONLY on
             # turn/start (param asymmetry).
             params["sandboxPolicy"] = {"type": "externalSandbox"}
+        effort = getattr(self, "_effort", None)
+        if effort:
+            # Spec 149: the thinking level, per turn (protocol: "this turn and
+            # subsequent turns"). Omitted = the model's own default.
+            params["effort"] = effort
+        logger.info("CodexTransport: turn/start thread=%s model=%s effort=%s",
+                    self._thread_id, self._effective_model or self._model, effort)
         try:
             result = await self._request("turn/start", params)
         except Exception as e:

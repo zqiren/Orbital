@@ -61,6 +61,8 @@ import AskTray from './AskTray';
 import { useSessionAsks } from '../hooks/useSessionAsks';
 import { formatAskAnswer } from '../utils/askAnswer';
 import PinTargetSelect, { resolveSendTarget } from './PinTargetSelect';
+import { useConversationModels } from '../hooks/useConversationModels';
+import { resolveCard } from '../hooks/useCredentialCards';
 import { useSessions } from '../hooks/useSessions';
 import { StopGlyph } from './StopGlyph';
 import ContextStrip from './ContextStrip';
@@ -985,6 +987,40 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   const pinnedAgentName = pinnedTarget
     ? (agents.find((a) => a.slug === pinnedTarget)?.name ?? pinnedTarget)
     : null;
+  // Spec 149: the pin menu's model line per worker (this conversation) and
+  // Orbital's credential card (this project — the same PUT Project Settings
+  // makes). Loaded when the menu opens.
+  const convModels = useConversationModels(projectId, sessionId);
+  const [cardPick, setCardPick] = useState<{ projectId: string; cardId: string | null } | null>(null);
+  const projectCardId = cardPick && cardPick.projectId === projectId
+    ? cardPick.cardId : (project.card_id ?? null);
+  const pinModels = useMemo(() => ({
+    workers: convModels.workers,
+    editable: sessionId !== undefined,
+    onWorkerChange: convModels.setWorkerParams,
+    onMenuOpen: convModels.refresh,
+    manager: convModels.cards.length > 0 ? {
+      cards: convModels.cards.map((c) => ({ id: c.id, name: c.name })),
+      cardId: projectCardId,
+      defaultName: resolveCard(convModels.cards, null, convModels.defaultCardId)?.name ?? null,
+      onChange: async (cardId: string | null) => {
+        const before = projectCardId;
+        setCardPick({ projectId, cardId });
+        try {
+          await api(`/api/v2/projects/${encodeURIComponent(projectId)}`, {
+            method: 'PUT',
+            body: JSON.stringify({ card_id: cardId }),
+          });
+          onRefreshProject?.(projectId);
+          return true;
+        } catch {
+          setCardPick({ projectId, cardId: before });
+          return false;
+        }
+      },
+    } : undefined,
+  }), [convModels.workers, convModels.setWorkerParams, convModels.refresh, convModels.cards,
+    convModels.defaultCardId, sessionId, projectCardId, projectId, onRefreshProject]);
   // Session import: an imported row whose transcript the first /chat converts.
   const viewedIsUnimportedImport =
     viewedEntry?.origin === 'imported' && viewedEntry.imported?.materialized === false;
@@ -4644,6 +4680,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
               value={pinnedTarget}
               runningSlugs={runningSubAgents}
               managerReady={managerReady}
+              models={pinModels}
               onChange={(slug) => {
                 if (leftOffOpenedRef.current !== null && leftOffOpenedRef.current === sessionId && slug !== pinnedTarget) {
                   leftOffOpenedRef.current = null;
