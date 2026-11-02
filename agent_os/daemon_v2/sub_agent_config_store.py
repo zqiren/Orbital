@@ -120,6 +120,14 @@ SCHEMA: dict[str, dict[str, _ParamSchema]] = {
             allowed=None,
             flag_template="-m {value}",
         ),
+        # Reasoning effort (spec 149). Rendered as codex's own config
+        # override; the app-server transport lifts it out of argv and sends
+        # it as ``turn/start.effort`` (the protocol's per-turn knob).
+        "effort": _ParamSchema(
+            name="effort",
+            allowed=("low", "medium", "high"),
+            flag_template="-c model_reasoning_effort={value}",
+        ),
     },
     "cursor": {
         # Cursor model IDs are account-dependent and change independently of
@@ -272,9 +280,16 @@ SCHEMA: dict[str, dict[str, _ParamSchema]] = {
 }
 
 
+# Spec 149: the params a single conversation may override over Settings (the
+# pin menu's model + thinking). Stored with the session, layered at dispatch.
+SESSION_PARAMS = ("model", "effort")
+
+
 def resolve_params(slug: str, store: "SubAgentConfigStore | None" = None,
+                   overrides: dict[str, str] | None = None,
                    ) -> dict[str, str]:
-    """Effective params for ``slug``: SCHEMA defaults under persisted overrides.
+    """Effective params for ``slug``: SCHEMA defaults under persisted overrides,
+    under this conversation's ``overrides`` (spec 149) when given.
 
     The argv path (``build_extra_args``) and the composition renderer both read
     configuration through this, so a param means the same thing either way.
@@ -286,7 +301,26 @@ def resolve_params(slug: str, store: "SubAgentConfigStore | None" = None,
     }
     if store is not None:
         params.update(store.get(slug))
+    for key, value in (overrides or {}).items():
+        if key in SESSION_PARAMS and key in SCHEMA.get(slug, {}) and value:
+            params[key] = str(value)
     return params
+
+
+def validate_session_params(slug: str, params: dict, *,
+                            extra_allowed: dict[str, list[str]] | None = None
+                            ) -> dict[str, str]:
+    """Cleaned spec-149 conversation overrides or :class:`SubAgentConfigError`.
+
+    Only ``SESSION_PARAMS`` the agent's schema has; values checked the same
+    way a Settings save is. Empty / None values are dropped (= "Default")."""
+    if not isinstance(params, dict):
+        raise SubAgentConfigError("params must be an object")
+    for key in params:
+        if key not in SESSION_PARAMS:
+            raise SubAgentConfigError(
+                f"'{key}' cannot be set per conversation")
+    return SubAgentConfigStore.validate(slug, params, extra_allowed=extra_allowed)
 
 
 class SubAgentConfigError(ValueError):
@@ -564,17 +598,20 @@ class SubAgentConfigStore:
             cleaned[key] = value
         return cleaned
 
-    def build_extra_args(self, slug: str) -> list[str]:
+    def build_extra_args(self, slug: str,
+                         overrides: dict[str, str] | None = None) -> list[str]:
         """Return extra argv tokens for the CLI invocation, from persisted config.
 
         Reads ``self.get(slug)`` and renders each param via its schema's
         ``flag_template``, splitting on whitespace so each token is a
         separate argv element. Params with no ``flag_template`` are delivered
         by another mechanism (a composition file) and emit nothing here.
+        ``overrides`` (spec 149) replaces a param's value, never adds a
+        second copy of its flag.
         """
         slug_schema = SCHEMA.get(slug, {})
         argv: list[str] = []
-        for key, value in resolve_params(slug, self).items():
+        for key, value in resolve_params(slug, self, overrides).items():
             schema = slug_schema.get(key)
             if schema is None or not schema.flag_template:
                 continue
@@ -591,11 +628,13 @@ class SubAgentConfigStore:
                 env[schema.env_var] = str(value)
         return env
 
-    def build_acp_config_options(self, slug: str) -> dict[str, str]:
+    def build_acp_config_options(self, slug: str,
+                                 overrides: dict[str, str] | None = None,
+                                 ) -> dict[str, str]:
         """ACP session config options for the params whose schema names one."""
         slug_schema = SCHEMA.get(slug, {})
         options: dict[str, str] = {}
-        for key, value in resolve_params(slug, self).items():
+        for key, value in resolve_params(slug, self, overrides).items():
             schema = slug_schema.get(key)
             if schema is not None and schema.acp_config_option and value:
                 options[schema.acp_config_option] = str(value)

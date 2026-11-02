@@ -27,9 +27,26 @@
 // Global Settings at the LLM cards instead of unpinning onto a manager that
 // would only fail.
 
+// Spec 149 (design "C2 with chevron", 2026-11-02): in the composer, each
+// worker row carries a second muted line "<model> · <thinking>" with a small
+// chevron. The line is its own control, beside (not inside) the row's option
+// button: clicking it swaps the side usage card, in place and at the same
+// width, for that worker's Model + Thinking panel (this conversation only).
+// The Orbital row's line is the project's credential card; its panel picks
+// another (the same project PUT as Project Settings). Clicking the line again,
+// Esc, or anywhere else in the menu swaps the usage card back; Esc never
+// closes the menu while the panel shows. Phones have no side card, so the
+// panel opens inline under its row.
+
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { ChevronDown } from 'lucide-react';
 import MessageAvatar from './MessageAvatar';
+import {
+  labelFor,
+  modelLineText,
+  type ParamsPatch,
+  type WorkerModelInfo,
+} from '../hooks/useConversationModels';
 import { useT } from '../i18n/useT';
 import { useLocale } from '../i18n/LocaleContext';
 import {
@@ -117,7 +134,31 @@ interface PinTargetSelectProps {
    * calling onChange(null).
    */
   managerReady?: boolean;
+  /** Spec 149, composer only: the model line on each row and its panel.
+   *  Absent (queue, automations) = the rows exactly as before. */
+  models?: PinModels;
   'data-testid'?: string;
+}
+
+/** Spec 149: what the composer hands the menu for the model lines. */
+export interface PinModels {
+  /** Per worker slug; a worker missing here gets no line. */
+  workers: Record<string, WorkerModelInfo>;
+  /** False until the conversation exists: lines show, but cannot change. */
+  editable: boolean;
+  /** Set / clear (null) a worker's model or thinking; resolves false on failure. */
+  onWorkerChange: (slug: string, patch: ParamsPatch) => Promise<boolean>;
+  /** Orbital's row: the project's credential card. Absent = no line. */
+  manager?: {
+    cards: Array<{ id: string; name: string }>;
+    /** The project's `card_id`; null follows the global default card. */
+    cardId: string | null;
+    /** The global default card's name, for "Default (…)". */
+    defaultName: string | null;
+    onChange: (cardId: string | null) => Promise<boolean>;
+  };
+  /** The menu opened: re-read the choices and this conversation's picks. */
+  onMenuOpen?: () => void;
 }
 
 const MENU_ROW =
@@ -371,6 +412,243 @@ function QuotaCard({ slug, name, info, now, t, locale }: {
   ));
 }
 
+// ---------------------------------------------------------------------------
+// Spec 149: model + thinking panel (the side card's other state)
+// ---------------------------------------------------------------------------
+
+function Radio({ checked, onClick, testId, children }: {
+  checked: boolean; onClick: () => void; testId: string; children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={checked}
+      data-testid={testId}
+      onClick={onClick}
+      className="flex w-full min-w-0 items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-[13px] text-primary
+                 hover:bg-card-hover/50 focus-visible:outline-none focus-visible:bg-card-hover/50 max-md:min-h-[44px]"
+    >
+      <span
+        aria-hidden
+        className={`grid h-3.5 w-3.5 shrink-0 place-items-center rounded-full border ${
+          checked ? 'border-accent' : 'border-muted/70'
+        }`}
+      >
+        {checked && <span className="h-1.5 w-1.5 rounded-full bg-accent" />}
+      </span>
+      {children}
+    </button>
+  );
+}
+
+function Section({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="px-2 text-[11px] font-medium text-secondary">{label}</span>
+      {children}
+    </div>
+  );
+}
+
+function PanelFooter({ text, error, t }: { text: string; error: boolean; t: T }) {
+  return (
+    <p className="m-0 border-t border-border/60 px-2 pt-2 text-[11px] leading-snug text-muted">
+      {error && (
+        <span role="alert" data-testid="pin-model-error" className="block text-error-text">
+          {t('pinAgent.model.saveFailed')}
+        </span>
+      )}
+      {text}
+    </p>
+  );
+}
+
+/** A long id (MiniMax's `m:minimax:MiniMax-M3:v:thinking`) wraps, never
+ *  truncates — at its `:` / `/` separators first, anywhere only as a last resort. */
+const VALUE_TEXT = 'min-w-0 [overflow-wrap:anywhere]';
+
+function breakable(text: string): ReactNode {
+  const parts = text.split(/(?<=[:/])/);
+  return parts.length < 2 ? text : parts.map((p, i) => (
+    <span key={i}>{p}{i < parts.length - 1 && <wbr />}</span>
+  ));
+}
+
+function WorkerPanel({ info, onChange, error, t }: {
+  info: WorkerModelInfo;
+  onChange: (patch: ParamsPatch) => void;
+  error: boolean;
+  t: T;
+}) {
+  const settingsLabel = info.settingsModel ? labelFor(info, info.settingsModel) : null;
+  const level = info.effort ?? info.settingsEffort;
+  // A pick the list no longer offers still shows, checked.
+  const listed = info.models
+    ? (info.model && !info.models.some((m) => m.value === info.model)
+      ? [...info.models, { value: info.model, label: info.model }]
+      : info.models)
+    : null;
+  return (
+    <div className="flex flex-col gap-2.5" data-testid={`pin-model-panel-${info.slug}`}>
+      <Section label={t('pinAgent.model.section.model')}>
+        <div role="radiogroup" aria-label={t('pinAgent.model.section.model')}>
+          <Radio
+            checked={info.model === null}
+            onClick={() => onChange({ model: null })}
+            testId="pin-model-opt-default"
+          >
+            <span className="shrink-0">{t('pinAgent.model.default')}</span>
+            {settingsLabel && (
+              <span className={`${VALUE_TEXT} text-muted`}>
+                {breakable(t('pinAgent.model.defaultValue', { value: settingsLabel }))}
+              </span>
+            )}
+          </Radio>
+          {listed
+            ? listed.map((m) => (
+                <Radio
+                  key={m.value}
+                  checked={info.model === m.value}
+                  onClick={() => onChange({ model: m.value })}
+                  testId={`pin-model-opt-${m.value}`}
+                >
+                  <span className={VALUE_TEXT}>{breakable(m.label)}</span>
+                </Radio>
+              ))
+            : <FreeTextModel key={info.slug} info={info} onChange={onChange} t={t} />}
+        </div>
+      </Section>
+      {info.levels && info.levels.length > 0 && (
+        <Section label={t('pinAgent.model.section.thinking')}>
+          <div
+            role="radiogroup"
+            aria-label={t('pinAgent.model.section.thinking')}
+            className="mx-2 flex gap-0.5 rounded-lg border border-border bg-nav p-0.5"
+          >
+            {info.levels.map((l) => (
+              <button
+                key={l}
+                type="button"
+                role="radio"
+                aria-checked={level === l}
+                data-testid={`pin-model-level-${l}`}
+                // Picking the Settings level (or the current pick again)
+                // clears the override: the conversation follows Settings.
+                onClick={() => onChange({
+                  effort: l === info.effort || l === info.settingsEffort ? null : l,
+                })}
+                className={`flex-auto whitespace-nowrap rounded-md px-1 py-1 text-[11px] font-medium transition-colors duration-150 max-md:min-h-[36px] ${
+                  level === l
+                    ? 'bg-segment-on text-segment-on-text shadow-[0_1px_2px_rgb(0_0_0/0.06)]'
+                    : 'text-secondary hover:text-primary'
+                }`}
+              >
+                {l}
+              </button>
+            ))}
+          </div>
+        </Section>
+      )}
+      <PanelFooter text={t('pinAgent.model.scope.worker')} error={error} t={t} />
+    </div>
+  );
+}
+
+/** Free-text agents (MiniMax, Pi, Cursor…): Default, or a typed model id,
+ *  applied on Enter or when the field loses focus. */
+function FreeTextModel({ info, onChange, t }: {
+  info: WorkerModelInfo; onChange: (patch: ParamsPatch) => void; t: T;
+}) {
+  const [draft, setDraft] = useState(info.model ?? '');
+  const inputRef = useRef<HTMLInputElement>(null);
+  const commit = () => {
+    const v = draft.trim();
+    if (v !== (info.model ?? '')) onChange({ model: v || null });
+  };
+  const custom = info.model !== null;
+  return (
+    <div
+      className="flex w-full min-w-0 items-center gap-2.5 rounded-md px-2 py-1 text-[13px] max-md:min-h-[44px]"
+      data-testid="pin-model-opt-other"
+    >
+      <button
+        type="button"
+        role="radio"
+        aria-checked={custom}
+        aria-label={t('pinAgent.model.other')}
+        onClick={() => inputRef.current?.focus()}
+        className={`grid h-3.5 w-3.5 shrink-0 place-items-center rounded-full border focus-visible:outline-none ${
+          custom ? 'border-accent' : 'border-muted/70'
+        }`}
+      >
+        {custom && <span className="h-1.5 w-1.5 rounded-full bg-accent" />}
+      </button>
+      <input
+        ref={inputRef}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') { e.preventDefault(); commit(); }
+        }}
+        placeholder={t('pinAgent.model.other')}
+        aria-label={t('pinAgent.model.other')}
+        spellCheck={false}
+        data-testid="pin-model-other-input"
+        className="min-w-0 flex-1 rounded-md border border-border bg-card px-2 py-1 text-[13px] text-primary
+                   placeholder:text-muted focus:border-accent focus:outline-none max-md:text-base"
+      />
+    </div>
+  );
+}
+
+function ManagerPanel({ manager, onChange, error, t }: {
+  manager: NonNullable<PinModels['manager']>;
+  onChange: (cardId: string | null) => void;
+  error: boolean;
+  t: T;
+}) {
+  return (
+    <div className="flex flex-col gap-2.5" data-testid="pin-model-panel-orbital">
+      <Section label={t('pinAgent.model.section.provider')}>
+        <div role="radiogroup" aria-label={t('pinAgent.model.section.provider')}>
+          <Radio
+            checked={manager.cardId === null}
+            onClick={() => onChange(null)}
+            testId="pin-model-card-default"
+          >
+            <span className="shrink-0">{t('pinAgent.model.default')}</span>
+            {manager.defaultName && (
+              <span className={`${VALUE_TEXT} text-muted`}>
+                {t('pinAgent.model.defaultValue', { value: manager.defaultName })}
+              </span>
+            )}
+          </Radio>
+          {manager.cards.map((c) => (
+            <Radio
+              key={c.id}
+              checked={manager.cardId === c.id}
+              onClick={() => onChange(c.id)}
+              testId={`pin-model-card-${c.id}`}
+            >
+              <span className={VALUE_TEXT}>{c.name}</span>
+            </Radio>
+          ))}
+        </div>
+      </Section>
+      <PanelFooter text={t('pinAgent.model.scope.manager')} error={error} t={t} />
+    </div>
+  );
+}
+
+/** The Orbital row's line: the card the project runs on. */
+function managerCardName(manager: PinModels['manager']): string | null {
+  if (!manager) return null;
+  if (manager.cardId === null) return manager.defaultName;
+  return manager.cards.find((c) => c.id === manager.cardId)?.name ?? null;
+}
+
 /** Date.now(), re-read every 30 s while `active` (ages, reset voiding). */
 function useNow(active: boolean): number {
   const [now, setNow] = useState(() => Date.now());
@@ -392,6 +670,7 @@ export default function PinTargetSelect({
   managerLabel,
   runningSlugs,
   managerReady = true,
+  models,
   'data-testid': testId,
 }: PinTargetSelectProps) {
   const t = useT();
@@ -401,6 +680,10 @@ export default function PinTargetSelect({
   // worker's), and whether the collapsed control is hovered.
   const [cardFor, setCardFor] = useState<string | null>(null);
   const [controlHover, setControlHover] = useState(false);
+  // Spec 149: whose card is in its model state (undefined = the usage card;
+  // null = Orbital's), and whether the last change there failed.
+  const [modelFor, setModelFor] = useState<string | null | undefined>(undefined);
+  const [modelError, setModelError] = useState(false);
   const availability = useAgentAvailability();
   const now = useNow(open || controlHover);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -411,7 +694,10 @@ export default function PinTargetSelect({
       if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
     };
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false);
+      if (e.key !== 'Escape') return;
+      // Spec 149: Esc first returns the card to usage; the menu stays open.
+      if (modelFor !== undefined) setModelFor(undefined);
+      else setOpen(false);
     };
     document.addEventListener('mousedown', onDocMouseDown);
     document.addEventListener('keydown', onKeyDown);
@@ -419,7 +705,7 @@ export default function PinTargetSelect({
       document.removeEventListener('mousedown', onDocMouseDown);
       document.removeEventListener('keydown', onKeyDown);
     };
-  }, [open]);
+  }, [open, modelFor]);
 
   // No sub-agents installed → no pin surface at all.
   if (agents.length === 0) return null;
@@ -447,11 +733,13 @@ export default function PinTargetSelect({
   const toggle = () => {
     // Decided from the rendered `open`, never inside a setState updater
     // (updaters must stay pure; CLAUDE.md React anti-patterns).
+    setModelFor(undefined);
     if (!open) {
       setCardFor(value);
       setControlHover(false);
       // One backend-cached REST hit; also kicks the codex read-through.
       refreshAgentAvailability();
+      models?.onMenuOpen?.();
     }
     setOpen(!open);
   };
@@ -476,10 +764,169 @@ export default function PinTargetSelect({
       locale={locale}
     />
   ) : null);
+
+  // --- Spec 149: the model line and its panel -------------------------------
+  const pinModels = standalone ? undefined : models;
+  const managerName = managerCardName(pinModels?.manager);
+  const lineText = (slug: string | null): string | null => {
+    if (!pinModels) return null;
+    if (slug === null) return managerName;
+    const info = pinModels.workers[slug];
+    return info ? modelLineText(info, t('pinAgent.model.default')) : null;
+  };
+  const editable = (slug: string | null) =>
+    slug === null ? Boolean(pinModels?.manager) : Boolean(pinModels?.editable);
+  const openModel = (slug: string | null) => {
+    setModelError(false);
+    setCardFor(slug);
+    setModelFor(modelFor === slug ? undefined : slug);
+  };
+  const changeWorker = (slug: string, patch: ParamsPatch) => {
+    setModelError(false);
+    void pinModels?.onWorkerChange(slug, patch).then((ok) => { if (!ok) setModelError(true); });
+  };
+  const changeCard = (cardId: string | null) => {
+    setModelError(false);
+    void pinModels?.manager?.onChange(cardId).then((ok) => { if (!ok) setModelError(true); });
+  };
+  const panelFor = (slug: string | null): ReactNode => {
+    if (!pinModels) return null;
+    if (slug === null) {
+      return pinModels.manager
+        ? <ManagerPanel manager={pinModels.manager} onChange={changeCard} error={modelError} t={t} />
+        : null;
+    }
+    const info = pinModels.workers[slug];
+    return info
+      ? <WorkerPanel info={info} onChange={(p) => changeWorker(slug, p)} error={modelError} t={t} />
+      : null;
+  };
+  /** The side card's model state: same shell and width as the usage card. */
+  const modelCard = (slug: string | null) => {
+    const panel = panelFor(slug);
+    if (!panel) return null;
+    const name = slug === null ? t('pinAgent.orbital') : nameOf(slug);
+    return (
+      <div
+        role="dialog"
+        aria-label={t('pinAgent.model.aria', { agent: name })}
+        data-testid="pin-model-card"
+        data-card-for={slug ?? 'orbital'}
+        // A long live model list scrolls inside the card on a short window.
+        className={`${ELEVATED} w-[300px] max-h-[calc(100dvh-7rem)] overflow-y-auto px-1.5 py-3 flex flex-col gap-2.5 text-left`}
+      >
+        <div className="flex items-center gap-2 px-2">
+          <MessageAvatar variant="agent" agentHandle={slug ?? undefined} />
+          <b className="text-[13px] font-semibold">{name}</b>
+        </div>
+        {panel}
+      </div>
+    );
+  };
+  const hoverRow = (slug: string | null) => {
+    // While a panel shows, the card stays put: the pointer may cross other
+    // rows on its way to it.
+    if (modelFor !== undefined) return;
+    setCardFor(slug);
+  };
+  /** The row's second line, a control of its own (or plain text before the
+   *  conversation exists). */
+  const modelLine = (slug: string | null, name: string, text: string) => {
+    const key = slug ?? 'orbital';
+    if (!editable(slug)) {
+      return (
+        <span data-testid={`pin-model-line-${key}`} className="mt-px text-xs text-muted whitespace-nowrap max-md:truncate max-md:max-w-full">
+          {text}
+        </span>
+      );
+    }
+    const active = modelFor === slug;
+    return (
+      <button
+        type="button"
+        data-model-line
+        data-testid={`pin-model-line-${key}`}
+        aria-expanded={active}
+        aria-label={`${t('pinAgent.model.aria', { agent: name })}: ${text}`}
+        title={text}
+        onClick={(e) => { e.stopPropagation(); openModel(slug); }}
+        className={`group/line pointer-events-auto relative z-10 mt-px inline-flex max-w-full items-center rounded-sm
+                    text-xs whitespace-nowrap transition-colors duration-150 hover:text-primary
+                    focus-visible:outline-none focus-visible:text-primary max-md:py-1 ${
+                      active ? 'text-primary' : 'text-muted'}`}
+      >
+        <span className="min-w-0 decoration-dotted decoration-1 underline-offset-[3px] group-hover/line:underline group-focus-visible/line:underline max-md:truncate">
+          {text}
+        </span>
+        <ChevronDown size={11} aria-hidden className="ml-0.5 shrink-0 text-muted" />
+      </button>
+    );
+  };
+  /** A row WITH a line: the option is a full-row button underneath, the
+   *  visible content passes clicks through to it, and the line sits above
+   *  as its own control — no control nested inside another. */
+  const lineRow = (opts: {
+    slug: string | null; name: string; text: string; selected: boolean;
+    avatar: ReactNode; trailing: ReactNode; label: string; highlight: boolean;
+  }) => (
+    <div
+      key={opts.slug ?? 'orbital'}
+      data-testid={`pin-row-${opts.slug ?? 'orbital'}`}
+      onMouseEnter={() => hoverRow(opts.slug)}
+      className={`${MENU_ROW} relative group/row has-[>button[role=option]:focus-visible]:bg-card-hover/50 ${
+        opts.highlight ? 'md:bg-card-hover/50' : ''}`}
+    >
+      <button
+        type="button"
+        role="option"
+        aria-selected={opts.selected}
+        aria-label={opts.label}
+        onClick={() => pick(opts.slug)}
+        onFocus={() => hoverRow(opts.slug)}
+        className="absolute inset-0 h-full w-full focus-visible:outline-none"
+      />
+      <span className="pointer-events-none contents">
+        {opts.avatar}
+        <span className="flex min-w-0 flex-1 flex-col items-start">
+          <span className="font-medium whitespace-nowrap">{opts.name}</span>
+          {modelLine(opts.slug, opts.name, opts.text)}
+        </span>
+        {opts.trailing}
+      </span>
+    </div>
+  );
+  /** Phone: no side card, so the panel opens under its row. */
+  const inlinePanel = (slug: string | null) => (modelFor === slug && pinModels ? (
+    <div
+      data-model-inline
+      data-testid={`pin-model-inline-${slug ?? 'orbital'}`}
+      className="md:hidden border-y border-border/60 bg-card/60 px-1.5 py-2"
+    >
+      {panelFor(slug)}
+    </div>
+  ) : null);
+
   const pinnedHasCard = hasCard(value, value ? availability[value] : undefined);
   const controlDot = value ? dotFor(value) : null;
-  const menuCard = open ? card(cardFor) : null;
+  const menuCard = !open ? null : modelFor !== undefined ? modelCard(modelFor) : card(cardFor);
   const hoverCard = !open && controlHover ? card(value) : null;
+
+  const orbitalTrailing = (
+    <span className="ml-auto flex items-center gap-2 text-xs text-muted whitespace-nowrap">
+      {managerReady ? (
+        <span>{t('pinAgent.managerRole')}</span>
+      ) : (
+        <span
+          data-testid="pin-orbital-key-required"
+          className="rounded-full border border-warning/40 bg-warning/10 px-2 py-px text-[11px] font-medium text-warning-text"
+        >
+          {t('pinAgent.orbital.keyRequired')}
+        </span>
+      )}
+      <span className="w-3 text-center">{value === null ? '✓' : ''}</span>
+    </span>
+  );
+  const orbitalText = lineText(null);
 
   return (
     // Composer: -ml-3/-my-2 pull the control through the composer card's
@@ -549,38 +996,94 @@ export default function PinTargetSelect({
           <div
             role="listbox"
             aria-label={managerLabel ?? t('pinAgent.aria')}
+            // Spec 149: a press anywhere in the menu but a line or an open
+            // phone panel returns the card to usage.
+            onMouseDown={pinModels ? (e) => {
+              const el = e.target as HTMLElement;
+              if (!el.closest('[data-model-line], [data-model-inline]')) setModelFor(undefined);
+            } : undefined}
             // Standalone opens downward: it is an ordinary field in the middle of
             // a form, where an upward menu would clip against the surface above.
-            className={`${ELEVATED} min-w-[300px] max-w-[calc(100vw-2rem)] overflow-hidden`}
+            className={`${ELEVATED} min-w-[300px] max-w-[calc(100vw-2rem)] overflow-hidden ${
+              pinModels ? 'max-md:max-h-[calc(100dvh-7rem)] max-md:overflow-y-auto' : ''}`}
           >
-            <button
-              type="button"
-              role="option"
-              aria-selected={value === null}
-              onClick={() => pick(null)}
-              onMouseEnter={() => setCardFor(null)}
-              onFocus={() => setCardFor(null)}
-              className={MENU_ROW}
-            >
-              <MessageAvatar variant="agent" />
-              <span className="font-medium whitespace-nowrap">{t('pinAgent.orbital')}</span>
-              <span className="ml-auto flex items-center gap-2 text-xs text-muted whitespace-nowrap">
-                {managerReady ? (
-                  <span>{t('pinAgent.managerRole')}</span>
-                ) : (
-                  <span
-                    data-testid="pin-orbital-key-required"
-                    className="rounded-full border border-warning/40 bg-warning/10 px-2 py-px text-[11px] font-medium text-warning-text"
-                  >
-                    {t('pinAgent.orbital.keyRequired')}
-                  </span>
-                )}
-                <span className="w-3 text-center">{value === null ? '✓' : ''}</span>
-              </span>
-            </button>
+            {orbitalText ? lineRow({
+              slug: null,
+              name: t('pinAgent.orbital'),
+              text: orbitalText,
+              selected: value === null,
+              avatar: <MessageAvatar variant="agent" />,
+              trailing: orbitalTrailing,
+              label: t('pinAgent.orbital'),
+              highlight: false,
+            }) : (
+              <button
+                type="button"
+                role="option"
+                aria-selected={value === null}
+                onClick={() => pick(null)}
+                onMouseEnter={() => hoverRow(null)}
+                onFocus={() => hoverRow(null)}
+                className={MENU_ROW}
+              >
+                <MessageAvatar variant="agent" />
+                <span className="font-medium whitespace-nowrap">{t('pinAgent.orbital')}</span>
+                {orbitalTrailing}
+              </button>
+            )}
+            {inlinePanel(null)}
             <div className="h-px bg-border/60" aria-hidden />
             {agents.map((a) => {
               const lines = usageLines(a.slug, availability[a.slug], now, t, locale);
+              const highlight = cardFor === a.slug && Boolean(menuCard);
+              const avatar = (
+                <AvatarWithDot
+                  slug={a.slug}
+                  dot={dotFor(a.slug)}
+                  dotTestId={`pin-dot-${a.slug}`}
+                  t={t}
+                />
+              );
+              const trailing = (
+                <span className="ml-auto flex items-center gap-2 text-xs text-muted whitespace-nowrap tabular-nums">
+                  {lines[0] && (
+                    <span
+                      data-testid={`pin-quota-${a.slug}`}
+                      data-tone={lines[0].tone}
+                      className={`max-md:hidden ${LINE_CLASS[lines[0].tone]}`}
+                    >
+                      {lines[0].text}
+                    </span>
+                  )}
+                  {lines[0] && (
+                    <span
+                      data-testid={`pin-quota-stack-${a.slug}`}
+                      className="hidden max-md:flex flex-col items-end gap-px"
+                    >
+                      {lines.map((l, i) => (
+                        <span key={i} className={LINE_CLASS[l.tone]}>{l.text}</span>
+                      ))}
+                    </span>
+                  )}
+                  <span className="w-3 text-center">{value === a.slug ? '✓' : ''}</span>
+                </span>
+              );
+              const text = lineText(a.slug);
+              if (text) {
+                return [
+                  lineRow({
+                    slug: a.slug,
+                    name: a.name,
+                    text,
+                    selected: value === a.slug,
+                    avatar,
+                    trailing,
+                    label: [a.name, lines[0]?.text].filter(Boolean).join(', '),
+                    highlight,
+                  }),
+                  <span key={`${a.slug}-inline`} className="contents">{inlinePanel(a.slug)}</span>,
+                ];
+              }
               return (
                 <button
                   key={a.slug}
@@ -588,39 +1091,13 @@ export default function PinTargetSelect({
                   role="option"
                   aria-selected={value === a.slug}
                   onClick={() => pick(a.slug)}
-                  onMouseEnter={() => setCardFor(a.slug)}
-                  onFocus={() => setCardFor(a.slug)}
-                  className={`${MENU_ROW} ${cardFor === a.slug && menuCard ? 'md:bg-card-hover/50' : ''}`}
+                  onMouseEnter={() => hoverRow(a.slug)}
+                  onFocus={() => hoverRow(a.slug)}
+                  className={`${MENU_ROW} ${highlight ? 'md:bg-card-hover/50' : ''}`}
                 >
-                  <AvatarWithDot
-                    slug={a.slug}
-                    dot={dotFor(a.slug)}
-                    dotTestId={`pin-dot-${a.slug}`}
-                    t={t}
-                  />
+                  {avatar}
                   <span className="font-medium whitespace-nowrap">{a.name}</span>
-                  <span className="ml-auto flex items-center gap-2 text-xs text-muted whitespace-nowrap tabular-nums">
-                    {lines[0] && (
-                      <span
-                        data-testid={`pin-quota-${a.slug}`}
-                        data-tone={lines[0].tone}
-                        className={`max-md:hidden ${LINE_CLASS[lines[0].tone]}`}
-                      >
-                        {lines[0].text}
-                      </span>
-                    )}
-                    {lines[0] && (
-                      <span
-                        data-testid={`pin-quota-stack-${a.slug}`}
-                        className="hidden max-md:flex flex-col items-end gap-px"
-                      >
-                        {lines.map((l, i) => (
-                          <span key={i} className={LINE_CLASS[l.tone]}>{l.text}</span>
-                        ))}
-                      </span>
-                    )}
-                    <span className="w-3 text-center">{value === a.slug ? '✓' : ''}</span>
-                  </span>
+                  {trailing}
                 </button>
               );
             })}
@@ -630,7 +1107,7 @@ export default function PinTargetSelect({
                 role="option"
                 aria-selected
                 onClick={() => pick(value)}
-                onMouseEnter={() => setCardFor(null)}
+                onMouseEnter={() => hoverRow(null)}
                 className={MENU_ROW}
               >
                 <MessageAvatar variant="agent" agentHandle={value} />

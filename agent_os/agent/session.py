@@ -330,6 +330,12 @@ class Session:
         # every pre-074 log, which reads as unpinned — no migration.
         self.pinned_target: str | None = None
 
+        # Spec 149: this conversation's model / thinking overrides per worker
+        # slug (``{"claude-code": {"model": "opus", "effort": "high"}}``),
+        # layered over Settings at dispatch. Same session_start-meta
+        # persistence as ``pinned_target``; absent reads as none.
+        self.sub_agent_params: dict[str, dict[str, str]] = {}
+
         # Automation kind (spec 066 §8, 4b): "schedule" / "file_watch" when the
         # session was fired by a trigger, else None. Stamped on the
         # session_start meta from the FIRST user message (the trigger header),
@@ -476,6 +482,12 @@ class Session:
                             # no-migration default: absent/null reads as None.
                             if msg.get("pinned_target"):
                                 session.pinned_target = msg["pinned_target"]
+                            if isinstance(msg.get("sub_agent_params"), dict):
+                                session.sub_agent_params = {
+                                    str(slug): {str(k): str(v) for k, v in p.items() if v}
+                                    for slug, p in msg["sub_agent_params"].items()
+                                    if isinstance(p, dict)
+                                }
                             if msg.get("trigger_type"):
                                 session.trigger_type = msg["trigger_type"]
                         elif msg.get("event") == "sub_agent_thread":
@@ -850,6 +862,17 @@ class Session:
         """
         self.pinned_target = target if target else None
         self._apply_meta_fields(pinned_target=self.pinned_target)
+
+    def set_sub_agent_params(self, slug: str, params: dict[str, str]) -> None:
+        """Spec 149: replace ``slug``'s conversation overrides (empty clears)
+        and persist them on the session_start meta, beside the pin target."""
+        updated = {k: dict(v) for k, v in self.sub_agent_params.items()}
+        if params:
+            updated[slug] = dict(params)
+        else:
+            updated.pop(slug, None)
+        self.sub_agent_params = updated
+        self._apply_meta_fields(sub_agent_params=updated)
 
     def _apply_meta_fields(self, **fields) -> None:
         """Stamp arbitrary fields onto the session_start meta.
