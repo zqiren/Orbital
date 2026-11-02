@@ -92,6 +92,27 @@ def _bypass_daemon_pid_guard():
         yield
 
 
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers", "real_start_check: run SetupEngine's spec 144 start check "
+                   "instead of the suite-wide stub that accepts every candidate")
+
+
+@pytest.fixture(autouse=True)
+def _start_check_accepts_by_default(request):
+    """Spec 144: resolution launches each candidate's version check before
+    accepting it. Most resolver tests use placeholder files or a mocked
+    ``shutil.which`` that cannot run, and count the launches they expect, so
+    the check is stubbed to "starts" unless a test opts in with
+    ``@pytest.mark.real_start_check`` (``test_start_check_144.py``)."""
+    if request.node.get_closest_marker("real_start_check"):
+        yield
+        return
+    with patch("agent_os.agents.setup_engine.SetupEngine._starts",
+               lambda self, *a, **k: True):
+        yield
+
+
 @pytest.fixture(autouse=True)
 def _no_real_sandbox_grant_refresh():
     """Keep create_app()'s startup hook off the real Windows ACLs (spec 109 D2)."""

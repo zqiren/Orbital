@@ -236,6 +236,36 @@ class TestResolveStrategyZero:
         assert store.get_override(SLUG) is not None
 
     @_runs_fake_cli
+    @pytest.mark.real_start_check
+    @patch("agent_os.agents.setup_engine.shutil.which")
+    def test_chosen_file_that_cannot_start_steps_to_detection(
+            self, which, engine, store, tmp_path):
+        """Spec 144: the pasted path heads the candidate list but must start.
+        A file that is there and exits 1 is passed over, not reported gone."""
+        binary = _fake_cli(tmp_path)
+        elsewhere = _fake_cli(tmp_path, name="codex-detected")
+        which.return_value = elsewhere
+        store.set_override(SLUG, binary=binary)
+        _fake_cli(tmp_path, stdout="dyld: Library not loaded", rc=1)  # same path, now broken
+        status = engine.check_agent(SLUG)
+        assert status.installed is True and status.binary_path == elsewhere
+        assert status.override_missing is False and status.override_path is None
+        assert store.get_override(SLUG) is not None
+
+    @_runs_fake_cli
+    @pytest.mark.real_start_check
+    @patch("agent_os.agents.setup_engine.shutil.which", return_value=None)
+    def test_chosen_file_that_cannot_start_and_nothing_else_reads_not_found(
+            self, _which, engine, store, tmp_path):
+        binary = _fake_cli(tmp_path)
+        store.set_override(SLUG, binary=binary)
+        _fake_cli(tmp_path, rc=1)
+        status = engine.check_agent(SLUG)
+        assert status.installed is False and status.binary_path is None
+        # The file exists, so the card must not say it is gone.
+        assert status.override_missing is False
+
+    @_runs_fake_cli
     @patch("agent_os.agents.setup_engine.shutil.which", return_value=None)
     def test_path_prepend_reaches_the_version_check_and_daemon_path(
             self, _which, engine, store, tmp_path, monkeypatch):

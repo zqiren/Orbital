@@ -69,3 +69,41 @@ def test_codex_windows_lists_the_desktop_apps_hash_versioned_cli():
     codex = next(m for m in _npm_manifests() if m.slug == "codex")
     assert ("%LOCALAPPDATA%\\OpenAI\\Codex\\bin\\*\\codex.exe"
             in codex.setup.auto_detect["windows"])
+
+
+# ---------------------------------------------------------------------------
+# Spec 144 "newest wins": glob matches are ordered by modification time.
+# Hash folder names (bin/<hash>/) say nothing about age.
+# ---------------------------------------------------------------------------
+
+def _hash_build(root, name, mtime):
+    folder = root / "bin" / name
+    folder.mkdir(parents=True)
+    exe = folder / "codex.exe"
+    exe.write_text("")
+    os.utime(exe, (mtime, mtime))
+    return str(exe)
+
+
+def test_glob_newest_modification_time_wins_over_name(tmp_path):
+    from agent_os.agents.setup_engine import _expand_auto_detect_entry
+
+    # "0aaa" sorts below "ffff" by name, but it is the copy the app just wrote.
+    newer = _hash_build(tmp_path, "0aaa1111", 2_000_000_000)
+    older = _hash_build(tmp_path, "ffff2222", 1_900_000_000)
+    pattern = str(tmp_path / "bin" / "*" / "codex.exe")
+    assert _expand_auto_detect_entry(pattern) == [newer, older]
+
+
+def test_glob_equal_modification_times_keep_the_name_order(tmp_path):
+    """A tie keeps the old natural order, so nvm's highest version still
+    wins when the folders share a timestamp."""
+    from agent_os.agents.setup_engine import _expand_auto_detect_entry
+
+    same = 1_950_000_000
+    v9 = _hash_build(tmp_path, "v9.0.0", same)
+    v22 = _hash_build(tmp_path, "v22.1.0", same)
+    v20 = _hash_build(tmp_path, "v20.3.0", same)
+    pattern = str(tmp_path / "bin" / "*" / "codex.exe")
+    assert _expand_auto_detect_entry(pattern) == [v22, v20, v9]
+    assert _expand_auto_detect_entry(pattern) == [v22, v20, v9]  # stable

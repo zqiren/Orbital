@@ -106,14 +106,24 @@ def _natural_key(path: str) -> list:
             for tok in re.split(r"(\d+)", path)]
 
 
+def _mtime(path: str) -> float:
+    try:
+        return os.stat(path).st_mtime
+    except OSError:
+        return 0.0
+
+
 def _expand_auto_detect_entry(expanded: str) -> list[str]:
     """Spec 115 D3: an ``auto_detect`` entry containing ``*`` is a glob —
-    ``$HOME/.nvm/versions/node/*/bin/codex`` — expanded newest-version-first
-    by natural sort so nvm's highest installed node wins. Plain entries are
+    ``$HOME/.nvm/versions/node/*/bin/codex``. Spec 144: matches come
+    newest-modified first, because a folder name (the Codex app's
+    ``bin/<hash>/``) says nothing about age; equal times fall back to natural
+    name order, so nvm's highest version still wins a tie. Plain entries are
     returned as they are."""
     if "*" not in expanded:
         return [expanded]
-    return sorted(glob.glob(expanded), key=_natural_key, reverse=True)
+    return sorted(glob.glob(expanded),
+                  key=lambda p: (_mtime(p), _natural_key(p)), reverse=True)
 
 
 _daemon_path_lock = threading.Lock()
@@ -295,6 +305,9 @@ class SetupEngine:
         # does, so a sweep after the first skips these subprocesses. Kept for
         # the daemon's lifetime; Refresh drops it (``forget_versions``).
         self._version_cache: dict[tuple, str] = {}
+        # Spec 144: whether a candidate binary starts, keyed like the version
+        # cache, so a sweep launches each copy once per change of its file.
+        self._start_checks: dict[tuple, bool] = {}
         # Spec 136 B.4: slugs whose binary was not found, with when that
         # answer expires (the sweep TTL). Read by sweeps only, so a missing
         # agent stops spawning its check command through a shell every sweep
@@ -506,15 +519,7 @@ class SetupEngine:
         locate card's PATH. A failed check is not cached: it is asked again
         next sweep.
         """
-        key = None
-        try:
-            real = os.path.realpath(binary)
-            st = os.stat(real)
-            source = self._resolved_sources.get(slug) or {}
-            key = (slug, real, st.st_mtime_ns, st.st_size, source.get("app_version"),
-                   cmd, (check_env or {}).get("PATH"))
-        except OSError:
-            pass
+        key = self._version_key(slug, binary, cmd, check_env)
         if key is not None:
             cached = self._version_cache.get(key)
             if cached is not None:
@@ -529,9 +534,91 @@ class SetupEngine:
             self._version_cache[key] = version
         return version
 
+    def _version_key(self, slug: str, binary: str, cmd: str,
+                     check_env: dict[str, str] | None) -> tuple | None:
+        try:
+            real = os.path.realpath(binary)
+            st = os.stat(real)
+        except OSError:
+            return None
+        source = self._resolved_sources.get(slug) or {}
+        return (slug, real, st.st_mtime_ns, st.st_size, source.get("app_version"),
+                cmd, (check_env or {}).get("PATH"))
+
     def forget_versions(self) -> None:
         """Drop every cached version answer — the user's Refresh."""
         self._version_cache.clear()
+        self._start_checks.clear()
+
+    def _starts(self, manifest: AgentManifest, binary: str, *,
+                check_env: dict[str, str] | None = None,
+                extra_dir: str | None = None) -> bool:
+        """Spec 144: does this candidate launch? Its manifest's version check
+        (``<binary> --version`` without one), no stdin, 5 s. Only the copy
+        about to be chosen is asked, once per file identity: the answer is
+        cached, and a success seeds the version cache so ``check_agent`` does
+        not launch it a second time. Sign-in and models are not asked.
+
+        A timeout counts as a start: the process is there, merely slow (a
+        cold Windows start, an antivirus scan of a freshly updated exe), and
+        skipping it would swap the new build for an old one.
+
+        ``check_env`` is the locate card's env (the version check's own);
+        ``extra_dir`` a directory the caller appends to the daemon PATH on
+        acceptance (an npm shim needs its ``node`` beside it).
+        """
+        command = manifest.runtime.command
+        check = manifest.setup.check_command or ""
+        if check and command and (check == command or check.startswith(command + " ")):
+            cmd = self._substitute_binary(check, command, binary)
+        else:
+            cmd = (f'"{binary}"' if " " in binary else binary) + " --version"
+        version_key = self._version_key(manifest.slug, binary, cmd, check_env)
+        if version_key is None:
+            return False
+        key = version_key + (extra_dir,)
+        cached = self._start_checks.get(key)
+        if cached is not None:
+            return cached
+        run_env = check_env
+        if extra_dir and run_env is None:
+            run_env = dict(os.environ)
+            run_env["PATH"] = os.pathsep.join(
+                p for p in (run_env.get("PATH", ""), extra_dir) if p)
+        output = None
+        try:
+            result = subprocess.run(
+                cmd, shell=True, stdin=subprocess.DEVNULL, capture_output=True,
+                text=True, encoding="utf-8", errors="replace", timeout=5,
+                env=run_env, creationflags=win_no_window_flags(),
+            )
+            ok = result.returncode == 0
+            output = (result.stdout or "").strip() if ok else None
+            if not ok:
+                logger.info("%s: %s does not start (exit %s): %s", manifest.slug,
+                            binary, result.returncode,
+                            ((result.stderr or result.stdout or "").strip()
+                             .splitlines() or [""])[-1][:200])
+        except subprocess.TimeoutExpired:
+            ok = True
+        except OSError as exc:
+            ok = False
+            logger.info("%s: %s does not start: %s", manifest.slug, binary, exc)
+        self._start_checks[key] = ok
+        if output and check:
+            self._version_cache[version_key] = self._version_line(output)
+        return ok
+
+    def _accept(self, manifest: AgentManifest, path: str, source: dict, *,
+                check_env: dict[str, str] | None = None,
+                extra_dir: str | None = None) -> bool:
+        """Pin ``path`` if it starts (spec 144); otherwise leave no pin."""
+        self._pin(manifest.slug, path, source)  # the version key reads the source
+        if self._starts(manifest, path, check_env=check_env, extra_dir=extra_dir):
+            return True
+        self._resolved_paths.pop(manifest.slug, None)
+        self._resolved_sources.pop(manifest.slug, None)
+        return False
 
     # ------------------------------------------------------------------
     # ACP handshake (readiness verdict)
@@ -988,6 +1075,10 @@ class SetupEngine:
            user installed wins over the copy inside ChatGPT.app).
         5. Try check_command via subprocess
 
+        A candidate counts only if it also starts (spec 144, ``_starts``):
+        one that is there but fails its version check is passed over for the
+        next, in this same order.
+
         Returns absolute path or None. The answer is pinned until its file
         disappears — an app update that moves its CLI, a self-updating CLI
         that relocates (the claude-code stale-path bug) — and then resolved
@@ -1025,10 +1116,11 @@ class SetupEngine:
         override = self._override_for(slug)
         if override is not None:
             chosen = override["binary"]
-            if os.path.isfile(chosen):
+            exists = os.path.isfile(chosen)
+            if exists and self._accept(manifest, chosen, {"kind": "override"},
+                                       check_env=self._override_env(override)):
                 self._override_missing.pop(slug, None)
                 self._override_hits.add(slug)
-                self._pin(slug, chosen, {"kind": "override"})
                 # D3 rule, same reason as strategy 3: the dependency checks
                 # (``node --version``) run on the daemon PATH.
                 for directory in override.get("path_prepend") or []:
@@ -1036,7 +1128,9 @@ class SetupEngine:
                 return chosen
             self._override_hits.discard(slug)
             found = self._detect(manifest)
-            if found is None:
+            # "Gone" only when the file is: one that is there but does not
+            # start reads as plain not-found (spec 144).
+            if found is None and not exists:
                 self._override_missing[slug] = chosen
             else:
                 self._override_missing.pop(slug, None)
@@ -1060,8 +1154,7 @@ class SetupEngine:
 
         # Strategy 2: shutil.which
         path = shutil.which(command)
-        if path:
-            self._pin(slug, path, {"kind": "path"})
+        if path and self._accept(manifest, path, {"kind": "path"}):
             return path
 
         # Strategy 3: auto_detect paths for current OS
@@ -1082,7 +1175,9 @@ class SetupEngine:
             for candidate in _expand_auto_detect_entry(expanded):
                 if not os.path.isfile(candidate):
                     continue
-                self._pin(slug, candidate, {"kind": "auto_detect"})
+                if not self._accept(manifest, candidate, {"kind": "auto_detect"},
+                                    extra_dir=os.path.dirname(candidate)):
+                    continue
                 # Spec 115 D3 rule: a binary found here is one shutil.which
                 # could not see, so its directory is not on PATH. An npm
                 # entry point is a `#!/usr/bin/env node` shim and the
@@ -1104,8 +1199,7 @@ class SetupEngine:
                 # check_command succeeded, so the command is available
                 # Use shutil.which one more time or fall back to bare command
                 path = shutil.which(command)
-                if path:
-                    self._pin(slug, path, {"kind": "check_command"})
+                if path and self._accept(manifest, path, {"kind": "check_command"}):
                     return path
 
         return None
@@ -1131,10 +1225,11 @@ class SetupEngine:
             hit = find_desktop_app(app, current_os)
             if hit is None:
                 continue
-            self._pin(manifest.slug, hit.executable, {
+            if not self._accept(manifest, hit.executable, {
                 "kind": "desktop_app", "label": hit.label,
                 "app_path": hit.app_path, "app_version": hit.version,
-            })
+            }):
+                continue
             return hit.executable
         return None
 
