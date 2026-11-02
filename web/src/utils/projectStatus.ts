@@ -18,6 +18,9 @@ import type { AgentRunStatus } from '../types';
  * worker has an open turn. It lights the dot for work no management turn
  * brackets — a pinned dispatch, a queue item assigned to a worker (spec 095).
  * It ranks below a manager error, so worker activity never hides a fault.
+ *
+ * The `*-text` tokens, not the bright fills: an 8px dot that carries meaning
+ * needs 3:1, and the fills read at ~2:1 on the light sidebar (spec 145).
  */
 export function getProjectDotColor(
   projectId: string,
@@ -26,17 +29,17 @@ export function getProjectDotColor(
   subAgentsRunning: Record<string, boolean> = {},
 ): string {
   const approvalCount = pendingApprovals[projectId] ?? 0;
-  if (approvalCount > 0) return 'bg-warning';
+  if (approvalCount > 0) return 'bg-warning-text';
 
   const status = agentStatuses[projectId] ?? 'idle';
   switch (status) {
     case 'running':
     case 'waiting':
-      return 'bg-success';
+      return 'bg-success-text';
     case 'error':
-      return 'bg-error';
+      return 'bg-error-text';
     default:
-      return subAgentsRunning[projectId] ? 'bg-success' : 'bg-idle';
+      return subAgentsRunning[projectId] ? 'bg-success-text' : 'bg-idle';
   }
 }
 

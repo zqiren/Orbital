@@ -33,7 +33,7 @@ export function SessionStatusGlyph({ lastTerminalEvent }: SessionStatusGlyphProp
   return (
     <AlertTriangle
       size={14}
-      className="shrink-0 text-amber-500"
+      className="shrink-0 text-warning-text"
       aria-label={t('sessionGlyph.errored')}
       role="img"
       data-testid="session-error-glyph"

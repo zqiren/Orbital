@@ -78,20 +78,20 @@ function aggregateDot(
   agentStatuses: Record<string, AgentRunStatus>,
   pendingApprovals: Record<string, number>,
   subAgentsRunning: Record<string, boolean>,
-): { color: 'bg-error' | 'bg-warning' | null; count: number } {
-  let color: 'bg-error' | 'bg-warning' | null = null;
+): { color: 'bg-error-text' | 'bg-warning-text' | null; count: number } {
+  let color: 'bg-error-text' | 'bg-warning-text' | null = null;
   let count = 0;
   for (const project of projects) {
     if (project.project_id === currentProjectId) continue;
     const dot = getProjectDotColor(
       project.project_id, agentStatuses, pendingApprovals, subAgentsRunning,
     );
-    if (dot !== 'bg-error' && dot !== 'bg-warning') continue;
+    if (dot !== 'bg-error-text' && dot !== 'bg-warning-text') continue;
     count += 1;
-    if (dot === 'bg-error') {
-      color = 'bg-error';
-    } else if (color !== 'bg-error') {
-      color = 'bg-warning';
+    if (dot === 'bg-error-text') {
+      color = 'bg-error-text';
+    } else if (color !== 'bg-error-text') {
+      color = 'bg-warning-text';
     }
   }
   return { color, count };

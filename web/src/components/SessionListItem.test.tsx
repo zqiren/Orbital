@@ -43,7 +43,7 @@ describe('SessionListItem — status glyph rendering', () => {
     );
     const glyph = screen.getByTestId('session-status-glyph');
     expect(glyph.textContent).toBe('◐');
-    expect(glyph).toHaveStyle({ color: '#22C55E' });
+    expect(glyph).toHaveStyle({ color: 'var(--color-success-text)' });
   });
 
   it('waiting → glyph ⟳', () => {
@@ -56,7 +56,7 @@ describe('SessionListItem — status glyph rendering', () => {
     );
     const glyph = screen.getByTestId('session-status-glyph');
     expect(glyph.textContent).toBe('⟳');
-    expect(glyph).toHaveStyle({ color: '#539AF8' });
+    expect(glyph).toHaveStyle({ color: 'var(--color-accent-text)' });
   });
 
   // Spec 102 — a pinned worker runs zero management turns, so the backend's
@@ -72,7 +72,7 @@ describe('SessionListItem — status glyph rendering', () => {
     );
     const glyph = screen.getByTestId('session-status-glyph');
     expect(glyph.textContent).toBe('◐');
-    expect(glyph).toHaveStyle({ color: '#22C55E' });
+    expect(glyph).toHaveStyle({ color: 'var(--color-success-text)' });
   });
 
   it('idle + worker_running keeps the status glyph over the pin glyph', () => {
@@ -105,7 +105,7 @@ describe('SessionListItem — status glyph rendering', () => {
     );
     const glyph = screen.getByTestId('session-status-glyph');
     expect(glyph.textContent).toBe('⚠');
-    expect(glyph).toHaveStyle({ color: '#F59E0B' });
+    expect(glyph).toHaveStyle({ color: 'var(--color-warning-text)' });
   });
 
   // Spec 081 — a queued session has never run; it must light up, and it must
@@ -120,7 +120,7 @@ describe('SessionListItem — status glyph rendering', () => {
     );
     const glyph = screen.getByTestId('session-status-glyph');
     expect(glyph.textContent).toBe('◔');
-    expect(glyph).toHaveStyle({ color: '#539AF8' });
+    expect(glyph).toHaveStyle({ color: 'var(--color-accent-text)' });
   });
 
   it('queued does NOT fall back to the resting idle display', () => {
@@ -412,7 +412,7 @@ describe('SessionListItem — kind chips and cleaned labels', () => {
     expect(screen.queryByTestId('session-kind-chip')).toBeNull();
     expect(screen.getByTestId('session-name')).toHaveTextContent('write an essay');
     // The old queue-origin desaturation is retired: status color is the token value.
-    expect(screen.getByTestId('session-status-glyph')).toHaveStyle({ color: '#22C55E' });
+    expect(screen.getByTestId('session-status-glyph')).toHaveStyle({ color: 'var(--color-success-text)' });
   });
 });
 

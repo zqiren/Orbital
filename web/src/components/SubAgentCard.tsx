@@ -111,7 +111,7 @@ export default function SubAgentCard({
                 {slug}
               </code>
               {!ready && (
-                <span className="text-[11px] font-medium text-warning bg-warning/10 border border-warning/30 rounded px-1.5 py-0.5">
+                <span className="text-[11px] font-medium text-warning-text dark:bg-warning/10 border border-warning/30 rounded px-1.5 py-0.5">
                   ⚠ Sign in
                 </span>
               )}
@@ -120,7 +120,7 @@ export default function SubAgentCard({
               <span
                 className={
                   sizeBytes > MEMORY_TARGET_BYTES
-                    ? 'text-warning'
+                    ? 'text-warning-text'
                     : 'text-secondary'
                 }
               >

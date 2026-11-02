@@ -61,6 +61,39 @@ describe('SubAgentStatusBar — three-state badge', () => {
     expect(screen.queryByTestId('sub-agent-stop-claude-code')).toBeNull();
   });
 
+  // Spec 145: the dot is a state colour at readable contrast, not the
+  // agent's brand tint; running adds the pin switcher's moving ring.
+  it.each([
+    ['running', 'bg-success-text'],
+    ['background-running', 'bg-warning-text'],
+    ['idle', 'bg-idle'],
+  ])('%s dot uses %s', async (status, cls) => {
+    apiMock.mockResolvedValue(statusPayload(status));
+    render(<SubAgentStatusBar projectId="p1" sessionId="s1" />);
+    const dot = await screen.findByTestId('sub-agent-dot-claude-code');
+    expect(dot).toHaveClass(cls);
+    expect(dot.className).not.toMatch(/agent-color|animate-pulse|bg-border\b/);
+    expect(dot).toHaveAttribute('aria-hidden', 'true');
+  });
+
+  it('running dot carries the moving ring in its own box; other states do not', async () => {
+    apiMock.mockResolvedValue(statusPayload('running'));
+    const { unmount } = render(<SubAgentStatusBar projectId="p1" sessionId="s1" />);
+    const ring = await screen.findByTestId('sub-agent-ring-claude-code');
+    expect(ring).toHaveClass('motion-safe:animate-ping', 'border-success-text');
+    // The ring sits inside the dot's box, not on the badge or the chip, so
+    // its growth never reaches the agent name.
+    const box = screen.getByTestId('sub-agent-dot-claude-code').parentElement!;
+    expect(box).toContainElement(ring);
+    expect(box).toHaveClass('relative');
+    unmount();
+
+    apiMock.mockResolvedValue(statusPayload('background-running'));
+    render(<SubAgentStatusBar projectId="p1" sessionId="s1" />);
+    await screen.findByTestId('sub-agent-dot-claude-code');
+    expect(screen.queryByTestId('sub-agent-ring-claude-code')).toBeNull();
+  });
+
   it('filters out fanout worker handles (they render in FanoutCard instead)', async () => {
     apiMock.mockResolvedValue({
       session_id: 's1',

@@ -142,7 +142,7 @@ export default function NotDetectedRow({
         <MessageAvatar variant="agent" agentHandle={slug} />
         <span className="text-base font-medium text-primary">{name}</span>
         <code className="text-xs text-secondary/80 font-mono">{slug}</code>
-        <span className="px-2 py-0.5 rounded-full border text-[11px] bg-sidebar text-secondary border-border">
+        <span className="px-2 py-0.5 rounded-full border text-[11px] bg-sidebar text-secondary border-muted">
           {t('subAgentCard.notDetected')}
         </span>
       </div>
@@ -150,7 +150,7 @@ export default function NotDetectedRow({
       {overrideMissing && overridePath && (
         <p
           data-testid={`sub-agent-locate-gone-${slug}`}
-          className="text-xs text-warning mt-1.5 break-all"
+          className="text-xs text-warning-text mt-1.5 break-all"
         >
           {t('subAgentCard.locate.gone', { path: overridePath })}
         </p>
@@ -229,7 +229,7 @@ export default function NotDetectedRow({
         {result && testedAnswer === trimmed && (
           <span
             data-testid={`sub-agent-locate-result-${slug}`}
-            className={`text-xs break-all ${result.ok ? 'text-success' : 'text-error'}`}
+            className={`text-xs break-all ${result.ok ? 'text-success-text' : 'text-error-text'}`}
           >
             {result.ok
               ? (result.version_output
@@ -248,7 +248,7 @@ export default function NotDetectedRow({
           </span>
         )}
         {saveError && (
-          <span className="text-xs text-error break-all">{saveError}</span>
+          <span className="text-xs text-error-text break-all">{saveError}</span>
         )}
       </div>
     </div>

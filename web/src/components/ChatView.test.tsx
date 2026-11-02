@@ -3183,6 +3183,10 @@ describe('ChatView: [Sub-agent] lifecycle marker rows (backlog #27)', () => {
     expect(text).toContain('Which file should I edit?');
     expect(text).not.toContain('agent_message(');
     expect(text).not.toContain('Do not send a new task');
+    // Spec 145: the question is something to read, so it takes the normal
+    // text colour, not the 2.9:1 accent fill.
+    expect(row!.className).toContain('text-primary');
+    expect(row!.className).not.toContain('text-accent');
   });
 
   it('tones rank by severity: lost work and interruptions warn, a plain stop does not', async () => {
@@ -3213,9 +3217,9 @@ describe('ChatView: [Sub-agent] lifecycle marker rows (backlog #27)', () => {
     );
     // A stop the user asked for is not an alarm.
     expect(byAction['stopped']).toContain('text-secondary');
-    expect(byAction['background_lost']).toContain('text-warning');
-    expect(byAction['interrupted']).toContain('text-warning');
-    expect(byAction['error']).toContain('text-error');
+    expect(byAction['background_lost']).toContain('text-warning-text');
+    expect(byAction['interrupted']).toContain('text-warning-text');
+    expect(byAction['error']).toContain('text-error-text');
   });
 
   // backlog #35a: the three things the borrowed `failed` shape got wrong.
@@ -3236,7 +3240,7 @@ describe('ChatView: [Sub-agent] lifecycle marker rows (backlog #27)', () => {
     expect(row!.getAttribute('data-action')).toBe('queue_dropped');
     // Amber, not red: the user's own stop is the usual cause and nothing
     // malfunctioned — but a message of theirs was thrown away, so not neutral.
-    expect(row!.className).toContain('text-warning');
+    expect(row!.className).toContain('text-warning-text');
     expect(row!.className).not.toContain('text-error');
 
     const text = row!.textContent ?? '';

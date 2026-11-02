@@ -339,7 +339,7 @@ describe('EdgeStrip — aggregate dot', () => {
       agentStatuses: {},
       pendingApprovals: { 'proj-2': 1 },
     });
-    expect(screen.getByTestId('strip-dot')).toHaveClass('bg-warning');
+    expect(screen.getByTestId('strip-dot')).toHaveClass('bg-warning-text');
   });
 
   it('prefers red over amber when both are present among other projects', () => {
@@ -347,7 +347,7 @@ describe('EdgeStrip — aggregate dot', () => {
       agentStatuses: { 'proj-2': 'error' },
       pendingApprovals: { 'proj-3': 1 },
     });
-    expect(screen.getByTestId('strip-dot')).toHaveClass('bg-error');
+    expect(screen.getByTestId('strip-dot')).toHaveClass('bg-error-text');
   });
 
   it('excludes the current project from the aggregate', () => {
@@ -382,7 +382,7 @@ describe('EdgeStrip — aggregate dot', () => {
       subAgentsRunning: { 'proj-2': true },
       pendingApprovals: {},
     });
-    expect(screen.getByTestId('strip-dot')).toHaveClass('bg-error');
+    expect(screen.getByTestId('strip-dot')).toHaveClass('bg-error-text');
   });
 });
 

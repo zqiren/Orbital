@@ -303,7 +303,7 @@ describe('Sidebar — project dot while a worker runs (spec 095)', () => {
         subAgentsRunning={{ 'proj-1': true }}
       />,
     );
-    expect(rowDot()).toHaveClass('bg-success');
+    expect(rowDot()).toHaveClass('bg-success-text');
   });
 
   it('is grey once the worker is done', () => {
@@ -325,7 +325,7 @@ describe('Sidebar — project dot while a worker runs (spec 095)', () => {
         subAgentsRunning={{ 'proj-1': true }}
       />,
     );
-    expect(rowDot()).toHaveClass('bg-error');
+    expect(rowDot()).toHaveClass('bg-error-text');
   });
 });
 
