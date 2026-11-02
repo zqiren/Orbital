@@ -89,7 +89,7 @@ _USAGE_LIMIT_RE = re.compile(
     r"|credit balance is too low|requires more credits|insufficient (?:credits|balance|quota)"
     r"|exceeded your current quota",
     re.IGNORECASE)
-_MODEL_RE = re.compile(r"model (?:is )?not (?:supported|available|found)|unsupported model"
+_MODEL_RE = re.compile(r"model (?:is )?(?:not (?:supported|available|found)|unavailable)|only available hosted in|unsupported model"
                        r"|does not have access to (?:the )?model"
                        # MiniMax Code: 'Model "minimax/X" is not available for the … route'
                        r"|model \"[^\"\n]*\" is not (?:supported|available)", re.IGNORECASE)

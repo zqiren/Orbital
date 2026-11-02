@@ -70,6 +70,14 @@ class TestClassifyErrorText:
         stop = ht.classify_error_text("400 Bad Request: The 'gpt-x' model is not supported when using Codex with a ChatGPT account.")
         assert stop.cause == ht.CAUSE_MODEL_UNAVAILABLE
 
+    def test_a_gateway_refusing_the_model_reads_as_model_unavailable(self):
+        # OpenCode Go, verbatim: a retired id, and a model the workspace's
+        # privacy Regions do not allow.
+        for text in ("LLM error (non-recoverable): Upstream request failed: Model is unavailable.",
+                     "The latest version of this model is only available hosted in China "
+                     "and requires explicit opt in: https://opencode.ai/workspace/w/go"):
+            assert ht.classify_error_text(text).cause == ht.CAUSE_MODEL_UNAVAILABLE
+
     def test_network_and_auth(self):
         assert ht.classify_error_text("read ECONNRESET").cause == ht.CAUSE_NETWORK_AUTH
         assert ht.classify_error_text("Failed to authenticate. API Error: 403").cause == ht.CAUSE_NETWORK_AUTH

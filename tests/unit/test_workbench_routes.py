@@ -475,3 +475,22 @@ async def test_workbench_exclude_global_persists_via_project_update(tmp_path):
         pids = {e["project_id"] for e in after["entries"]}
         assert pid_excl not in pids
         assert pid_keep in pids
+
+
+def test_local_zone_on_windows_comes_from_the_system(monkeypatch):
+    """Windows has no /etc/localtime. Without asking the system, every local
+    zone read UTC: an imported Codex automation fired hours off the local time
+    it was set for, and asks went overdue at the wrong midnight."""
+    from agent_os.daemon_v2 import browser_manager
+    monkeypatch.delenv("TZ", raising=False)
+    monkeypatch.setattr("sys.platform", "win32")
+    monkeypatch.setattr(browser_manager, "_detect_timezone", lambda: "Asia/Shanghai")
+    assert workbench_cards._local_tz_name() == "Asia/Shanghai"
+
+
+def test_tz_env_still_wins_over_the_system_zone(monkeypatch):
+    from agent_os.daemon_v2 import browser_manager
+    monkeypatch.setenv("TZ", "Europe/Paris")
+    monkeypatch.setattr("sys.platform", "win32")
+    monkeypatch.setattr(browser_manager, "_detect_timezone", lambda: "Asia/Shanghai")
+    assert workbench_cards._local_tz_name() == "Europe/Paris"

@@ -20,6 +20,7 @@ Pure, dependency-light helpers used by the Workbench read path
 from __future__ import annotations
 
 import os
+import sys
 from datetime import date, datetime, timezone
 
 
@@ -47,12 +48,19 @@ def _local_tz_name() -> str:
     """Best-effort IANA name for the daemon's local zone.
 
     ``TZ`` env wins; else the ``/etc/localtime`` symlink target (macOS/Linux);
-    else UTC. Returned as a name (not a tzinfo) so callers — including Task 6 —
-    can pass it straight back through ``_resolve_tz``.
+    else, on Windows, what the system reports; else UTC. Returned as a name (not
+    a tzinfo) so callers — including Task 6 — can pass it straight back through
+    ``_resolve_tz``.
     """
     tz_env = os.environ.get("TZ")
     if tz_env:
         return tz_env
+    if sys.platform == "win32":
+        try:
+            from agent_os.daemon_v2.browser_manager import _detect_timezone
+            return _detect_timezone() or "UTC"
+        except Exception:
+            return "UTC"
     try:
         target = os.path.realpath("/etc/localtime")
         marker = "/zoneinfo/"

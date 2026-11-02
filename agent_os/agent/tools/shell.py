@@ -376,11 +376,27 @@ def build_windows_script(command: str) -> str:
     UI language and of the exit code. The first line makes the redirected
     output UTF-8: PowerShell 5.1 otherwise encodes it in the OEM code page
     (437 on an en-US system locale), where CJK becomes ``?`` (bench
-    2026-10-20). It also covers native programs the command runs.
+    2026-10-20). It also covers native programs the command runs, except Python,
+    which ignores the console's encoding when redirected and raised on CJK.
+
+    The location lines are for the sandbox worker. It cannot read the parents
+    of a workspace under a user profile, so PowerShell starts at the drive root
+    and ``Set-Location`` is refused, though the process's own directory is
+    right: a relative command then ran against ``C:\\``. A drive rooted at the
+    workspace needs no parent, and native programs inherit the real path. An
+    ordinary start skips it and keeps its ordinary location.
     """
     return (
         "try { $OutputEncoding = [Console]::OutputEncoding = "
         "New-Object System.Text.UTF8Encoding $false } catch {}\n"
+        "if (-not $env:PYTHONIOENCODING) { $env:PYTHONIOENCODING = 'utf-8' }\n"
+        "if ((Get-Location).ProviderPath -ne [Environment]::CurrentDirectory) {\n"
+        "    try {\n"
+        "        New-PSDrive -Name workspace -PSProvider FileSystem "
+        "-Root ([Environment]::CurrentDirectory) -ErrorAction Stop | Out-Null\n"
+        "        Set-Location -LiteralPath 'workspace:\\' -ErrorAction Stop\n"
+        "    } catch { $Error.Clear() }\n"
+        "}\n"
         "$global:LASTEXITCODE = 0\n"
         f"{command}\n"
         "$__orbital_ok = $?\n"
