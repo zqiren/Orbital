@@ -106,6 +106,8 @@ setup:
     windows:
       - "%APPDATA%\\npm\\codex.cmd"
       - "%PROGRAMFILES%\\nodejs\\codex.cmd"
+      # The Codex desktop app's CLI. <hash> changes with every app update.
+      - "%LOCALAPPDATA%\\OpenAI\\Codex\\bin\\*\\codex.exe"
     macos:
       - "/usr/local/bin/codex"
       - "$HOME/.npm-global/bin/codex"

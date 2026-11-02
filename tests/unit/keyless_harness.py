@@ -44,7 +44,7 @@ class FakeSetupEngine:
         self.statuses = list(statuses)
         self.calls = 0
 
-    def check_all(self, allow_stale: bool = False):
+    def check_all(self, allow_stale: bool = False, **_kw):
         self.calls += 1
         return list(self.statuses)
 
@@ -114,7 +114,6 @@ def build_client(tmp_path, *, keyed: bool, statuses=None, settings_store=None):
         credential_store=MagicMock(), trigger_manager=MagicMock(),
         provider_registry=ProviderRegistry(),
     )
-    agents_v2._available_cache["result"] = None
     app = FastAPI()
     app.include_router(agents_v2.router)
     return TestClient(app), {

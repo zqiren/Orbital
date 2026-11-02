@@ -337,7 +337,9 @@ class CodexTransport(AgentTransport):
         if method == "item/reasoning/textDelta":
             return  # raw reasoning text stays out (spec 100, out of scope)
         if method == "error":
-            text = params.get("message") or json.dumps(params)[:500]
+            # ErrorNotification nests the text: {error: {message, ...}, willRetry}.
+            text = ((params.get("error") or {}).get("message")
+                    or params.get("message") or json.dumps(params)[:500])
             await self._event_queue.put(TransportEvent(
                 event_type="error", data={"error": params},
                 raw_text=f"Error: {text}"))

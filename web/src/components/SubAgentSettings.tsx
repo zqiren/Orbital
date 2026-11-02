@@ -4,6 +4,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../config';
+import { refreshAgentAvailability } from '../hooks/useAgentAvailability';
 import { useWebSocket } from '../hooks/useWebSocket';
 import MessageAvatar from './MessageAvatar';
 import NotDetectedRow from './NotDetectedRow';
@@ -311,6 +312,8 @@ export default function SubAgentSettings({ standalone = false, onBack }: Props) 
     try {
       const data = await api<SubAgentEntry[]>('/api/v2/settings/sub-agents');
       setEntries(data);
+      // Every card action ends here: the pin menu follows a login or a locate.
+      refreshAgentAvailability();
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       setError(msg);
@@ -380,6 +383,7 @@ export default function SubAgentSettings({ standalone = false, onBack }: Props) 
         { method: 'POST' },
       );
       setEntries(data);
+      refreshAgentAvailability();
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       setError(msg);

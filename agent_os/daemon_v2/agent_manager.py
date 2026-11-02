@@ -7119,7 +7119,8 @@ class AgentManager:
 
             if polls % 150 == 0:  # one line every ~5 minutes, not a kill
                 logger.info(
-                    "sub-agents still busy after ~%ds for %s/%s — waiting "
+                    "sub-agents %s still busy after ~%ds for %s/%s — waiting "
                     "(no reactive kill; Piece 3)",
-                    polls * 2, project_id, session_id,
+                    [a.get("handle") for a in busy], polls * 2, project_id,
+                    session_id,
                 )

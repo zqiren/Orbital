@@ -3511,10 +3511,6 @@ async def chat_history(
 
 # ---- Agent Registry / Setup Endpoints ----
 
-_available_cache: dict = {"result": None, "expires_at": 0.0}
-_AVAILABLE_CACHE_TTL = 60  # seconds
-
-
 def _live_codex_transport():
     """A live codex handle's transport, if any (spec 099: its connection
     answers ``account/rateLimits/read`` with no extra process)."""
@@ -3563,11 +3559,10 @@ async def available_agents():
     if _setup_engine is None:
         return []
 
-    now = time.time()
-    if _available_cache["result"] is not None and now < _available_cache["expires_at"]:
-        return _with_quota(_available_cache["result"])
-
-    statuses = await asyncio.to_thread(_setup_engine.check_all)
+    # The last sweep, however old: the pin menu reads this on every open and
+    # must never scan. A login, locate or install patches or drops that sweep.
+    statuses = await asyncio.to_thread(
+        _setup_engine.check_all, allow_stale=True, refresh_if_stale=False)
     result = []
     for s in statuses:
         entry = {
@@ -3592,8 +3587,6 @@ async def available_agents():
         }
         result.append(entry)
 
-    _available_cache["result"] = result
-    _available_cache["expires_at"] = time.time() + _AVAILABLE_CACHE_TTL
     return _with_quota(result)
 
 

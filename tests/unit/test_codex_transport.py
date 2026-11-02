@@ -234,6 +234,22 @@ class TestErrors:
         [event] = _drain(t)
         assert event.event_type == "error"
 
+    @pytest.mark.asyncio
+    async def test_usage_limit_says_the_message_and_closes_the_turn(self):
+        """The real ErrorNotification nests the text under ``error``. Out of
+        quota is a failed turn, which is what wakes the waiting manager."""
+        t = _transport()
+        await t._route_server_message({"jsonrpc": "2.0", "method": "error", "params": {
+            "error": {"message": "You've hit your usage limit.",
+                      "codexErrorInfo": "usageLimitExceeded"},
+            "willRetry": False, "threadId": "t", "turnId": "u"}})
+        await t._route_server_message({"jsonrpc": "2.0", "method": "turn/completed", "params": {
+            "threadId": "t", "turn": {"id": "u", "status": "failed"}}})
+        error, done = _drain(t)
+        assert error.event_type == "error"
+        assert error.raw_text == "Error: You've hit your usage limit."
+        assert done.event_type == "turn_complete" and done.data["cause"] == "error"
+
 
 class _FakeStdin:
     """Captures JSON-RPC frames written by the transport."""

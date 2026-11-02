@@ -7,7 +7,12 @@ import { ArrowLeft } from 'lucide-react';
 import { usePlatform } from './hooks/usePlatform';
 import { useProjects } from './hooks/useProjects';
 import { useTriggers } from './hooks/useTriggers';
-import { applyQuotaUpdate, fetchAgentAvailability } from './hooks/useAgentAvailability';
+import {
+  applyQuotaUpdate,
+  fetchAgentAvailability,
+  settleInstalledAgents,
+  useInstalledAgents,
+} from './hooks/useAgentAvailability';
 import { useWebSocket, type ConnectionState } from './hooks/useWebSocket';
 import { bumpPricingVersion } from './budget/pricingVersion';
 import UpdatePill from './components/UpdatePill';
@@ -129,7 +134,7 @@ export default function App() {
   // Project-level agent availability. Lifted out of ChatView so a Files->Chat
   // tab switch doesn't block on the daemon's /agents/available cache miss
   // (cold call can take up to 8s). null = not yet loaded.
-  const [agentsAvailable, setAgentsAvailable] = useState<Array<{ slug: string; name: string }> | null>(null);
+  const agentsAvailable = useInstalledAgents();
   // Global/default LLM model (from app settings) — header fallback when a
   // project has no per-project model pinned. Fetched once on mount.
   const [defaultModel, setDefaultModel] = useState<string>('');
@@ -197,14 +202,18 @@ export default function App() {
   // fetching per project select and clearing meanwhile made the pin control
   // unmount and pop in late on every session open. Stale-while-revalidate:
   // the list is never cleared once loaded.
-  // installGeneration bumps when an Orbital-managed install completes, so the
-  // cached list picks up a freshly installed agent (dsh) without a reload —
-  // otherwise the pin menu stays stale for the whole page lifetime.
-  const [installGeneration, setInstallGeneration] = useState(0);
+  // A sweep or an install that changed an agent says so over the WS, so the pin
+  // menu picks it up without a reload. Otherwise it stays stale for the whole
+  // page lifetime.
+  const [agentsGeneration, setAgentsGeneration] = useState(0);
   useEffect(() => {
-    const bump = () => setInstallGeneration((g) => g + 1);
+    const bump = () => setAgentsGeneration((g) => g + 1);
     ws.on('sub_agent_install_done', bump);
-    return () => ws.off('sub_agent_install_done', bump);
+    ws.on('sub_agents.updated', bump);
+    return () => {
+      ws.off('sub_agent_install_done', bump);
+      ws.off('sub_agents.updated', bump);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   // Spec 099: the same fetch fills the availability store (readiness +
@@ -219,24 +228,9 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   useEffect(() => {
-    let cancelled = false;
-    fetchAgentAvailability()
-      .then((agents) => {
-        if (cancelled) return;
-        setAgentsAvailable(
-          agents.filter((a) => a.slug !== 'built-in' && a.installed)
-            .map((a) => ({ slug: a.slug, name: a.name })),
-        );
-      })
-      .catch(() => {
-        if (cancelled) return;
-        // First load failed → settle on empty (the @-dropdown shows no
-        // matches). A failed REFETCH keeps the last good list instead of
-        // blanking a working control.
-        setAgentsAvailable((prev) => prev ?? []);
-      });
-    return () => { cancelled = true; };
-  }, [installGeneration]);
+    // First load failed → settle on empty (the @-dropdown shows no matches).
+    fetchAgentAvailability().catch(settleInstalledAgents);
+  }, [agentsGeneration]);
 
   // Mobile panel swap navigation
   const [isMobile, setIsMobile] = useState(false);
