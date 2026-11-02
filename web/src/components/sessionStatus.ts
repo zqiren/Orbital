@@ -5,12 +5,13 @@
 /**
  * sessionStatus.ts — maps AgentRunStatus → display glyph + CSS color token.
  *
- * These glyphs/colors come from the V1 mockup. The color tokens are defined in
- * web/src/index.css under @theme:
- *   success → #22C55E   (running)
- *   accent  → #539AF8   (waiting)
- *   warning → #F59E0B   (pending_approval / Blocked)
- *   idle    → #A1A1AA   (idle)
+ * These glyphs come from the V1 mockup. The colours are the readable status
+ * tokens in web/src/index.css (spec 145; the bright fills read at ~2:1 on the
+ * light sidebar), referenced as CSS variables so they follow the theme:
+ *   success-text → #15803D / dark #4ADE80   (running)
+ *   accent-text  → #2563EB / dark #539AF8   (waiting, queued, starting)
+ *   warning-text → #B45309 / dark #FBBF24   (pending_approval / Blocked, error)
+ *   idle         → #A1A1AA                  (idle; resting rows show no glyph)
  */
 
 import type { AgentRunStatus, SessionListEntry } from '../types';
@@ -19,7 +20,7 @@ import { displayRunStatus } from '../utils/projectStatus';
 
 export interface StatusDisplay {
   glyph: string;
-  /** Inline CSS color value (matches the @theme token). */
+  /** Inline CSS color value (a `var(--color-*)` theme token). */
   color: string;
   /** Human-readable label (used for aria and text). English — this map is
    *  module-level and cannot call the useT() hook. */
@@ -55,16 +56,16 @@ export interface StatusDisplay {
  *                   resting: the row must light up).
  */
 const STATUS_DISPLAY_MAP: Record<AgentRunStatus, StatusDisplay> = {
-  running: { glyph: '◐', color: '#22C55E', label: 'Running' },
-  waiting: { glyph: '⟳', color: '#539AF8', label: 'Waiting' },
+  running: { glyph: '◐', color: 'var(--color-success-text)', label: 'Running' },
+  waiting: { glyph: '⟳', color: 'var(--color-accent-text)', label: 'Waiting' },
   // Waiting's blue: both are "not my turn yet". A distinct glyph (a quarter
   // circle, less full than waiting's ⟳ spin) keeps the two readable apart.
-  queued: { glyph: '◔', color: '#539AF8', label: 'Queued', labelKey: 'session.status.queued' },
+  queued: { glyph: '◔', color: 'var(--color-accent-text)', label: 'Queued', labelKey: 'session.status.queued' },
   // pending_approval is rendered as "Blocked" in ALL UI copy per spec.
-  pending_approval: { glyph: '⚠', color: '#F59E0B', label: 'Blocked' },
+  pending_approval: { glyph: '⚠', color: 'var(--color-warning-text)', label: 'Blocked' },
   idle: { glyph: '⏸', color: '#A1A1AA', label: 'Idle', resting: true },
-  new_session: { glyph: '◐', color: '#539AF8', label: 'Starting' },
-  error: { glyph: '⚠', color: '#F59E0B', label: 'Error' },
+  new_session: { glyph: '◐', color: 'var(--color-accent-text)', label: 'Starting' },
+  error: { glyph: '⚠', color: 'var(--color-warning-text)', label: 'Error' },
 };
 
 const FALLBACK_STATUS: StatusDisplay = { glyph: '⏸', color: '#A1A1AA', label: 'Idle', resting: true };

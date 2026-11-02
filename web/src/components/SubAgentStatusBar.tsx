@@ -16,10 +16,9 @@
 // process tree and cannot be guaranteed stopped (accepted limitation, see
 // REPORT-piece3-child-classification.md).
 
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../config';
 import { useT } from '../i18n/useT';
-import { agentTint } from '../utils/agentIcons';
 import {
   useSubAgentStatus,
   type SubAgentInfo,
@@ -48,12 +47,14 @@ const BADGE_LABEL_KEY: Record<SubAgentInfo['status'], 'subAgentBar.working' | 's
   idle: 'subAgentBar.idle',
 };
 
-/** The dot before the status word: the agent's own colour, pulsing, while
- *  its turn runs; amber for work alive after the turn; grey when idle. */
+/** The dot before the status word (spec 145): green while its turn runs,
+ *  with the pin switcher's moving ring; amber for work alive after the turn;
+ *  grey when idle. Stable state colours at readable contrast in both themes;
+ *  the chip's name carries the identity. */
 const DOT_CLASS: Record<SubAgentInfo['status'], string> = {
-  running: 'bg-[var(--agent-color)] animate-pulse',
-  'background-running': 'bg-warning',
-  idle: 'bg-border',
+  running: 'bg-success-text',
+  'background-running': 'bg-warning-text',
+  idle: 'bg-idle',
 };
 
 export default function SubAgentStatusBar({ projectId, sessionId, live }: Props) {
@@ -106,7 +107,6 @@ export default function SubAgentStatusBar({ projectId, sessionId, live }: Props)
         <div
           key={a.handle}
           data-testid={`sub-agent-chip-${a.handle}`}
-          style={{ '--agent-color': agentTint(a.handle) } as CSSProperties}
           className="flex items-center gap-1.5 shrink-0 rounded-md bg-background dark:bg-elevated pl-2 pr-1 py-0.5 text-primary"
         >
           <span className="max-w-[96px] truncate">{a.display_name}</span>
@@ -115,7 +115,23 @@ export default function SubAgentStatusBar({ projectId, sessionId, live }: Props)
             data-status={a.status}
             className="inline-flex items-center gap-1.5 text-2xs leading-4 text-secondary"
           >
-            <span aria-hidden="true" className={`inline-block w-[7px] h-[7px] rounded-full ${DOT_CLASS[a.status]}`} />
+            {/* The dot sits in a 12px box so the ring grows inside room of
+                its own, clear of the name and the word; the box is under
+                the badge's 16px line, so the chip keeps its height. */}
+            <span aria-hidden="true" className="relative grid place-items-center w-3 h-3 shrink-0">
+              {a.status === 'running' && (
+                <span
+                  data-testid={`sub-agent-ring-${a.handle}`}
+                  className="absolute inset-[2.5px] rounded-full border-[1.5px] border-success-text
+                             motion-safe:animate-ping [animation-duration:1.6s] motion-reduce:opacity-40"
+                />
+              )}
+              <span
+                data-testid={`sub-agent-dot-${a.handle}`}
+                aria-hidden="true"
+                className={`relative w-[7px] h-[7px] rounded-full ${DOT_CLASS[a.status]}`}
+              />
+            </span>
             {t(BADGE_LABEL_KEY[a.status])}
           </span>
           {a.status !== 'idle' && (

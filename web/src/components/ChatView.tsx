@@ -4071,14 +4071,14 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
               // malfunctioned.
               const tone =
                 item.action === 'failed' || item.action === 'error'
-                  ? 'text-error/80'
+                  ? 'text-error-text'
                   : item.action === 'background_lost' ||
                       item.action === 'interrupted' ||
                       item.action === 'queue_dropped' ||
                       (item.action === 'stopped' && !!item.count)
-                    ? 'text-warning'
+                    ? 'text-warning-text'
                     : item.action === 'interaction_required'
-                      ? 'text-accent'
+                      ? 'text-primary'
                       : 'text-secondary';
               rendered = (
                 <div

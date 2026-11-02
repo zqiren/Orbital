@@ -71,11 +71,11 @@ interface FanoutCardProps {
 }
 
 const STATUS_CLASS: Record<FanoutTaskStatus, string> = {
-  running: 'bg-blue-500/15 text-blue-400 border-blue-500/40 animate-pulse',
-  completed: 'bg-green-500/15 text-green-400 border-green-500/40',
-  error: 'bg-red-500/15 text-red-400 border-red-500/40',
-  stalled: 'bg-amber-500/15 text-amber-400 border-amber-500/40',
-  interrupted: 'bg-zinc-500/15 text-zinc-400 border-zinc-500/30',
+  running: 'bg-accent/15 text-primary border-accent/40 animate-pulse',
+  completed: 'dark:bg-success/15 text-success-text border-success/40',
+  error: 'dark:bg-error/15 text-error-text border-error/40',
+  stalled: 'dark:bg-warning/15 text-warning-text border-warning/40',
+  interrupted: 'dark:bg-idle/15 text-secondary border-idle/30',
 };
 
 const STATUS_LABEL_KEY: Record<FanoutTaskStatus, StringKey> = {

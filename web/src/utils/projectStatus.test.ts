@@ -24,8 +24,8 @@ describe('getProjectDotColor — precedence (spec 095)', () => {
     );
 
   it('shows green while a worker runs with the manager idle', () => {
-    expect(dot('idle', { workers: true })).toBe('bg-success');
-    expect(dot(undefined, { workers: true })).toBe('bg-success');
+    expect(dot('idle', { workers: true })).toBe('bg-success-text');
+    expect(dot(undefined, { workers: true })).toBe('bg-success-text');
   });
 
   it('stays grey with the manager idle and no worker running', () => {
@@ -33,16 +33,16 @@ describe('getProjectDotColor — precedence (spec 095)', () => {
   });
 
   it('keeps a manager error red while a worker runs', () => {
-    expect(dot('error', { workers: true })).toBe('bg-error');
+    expect(dot('error', { workers: true })).toBe('bg-error-text');
   });
 
   it('keeps pending approvals amber over a running worker', () => {
-    expect(dot('idle', { approvals: 1, workers: true })).toBe('bg-warning');
+    expect(dot('idle', { approvals: 1, workers: true })).toBe('bg-warning-text');
   });
 
   it('is unchanged for manager-running states', () => {
-    expect(dot('running')).toBe('bg-success');
-    expect(dot('waiting')).toBe('bg-success');
+    expect(dot('running')).toBe('bg-success-text');
+    expect(dot('waiting')).toBe('bg-success-text');
   });
 
   it('treats a missing map as no worker running (older callers)', () => {

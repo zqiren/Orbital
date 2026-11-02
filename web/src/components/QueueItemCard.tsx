@@ -270,7 +270,7 @@ function RunningCard({
   return (
     <Shell item={item} className={CARD}>
       <div className="flex items-center gap-2">
-        <StateDot tone="bg-success" pulse />
+        <StateDot tone="bg-success-text" pulse />
         <span className="text-[11px] font-medium text-secondary">{t('queue.item.running')}</span>
         {started && (
           <span className={`font-mono tabular-nums ${META}`}>
@@ -337,7 +337,7 @@ function BlockedRow({
   return (
     <Shell item={item} className={CARD}>
       <div className="flex items-center gap-2.5">
-        <StateDot tone="bg-warning" />
+        <StateDot tone="bg-warning-text" />
         <span className="min-w-0 flex-1 break-words text-[13px] text-primary">{item.content}</span>
         <AgentChip item={item} />
         <span className="shrink-0 text-[11px] font-medium text-warning">

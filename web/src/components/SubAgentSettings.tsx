@@ -446,7 +446,7 @@ export default function SubAgentSettings({ standalone = false, onBack }: Props) 
       )}
 
       {error && (
-        <div className="bg-warning/10 border border-warning/20 rounded-lg px-4 py-3 mb-4 text-sm text-warning">
+        <div className="dark:bg-warning/10 border border-warning/20 rounded-lg px-4 py-3 mb-4 text-sm text-warning-text">
           {error}
         </div>
       )}
@@ -504,7 +504,7 @@ export default function SubAgentSettings({ standalone = false, onBack }: Props) 
               {cliMissing[entry.slug] && (
                 <p
                   data-testid={`sub-agent-update-missing-${entry.slug}`}
-                  className="text-xs text-error px-1"
+                  className="text-xs text-error-text px-1"
                 >
                   {t('subAgentCard.updateCliMissing', {
                     name: entry.name,
@@ -981,7 +981,7 @@ function SubAgentCard({ entry, onChanged, onChangeLocation }: CardProps) {
           data-testid={`sub-agent-handshake-failed-${entry.slug}`}
           className="flex flex-col gap-1 mt-2"
         >
-          <p className="text-xs text-warning">
+          <p className="text-xs text-warning-text">
             {t('subAgentCard.handshakeFailed', { name: entry.name })}
           </p>
           {entry.handshake.detail && (
@@ -1006,7 +1006,7 @@ function SubAgentCard({ entry, onChanged, onChangeLocation }: CardProps) {
           data-testid={`sub-agent-update-${entry.slug}`}
           className="flex flex-col gap-2 mt-3 mb-3"
         >
-          <p className="text-xs text-warning">
+          <p className="text-xs text-warning-text">
             {t('subAgentCard.updateNeeded', {
               name: entry.name,
               version: shortVersion(entry.version),
@@ -1034,7 +1034,7 @@ function SubAgentCard({ entry, onChanged, onChangeLocation }: CardProps) {
           {updateNotice && (
             <p
               data-testid={`sub-agent-update-notice-${entry.slug}`}
-              className={`text-[11px] ${updateNotice === 'busy' ? 'text-warning' : 'text-error'}`}
+              className={`text-[11px] ${updateNotice === 'busy' ? 'text-warning-text' : 'text-error-text'}`}
             >
               {updateNotice === 'busy'
                 ? t('subAgentCard.updateBusy', { name: entry.name })
@@ -1055,7 +1055,7 @@ function SubAgentCard({ entry, onChanged, onChangeLocation }: CardProps) {
       {authExpired && supportsLogin && (
         <p
           data-testid={`sub-agent-auth-expired-${entry.slug}`}
-          className="text-xs text-warning mt-2"
+          className="text-xs text-warning-text mt-2"
         >
           {t('subAgentCard.authExpiredNote', { name: entry.name })}
         </p>
@@ -1104,7 +1104,7 @@ function SubAgentCard({ entry, onChanged, onChangeLocation }: CardProps) {
           {installError ? (
             <p
               data-testid={`sub-agent-install-error-${entry.slug}`}
-              className="text-xs text-warning"
+              className="text-xs text-warning-text"
             >
               {t('subAgentCard.installFailed', { error: installError })}
             </p>
@@ -1114,7 +1114,7 @@ function SubAgentCard({ entry, onChanged, onChangeLocation }: CardProps) {
             // offering a bare Retry with no explanation.
             <p
               data-testid={`sub-agent-install-error-${entry.slug}`}
-              className="text-xs text-warning"
+              className="text-xs text-warning-text"
             >
               {t('subAgentCard.installFailedEarlier')}
             </p>
@@ -1184,7 +1184,7 @@ function SubAgentCard({ entry, onChanged, onChangeLocation }: CardProps) {
         <p
           data-testid={`sub-agent-login-notice-${entry.slug}`}
           className={`text-[11px] mb-3 ${
-            loginNotice === 'unverified' ? 'text-warning' : 'text-error'
+            loginNotice === 'unverified' ? 'text-warning-text' : 'text-error-text'
           }`}
         >
           {loginNotice === 'unverified'
@@ -1303,7 +1303,7 @@ function SubAgentCard({ entry, onChanged, onChangeLocation }: CardProps) {
             >
               {saving ? t('subAgentCard.saving') : t('subAgentCard.save')}
             </button>
-            {saved && <span className="text-xs text-success">{t('subAgentCard.saved')}</span>}
+            {saved && <span className="text-xs text-success-text">{t('subAgentCard.saved')}</span>}
           </div>
         </div>
       ) : (
@@ -1313,7 +1313,7 @@ function SubAgentCard({ entry, onChanged, onChangeLocation }: CardProps) {
       )}
 
       {actionError && (
-        <p className="text-xs text-warning mt-2">{actionError}</p>
+        <p className="text-xs text-warning-text mt-2">{actionError}</p>
       )}
     </div>
   );
@@ -1495,7 +1495,7 @@ function ManagedCredentials({ slug, fields, onChanged }: ManagedCredentialsProps
             {errors[field.key] && (
               <p
                 data-testid={`sub-agent-cred-error-${field.key}`}
-                className="text-xs text-warning"
+                className="text-xs text-warning-text"
               >
                 {errors[field.key]}
               </p>
@@ -1510,8 +1510,8 @@ function ManagedCredentials({ slug, fields, onChanged }: ManagedCredentialsProps
 
 function StatusPill({ label, variant }: { label: string; variant: 'success' | 'warning' }) {
   const cls = variant === 'success'
-    ? 'bg-success/10 text-success border-success/20'
-    : 'bg-warning/10 text-warning border-warning/20';
+    ? 'dark:bg-success/10 text-success-text border-success/20'
+    : 'dark:bg-warning/10 text-warning-text border-warning/20';
   return (
     <span className={`px-2 py-0.5 rounded-full border text-[11px] ${cls}`}>
       {label}

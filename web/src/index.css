@@ -94,7 +94,13 @@
   --color-warning-surface: #FFFBF0;                /* tinted warning panel */
   --color-warning-text: #B45309;                   /* small warning text */
   --color-error-surface: #FEF2F2;                  /* tinted error row/hover */
-  --color-error-text: #DC2626;                     /* small error text */
+  --color-error-text: #B91C1C;                     /* small error text, status dots */
+  /* Spec 145: readable status hues for small text, dots and glyphs. The fills
+     above (success/warning/error/accent) read at ~2-2.9:1 on light surfaces;
+     these reach >= 4.5:1 on every light surface. */
+  --color-success-text: #15803D;                   /* small success text, status dots */
+  --color-accent-text: #2563EB;                    /* blue status dots + glyphs */
+  --color-warning-dot: #D97706;                    /* pin switcher "low" dot (brighter, apart from red) */
   --color-qr-surface: var(--color-background);     /* QR quiet zone; must stay light */
   --color-logo-ink: #1a1a2e;                       /* logo stem + leaf; applied on dark only */
   --color-logo-tile: #FFFFFF;                      /* tile behind logo + agent marks; dark only */
@@ -195,8 +201,9 @@
   --color-muted: #7F848D;
   --color-idle: #7F848D;
 
-  /* Accent stays the same FILL; status hues are unchanged and read on these
-     surfaces at >= 4.3:1. */
+  /* Accent stays the same FILL. The status FILLS are unchanged; as small text
+     or dots they drop below 4.5:1 here too (red: 4.29 on card, 3.83 on
+     elevated), so small text and dots use the *-text tokens below. */
 
   /* Role tokens (see the light definitions in @theme). Palette "1a —
      Graphite + accent states": the surfaces above stay neutral and colour
@@ -226,6 +233,9 @@
   --color-warning-text: #FBBF24;
   --color-error-surface: rgb(239 68 68 / 0.12);
   --color-error-text: #F87171;
+  --color-success-text: #4ADE80;
+  --color-accent-text: #539AF8;
+  --color-warning-dot: #FBBF24;
   --color-qr-surface: #FFFFFF;
   --color-logo-ink: #E8EAED;
   --color-logo-tile: #FFFFFF;
@@ -632,6 +642,18 @@ body {
   height: 16px;
   pointer-events: none;
   background: linear-gradient(to bottom, var(--color-card), rgb(from var(--color-card) r g b / 0));
+}
+
+/* Spec 145: the pin switcher's status dot (PinTargetSelect's StatusDot, the
+   only element carrying both data-color and data-pulse). Its classes read the
+   bright fills (`bg-warning text-warning`), which sit at ~2.2:1 on light
+   surfaces; re-pointing the tokens on the dot itself moves the dot and its
+   ring together. Amber takes the brighter --color-warning-dot so "low" stays
+   apart from red. */
+[data-color][data-pulse] {
+  --color-success: var(--color-success-text);
+  --color-warning: var(--color-warning-dot);
+  --color-error: var(--color-error-text);
 }
 
 ::view-transition-group(*) {

@@ -13,18 +13,19 @@ interface StatusBadgeProps {
   size?: 'sm' | 'md';
 }
 
+// Readable status tokens, not the bright fills (spec 145: ~2:1 on light).
 const STATUS_CONFIG: Record<BadgeStatus, { color: string; labelKey: StringKey }> = {
-  running: { color: 'bg-success', labelKey: 'status.active' },
-  waiting: { color: 'bg-success', labelKey: 'status.waiting' },
+  running: { color: 'bg-success-text', labelKey: 'status.active' },
+  waiting: { color: 'bg-success-text', labelKey: 'status.waiting' },
   // Spec 081: a first message waiting for the project slot. Reached only if
   // a queued session is ever routed through the project-header badge (today
   // it renders the agent's own status); the exhaustive Record demands it.
-  queued: { color: 'bg-accent', labelKey: 'session.status.queued' },
+  queued: { color: 'bg-accent-text', labelKey: 'session.status.queued' },
   idle: { color: 'bg-idle', labelKey: 'status.idle' },
-  error: { color: 'bg-error', labelKey: 'status.error' },
-  needs_input: { color: 'bg-warning', labelKey: 'status.needsInput' },
+  error: { color: 'bg-error-text', labelKey: 'status.error' },
+  needs_input: { color: 'bg-warning-text', labelKey: 'status.needsInput' },
   new_session: { color: 'bg-idle', labelKey: 'status.idle' },
-  pending_approval: { color: 'bg-warning', labelKey: 'status.awaitingApproval' },
+  pending_approval: { color: 'bg-warning-text', labelKey: 'status.awaitingApproval' },
 };
 
 export default function StatusBadge({ status, size = 'md' }: StatusBadgeProps) {
