@@ -127,6 +127,26 @@ def test_failed_pinned_send_broadcasts_sub_agent_failed(env):
     assert not [e for _, e, _ in sent if e.get("type") == "chat.sub_agent_message"]
 
 
+def test_a_sent_message_is_not_announced_as_the_workers_own_words(env, monkeypatch):
+    """``send()``'s "Message sent to …" is the route's answer. Broadcast as
+    ``chat.sub_agent_message`` it rendered as a worker bubble, transcript path
+    and all, for as long as the turn ran."""
+    client, pid, ws, sid, sent = env
+
+    class _Sent:
+        async def send(self, project_id, handle, message, **kwargs):
+            return "Message sent to claude-code. Transcript: C:/t.jsonl"
+
+    monkeypatch.setattr(_routes_mod(), "_sub_agent_manager", _Sent())
+    resp = client.post(f"/api/v2/agents/{pid}/inject", json={
+        "content": "hi", "target": "claude-code", "session_id": sid,
+    })
+
+    assert resp.status_code == 200
+    assert resp.json()["status"].startswith("Message sent to claude-code")
+    assert not [e for _, e, _ in sent if e.get("type") == "chat.sub_agent_message"]
+
+
 def test_no_broadcast_when_the_failure_row_could_not_be_persisted(env, monkeypatch):
     client, pid, ws, sid, sent = env
     routes_mod = _routes_mod()

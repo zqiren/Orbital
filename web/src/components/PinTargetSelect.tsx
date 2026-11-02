@@ -38,7 +38,7 @@
 // closes the menu while the panel shows. Phones have no side card, so the
 // panel opens inline under its row.
 
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { ChevronDown } from 'lucide-react';
 import MessageAvatar from './MessageAvatar';
 import {
@@ -676,6 +676,18 @@ export default function PinTargetSelect({
   const t = useT();
   const { locale } = useLocale();
   const [open, setOpen] = useState(false);
+  // The composer can sit far enough right that the menu and the card beside it
+  // run off a narrow window. Slide them back on screen, as far as the left edge
+  // allows. Every render: which card shows changes the width.
+  const menuWrapRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const wrap = menuWrapRef.current;
+    if (!wrap) return;
+    wrap.style.transform = '';
+    const { left, right } = wrap.getBoundingClientRect();
+    const shift = Math.min(right - (window.innerWidth - 8), left - 8);
+    if (shift > 0) wrap.style.transform = `translateX(-${shift}px)`;
+  });
   // Whose hover card shows while the menu is open (defaults to the pinned
   // worker's), and whether the collapsed control is hovered.
   const [cardFor, setCardFor] = useState<string | null>(null);
@@ -990,6 +1002,7 @@ export default function PinTargetSelect({
         // beside the menu, bottom-aligned with it (top-aligned when the
         // standalone menu opens downward).
         <div
+          ref={menuWrapRef}
           className={`absolute ${standalone ? 'top-full mt-1 items-start' : 'bottom-full mb-2 items-end'}
                      left-0 z-50 flex gap-2`}
         >

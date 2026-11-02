@@ -453,8 +453,9 @@ class ProcessManager:
                     if getattr(adapter, "_idle", None) is True:
                         adapter._idle = False
 
-                    # Piece 3 Part A — provenance capture: a Bash tool_use
-                    # with run_in_background=true IS the registration of real
+                    # Piece 3 Part A — provenance capture: a shell tool_use
+                    # (Bash, or PowerShell on Windows) with
+                    # run_in_background=true IS the registration of real
                     # background work (the only trusted classifier; see
                     # background_work.py). tool_input survives into
                     # chunk.metadata via transport_event_to_chunk
@@ -462,7 +463,7 @@ class ProcessManager:
                     if chunk.chunk_type == "tool_activity":
                         meta = getattr(chunk, "metadata", None) or {}
                         tool_input = meta.get("tool_input") or {}
-                        if (meta.get("tool_name") == "Bash"
+                        if (meta.get("tool_name") in ("Bash", "PowerShell")
                                 and tool_input.get("run_in_background")):
                             root_proc = getattr(
                                 getattr(adapter, "_transport", None),

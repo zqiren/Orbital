@@ -198,6 +198,38 @@ describe('PinTargetSelect model line', () => {
     expect(screen.queryByTestId('pin-model-card')).toBeNull();
   });
 
+  describe('in a window too narrow for the menu and its card', () => {
+    const place = (left: number, right: number) =>
+      vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+        .mockReturnValue({ left, right } as DOMRect);
+    const width = window.innerWidth;
+
+    beforeEach(() => { window.innerWidth = 929; });
+    afterEach(() => {
+      window.innerWidth = width;
+      vi.restoreAllMocks();
+    });
+
+    it('slides left so the card stays on screen', () => {
+      place(498, 1106);
+      renderMenu(models());
+      fireEvent.click(line('codex'));
+      expect(screen.getByRole('listbox').parentElement!.style.transform).toBe('translateX(-185px)');
+    });
+
+    it('never slides past the left edge', () => {
+      place(100, 1300);
+      renderMenu(models());
+      expect(screen.getByRole('listbox').parentElement!.style.transform).toBe('translateX(-92px)');
+    });
+
+    it('stays put when everything fits', () => {
+      place(258, 866);
+      renderMenu(models());
+      expect(screen.getByRole('listbox').parentElement!.style.transform).toBe('');
+    });
+  });
+
   it('choosing applies at once; Default clears the override', () => {
     const m = models();
     renderMenu(m);

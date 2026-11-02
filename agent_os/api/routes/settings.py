@@ -796,12 +796,23 @@ def _build_sub_agent_status_entry(s) -> dict:
     }
 
 
+async def _detected_binary(slug: str) -> str | None:
+    """The binary the last sweep found. A probe needs it on Windows, where an
+    npm-installed CLI is only a ``.cmd`` and its bare name cannot be spawned."""
+    if _setup_engine is None:
+        return None
+    statuses = await asyncio.to_thread(
+        _setup_engine.check_all, allow_stale=True, refresh_if_stale=False)
+    return next((s.binary_path for s in statuses if s.slug == slug), None)
+
+
 async def _codex_live_models(binary: str | None = None) -> list[str] | None:
     """Indirection over the cached codex model/list probe (monkeypatch seam
     for route tests). None means "list unavailable" — callers degrade to the
     static schema (free-text model entry)."""
     from agent_os.agent.transports.codex_models import get_codex_models_cached
-    return await get_codex_models_cached(binary or "codex")
+    return await get_codex_models_cached(
+        binary or await _detected_binary("codex") or "codex")
 
 
 async def _claude_live_models(binary: str | None = None) -> list[dict] | None:
@@ -809,7 +820,8 @@ async def _claude_live_models(binary: str | None = None) -> list[dict] | None:
     seam for route tests): ``[{"value", "label"}]``. None means "list
     unavailable" — callers keep the static whitelist."""
     from agent_os.agent.transports.claude_models import get_claude_models_cached
-    return await get_claude_models_cached(binary or "claude")
+    return await get_claude_models_cached(
+        binary or await _detected_binary("claude-code") or "claude")
 
 
 async def _augment_claude_live_models(entries: list[dict]) -> list[dict]:

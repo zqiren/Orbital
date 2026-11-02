@@ -2043,17 +2043,6 @@ async def inject_message(project_id: str, req: InjectRequest):
                 })
             raise HTTPException(status_code=404, detail=f"Failed to dispatch to {req.target}: {result}")
 
-        # Broadcast acknowledgement so ChatView knows the message was sent
-        ack_ts = datetime.now(timezone.utc).isoformat()
-        _ws_manager.broadcast(project_id, {
-            "type": "chat.sub_agent_message",
-            "project_id": project_id,
-            "session_id": mention_session_id,
-            "content": result,
-            "source": req.target,
-            "timestamp": ack_ts,
-        })
-
         return {"status": result}
     else:
         # Route to management agent (auto-starts if no session).

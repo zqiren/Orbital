@@ -23,10 +23,10 @@ Anchor mechanism (cross-platform by construction, Part A Windows gate):
 at registration we snapshot the agent root's direct children (the
 infrastructure baseline); a capture task then polls for a NEW direct child —
 that subtree is the work anchor, tracked as a ``psutil.Process`` (identity-
-checked by create-time, so PID reuse reads dead, not alive). On POSIX a child
-matching claude-code's ``~/.claude/shell-snapshots`` launcher pattern is
-preferred when several candidates appear; the pattern is a REFINEMENT, never
-the sole mechanism.
+checked by create-time, so PID reuse reads dead, not alive). A child matching
+claude-code's ``~/.claude/shell-snapshots`` launcher pattern is adopted at
+once; failing that, a new child that outlasts the capture window is. The
+pattern is a REFINEMENT, never the sole mechanism.
 
 WINDOWS GATE — OPENED 2026-11-02 (spec 147 Phase 2): ``three_state_supported``
 is True on every platform, win32 included. The gate was opened on the strength
@@ -44,7 +44,6 @@ provenance and any tree walk. It equally escapes the reap kill.
 
 import asyncio
 import logging
-import sys
 import time
 from dataclasses import dataclass, field
 
@@ -52,9 +51,11 @@ import psutil
 
 logger = logging.getLogger(__name__)
 
-# POSIX refinement: claude-code's Bash tool launches background jobs under a
-# shell sourcing a snapshot file at this path fragment (observed live).
-_POSIX_LAUNCHER_FRAGMENT = ".claude/shell-snapshots/"
+# claude-code's Bash tool launches background jobs under a shell sourcing a
+# snapshot file at this path fragment (observed live, Git Bash included). The
+# bootstrap that WRITES the snapshot quotes a native path, so on Windows only
+# the launcher matches.
+_LAUNCHER_FRAGMENT = ".claude/shell-snapshots/"
 
 Key = tuple[str, str, str]  # (project_id, session_id, handle)
 
@@ -128,11 +129,14 @@ class BackgroundWorkRegistry:
 
     async def _capture_anchor(self, key: Key, rec: BackgroundWorkRecord,
                               root_proc: "psutil.Process", baseline: set[int]) -> None:
-        """Adopt the first NEW direct child of the agent root as the work
-        anchor. POSIX: prefer the shell-snapshots launcher when several
-        candidates appear in the window."""
+        """Adopt the NEW direct child of the agent root that is the work: the
+        shell-snapshots launcher as soon as it appears, else whichever new
+        child outlasts the window. A first-come pick would take the CLI's own
+        snapshot bootstrap (``bash -lc echo "$PATH"``), which exits within a
+        second, and the worker would read idle while its shell runs."""
         deadline = time.monotonic() + self.capture_window_s
-        while time.monotonic() < deadline:
+        while True:
+            expired = time.monotonic() >= deadline
             try:
                 candidates = [
                     c for c in root_proc.children()
@@ -140,17 +144,10 @@ class BackgroundWorkRegistry:
                 ]
             except psutil.Error:
                 return  # root gone — nothing to anchor
-            if candidates:
+            chosen = next((c for c in candidates if self._is_launcher(c)), None)
+            if chosen is None and expired and candidates:
                 chosen = candidates[0]
-                if sys.platform != "win32" and len(candidates) > 1:
-                    for c in candidates:
-                        try:
-                            if any(_POSIX_LAUNCHER_FRAGMENT in part
-                                   for part in c.cmdline()):
-                                chosen = c
-                                break
-                        except psutil.Error:
-                            continue
+            if chosen is not None:
                 rec.anchor = chosen
                 self._last_activity[key] = time.monotonic()
                 logger.info(
@@ -158,11 +155,20 @@ class BackgroundWorkRegistry:
                     key, chosen.pid, rec.command[:80],
                 )
                 return
+            if expired:
+                break
             await asyncio.sleep(self.capture_poll_s)
         logger.info(
             "background work anchor capture expired for %s cmd=%r "
             "(work likely finished within the window)", key, rec.command[:80],
         )
+
+    @staticmethod
+    def _is_launcher(proc: "psutil.Process") -> bool:
+        try:
+            return any(_LAUNCHER_FRAGMENT in part for part in proc.cmdline())
+        except psutil.Error:
+            return False
 
     def _claimed_pids(self, key: Key) -> set[int]:
         return {r.anchor.pid for r in self._records.get(key, [])

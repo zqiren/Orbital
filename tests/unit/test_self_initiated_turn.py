@@ -245,6 +245,22 @@ async def test_self_turn_background_shell_registers_and_status_follows_the_regis
     assert sam._adapter_status(adapter, PID, SID, HANDLE) == "idle"
 
 
+@pytest.mark.asyncio
+async def test_a_powershell_tool_background_shell_registers_too():
+    """On Windows the CLI may launch the same background shell through its
+    PowerShell tool."""
+    pm, observer, adapter, transcript, closed = _wire([
+        _chunk("tool_activity", "[Using tool: PowerShell]", tool_name="PowerShell",
+               tool_id="t1", tool_input={"command": "ping -n 60 127.0.0.1",
+                                         "run_in_background": True}),
+        _turn_complete("self"),
+    ])
+    pm.background_work.register = MagicMock()
+    await _run(pm, adapter, transcript)
+    pm.background_work.register.assert_called_once()
+    assert pm.background_work.register.call_args.kwargs["command"] == "ping -n 60 127.0.0.1"
+
+
 # ---------------------------------------------------------------------------
 # §6.8 — the lifecycle row and broadcast
 # ---------------------------------------------------------------------------
