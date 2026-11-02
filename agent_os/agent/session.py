@@ -912,13 +912,15 @@ class Session:
         return list(self._messages)
 
     def get_recent(self, max_tokens: int, *,
-                   exclude_kind=None) -> list[dict]:
+                   exclude_kind=None, keep_tail_kind=None) -> list[dict]:
         """Return recent messages fitting within token budget (newest first priority).
 
         Iterates backward, estimates tokens as len(str(msg))/4. Rows whose
         ``_kind`` is ``exclude_kind`` (one kind, or a set of kinds) are left
         out and do not count against the budget (spec 112: finished memory
-        record turns; the tidy pass's row).
+        record turns; the tidy pass's row). Rows of ``keep_tail_kind`` at the
+        very end of the session stay even if excluded: the record turn in
+        progress, whose rows are always the tail.
         """
         if exclude_kind is None:
             excluded: frozenset[str] = frozenset()
@@ -928,8 +930,10 @@ class Session:
             excluded = frozenset(exclude_kind)
         result = []
         used_tokens = 0
+        in_tail = keep_tail_kind is not None
         for msg in reversed(self.get_model_messages()):
-            if excluded and msg.get("_kind") in excluded:
+            in_tail = in_tail and msg.get("_kind") == keep_tail_kind
+            if not in_tail and excluded and msg.get("_kind") in excluded:
                 continue
             est = estimate_message_tokens(msg)
             if used_tokens + est > max_tokens:

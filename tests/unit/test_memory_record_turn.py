@@ -779,3 +779,42 @@ async def test_five_completed_record_turns_leave_no_rows_in_the_window(tmp_path)
     assert sum(1 for m in sixth_run_first_build if m.get("role") == "assistant") == 5
     # And the consistency invariant: no dangling tool rows anywhere in it.
     assert all(m.get("role") != "tool" for m in sixth_run_first_build)
+
+
+@pytest.mark.asyncio
+async def test_an_interrupted_ask_is_not_repeated_in_the_next_record_turn(tmp_path):
+    """Spec 142: a record turn cancelled by a held message leaves its [MEMORY]
+    row in the session. The next run's record turn asks once, not twice."""
+    llm = _ScriptedLLM([_reply("reply"), _reply("unused"), _reply("second reply"),
+                        _reply("nothing to record")], gate_call=1)
+    session, tools, loop = _rig(tmp_path, llm)
+    task = asyncio.create_task(loop.run())
+    await asyncio.wait_for(llm.in_flight.wait(), timeout=2)
+    session.queue_message("and another thing", nonce="n1")
+    assert loop.yield_memory_record() is True
+    await asyncio.wait_for(task, timeout=2)
+
+    await loop.run()
+
+    asks = [m for m in llm.sent[-1] if "[MEMORY] This run is ending" in str(m.get("content"))]
+    assert len(asks) == 1
+    assert len(_memory_rows(session)) == 2  # both stay on disk for the chat view
+
+
+@pytest.mark.asyncio
+async def test_a_finished_record_turn_stays_out_of_the_next_one(tmp_path):
+    """The second record turn's prompt is the previous call plus its own ask:
+    no earlier ask, reply or tool row rides along, so the prefix still hits."""
+    llm = _ScriptedLLM([_reply("reply"), _reply("first record reply"),
+                        _reply("second reply"), _reply("nothing to record")])
+    session, tools, loop = _rig(tmp_path, llm)
+    await loop.run()
+    persist_user_row(session, "And the next thing.")
+    await loop.run()
+
+    during = llm.sent[3]
+    assert sum("[MEMORY] This run is ending" in str(m.get("content")) for m in during) == 1
+    assert not any("first record reply" in str(m.get("content")) for m in during)
+    before = llm.sent[2]
+    for i in range(len(before) - 1):
+        assert json.dumps(before[i], sort_keys=True) == json.dumps(during[i], sort_keys=True), i

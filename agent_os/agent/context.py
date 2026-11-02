@@ -651,13 +651,12 @@ class ContextManager:
         # Get sliding window from session. Spec 112: finished record turns
         # never ride along (their every row is tagged, so the assistant
         # tool-call rows and their results leave together and
-        # _validate_tool_results sees a consistent window).
+        # _validate_tool_results sees a consistent window). Only the turn in
+        # progress is in, so the model is asked once (spec 142).
         sliding_window = self._session.get_recent(
             remaining,
-            exclude_kind=(
-                {MEMORY_TIDY_KIND, ASK_CARD_KIND} if self.include_memory_record_rows
-                else {MEMORY_RECORD_KIND, MEMORY_TIDY_KIND, ASK_CARD_KIND}
-            ),
+            exclude_kind={MEMORY_RECORD_KIND, MEMORY_TIDY_KIND, ASK_CARD_KIND},
+            keep_tail_kind=MEMORY_RECORD_KIND if self.include_memory_record_rows else None,
         )
 
         # Remap non-standard roles for LLM compatibility
