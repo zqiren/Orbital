@@ -28,13 +28,14 @@ matching claude-code's ``~/.claude/shell-snapshots`` launcher pattern is
 preferred when several candidates appear; the pattern is a REFINEMENT, never
 the sole mechanism.
 
-WINDOWS GATE — OPEN: the Windows process shape of a run_in_background shell
-has NOT been observed (REPORT-piece3-child-classification.md scoped it; this
-machine cannot run the observation). ``three_state_supported`` is therefore
-False on win32: status stays two-state there (explicit, logged degradation —
-eviction remains descendant-gated so no work can be killed; nothing silently
-reads idle while liveness is unverifiable). Do not flip this without the
-observed Windows trace.
+WINDOWS GATE — OPENED 2026-11-02 (spec 147 Phase 2): ``three_state_supported``
+is True on every platform, win32 included. The gate was opened on the strength
+of nine of nine Windows run_in_background shells tracked correctly in field
+feedback bundles (2026-10-28 / 2026-11-01). If the Windows process shape turns
+out wrong somewhere, the failure mode is display only: the status dot stays
+green after the shell ends or never lights for it — not a crash, and eviction
+stays descendant-gated so no work is killed. The instance attribute remains so
+tests (and a future re-close) can set it False for the two-state path.
 
 Known accepted limitation (do not chase): work detached via raw foreground
 ``&``/``nohup`` reparents away from the agent tree and is invisible to both
@@ -87,16 +88,9 @@ class BackgroundWorkRegistry:
                  capture_poll_s: float = 0.25):
         self.capture_window_s = capture_window_s
         self.capture_poll_s = capture_poll_s
-        # Part A Windows gate (see module docstring). Instance attr so tests
-        # can exercise the degraded path without platform patching.
-        self.three_state_supported = sys.platform != "win32"
-        if not self.three_state_supported:
-            logger.warning(
-                "BackgroundWorkRegistry: three-state status DISABLED on this "
-                "platform (Windows liveness shape unverified — Part A gate "
-                "open). Status degrades to two-state; eviction stays "
-                "descendant-gated."
-            )
+        # Windows gate, opened 2026-11-02 (see module docstring). Instance
+        # attr so tests can exercise the degraded two-state path.
+        self.three_state_supported = True
         self._records: dict[Key, list[BackgroundWorkRecord]] = {}
         self._last_activity: dict[Key, float] = {}
 

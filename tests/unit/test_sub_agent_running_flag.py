@@ -8,8 +8,9 @@ worker).
 
 Four pieces, all tested here:
 - ``SubAgentManager.has_running_sub_agents(pid)``: True iff some worker in ANY
-  session of the project has an open turn. ``background-running`` does not
-  count (a detached job would otherwise hold the dot green indefinitely).
+  session of the project has an open turn, or a worker reads
+  ``background-running`` (spec 147 Phase 2: a claude-code shell still running
+  after its turn keeps the project Active).
 - ``GET /agents/{pid}/run-status`` carries it as the additive
   ``sub_agents_running`` field. ``status`` keeps its manager-only meaning.
 - ``LifecycleObserver.on_message_routed`` broadcasts ``sub_agent.dispatched``
@@ -85,13 +86,22 @@ class TestHasRunningSubAgents:
         _plant(mgr, PID, SID_B, "claude-code", _adapter(idle=True))
         assert mgr.has_running_sub_agents(PID) is False
 
-    def test_background_running_does_not_count(self):
+    def test_background_running_counts(self):
+        """Spec 147 Phase 2: an idle worker with a live background shell keeps
+        the project dot lit."""
         mgr = _manager(background_live=True)
         adapter = _adapter(idle=True, supports_background=True)
         _plant(mgr, PID, SID_A, "claude-code", adapter)
         # Precondition: the adapter really reads background-running.
         assert mgr.list_active(PID, session_id=SID_A)[0]["status"] == (
             "background-running")
+        assert mgr.has_running_sub_agents(PID) is True
+
+    def test_idle_worker_whose_shell_ended_does_not_count(self):
+        mgr = _manager(background_live=False)
+        _plant(mgr, PID, SID_A, "claude-code",
+               _adapter(idle=True, supports_background=True))
+        assert mgr.list_active(PID, session_id=SID_A)[0]["status"] == "idle"
         assert mgr.has_running_sub_agents(PID) is False
 
     def test_dead_adapter_does_not_count_and_is_evicted(self):
@@ -320,6 +330,26 @@ class TestDeleteSessionWorkerGuard:
 
 
 # ---------------------------------------------------------------------------
+# Spec 147 Phase 2: the registry's Windows gate is open on every platform.
+# ---------------------------------------------------------------------------
+
+class TestThreeStateGate:
+    def test_open_on_win32(self, monkeypatch):
+        monkeypatch.setattr(sys, "platform", "win32")
+        assert BackgroundWorkRegistry().three_state_supported is True
+
+    def test_open_on_darwin_and_linux(self, monkeypatch):
+        for plat in ("darwin", "linux"):
+            monkeypatch.setattr(sys, "platform", plat)
+            assert BackgroundWorkRegistry().three_state_supported is True
+
+    def test_instance_attribute_can_still_be_closed(self):
+        registry = BackgroundWorkRegistry()
+        registry.three_state_supported = False
+        assert registry.three_state_supported is False
+
+
+# ---------------------------------------------------------------------------
 # Spec 102: SubAgentManager.running_session_ids — the per-session form of the
 # same signal, feeding the session-list row glyph.
 # ---------------------------------------------------------------------------
@@ -334,13 +364,35 @@ class TestRunningSessionIds:
         _plant(mgr, PID, SID_B, "claude-code", _adapter(idle=False))
         assert mgr.running_session_ids(PID) == {SID_B}
 
-    def test_background_running_is_excluded(self):
+    def test_background_running_is_included(self):
+        """Spec 147 Phase 2: a session whose idle worker has a live registered
+        background shell is running; the other session is not."""
         mgr = _manager(background_live=True)
         _plant(mgr, PID, SID_A, "claude-code",
                _adapter(idle=True, supports_background=True))
+        _plant(mgr, PID, SID_B, "codex", _adapter(idle=True))
         assert mgr.list_active(PID, session_id=SID_A)[0]["status"] == (
             "background-running")
-        assert mgr.running_session_ids(PID) == set()
+        assert mgr.running_session_ids(PID) == {SID_A}
+
+    def test_background_running_with_real_registry(self):
+        """Same contract through a real BackgroundWorkRegistry holding a live
+        anchored record, not a mock."""
+        import psutil
+        from agent_os.daemon_v2.background_work import BackgroundWorkRecord
+
+        registry = BackgroundWorkRegistry()
+        registry.three_state_supported = True
+        rec = BackgroundWorkRecord(command="sleep 40", registered_at=0.0,
+                                   anchor=psutil.Process())
+        registry._records[(PID, SID_A, "claude-code")] = [rec]
+        pm = MagicMock()
+        pm.background_work = registry
+        mgr = SubAgentManager(process_manager=pm)
+        _plant(mgr, PID, SID_A, "claude-code",
+               _adapter(idle=True, supports_background=True))
+        assert mgr.running_session_ids(PID) == {SID_A}
+        assert mgr.has_running_sub_agents(PID) is True
 
     def test_dead_adapter_is_excluded_and_evicted(self):
         mgr = _manager()

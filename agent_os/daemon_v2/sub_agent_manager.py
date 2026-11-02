@@ -2886,8 +2886,9 @@ class SubAgentManager:
 
         The per-session form of ``has_running_sub_agents``: the session-list
         row glyph lights for a pinned run the same way the project dot does.
-        ``background-running`` does not count (only an open turn is work in
-        progress); dead adapters are evicted on the way via ``list_active``.
+        ``background-running`` counts too (spec 147 Phase 2): a worker whose
+        turn ended with a background shell still alive keeps its session
+        Active. Dead adapters are evicted on the way via ``list_active``.
         Mutates ``_adapters`` through that eviction — call it on the event
         loop, never from a worker thread.
         """
@@ -2895,7 +2896,7 @@ class SubAgentManager:
         running = {
             sid
             for sid in session_ids
-            if any(entry["status"] == "running"
+            if any(entry["status"] in ("running", "background-running")
                    for entry in self.list_active(project_id, session_id=sid))
         }
         registry = getattr(self, "_job_registry", None)
