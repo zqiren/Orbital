@@ -134,7 +134,7 @@ def _meta_events(tmp_path, stem: str, event: str) -> list[dict]:
 
 
 def _err(status: int) -> LLMError:
-    return LLMError(f"http {status}", status_code=status)
+    return LLMError(f"http {status}: invalid api key", status_code=status)
 
 
 # ---------------------------------------------------------------------------
@@ -182,6 +182,30 @@ async def test_auth_error_rotates_to_global_rung_and_continues(tmp_path, status)
 # ---------------------------------------------------------------------------
 # 400 and transient errors keep today's semantics — the rung is unreachable
 # ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_a_403_about_the_request_keeps_the_key_and_says_why(tmp_path):
+    """OpenCode Go answers a region-gated model with 403 RegionError. The key is
+    fine, so no rung is swapped and nothing says the key was rejected."""
+    session = Session.new("region403", str(tmp_path))
+    refusal = LLMError(
+        "Error code: 403 - {'error': {'type': 'RegionError', 'message': "
+        "'Select Global under Regions to use this model.'}}", status_code=403)
+    primary = AlwaysErrorProvider("deepseek-v4.1-flash", refusal, api_key="sk-project")
+    auth = SuccessProvider("global-model", api_key="sk-global", provider="tokendance")
+
+    loop = _make_loop(tmp_path, session, primary, auth=auth)
+    persist_user_row(session, "hello")
+    await loop.run()
+
+    assert loop._llm_failed
+    assert auth._call_count == 0
+    assert not _meta_events(tmp_path, "region403", "model_swap")
+    texts = _system_texts(session)
+    assert any("Select Global under Regions" in t for t in texts)
+    assert not any("rejected" in t for t in texts)
+    assert not any("Error code" in t for t in texts)
+
 
 @pytest.mark.asyncio
 async def test_400_still_cold_aborts_without_touching_auth_rung(tmp_path):

@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from uuid import uuid4
 
+from agent_os.agent.providers.types import is_rejected_credential
 from agent_os.agent import asks as asks_mod
 from agent_os.agent.context import ASK_CARD_KIND, MEMORY_TIDY_KIND, ContextManager, ask_card_row
 from agent_os.agent.loop import (
@@ -1543,11 +1544,10 @@ class AgentManager:
         def record_credential_error(status: int, message: str) -> None:
             if not card_id_for_health or self._settings_store is None:
                 return
-            code = {
-                401: "invalid_api_key",
-                403: "invalid_api_key",
-                402: "insufficient_credits",
-            }.get(status, "provider_error")
+            if is_rejected_credential(status, message):
+                code = "invalid_api_key"
+            else:
+                code = "insufficient_credits" if status == 402 else "provider_error"
             try:
                 self._settings_store.record_card_health(
                     card_id_for_health,

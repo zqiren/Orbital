@@ -26,6 +26,9 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
+from agent_os.agent.providers.types import (
+    AUTH_FAILURE_PHRASES, is_rejected_credential, unwrap_provider_message,
+)
 from agent_os.agent.prompt_builder import Autonomy
 from agent_os.agent.skills import SkillLoader
 from agent_os.agent.skill_catalog import SkillCatalog
@@ -3941,48 +3944,6 @@ async def fetch_models(req: FetchModelsRequest):
             raise HTTPException(status_code=502, detail=str(e) or type(e).__name__)
 
 
-# Phrases that mean the CREDENTIAL was rejected. Everything else a gateway
-# refuses a request for — no payment method, a region gate, a quota, an
-# unenrolled model — also arrives as 401/403, and calling those "Invalid API
-# key" sends the user to re-issue a key that works fine. Reported from the
-# field on OpenCode Go: deepseek-v4-flash answers 403 RegionError until the
-# workspace opts into China hosting. Auth phrasing is a small stable set; the
-# reasons a request can be refused are open-ended, so the allowlist covers
-# auth and everything else passes through in the provider's own words.
-_AUTH_FAILURE_PHRASES = (
-    "api key", "apikey", "api-key",
-    "authentication", "unauthorized", "invalid token", "invalid credentials",
-)
-
-
-def _unwrap_provider_message(raw: str) -> str:
-    """Pull the provider's sentence out of an SDK envelope.
-
-    SDK errors arrive as ``Error code: 403 - {'type': 'error', 'error':
-    {'message': '...'}}`` — a Python repr, which is unreadable in a red UI
-    line. Return the innermost ``message`` when the envelope parses, else the
-    raw string unchanged.
-    """
-    import ast
-
-    body = raw.split(" - ", 1)[1] if " - " in raw else raw
-    try:
-        parsed = ast.literal_eval(body.strip())
-    except (ValueError, SyntaxError):
-        return raw
-    for _ in range(4):  # {'error': {'error': {...}}} nests at most a little
-        if not isinstance(parsed, dict):
-            break
-        msg = parsed.get("message")
-        if isinstance(msg, str) and msg:
-            return msg
-        nxt = parsed.get("error")
-        if nxt is None:
-            break
-        parsed = nxt
-    return raw
-
-
 _WIRE_PROTOCOL_NAMES = {
     "openai": "OpenAI chat/completions",
     "anthropic": "Anthropic messages",
@@ -4015,9 +3976,9 @@ def _describe_auth_failure(raw: str | None) -> str:
     """Map a 401/403 to display text: the stable "Invalid API key" only when
     the provider says the credential was the problem."""
     message = raw or ""
-    if any(p in message.lower() for p in _AUTH_FAILURE_PHRASES):
+    if any(p in message.lower() for p in AUTH_FAILURE_PHRASES):
         return "Invalid API key"
-    return _unwrap_provider_message(message)
+    return unwrap_provider_message(message)
 
 
 class TestConnectionRequest(BaseModel):
@@ -4128,11 +4089,12 @@ async def run_connection_test(provider: str, model: str, api_key: str,
     except LLMError as e:
         status = e.status_code
         if status in (401, 403):
-            return {"ok": False, "status": status, "code": "invalid_api_key",
+            code = "invalid_api_key" if is_rejected_credential(status, e.message) else "provider_error"
+            return {"ok": False, "status": status, "code": code,
                     "message": _describe_auth_failure(e.message)}
         if status == 402:
             return {"ok": False, "status": status, "code": "insufficient_credits",
-                    "message": _unwrap_provider_message(e.message)}
+                    "message": unwrap_provider_message(e.message)}
         if status == 404:
             return {"ok": False, "status": status, "code": "model_not_found",
                     "message": f"Model '{model}' not found on this provider"}

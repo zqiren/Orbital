@@ -18,6 +18,7 @@ import openai
 import pytest
 
 from agent_os.daemon_v2.models import AgentConfig
+from agent_os.agent.providers.types import LLMError
 from agent_os.agent.session import persist_user_row
 from agent_os.daemon_v2.provider_errors import (
     ProviderConfigError,
@@ -49,7 +50,7 @@ def test_classify_passes_provider_config_error_through():
 
 @pytest.mark.parametrize("status", [401, 403])
 def test_classify_auth_statuses_as_invalid_api_key(status):
-    code, msg = classify_llm_error(_FakeStatusError("nope", status))
+    code, msg = classify_llm_error(_FakeStatusError("nope: invalid api key", status))
     assert code == "invalid_api_key"
     assert "nope" in msg
 
@@ -283,3 +284,28 @@ def test_on_loop_done_broadcasts_llm_error_swallowed_by_loop():
     payloads = [c[0][1] for c in manager._ws.broadcast.call_args_list]
     err_payload = next(p for p in payloads if p.get("status") == "error")
     assert err_payload["error_code"] == "invalid_api_key"
+
+
+# The gateway's own words, from a field report on OpenCode Go.
+REGION_REFUSAL = (
+    "Error code: 403 - {'type': 'error', 'error': {'type': 'RegionError', 'message': "
+    "'The latest version of this model is only available hosted in China and "
+    "requires explicit opt in: https://opencode.ai/workspace/wrk_1/go'}}"
+)
+
+
+def test_a_403_about_the_request_is_not_a_rejected_key():
+    code, message = classify_llm_error(LLMError(REGION_REFUSAL, status_code=403))
+    assert code == "provider_error"
+    assert message.startswith("The latest version of this model")
+    assert "Error code" not in message
+
+
+@pytest.mark.parametrize("raw", ["Invalid API key", "authentication failed", ""])
+def test_a_403_about_the_credential_still_is(raw):
+    assert classify_llm_error(LLMError(raw, status_code=403))[0] == "invalid_api_key"
+
+
+def test_a_401_is_a_rejected_key_whatever_it_says():
+    # Providers word these in many languages; only 403 is open-ended.
+    assert classify_llm_error(LLMError("身份验证失败", status_code=401))[0] == "invalid_api_key"

@@ -14,7 +14,7 @@ Codes are part of the HTTP/WS contract with the frontend — keep them stable:
   missing_card         the project points at a credential card that no longer
                        exists and there is no default card
   missing_api_key      the resolved credential card carries no key
-  invalid_api_key      provider rejected the key (401/403)
+  invalid_api_key      provider rejected the key (401, or a 403 that says so)
   model_not_found      provider returned 404 for the model/endpoint
   provider_unreachable network-level failure reaching base_url
   provider_error       any other failure from the LLM call path (raw message
@@ -23,6 +23,10 @@ Codes are part of the HTTP/WS contract with the frontend — keep them stable:
                        Orbital's own bug (e.g. a file it could not read). The
                        UI must not send the user to provider settings for it.
 """
+
+from agent_os.agent.providers.types import (
+    is_rejected_credential, unwrap_provider_message,
+)
 
 # Modules whose exceptions are, by construction, failures of the LLM call
 # path: the provider SDKs, their HTTP transport, and Orbital's own provider
@@ -70,7 +74,10 @@ def classify_llm_error(exc: BaseException) -> tuple[str, str]:
 
     status = getattr(exc, "status_code", None)
     if status in (401, 403):
-        return "invalid_api_key", str(exc)
+        if is_rejected_credential(status, str(exc)):
+            return "invalid_api_key", str(exc)
+        # A region gate, a privacy setting: the key is fine, say what was said.
+        return "provider_error", unwrap_provider_message(str(exc))
     if status == 404:
         return "model_not_found", str(exc)
 

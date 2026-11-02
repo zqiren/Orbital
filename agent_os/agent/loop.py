@@ -32,6 +32,8 @@ from agent_os.agent.providers.types import (
     ContextOverflowError,
     LLMError,
     ErrorCategory,
+    is_rejected_credential,
+    unwrap_provider_message,
 )
 from agent_os.agent.tools.base import ToolResult
 from agent_os.utils.text_io import read_text_lenient
@@ -1319,11 +1321,13 @@ class AgentLoop:
                     # rotation member (transient cooldowns, the per-index
                     # _answered 400-guard). Scoped strictly to 401/403 —
                     # 400 stays cold-ABORT exactly as above. Nothing is
-                    # persisted: the next run tries the project key fresh.
+                    # persisted: the next run tries the project key fresh. A 403
+                    # about the request (OpenCode Go's region gate) leaves the
+                    # key alone: another key would not be why it now works.
                     _auth_abort_note = None
                     if (
                         category == ErrorCategory.ABORT
-                        and e.status_code in (401, 403)
+                        and is_rejected_credential(e.status_code, e.message)
                     ):
                         dead_key = getattr(
                             _all_providers[_current_idx], "api_key", None,
@@ -1388,7 +1392,10 @@ class AgentLoop:
                     if category == ErrorCategory.ABORT:
                         self._llm_failed = True
                         self.last_llm_error = e
-                        abort_msg = f"LLM error (non-recoverable): {e.message}."
+                        abort_msg = (
+                            "LLM error (non-recoverable): "
+                            f"{unwrap_provider_message(e.message)}."
+                        )
                         if _auth_abort_note:
                             abort_msg += f" {_auth_abort_note}"
                         self._session.append_system(abort_msg + " Stopping.")
