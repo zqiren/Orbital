@@ -6,6 +6,7 @@ import { parseAskAnswer } from '../utils/askAnswer';
 import { useState, type CSSProperties } from 'react';
 import type { DisplayItem } from '../utils/chatTransform';
 import { parseAttachmentsBlock } from '../lib/attachment-parsing';
+import { parseTriggerHeader } from '../lib/trigger-parsing';
 import { parseSkillBlock } from '../lib/skill-parsing';
 import { splitQuotesBlock } from '../utils/annotations';
 import AttachmentChip from './AttachmentChip';
@@ -98,7 +99,10 @@ export default function ChatMessage({ message, agentName, workspace, onOpenPath 
   const [quotesOpen, setQuotesOpen] = useState(false);
 
   if (message.type === 'user_message') {
-    const { strippedContent: afterAttachments, attachments } = parseAttachmentsBlock(message.content);
+    // An automation run's header line: the heading and the list row already
+    // name the automation, so the bubble carries the task text only.
+    const { strippedContent: afterTrigger } = parseTriggerHeader(message.content);
+    const { strippedContent: afterAttachments, attachments } = parseAttachmentsBlock(afterTrigger);
     // Spec 132: a `/`-picked skill's block follows the attachments block.
     const { strippedContent, skill } = parseSkillBlock(afterAttachments);
     // Spec 146: a message answering an ask shows the question above the words.

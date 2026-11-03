@@ -29,6 +29,20 @@ function agentMsg(content: string): AgentMessage {
   };
 }
 
+describe('ChatMessage — an automation run\'s first message', () => {
+  it('shows the task without the run header', () => {
+    render(<ChatMessage message={userMsg("[Triggered by schedule 'Daily' (every day at 9)]\n\nSummarise the inbox")} />);
+    expect(screen.getByText('Summarise the inbox')).toBeInTheDocument();
+    expect(screen.queryByText(/Triggered by/)).not.toBeInTheDocument();
+  });
+
+  it('keeps the changed files of a file_watch run', () => {
+    render(<ChatMessage message={userMsg("[Triggered by file_watch 'Inbox']\n\nChanged files: a.md\n\nFile them")} />);
+    expect(screen.getByText(/Changed files: a\.md\s+File them/)).toBeInTheDocument();
+    expect(screen.queryByText(/Triggered by/)).not.toBeInTheDocument();
+  });
+});
+
 describe('ChatMessage — user_message with <attached_files> block', () => {
   it('renders chips for each attachment and the stripped user text below', () => {
     const content =

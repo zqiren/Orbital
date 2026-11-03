@@ -860,6 +860,11 @@ SUB_AGENTS_UPDATED = "sub_agents.updated"
 # refetches on the event — announcing every time would loop).
 _late_model_digests: dict[str, str] = {}
 _late_model_tasks: set[asyncio.Task] = set()
+# The last live schemas each augmenter produced, per agent slug. A read that
+# misses the budget serves these instead of the static list, so a menu opened
+# after the probe cache expired shows "Opus 5.5", not `opus`, while the probe
+# runs again (Windows smoke 2026-11-03, decision 4).
+_last_live_schemas: dict[str, dict[str, dict]] = {}
 
 
 def _model_schemas(entries: list[dict]) -> str:
@@ -891,7 +896,8 @@ async def _augment_live_models(entries: list[dict], *,
     await asyncio.wait([task for *_rest, task in jobs], timeout=wait)
     for name, mine, before, task in jobs:
         if not task.done():
-            _finish_late(name, mine, before, task)
+            _serve_last_live(name, entries)
+            _finish_late(name, mine, original, before, task)
             continue
         if task.cancelled() or task.exception() is not None:
             if not task.cancelled():
@@ -899,14 +905,40 @@ async def _augment_live_models(entries: list[dict], *,
                                exc_info=task.exception())
             continue
         # Each augmenter changes its own agents' schemas only.
-        for entry, untouched, augmented in zip(entries, original, mine):
-            if augmented.get("param_schema") != untouched.get("param_schema"):
-                entry["param_schema"] = augmented.get("param_schema")
+        _merge_live(name, entries, original, mine)
         _late_model_digests[name] = _model_schemas(mine)
     return entries
 
 
-def _finish_late(name: str, mine: list[dict], before: str, task: asyncio.Task) -> None:
+def _merge_live(name: str, entries: list[dict], original: list[dict],
+                mine: list[dict]) -> None:
+    """Copy the schemas augmenter ``name`` changed into ``entries`` and
+    remember them for a later read that misses the budget."""
+    for entry, untouched, augmented in zip(entries, original, mine):
+        if augmented.get("param_schema") != untouched.get("param_schema"):
+            entry["param_schema"] = augmented.get("param_schema")
+            _last_live_schemas.setdefault(name, {})[entry.get("slug", "")] = (
+                copy.deepcopy(augmented.get("param_schema")))
+
+
+def _serve_last_live(name: str, entries: list[dict]) -> None:
+    """While augmenter ``name`` is still probing, serve the schemas it
+    produced last time. A model saved since then stays listed."""
+    for entry in entries:
+        remembered = _last_live_schemas.get(name, {}).get(entry.get("slug", ""))
+        if remembered is None:
+            continue
+        schema = copy.deepcopy(remembered)
+        for param, param_schema in schema.items():
+            allowed = param_schema.get("allowed") if isinstance(param_schema, dict) else None
+            saved = (entry.get("config") or {}).get(param)
+            if isinstance(allowed, list) and saved and saved not in allowed:
+                allowed.append(saved)
+        entry["param_schema"] = schema
+
+
+def _finish_late(name: str, mine: list[dict], original: list[dict], before: str,
+                 task: asyncio.Task) -> None:
     _late_model_tasks.add(task)
 
     def _done(t: asyncio.Task) -> None:
@@ -914,7 +946,14 @@ def _finish_late(name: str, mine: list[dict], before: str, task: asyncio.Task) -
         if t.cancelled() or t.exception() is not None:
             return
         after = _model_schemas(mine)
-        if after == before or _late_model_digests.get(name) == after:
+        if after == before:
+            return
+        # Remember only the agents this augmenter changed.
+        for untouched, augmented in zip(original, mine):
+            if augmented.get("param_schema") != untouched.get("param_schema"):
+                _last_live_schemas.setdefault(name, {})[augmented.get("slug", "")] = (
+                    copy.deepcopy(augmented.get("param_schema")))
+        if _late_model_digests.get(name) == after:
             return
         _late_model_digests[name] = after
         _broadcast_sub_agents_updated("models")

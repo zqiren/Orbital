@@ -475,6 +475,13 @@ def test_go_does_not_default_to_a_region_gated_model(real):
     assert not first.startswith("deepseek-"), first
 
 
+def test_go_does_not_suggest_deepseek_v4_flash(real):
+    """Windows smoke 2026-11-03, decision 3: Go answers 400 "Model is
+    unavailable" for deepseek-v4-flash while v4.1-flash and v4-pro work. It
+    stays catalogued (a live list may still offer it) but is not suggested."""
+    assert "deepseek-v4-flash" not in real.suggested_models("opencode-go")
+
+
 # --- Claude Haiku 5.5 on both OpenCode tiers --------------------------------
 #
 # Reported 2026-10-10: "haiku returns 400 in Test Connection on an OpenCode Go

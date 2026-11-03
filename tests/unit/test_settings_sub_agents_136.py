@@ -329,6 +329,62 @@ def test_a_late_model_list_is_announced_once(monkeypatch, tmp_path):
     asyncio.run(scenario())
 
 
+def test_a_read_during_a_rerun_probe_serves_the_last_live_list(monkeypatch, tmp_path):
+    """Windows smoke 2026-11-03, decision 4: the pin menu opened after the probe
+    cache expired showed raw ids (`opus`) until the late list landed. A read
+    that misses the budget now serves the list the probe gave last time, and
+    the same answer arriving late announces nothing."""
+    m = _model_env(monkeypatch, tmp_path, delay=0.3)
+
+    async def scenario():
+        await routes.list_sub_agent_settings()
+        assert await _wait_for(lambda: m.ws.updates())
+        await asyncio.sleep(0.4)
+        count = len(m.ws.updates())
+
+        async def codex_again(binary=None):
+            await asyncio.sleep(0.3)
+            return ["gpt-live-1"]
+
+        async def claude_again(binary=None):
+            await asyncio.sleep(0.3)
+            return [{"value": "claude-live-1", "label": "Live 1"}]
+
+        monkeypatch.setattr(routes, "_codex_live_models", codex_again)
+        monkeypatch.setattr(routes, "_claude_live_models", claude_again)
+        t0 = time.monotonic()
+        entries = await routes.list_sub_agent_settings()
+        assert time.monotonic() - t0 < 0.25
+        assert _allowed(entries, "codex") == ["gpt-live-1"]
+        assert "claude-live-1" in _allowed(entries, "claude-code")
+        claude = next(e for e in entries if e["slug"] == "claude-code")
+        assert claude["param_schema"]["model"]["labels"]["claude-live-1"] == "Live 1"
+        await asyncio.sleep(0.5)
+        assert len(m.ws.updates()) == count
+
+    asyncio.run(scenario())
+
+
+def test_a_model_saved_since_the_last_live_list_stays_listed(monkeypatch, tmp_path):
+    m = _model_env(monkeypatch, tmp_path, delay=0.3)
+
+    async def scenario():
+        await routes.list_sub_agent_settings()
+        assert await _wait_for(lambda: m.ws.updates())
+        await asyncio.sleep(0.4)
+        routes._sub_agent_config_store.set("codex", {"model": "gpt-saved"}, extra_allowed={"model": ["gpt-saved"]})
+
+        async def codex_again(binary=None):
+            await asyncio.sleep(0.3)
+            return ["gpt-live-1"]
+
+        monkeypatch.setattr(routes, "_codex_live_models", codex_again)
+        entries = await routes.list_sub_agent_settings()
+        assert _allowed(entries, "codex") == ["gpt-live-1", "gpt-saved"]
+
+    asyncio.run(scenario())
+
+
 # ---------------------------------------------------------------------------
 # C.3 Project Settings asks once; nothing project-specific in the sweep
 # ---------------------------------------------------------------------------

@@ -992,3 +992,64 @@ class TestReadLoopResilience:
         t._popen = _FakePopen(stderr=reader)
         await t._drain_stderr()
         assert reader.at_eof()  # drained to completion, not aborted mid-way
+
+
+class TestWindowsSandboxNote:
+    """Windows smoke 2026-11-03, decision 1: Codex's own Windows sandbox
+    failing to provision is Codex's access control, which Orbital inherits.
+    The transport queues one plain note per worker; ProcessManager puts it
+    on the turn's result so the manager tells the user where the fix is."""
+
+    _FAILED = {"type": "commandExecution", "id": "call_1", "command": "dir",
+               "cwd": "C:\\ws", "status": "failed", "exitCode": None,
+               "aggregatedOutput": "Failed to create unified exec process: "
+                                   "helper_unknown_error: setup refresh had errors"}
+
+    @pytest.mark.asyncio
+    async def test_failed_command_with_the_signature_queues_the_note_once(self):
+        from agent_os.agent.transports.codex_transport import WINDOWS_SANDBOX_NOTE
+        t = _transport()
+        for _ in range(2):
+            await t._route_server_message({"jsonrpc": "2.0", "method": "item/completed",
+                                           "params": {"item": dict(self._FAILED)}})
+        events = _drain(t)
+        assert [e.event_type for e in events] == ["tool_use", "tool_use"]
+        assert events[0].data["is_error"] is True
+        assert t.take_notes() == [WINDOWS_SANDBOX_NOTE]
+        assert t.take_notes() == []  # taken once, said once
+        assert "codex doctor" in WINDOWS_SANDBOX_NOTE
+        assert "~/.codex/config.toml" in WINDOWS_SANDBOX_NOTE
+
+    @pytest.mark.asyncio
+    async def test_error_notification_with_the_signature_queues_the_note(self):
+        from agent_os.agent.transports.codex_transport import WINDOWS_SANDBOX_NOTE
+        t = _transport()
+        await t._route_server_message({"jsonrpc": "2.0", "method": "error", "params": {
+            "error": {"message": "helper_unknown_error: setup refresh had errors"},
+            "willRetry": False}})
+        [event] = _drain(t)
+        assert event.event_type == "error"
+        assert t.take_notes() == [WINDOWS_SANDBOX_NOTE]
+
+    @pytest.mark.asyncio
+    async def test_an_ordinary_failure_queues_nothing(self):
+        t = _transport()
+        item = dict(self._FAILED, aggregatedOutput="ls: cannot access 'x': No such file", exitCode=2)
+        await t._route_server_message({"jsonrpc": "2.0", "method": "item/completed",
+                                       "params": {"item": item}})
+        _drain(t)
+        assert t.take_notes() == []
+
+    @pytest.mark.asyncio
+    async def test_codex_quoting_the_error_in_its_answer_queues_the_note(self):
+        # Where Codex puts the text depends on its version: the spawn failure
+        # may reach Orbital only as Codex's own explanation.
+        from agent_os.agent.transports.codex_transport import WINDOWS_SANDBOX_NOTE
+        t = _transport()
+        await t._route_server_message({"jsonrpc": "2.0", "method": "item/completed",
+            "params": {"item": {"type": "agentMessage", "id": "msg_1", "phase": "final_answer",
+                                "text": "I can't run commands here: every call fails with "
+                                        "`helper_unknown_error: setup refresh had errors`."}}})
+        [event] = _drain(t)
+        assert event.event_type == "message"
+        assert t.take_notes() == [WINDOWS_SANDBOX_NOTE]

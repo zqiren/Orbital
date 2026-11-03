@@ -110,6 +110,24 @@ def policy_for_autonomy(autonomy, os_name: str | None = None) -> tuple[str, str]
 # trap on the next model churn.
 _PREFERRED_STARTUP_MODELS: tuple[str, ...] = ("gpt-5.4-mini", "gpt-5.4", "gpt-5.5")
 
+# Codex's own Windows sandbox failing to provision: every command fails
+# before it starts, in plain ``codex exec`` too (openai/codex #32855, #42513,
+# #52179 — ``[windows] sandbox = "elevated"`` whose elevated setup is broken).
+# Orbital inherits Codex's access settings and never rewrites its config, so
+# the only honest move is to say what is wrong and where the fix lives. The
+# note rides the worker's result once per worker, so the manager tells the
+# user in their own words (Windows smoke 2026-11-03, decision 1).
+_WINDOWS_SANDBOX_SIGNATURES = ("helper_unknown_error", "setup refresh had errors")
+WINDOWS_SANDBOX_NOTE = (
+    "[Orbital] Codex's own Windows sandbox is not working on this machine: "
+    "Codex reports `helper_unknown_error: setup refresh had errors`, so every "
+    "command it runs fails before it starts (the same happens in a plain "
+    "`codex exec`). Orbital inherits Codex's access settings and does not "
+    "change them. The fix is in Codex: run `codex doctor`, or set "
+    "`sandbox = \"unelevated\"` under `[windows]` in ~/.codex/config.toml, "
+    "then start a new session."
+)
+
 # Server->client approval surfaces we answer with {"decision": ...}.
 # item/permissions/requestApproval exists in the schema with a different,
 # non-decision response shape and never fired in the probe — it (and any
@@ -158,6 +176,10 @@ class CodexTransport(AgentTransport):
         self._reader_task: asyncio.Task | None = None
         self._stderr_task: asyncio.Task | None = None
         self._event_queue: asyncio.Queue[TransportEvent] = asyncio.Queue()
+        # Notes for the manager about this worker's environment, taken at the
+        # turn boundary by ProcessManager (``take_notes``). Each is said once.
+        self._pending_notes: list[str] = []
+        self._noted_windows_sandbox = False
         # Session identity (thread/start | thread/resume response)
         self._thread_id: str | None = None
         self._rollout_path: str | None = None
@@ -342,6 +364,7 @@ class CodexTransport(AgentTransport):
             # ErrorNotification nests the text: {error: {message, ...}, willRetry}.
             text = ((params.get("error") or {}).get("message")
                     or params.get("message") or json.dumps(params)[:500])
+            self._observe_environment_failure(str(text))
             await self._event_queue.put(TransportEvent(
                 event_type="error", data={"error": params},
                 raw_text=f"Error: {text}"))
@@ -498,6 +521,7 @@ class CodexTransport(AgentTransport):
                 text = item.get("text") or self._message_parts.get(item_id, "")
                 self._message_parts.pop(item_id, None)
                 if text:
+                    self._observe_environment_failure(text)
                     await self._put_message(text, phase_label=item.get("phase"))
             return
         if itype == "commandExecution":
@@ -519,6 +543,7 @@ class CodexTransport(AgentTransport):
                 # Spec 100: the capsule row's result, in the shared key.
                 data["result"] = output
                 data["is_error"] = item.get("status") == "failed"
+                self._observe_environment_failure(output)
             await self._event_queue.put(TransportEvent(
                 event_type="tool_use",
                 data=data,
@@ -654,6 +679,26 @@ class CodexTransport(AgentTransport):
                 value = args[i + 1][len(prefix):].strip().strip('"\'')
                 return value or None
         return None
+
+    def _observe_environment_failure(self, text: str) -> None:
+        """A failure Codex cannot recover from on its own and the user must
+        fix in Codex. Queues the matching note, once per worker.
+
+        Read on every command output, error notification and agent message:
+        where Codex puts the text depends on its version (the spawn failure
+        may never become a command item), and the string is specific enough
+        that an ordinary conversation never carries it."""
+        if self._noted_windows_sandbox:
+            return
+        if any(sig in text for sig in _WINDOWS_SANDBOX_SIGNATURES):
+            self._noted_windows_sandbox = True
+            self._pending_notes.append(WINDOWS_SANDBOX_NOTE)
+
+    def take_notes(self) -> list[str]:
+        """Environment notes queued since the last call; the caller appends
+        them to the turn's result so the manager sees them with it."""
+        notes, self._pending_notes = self._pending_notes, []
+        return notes
 
     def _thread_open_request(self, workspace: str) -> tuple[str, dict]:
         """(method, params) opening the thread — fresh or resume.

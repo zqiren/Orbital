@@ -260,6 +260,24 @@ class ProcessManager:
                         # Transports that do not stamp origin (codex, ACP,
                         # Pi) read as dispatch boundaries, unchanged.
                         self_turn = meta.get("origin") == "self"
+                        # A transport's notes about the worker's environment
+                        # (a sandbox the user must fix in the CLI's own
+                        # config) travel on the turn's result, whatever its
+                        # cause, so the manager relays them to the user.
+                        take_notes = getattr(
+                            getattr(adapter, "_transport", None),
+                            "take_notes", None)
+                        raw_notes = take_notes() if callable(take_notes) else None
+                        notes = ([n for n in raw_notes if isinstance(n, str) and n.strip()]
+                                 if isinstance(raw_notes, list) else [])
+                        if notes:
+                            note_text = "\n\n".join(notes)
+                            last_response_text = (
+                                f"{last_response_text}\n\n{note_text}"
+                                if last_response_text else note_text)
+                            last_error_text = (
+                                f"{last_error_text}\n\n{note_text}"
+                                if last_error_text else note_text)
                         # Resume persistence: a completed turn (success OR
                         # error — a failed turn still has a live, resumable
                         # session) carries the thread's resume identity.
