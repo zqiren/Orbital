@@ -8,10 +8,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const turnCalls: string[] = [];
 let release: (() => void) | null = null;
 let filesNow: string[] = [];
+let hasChanges = true;
 
 vi.mock('../config', () => ({
   api: vi.fn(async (path: string) => {
-    if (path.includes('/status')) return { status: 'watching', has_changes: true };
+    if (path.includes('/status')) return { status: 'watching', has_changes: hasChanges };
     if (path.includes('/turn')) {
       turnCalls.push(path);
       const snapshot = [...filesNow];
@@ -24,7 +25,13 @@ vi.mock('../config', () => ({
   BASE_URL: '',
 }));
 
-import { __resetFileHistoryStores, bumpFileHistory, useHistoryStatus, useTurnFiles } from './useFileHistory';
+import {
+  __resetFileHistoryStores,
+  bumpFileHistory,
+  noteAgentStatus,
+  useHistoryStatus,
+  useTurnFiles,
+} from './useFileHistory';
 
 function Probe() {
   const data = useTurnFiles('p1', 'S', '2026-11-04T10:00:00Z', null, true);
@@ -41,6 +48,7 @@ beforeEach(() => {
   turnCalls.length = 0;
   release = null;
   filesNow = [];
+  hasChanges = true;
 });
 
 describe('useFileHistory stores', () => {
@@ -69,5 +77,27 @@ describe('useFileHistory stores', () => {
     await waitFor(() => expect(getAllByTestId('s-p9')[0].textContent).toBe('true'));
     const statusCalls = (api as ReturnType<typeof vi.fn>).mock.calls.filter((c) => String(c[0]).includes('/status'));
     expect(statusCalls).toHaveLength(1);
+  });
+
+  it('a run that ends anywhere re-reads a status this device already holds', async () => {
+    // The project's first change lands in a run started from the Workbench:
+    // no ChatTab is mounted to see it end, yet the cached "no changes" must
+    // not outlive the run (the changed-files line would never show).
+    hasChanges = false;
+    const { getByTestId } = render(<StatusProbe pid="p3" />);
+    await waitFor(() => expect(getByTestId('s-p3').textContent).toBe('false'));
+    hasChanges = true;
+    act(() => noteAgentStatus('p3', 'running'));
+    act(() => noteAgentStatus('p3', 'idle'));
+    await waitFor(() => expect(getByTestId('s-p3').textContent).toBe('true'));
+  });
+
+  it('a run end does not fetch the status of a project nothing has asked about', async () => {
+    const { api } = await import('../config');
+    (api as ReturnType<typeof vi.fn>).mockClear();
+    noteAgentStatus('p4', 'running');
+    noteAgentStatus('p4', 'idle');
+    await Promise.resolve();
+    expect((api as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(0);
   });
 });

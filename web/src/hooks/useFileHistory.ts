@@ -25,6 +25,7 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from '
 import { api } from '../config';
 import { isMemoryFile } from '../components/history/historyModel';
 import type {
+  AgentRunStatus,
   FileHistoryList,
   HistoryRestoreItem,
   HistoryRestoreResult,
@@ -139,6 +140,26 @@ export function bumpFileHistory(projectId: string, opts: { again?: number } = {}
 
 /** The watcher settles writes over a 2 s quiet window; re-read once after it. */
 export const SETTLE_MS = 3500;
+
+const IN_RUN: ReadonlySet<AgentRunStatus> = new Set<AgentRunStatus>(['running', 'waiting', 'pending_approval']);
+const runningByProject = new Set<string>();
+
+/**
+ * Every project's agent.status, from App. A run that ends re-reads the
+ * project's history when this device already holds an answer for it: the
+ * ChatTab bump only sees runs in the open project, so a run started and
+ * watched from the Workbench left a cached "no changes" (a project's first
+ * change never showed its changed-files line until a reload). A project
+ * nothing has asked about stays unfetched; its first surface reads it fresh.
+ */
+export function noteAgentStatus(projectId: string, status: AgentRunStatus) {
+  if (IN_RUN.has(status)) {
+    runningByProject.add(projectId);
+    return;
+  }
+  if (!runningByProject.delete(projectId)) return;
+  if (statusByProject.has(projectId)) bumpFileHistory(projectId, { again: SETTLE_MS });
+}
 
 /** The project's history health; null until known or when the daemon has none. */
 export function useHistoryStatus(projectId: string | undefined): HistoryStatus | null {
@@ -402,6 +423,7 @@ export function __resetFileHistoryStores() {
   statusByProject.clear();
   statusInFlight.clear();
   epochByProject.clear();
+  runningByProject.clear();
   turnCache.clear();
   focusByProject.clear();
   listeners.clear();

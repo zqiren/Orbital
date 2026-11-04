@@ -54,6 +54,7 @@ import WorkbenchPage from './components/WorkbenchPage';
 import { useWorkbenchFeed, useWorkbenchFeedSync } from './hooks/useWorkbenchFeed';
 import { useCheckedMarks } from './hooks/useSeenReplies';
 import { useHomeShortcut } from './hooks/useHomeShortcut';
+import { noteAgentStatus } from './hooks/useFileHistory';
 import { buildFeedGroups, waitingCounts } from './components/workbench/feedModel';
 import { projectDisplayName } from './utils/projectDisplayName';
 import { useT } from './i18n/useT';
@@ -367,6 +368,7 @@ export default function App() {
   // WebSocket event handlers
   const handleAgentStatus = useCallback((event: WebSocketEvent) => {
     const e = event as AgentStatusEvent;
+    noteAgentStatus(e.project_id, e.status);
     setAgentStatuses((prev) => ({ ...prev, [e.project_id]: e.status }));
     setStatusTicks((prev) => ({ ...prev, [e.project_id]: (prev[e.project_id] ?? 0) + 1 }));
   }, []);
