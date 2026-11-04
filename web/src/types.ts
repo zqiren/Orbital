@@ -1591,6 +1591,8 @@ export interface HistoryRestoreResult {
   current_sha?: string | null;
   reason?: string;
   unchanged?: boolean;
+}
+
 /** Spec 154 §5.2: an open ask on a Workbench row. */
 export interface WorkbenchFeedAsk {
   id: string;
