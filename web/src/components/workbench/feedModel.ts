@@ -7,8 +7,10 @@
  *
  * 等你 (waiting on you): overdue asks, then amber rows newest first, then the
  * rest newest first. 进行中 (running): pending sends first, then newest
- * `last_user_at` first. A row is in exactly one group; a card answered from
- * the Workbench (held) stays in 等你 until its turn ends.
+ * `last_user_at` first. A row is in exactly one group. A card the user just
+ * answered (from its field or the reading pane: held) is in 进行中 at once,
+ * before the daemon reports the turn, and comes back to 等你 as finished and
+ * unchecked when the turn ends (2026-11-04; it used to stay in 等你).
  *
  * Pure: the store, the optimistic checked marks and "now" are inputs, so the
  * strip dot, the project counts and the page agree by construction.
@@ -80,9 +82,9 @@ export function buildFeedGroups(feed: FeedState, marks: Marks, now: number = Dat
       ask: raw.ask && feed.closedAsks.has(`${raw.project_id}\u0000${raw.ask.id}`) ? null : raw.ask,
     };
     if (!row.session_id && !row.ask) continue; // a session-less ask, closed from its card
-    const live = isRunning(row);
     const held = feed.held.has(key);
-    const wait = isWaiting(row, now) || held;
+    const live = isRunning(row) || held;
+    const wait = !held && isWaiting(row, now);
     if (!wait && !live) continue;
     const dot: CardDot = wait && needsAction(row) ? 'need' : live ? 'run' : 'new';
     const item: FeedItem = { key, row, pending: null, dot, waiting: wait, time: cardTime(row, live) };

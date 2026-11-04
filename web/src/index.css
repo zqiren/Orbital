@@ -865,3 +865,31 @@ body {
 @keyframes vt-back-out {
   to { opacity: 0; transform: translateX(-8px); }
 }
+
+/* Maximized document panel (2026-11-04): the whole window except the 20px
+ * edge strip, in a project and on the Workbench alike. Below the strip's rail
+ * (z-21) and flyout (z-20), so hovering the strip still floats the project
+ * list over it and the Workbench glyph stays one click away. Desktop only:
+ * the phone's sheet is already the whole screen. */
+@media (min-width: 768px) {
+  .panel-max-window {
+    position: fixed !important;
+    top: 0 !important;
+    right: 0 !important;
+    bottom: 0 !important;
+    left: 20px !important;
+    z-index: 19 !important;
+    width: auto !important;
+    max-width: none !important;
+    height: auto !important;
+    padding-top: var(--titlebar-h);
+  }
+  /* The project's main area carries a view-transition name, which makes it a
+   * stacking context painted under the project column (z-index 1). While a
+   * panel inside it is maximized, lift the whole area to the panel's layer:
+   * still under the strip's flyout (20) and rail (21). */
+  [data-testid="project-main"]:has(.panel-max-window) {
+    position: relative;
+    z-index: 19;
+  }
+}

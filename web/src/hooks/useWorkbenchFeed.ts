@@ -17,8 +17,9 @@
  *     进行中 from the moment it is sent until the feed carries its session;
  *   - live activity per session (`agent.status_summary`, else
  *     `agent.activity`), shown on running cards and never persisted;
- *   - held cards: a card answered from the Workbench keeps its place in 等你
- *     until the agent's turn ends (§5.8);
+ *   - held cards: a card answered from the Workbench (its reply field or the
+ *     reading pane) is drawn in 进行中 until the agent's turn ends, and then
+ *     comes back to 等你 as finished and unchecked (2026-11-04);
  *   - asks closed from a card, hidden until the next feed agrees;
  *   - text to put back in the composer when a send could not start.
  *
@@ -176,7 +177,7 @@ export function removePending(nonce: string): void {
   set({ pending: state.pending.filter((p) => p.nonce !== nonce) });
 }
 
-/** Keep this card in 等你 until the turn its reply starts has ended. */
+/** Draw this card in 进行中 until the turn its reply starts has ended. */
 export function holdCard(row: WorkbenchFeedRow): void {
   const held = new Map(state.held);
   held.set(sessionKeyOf(row.project_id, row.session_id), { sawRunning: false, at: Date.now(), row });

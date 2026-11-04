@@ -11,6 +11,10 @@
  * and only waiting cards have it. On a phone the reply row is always shown on
  * waiting cards, with send and ✓ on its right.
  *
+ * A click anywhere else on the card (not the title, ✓ or the reply field)
+ * selects it: the Workbench opens that session's chat in the reading pane;
+ * a second click closes it (2026-11-04).
+ *
  * An automation run (a session a schedule / file-watch trigger started)
  * reads `<automation name> · <the run's first line>`; the first line is then
  * not repeated in the muted line.
@@ -19,7 +23,7 @@
  * always renders from the feed row it is given.
  */
 
-import { useEffect, useState, type KeyboardEvent } from 'react';
+import { useEffect, useState, type KeyboardEvent, type MouseEvent } from 'react';
 import { Check, Send } from 'lucide-react';
 import type { WorkbenchFeedRow } from '../../types';
 import { useT } from '../../i18n/useT';
@@ -58,10 +62,15 @@ export interface TaskCardProps {
   onConfirm: (item: FeedItem) => void;
   /** Resolves true when the reply went out (the field then clears). */
   onReply: (item: FeedItem, words: string) => Promise<boolean>;
+  /** This card's session is in the reading pane (the selected ring). */
+  selected?: boolean;
+  /** A click on the card body. Absent: the card cannot be selected. */
+  onSelect?: (item: FeedItem) => void;
 }
 
 export default function TaskCard({
   item, projectName, agentName, activity, phone, fresh, onOpen, onConfirm, onReply,
+  selected = false, onSelect,
 }: TaskCardProps) {
   const t = useT();
   const [reply, setReply] = useState('');
@@ -207,8 +216,18 @@ export default function TaskCard({
     </div>
   ) : null;
 
+  // The body selects; the controls inside it (title, ✓, reply field and its
+  // send) keep their own jobs.
+  function onCardClick(e: MouseEvent<HTMLDivElement>) {
+    if (!onSelect) return;
+    if ((e.target as Element).closest('button, input, textarea, a')) return;
+    onSelect(item);
+  }
+
   const cls = [
     'wb-card', 'wb-layer',
+    onSelect ? 'is-selectable' : '',
+    selected ? 'is-selected' : '',
     ask ? 'is-ask' : '',
     item.waiting ? 'is-waiting' : '',
     fresh ? 'is-fresh' : '',
@@ -216,7 +235,14 @@ export default function TaskCard({
   ].filter(Boolean).join(' ');
 
   return (
-    <div className={cls} data-testid="wb-card" data-dot={item.dot} data-key={item.key}>
+    <div
+      className={cls}
+      data-testid="wb-card"
+      data-dot={item.dot}
+      data-key={item.key}
+      data-selected={selected ? 'true' : 'false'}
+      onClick={onCardClick}
+    >
       <div className="wb-head">
         <span className={`wb-dot is-${item.dot}`} aria-hidden="true" />
         <span className="wb-tx">

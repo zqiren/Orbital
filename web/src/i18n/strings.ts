@@ -1469,6 +1469,7 @@ export const STRINGS = {
   "workbench.composer.project": { en: "Project", zh: "项目" },
   "workbench.composer.send": { en: "Send", zh: "发送" },
   "workbench.filter.all": { en: "All projects", zh: "全部项目" },
+  "workbench.pane.close": { en: "Close", zh: "关闭" },
   "workbench.summary.running": { en: "{n} running", zh: "{n} 件进行中" },
   "workbench.summary.waiting": { en: "{n} waiting on you", zh: "{n} 件等你" },
   "settings.workbench.label": { en: "Workbench", zh: "工作台" },

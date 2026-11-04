@@ -907,6 +907,8 @@ export default function App() {
             agents={agentsAvailable ?? []}
             phone={isMobile}
             managerModel={defaultModel}
+            agentStatuses={agentStatuses}
+            statusTicks={statusTicks}
           />
         )}
 

@@ -845,6 +845,16 @@ interface ChatViewProps {
    * changed-files line shows no undo glyph.
    */
   onUndoTurn?: (turn: { sessionId: string; fromTs: string; toTs: string | null }) => void;
+  /**
+   * Workbench reading pane (2026-11-04): false = being on screen does not
+   * check the session's reply. The pane is a glance, not the desk: the card
+   * stays until ✓, and comes back to 等你 when a turn ends while the pane is
+   * open. Default true (the session's own page checks it).
+   */
+  checksOnView?: boolean;
+  /** Called once the user's own message went out (the pane moves its card
+   *  to 进行中 at once). */
+  onUserSend?: () => void;
 }
 
 interface StreamState {
@@ -889,7 +899,7 @@ interface PendingApproval {
   reason?: string;
 }
 
-export default function ChatView({ projectId, project, agentStatus, statusTick, agents, sessionId, initialAskReply, initialDraft, initialSkill, onDraftConsumed, onRefreshProject, onOpenSession, onUndoTurn }: ChatViewProps) {
+export default function ChatView({ projectId, project, agentStatus, statusTick, agents, sessionId, initialAskReply, initialDraft, initialSkill, onDraftConsumed, onRefreshProject, onOpenSession, onUndoTurn, checksOnView = true, onUserSend }: ChatViewProps) {
   const t = useT();
   const { locale } = useLocale();
   // Chrome-only translator for the annotation chip's fallback label (the
@@ -999,7 +1009,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   // project column's session list does the same on desktop; this covers the
   // phone, which has no session list (markChecked dedupes the two).
   useEffect(() => {
-    if (!sessionId) return;
+    if (!sessionId || !checksOnView) return;
     const row = pinSessions.find((s) => s.session_id === sessionId);
     if (!row?.last_reply_at) return;
     const key = seenKey(row);
@@ -1007,7 +1017,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     if (!checked || Date.parse(row.last_reply_at) > Date.parse(checked)) {
       void markChecked(projectId, key, row.last_reply_at);
     }
-  }, [projectId, sessionId, pinSessions]);
+  }, [projectId, sessionId, pinSessions, checksOnView]);
   // Keyed by the viewed session; `sessionId: undefined` is the project with no
   // session minted yet (the choice is the project's sticky pin then).
   const [localPin, setLocalPin] = useState<{ sessionId: string | undefined; slug: string | null } | null>(null);
@@ -3572,6 +3582,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         skillPayload,
         answering,
       );
+      onUserSend?.();
       // A pinned send materialized the session on the backend — if the pin
       // PATCH had failed earlier (brand-new session, 404 before the first
       // message), persist it now so it survives reloads. `pinAgent`'s

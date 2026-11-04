@@ -79,10 +79,11 @@ interface FilePreviewDrawerProps {
    */
   header?: ReactNode;
   /**
-   * Spec 137 — maximized: docked, the column takes the whole row (the session
-   * column and chat hide beside it); as an overlay it spans the content area
-   * edge to edge, i.e. everything right of the strip/list. No resize handle
-   * either way; the remembered width is untouched for the restore.
+   * Spec 137 — maximized, amended 2026-11-04: docked or as an overlay, the
+   * panel covers the whole window except the 20px edge strip (the project
+   * column and the list included), so one click on the strip returns. No
+   * resize handle either way; the remembered width is untouched for the
+   * restore.
    */
   maximized?: boolean;
   /** Overlay only: what Escape does. Default: `onClose`. */
@@ -366,7 +367,9 @@ export default function FilePreviewDrawer({
         style={{ '--file-preview-drawer-width': `${dockedWidth}px` } as CSSProperties}
         className={`float-panel-dock relative z-0 hidden md:flex h-full min-h-0 flex-col bg-background ${
           maximized
-            ? 'flex-1 min-w-0'
+            ? // 2026-11-04: the whole window except the 20px edge strip
+              // (index.css), not just the right area beside the column.
+              'flex-1 min-w-0 panel-max-window'
             : // Shrinks (to the 320px floor) rather than overflowing when
               // the row narrows without a window resize — pinning the project
               // list takes 240px from the right area and re-measures nothing
@@ -397,13 +400,17 @@ export default function FilePreviewDrawer({
   return (
     <>
       {/* Scrim — click to dismiss; fades with the panel. */}
-      <div
-        aria-hidden
-        onClick={onClose}
-        className={`absolute inset-0 ${raised ? 'z-[65]' : 'z-30'} bg-black/30 transition-opacity duration-200 ${
-          open ? 'opacity-100' : 'opacity-0 pointer-events-none'
-        }`}
-      />
+      {/* Maximized there is nothing beside the panel to dim. */}
+      {!maximized && (
+        <div
+          aria-hidden
+          data-testid="file-preview-scrim"
+          onClick={onClose}
+          className={`absolute inset-0 ${raised ? 'z-[65]' : 'z-30'} bg-black/30 transition-opacity duration-200 ${
+            open ? 'opacity-100' : 'opacity-0 pointer-events-none'
+          }`}
+        />
+      )}
       {/* Panel: bottom-sheet on mobile, right-side slide-out on desktop.
           `inert` while closed removes its controls (close button + FilePreview's
           copy/download) from the tab order even though it stays mounted
@@ -421,7 +428,7 @@ export default function FilePreviewDrawer({
         className={`float-panel-drawer absolute ${raised ? 'z-[70]' : 'z-40'} flex flex-col bg-background shadow-xl transition-transform duration-200 ease-out
           inset-x-0 bottom-0 h-[75%] rounded-t-xl border-t border-border
           md:inset-y-0 md:right-0 md:h-full md:rounded-none md:border-t-0 md:border-l
-          ${maximized ? 'md:left-0 md:w-auto md:max-w-none' : 'md:left-auto md:w-[var(--file-preview-drawer-width)] md:max-w-[80%]'}
+          ${maximized ? 'md:left-0 md:w-auto md:max-w-none panel-max-window' : 'md:left-auto md:w-[var(--file-preview-drawer-width)] md:max-w-[80%]'}
           ${open ? 'translate-y-0 md:translate-x-0' : 'translate-y-full md:translate-y-0 md:translate-x-full pointer-events-none'}`}
       >
         {!maximized && resizeHandle}

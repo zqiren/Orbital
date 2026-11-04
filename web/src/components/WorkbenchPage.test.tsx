@@ -17,6 +17,36 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const apiMock = vi.hoisted(() => vi.fn());
 vi.mock('../config', () => ({ api: apiMock, isRelayMode: false }));
 
+// The reading pane embeds the real ChatView and FilePreview; here they are
+// stubs (the daemon smoke drives the real ones). The ChatView stub opens a
+// document through the pane's OpenPathContext and reports a send.
+const chatView = vi.hoisted(() => ({ last: null as Record<string, unknown> | null, mounts: 0 }));
+vi.mock('./ChatView', async () => {
+  const React = await import('react');
+  const { OpenPathContext } = await import('./filePreviewContext');
+  function ChatViewStub(props: Record<string, unknown>) {
+    React.useEffect(() => { chatView.mounts += 1; }, []);
+    chatView.last = props;
+    const open = React.useContext(OpenPathContext);
+    return (
+      <div data-testid="chatview-stub" data-session={String(props.sessionId)}>
+        <button type="button" data-testid="stub-open-doc" onClick={() => open?.('docs/a.md')}>doc</button>
+        <button type="button" data-testid="stub-send" onClick={() => (props.onUserSend as (() => void) | undefined)?.()}>send</button>
+      </div>
+    );
+  }
+  return { default: ChatViewStub };
+});
+vi.mock('./FilePreview', () => ({
+  default: (props: { selectedPath: string | null; panelHeader?: { onBack: () => void }; headerExtras?: unknown }) => (
+    <div data-testid="file-preview-stub">
+      <button type="button" data-testid="stub-doc-back" onClick={props.panelHeader?.onBack}>back</button>
+      <span>{props.selectedPath}</span>
+      {props.headerExtras as never}
+    </div>
+  ),
+}));
+
 import WorkbenchPage from './WorkbenchPage';
 import { __resetWorkbenchFeed, refreshFeed } from '../hooks/useWorkbenchFeed';
 import { __resetCheckedMarks } from '../hooks/useSeenReplies';
@@ -66,11 +96,11 @@ function setApi(map: typeof routes) {
   });
 }
 
-async function renderPage(feed: WorkbenchFeedRow[] = FEED, extra: typeof routes = {}) {
+async function renderPage(feed: WorkbenchFeedRow[] = FEED, extra: typeof routes = {}, phone = false) {
   setApi({ 'GET /api/v2/workbench/feed': () => ({ rows: feed, window_days: 14 }), ...extra });
   await act(async () => { await refreshFeed(); });
   const setRoute = vi.fn();
-  render(<WorkbenchPage setRoute={setRoute} projects={PROJECTS} agents={AGENTS} />);
+  render(<WorkbenchPage setRoute={setRoute} projects={PROJECTS} agents={AGENTS} phone={phone} />);
   return { setRoute };
 }
 
@@ -234,8 +264,31 @@ describe('Workbench — card actions', () => {
       content: '[Answer to ask a1b2c3, already closed: "Sync the notes too?"]\nyes please',
       session_id: 'asked', ask_id: 'a1b2c3', ask_answer: 'yes please',
     });
-    // The card keeps its place in 等你 while the agent works.
-    expect(cards().some((c) => c.textContent?.includes('Sync OSS'))).toBe(true);
+    // 2026-11-04 (supersedes "keeps its place in 等你"): the card moves to
+    // 进行中 at once.
+    expect(cardWith('Sync OSS').getAttribute('data-dot')).toBe('run');
+  });
+
+  it('a card answered from its field sits in 进行中 until the turn ends, then comes back to 等你 unchecked', async () => {
+    await renderPage();
+    const done = cardWith('Hero copy');
+    fireEvent.change(within(done).getByTestId('wb-card-reply'), { target: { value: 'one more pass' } });
+    fireEvent.keyDown(within(done).getByTestId('wb-card-reply'), { key: 'Enter' });
+    await waitFor(() => expect(cardWith('Hero copy').getAttribute('data-dot')).toBe('run'));
+    expect(screen.getByTestId('workbench-summary')).toHaveTextContent('2 running');
+    // The turn runs…
+    const running = row({ session_id: 'done', session_uuid: 'done', name: 'Hero copy', agent: 'codex',
+      status: 'running', last_user_at: iso(0), last_reply_at: iso(20) });
+    routes['GET /api/v2/workbench/feed'] = () => ({ rows: [running], window_days: 14 });
+    await act(async () => { await refreshFeed(); });
+    expect(cardWith('Hero copy').getAttribute('data-dot')).toBe('run');
+    // …and ends with a new reply: back to 等你, blue (finished, unchecked).
+    const finished = row({ session_id: 'done', session_uuid: 'done', name: 'Hero copy', agent: 'codex',
+      result_line: 'Second pass done', last_user_at: iso(1), last_reply_at: new Date().toISOString() });
+    routes['GET /api/v2/workbench/feed'] = () => ({ rows: [finished], window_days: 14 });
+    await act(async () => { await refreshFeed(); });
+    expect(cardWith('Hero copy').getAttribute('data-dot')).toBe('new');
+    expect(screen.getByTestId('workbench-summary')).toHaveTextContent('1 waiting on you');
   });
 
   it('a session-less ask opens through the old doorway (mint + ask quoted)', async () => {
@@ -341,5 +394,137 @@ describe('Workbench — relative time ticks', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('Workbench — reading pane (2026-11-04)', () => {
+  beforeEach(() => {
+    chatView.last = null;
+    chatView.mounts = 0;
+  });
+
+  const pane = () => screen.queryByTestId('wb-pane');
+
+  it('nothing selected: no pane, the page is unchanged', async () => {
+    await renderPage();
+    expect(pane()).toBeNull();
+    expect(screen.queryByTestId('chatview-stub')).toBeNull();
+    expect(cards().some((c) => c.getAttribute('data-selected') === 'true')).toBe(false);
+  });
+
+  it('a click on a card body selects it and opens that session\'s chat in the pane', async () => {
+    await renderPage();
+    fireEvent.click(cardWith('Hero copy'));
+    expect(cardWith('Hero copy').getAttribute('data-selected')).toBe('true');
+    const p = pane()!;
+    expect(p).not.toBeNull();
+    expect(within(p).getByTestId('wb-pane-title')).toHaveTextContent('Hero copy');
+    expect(within(p).getByTestId('chatview-stub').getAttribute('data-session')).toBe('done');
+    expect(chatView.last).toMatchObject({ projectId: 'proj-a', sessionId: 'done', checksOnView: false });
+    expect(within(p).getByTestId('wb-pane-open')).toHaveTextContent('Open session');
+    expect(within(p).getByTestId('wb-pane-close')).toBeInTheDocument();
+  });
+
+  it('the title, ✓ and the reply field do not select', async () => {
+    const { setRoute } = await renderPage();
+    const done = cardWith('Hero copy');
+    fireEvent.click(within(done).getByTestId('wb-card-reply'));
+    expect(pane()).toBeNull();
+    fireEvent.click(within(done).getByTestId('wb-card-title'));
+    expect(pane()).toBeNull();
+    expect(setRoute).toHaveBeenCalledWith({ name: 'project', projectId: 'proj-a', sessionId: 'done' });
+  });
+
+  it('a second click on the selected card closes the pane, and so does ×', async () => {
+    await renderPage();
+    fireEvent.click(cardWith('Hero copy'));
+    expect(pane()).not.toBeNull();
+    fireEvent.click(cardWith('Hero copy'));
+    expect(pane()).toBeNull();
+    fireEvent.click(cardWith('Weekly report'));
+    expect(within(pane()!).getByTestId('wb-pane-title')).toHaveTextContent('Weekly report');
+    fireEvent.click(screen.getByTestId('wb-pane-close'));
+    expect(pane()).toBeNull();
+  });
+
+  it('打开会话 goes to the full session', async () => {
+    const { setRoute } = await renderPage();
+    fireEvent.click(cardWith('Hero copy'));
+    fireEvent.click(screen.getByTestId('wb-pane-open'));
+    expect(setRoute).toHaveBeenCalledWith({ name: 'project', projectId: 'proj-a', sessionId: 'done' });
+  });
+
+  it('a session-less ask has no session to show, so it does not select', async () => {
+    await renderPage();
+    fireEvent.click(cardWith('Renew the domain'));
+    expect(pane()).toBeNull();
+  });
+
+  it('a send from the pane moves the card to 进行中 at once', async () => {
+    await renderPage();
+    fireEvent.click(cardWith('Hero copy'));
+    expect(cardWith('Hero copy').getAttribute('data-dot')).toBe('new');
+    fireEvent.click(screen.getByTestId('stub-send'));
+    expect(cardWith('Hero copy').getAttribute('data-dot')).toBe('run');
+    // Still selected, pane still open.
+    expect(cardWith('Hero copy').getAttribute('data-selected')).toBe('true');
+    expect(pane()).not.toBeNull();
+  });
+
+  it('a document opens OVER the pane with a back chevron; back returns to the same chat', async () => {
+    await renderPage(FEED, {
+      'GET /api/v2/projects/proj-a/files/content?path=docs%2Fa.md&document_preview=1': () => ({
+        path: 'docs/a.md', content: '# A', size: 3, mime: 'text/markdown', truncated: false,
+      }),
+    });
+    fireEvent.click(cardWith('Hero copy'));
+    fireEvent.click(screen.getByTestId('stub-open-doc'));
+    const doc = await screen.findByTestId('wb-pane-doc');
+    expect(within(doc).getByTestId('file-preview-stub')).toHaveTextContent('docs/a.md');
+    // Over the pane, not a second panel: inside it, and the chat stays mounted.
+    expect(pane()!.contains(doc)).toBe(true);
+    expect(screen.getAllByTestId('chatview-stub')).toHaveLength(1);
+    fireEvent.click(within(doc).getByTestId('stub-doc-back'));
+    expect(screen.queryByTestId('wb-pane-doc')).toBeNull();
+    expect(chatView.mounts).toBe(1);
+  });
+
+  it('maximize: the document covers the window except the edge strip; again restores it', async () => {
+    await renderPage(FEED, {
+      'GET /api/v2/projects/proj-a/files/content?path=docs%2Fa.md&document_preview=1': () => ({
+        path: 'docs/a.md', content: '# A', size: 3, mime: 'text/markdown', truncated: false,
+      }),
+    });
+    fireEvent.click(cardWith('Hero copy'));
+    fireEvent.click(screen.getByTestId('stub-open-doc'));
+    const doc = await screen.findByTestId('wb-pane-doc');
+    expect(doc.className).not.toContain('panel-max-window');
+    fireEvent.click(within(doc).getByTestId('wb-pane-doc-maximize'));
+    expect(screen.getByTestId('wb-pane-doc').className).toContain('panel-max-window');
+    fireEvent.click(within(screen.getByTestId('wb-pane-doc')).getByTestId('wb-pane-doc-maximize'));
+    expect(screen.getByTestId('wb-pane-doc').className).not.toContain('panel-max-window');
+  });
+
+  it('✓ on the selected card closes the pane with it', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      await renderPage();
+      fireEvent.click(cardWith('Hero copy'));
+      fireEvent.click(within(cardWith('Hero copy')).getByTestId('wb-card-confirm'));
+      await act(async () => { vi.advanceTimersByTime(300); });
+      await waitFor(() => expect(pane()).toBeNull());
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('phone: the pane is a bottom sheet over a scrim; the scrim closes it', async () => {
+    await renderPage(FEED, {}, true);
+    fireEvent.click(cardWith('Hero copy'));
+    const sheet = pane()!;
+    expect(sheet.getAttribute('data-variant')).toBe('sheet');
+    expect(within(sheet).queryByTestId('wb-pane-doc-maximize')).toBeNull();
+    fireEvent.click(screen.getByTestId('wb-pane-scrim'));
+    expect(pane()).toBeNull();
   });
 });
