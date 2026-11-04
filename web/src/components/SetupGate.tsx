@@ -44,7 +44,7 @@ export default function SetupGate({ setupIssues, onComplete }: SetupGateProps) {
             off the canvas instead of relying on a 1px border — see the surface
             ladder in index.css. Kept in step with SetupWizard, which users can
             see back-to-back with this screen. */}
-        <div className="bg-card border border-border rounded-lg p-8">
+        <div className="surface-float-static p-8">
           <h1 className="text-2xl font-semibold text-primary mb-3">
             {t('setupGate.welcome')}
           </h1>

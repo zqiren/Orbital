@@ -35,7 +35,7 @@ export default function ComposerDisabledPrompt({
     <div
       role="region"
       aria-label={t('composerDisabled.aria')}
-      className="flex items-center justify-between gap-3 px-3 py-2.5 bg-background border border-border rounded-lg"
+      className="flex items-center justify-between gap-3 px-3 py-2.5 surface-float-static"
       data-testid="composer-disabled-prompt"
     >
       <span className="text-sm text-secondary">

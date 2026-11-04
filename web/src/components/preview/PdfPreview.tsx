@@ -238,7 +238,7 @@ export default function PdfPreview({ bytes, fileName, onNav, onError }: EnginePr
       ref={scrollerRef}
       onScroll={handleScroll}
       aria-label={fileName}
-      className="absolute inset-0 overflow-auto bg-sidebar"
+      className="doc-desk absolute inset-0 overflow-auto bg-sidebar"
       data-testid="pdf-scroller"
     >
       {password ? (
@@ -385,7 +385,7 @@ function PasswordPrompt({
         e.preventDefault();
         onSubmit(value);
       }}
-      className="mx-auto mt-10 max-w-xs flex flex-col gap-2 rounded-lg border border-border bg-card p-4"
+      className="mx-auto mt-10 max-w-xs flex flex-col gap-2 surface-float-static p-4"
     >
       <p className="text-sm text-primary">{t('filePreview.doc.password.prompt')}</p>
       {incorrect && <p className="text-xs text-error">{t('filePreview.doc.password.incorrect')}</p>}

@@ -247,7 +247,7 @@ export default function CreateProject({
         aria-modal="true"
         aria-labelledby={titleId}
         onKeyDown={handleTrapTab}
-        className="bg-background rounded-xl shadow-xl border border-border w-full max-w-[560px] max-h-[85vh] flex flex-col mx-4 animate-slide-up max-md:max-w-full max-md:max-h-full max-md:h-full max-md:mx-0 max-md:rounded-none"
+        className="surface-float-pop w-full max-w-[560px] max-h-[85vh] flex flex-col mx-4 animate-slide-up max-md:max-w-full max-md:max-h-full max-md:h-full max-md:mx-0 max-md:rounded-none"
       >
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-3.5 border-b border-border shrink-0">
@@ -298,7 +298,7 @@ export default function CreateProject({
             {workspace ? (
               <div
                 data-testid="create-project-folder-row"
-                className="flex items-center gap-3 bg-sidebar border border-border rounded-lg px-3 py-2.5"
+                className="flex items-center gap-3 surface-float-static surface-float-nested px-3 py-2.5"
               >
                 <Folder size={16} aria-hidden="true" className="shrink-0 text-accent" />
                 <div className="min-w-0 flex-1">
@@ -422,10 +422,10 @@ export default function CreateProject({
                         key={opt.value}
                         type="button"
                         onClick={() => setAutonomy(opt.value)}
-                        className={`text-left border rounded-lg p-3 transition-all duration-150 max-md:min-h-[44px] ${
+                        className={`text-left surface-float-static surface-float-nested p-3 transition-all duration-150 max-md:min-h-[44px] ${
                           autonomy === opt.value
-                            ? 'border-accent bg-accent/5'
-                            : 'border-border hover:border-secondary/40'
+                            ? 'bg-accent/5 ring-1 ring-accent/30'
+                            : ''
                         }`}
                       >
                         <span className="text-sm font-medium text-primary block">

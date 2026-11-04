@@ -168,7 +168,7 @@ export default function PairPhone() {
           </div>
         </div>
 
-        <div className="bg-sidebar border border-border rounded-xl overflow-hidden">
+        <div className="surface-float-static overflow-hidden">
           {lanLoading ? (
             <div className="p-6 flex items-center justify-center gap-3">
               <RefreshCw className="w-4 h-4 text-secondary animate-spin" />
@@ -281,7 +281,7 @@ export default function PairPhone() {
       </div>
 
       {/* ---- QR Pairing Card (WhatsApp-style) ---- */}
-      <div className="bg-sidebar border border-border rounded-xl overflow-hidden">
+      <div className="surface-float-static overflow-hidden">
         {/* Top section: instructions + QR side by side */}
         {state === 'active' && code ? (
           <div className="flex max-md:flex-col">
@@ -413,7 +413,7 @@ export default function PairPhone() {
         </div>
 
         {devices.length === 0 ? (
-          <div className="bg-sidebar border border-border rounded-xl px-5 py-8 flex flex-col items-center text-center">
+          <div className="surface-float-static px-5 py-8 flex flex-col items-center text-center">
             <div className="w-10 h-10 rounded-full bg-secondary/5 flex items-center justify-center mb-3">
               <Laptop className="w-5 h-5 text-secondary/40" />
             </div>
@@ -432,7 +432,7 @@ export default function PairPhone() {
               return (
                 <div
                   key={device.phone_id}
-                  className={`group flex items-center gap-3 bg-sidebar border border-border rounded-xl px-4 py-3 transition-all duration-150 ${
+                  className={`group flex items-center gap-3 surface-float-static surface-float-nested px-4 py-3 transition-all duration-150 ${
                     isRevoking ? 'opacity-50' : 'hover:border-secondary/30'
                   }`}
                 >

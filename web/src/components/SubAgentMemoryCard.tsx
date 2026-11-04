@@ -196,7 +196,7 @@ export default function SubAgentMemoryCard({ projectId, entry, onSaved }: Props)
   const [expanded, setExpanded] = useState(false);
 
   return (
-    <div className="bg-sidebar/30 border border-border rounded-lg">
+    <div className="surface-float-static surface-float-nested">
       <button
         type="button"
         onClick={() => setExpanded((x) => !x)}

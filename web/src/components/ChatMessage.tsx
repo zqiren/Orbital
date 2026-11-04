@@ -149,7 +149,7 @@ export default function ChatMessage({ message, agentName, workspace, onOpenPath 
             it answers. `min()` keeps it proportional on narrow/mobile panes and
             bounded on wide ones. The corner notch flips tl→tr to point back at
             the label above it, the way it used to point at the avatar. */}
-        <div className="inline-block max-w-[min(70%,680px)] rounded-lg rounded-tr-sm bg-bubble px-3 py-2 text-[13px] leading-[1.55] text-bubble-text whitespace-pre-wrap break-words">
+        <div className="float-bubble inline-block max-w-[min(70%,680px)] rounded-lg rounded-tr-sm bg-bubble px-3 py-2 text-[13px] leading-[1.55] text-bubble-text whitespace-pre-wrap break-words">
           {hasChips && (
             <div className="flex flex-wrap gap-2 mb-2">
               {skill && (

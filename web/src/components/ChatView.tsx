@@ -3918,7 +3918,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
               aria-label={annotationCount}
               data-testid="annotation-popover"
               style={popoverShift ? { transform: `translateX(-${popoverShift}px)` } : undefined}
-              className="absolute bottom-full left-0 mb-2 z-50 w-[min(26rem,calc(100vw-3rem))] rounded-[10px] border border-border bg-elevated p-2 text-[13px] shadow-[0_10px_28px_rgba(24,24,27,0.10),0_2px_6px_rgba(24,24,27,0.05)]"
+              className="absolute bottom-full left-0 mb-2 z-50 w-[min(26rem,calc(100vw-3rem))] surface-float-pop p-2 text-[13px]"
             >
               {annotationList}
             </div>
@@ -4682,7 +4682,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
             Its offer runs executeNewSession (the flow the removed /new slash
             command used to run). */}
         <ContextStrip usage={contextUsage} onNewSession={executeNewSession} />
-        <div className="relative flex flex-col gap-2 bg-elevated border border-border rounded-lg shadow-[0_1px_2px_rgba(0,0,0,0.04)] px-3 py-2 transition-[border-color,box-shadow] duration-150 focus-within:border-accent focus-within:shadow-[0_0_0_3px_color-mix(in_oklab,var(--color-accent)18%,transparent)] motion-reduce:transition-none">
+        <div className="relative flex flex-col gap-2 surface-float-static surface-float-focus px-3 py-2 transition-[box-shadow] duration-150 motion-reduce:transition-none">
           {/* Spec 132: the `/` skill menu. Skills only, one flat list (no
               origin badge); at most 8 rows visible, then it scrolls. */}
           {skillMenuOpen && (
@@ -4691,7 +4691,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
               aria-label={t('chat.skill.menuAria')}
               data-testid="skill-menu"
               ref={skillMenuRef}
-              className="absolute bottom-full left-0 mb-1 w-[min(28rem,calc(100vw-2rem))] max-h-80 max-md:max-h-[352px] overflow-y-auto bg-elevated border border-border rounded-[10px] shadow-[0_10px_28px_rgba(24,24,27,0.10),0_2px_6px_rgba(24,24,27,0.05)] z-50 py-1"
+              className="absolute bottom-full left-0 mb-1 w-[min(28rem,calc(100vw-2rem))] max-h-80 max-md:max-h-[352px] overflow-y-auto surface-float-pop z-50 py-1"
             >
               {filteredSkills.map((skill, i) => (
                 <button

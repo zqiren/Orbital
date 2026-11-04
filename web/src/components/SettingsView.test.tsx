@@ -320,6 +320,13 @@ describe('SettingsView autosave', () => {
     expect(onSave).toHaveBeenCalledWith({ autonomy: 'supervised' });
   });
 
+  it('autonomy tiles are Float static with no border; the selected one carries the accent ring', () => {
+    render(<SettingsView project={project} onSave={vi.fn(() => Promise.resolve())} onDelete={vi.fn()} />);
+    expectFloatTile('Hands-off', true);
+    expectFloatTile('Check-in', false);
+    expectFloatTile('Supervised', false);
+  });
+
   it('typing saves by itself once the user pauses', async () => {
     const onSave = vi.fn(() => Promise.resolve());
     render(<SettingsView project={project} onSave={onSave} onDelete={vi.fn()} />);
@@ -529,3 +536,18 @@ describe('SettingsView Safe mode (spec 117)', () => {
     expect(screen.getByRole('button', { name: '关闭本项目的安全模式' })).toBeInTheDocument();
   });
 });
+
+// Float pass (1104): a radio choice tile is a Float static layer with no
+// border; the selected one adds the accent ring (and keeps its accent tint).
+function expectFloatTile(title: string, selected: boolean) {
+  const tile = screen.getByText(title).closest('button') as HTMLButtonElement;
+  const cls = tile.className.split(/\s+/);
+  expect(cls).toContain('surface-float-static');
+  expect(tile.className).not.toMatch(/(^|\s)border(-|\s|$)/);
+  if (selected) {
+    expect(cls).toContain('ring-1');
+    expect(tile.className).toContain('ring-accent');
+  } else {
+    expect(tile.className).not.toMatch(/(^|\s)ring-/);
+  }
+}

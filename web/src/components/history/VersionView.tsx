@@ -62,7 +62,7 @@ export default function VersionView({ view, markdown, remarkPlugins, scrollKey }
     <div
       ref={scrollerRef}
       data-testid="history-version-view"
-      className={`flex-1 min-h-0 overflow-auto bg-sidebar ${PALETTE_VARS}`}
+      className={`doc-sheet flex-1 min-h-0 overflow-auto bg-sidebar ${PALETTE_VARS}`}
     >
       {markdown ? (
         <div className="p-4">

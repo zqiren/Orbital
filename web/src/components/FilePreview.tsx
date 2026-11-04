@@ -206,7 +206,7 @@ function textOffsetWithin(host: Node, node: Node, offset: number): number | null
  * app, invisible in Chromium. The scroller is the element that owns the
  * visible area, so the background moves there at no layout cost.
  */
-const TEXT_SCROLLER_CLASS = 'flex-1 overflow-auto bg-sidebar';
+const TEXT_SCROLLER_CLASS = 'doc-sheet flex-1 overflow-auto bg-sidebar';
 const SOURCE_PRE_CLASS = 'font-mono text-sm text-primary p-4 whitespace-pre-wrap break-words';
 
 /**
@@ -696,7 +696,7 @@ export default function FilePreview({
             </div>
           </div>
         )}
-        <div className="flex-1 overflow-auto flex items-center justify-center p-4 bg-sidebar">
+        <div className="doc-desk flex-1 overflow-auto flex items-center justify-center p-4 bg-sidebar">
           {quoting && onQuote ? (
             // The wrapper shrink-wraps the <img>, so the overlay's coordinate
             // space IS the displayed image (no letterboxing to correct for).
@@ -735,7 +735,7 @@ export default function FilePreview({
           </div>
         )}
         <div className="flex-1 flex items-center justify-center p-8">
-          <div className="bg-sidebar rounded-lg p-6 max-w-sm w-full text-center">
+          <div className="surface-float-static p-6 max-w-sm w-full text-center">
             <File size={48} className="mx-auto text-secondary mb-4" />
             <p className="font-semibold text-sm text-primary mb-1">{fileName}</p>
             <p className="text-xs text-secondary mb-1">{formatSize(fileContent.size)}</p>
@@ -1145,7 +1145,7 @@ export default function FilePreview({
       )}
       {editing ? (
         editView === 'preview' ? (
-          <div className="flex-1 overflow-auto bg-sidebar p-4 min-h-0">
+          <div className="doc-sheet flex-1 overflow-auto bg-sidebar p-4 min-h-0">
             <MarkdownContent content={draft} remarkPlugins={PREVIEW_REMARK_PLUGINS} relativeLink={relativeLink} />
           </div>
         ) : (

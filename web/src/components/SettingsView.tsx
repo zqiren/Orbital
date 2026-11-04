@@ -663,7 +663,7 @@ export default function SettingsView({
                 {skills.map((s) => (
                   <div
                     key={s.name}
-                    className="flex items-center justify-between bg-sidebar border border-border rounded-lg px-3 py-2"
+                    className="flex items-center justify-between surface-float-static surface-float-nested px-3 py-2"
                   >
                     <div className="min-w-0 mr-2">
                       <span className="text-sm font-medium text-primary block truncate">
@@ -782,10 +782,10 @@ export default function SettingsView({
                   setAutonomy(opt.value);
                   saveNow({ autonomy: opt.value });
                 }}
-                className={`text-left border rounded-lg p-3 transition-all duration-150 max-md:min-h-[44px] ${
+                className={`text-left surface-float-static p-3 transition-all duration-150 max-md:min-h-[44px] ${
                   autonomy === opt.value
-                    ? 'border-accent bg-accent/5'
-                    : 'border-border hover:border-secondary/40'
+                    ? 'bg-accent/5 ring-1 ring-accent/30'
+                    : ''
                 }`}
               >
                 <span className="text-sm font-medium text-primary block">

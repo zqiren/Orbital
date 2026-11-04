@@ -196,7 +196,7 @@ export default function ConnectorSettings() {
               <li
                 key={c.id}
                 data-testid={`connector-card-${c.id}`}
-                className="border border-border rounded-lg px-3 py-2.5 bg-sidebar"
+                className="surface-float-static px-3 py-2.5"
               >
                 <div className="flex items-center gap-3">
                   <span className="text-xl shrink-0" aria-hidden="true">

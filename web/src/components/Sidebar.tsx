@@ -410,7 +410,7 @@ export default function Sidebar({
         <div
           role="status"
           data-testid="safe-mode-notice"
-          className="mx-2 mb-1.5 flex items-start gap-2 rounded-lg border border-border/60 bg-card/55 px-2.5 py-2"
+          className="mx-2 mb-1.5 flex items-start gap-2 surface-float-static px-2.5 py-2"
         >
           <p className="min-w-0 flex-1 text-2xs leading-relaxed text-secondary">
             {t('safeMode.notice.body')}
@@ -486,7 +486,7 @@ export default function Sidebar({
               role="menu"
               aria-label={t('sidebar.newProjectMore')}
               data-testid="new-project-menu"
-              className="absolute inset-x-0 bottom-full z-20 mb-1.5 rounded-[10px] border border-border bg-elevated p-1.5 shadow-lg"
+              className="absolute inset-x-0 bottom-full z-20 mb-1.5 surface-float-pop p-1.5"
             >
               <button
                 type="button"

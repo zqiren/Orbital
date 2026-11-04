@@ -364,7 +364,7 @@ export default function FilePreviewDrawer({
         data-maximized={maximized}
         aria-label={t('panel.handle')}
         style={{ '--file-preview-drawer-width': `${dockedWidth}px` } as CSSProperties}
-        className={`relative z-0 hidden md:flex h-full min-h-0 flex-col bg-background ${
+        className={`float-panel-dock relative z-0 hidden md:flex h-full min-h-0 flex-col bg-background ${
           maximized
             ? 'flex-1 min-w-0'
             : // Shrinks (to the 320px floor) rather than overflowing when
@@ -418,7 +418,7 @@ export default function FilePreviewDrawer({
         onKeyDown={handleTrapTab}
         data-maximized={maximized}
         style={{ '--file-preview-drawer-width': `${drawerWidth}px` } as CSSProperties}
-        className={`absolute ${raised ? 'z-[70]' : 'z-40'} flex flex-col bg-background shadow-xl transition-transform duration-200 ease-out
+        className={`float-panel-drawer absolute ${raised ? 'z-[70]' : 'z-40'} flex flex-col bg-background shadow-xl transition-transform duration-200 ease-out
           inset-x-0 bottom-0 h-[75%] rounded-t-xl border-t border-border
           md:inset-y-0 md:right-0 md:h-full md:rounded-none md:border-t-0 md:border-l
           ${maximized ? 'md:left-0 md:w-auto md:max-w-none' : 'md:left-auto md:w-[var(--file-preview-drawer-width)] md:max-w-[80%]'}

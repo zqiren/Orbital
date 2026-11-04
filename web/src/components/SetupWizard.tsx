@@ -151,7 +151,7 @@ function WizardCard({
   children: ReactNode;
 }) {
   return (
-    <div className="bg-card border border-border rounded-lg p-8 max-md:p-5">
+    <div className="surface-float-static p-8 max-md:p-5">
       <StepIndicator current={step} />
       <div className="flex items-start justify-between gap-4 mb-3">
         <h1 className="text-2xl font-semibold text-primary">{title}</h1>
@@ -611,7 +611,7 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
                       <li
                         key={c.id}
                         data-testid={`wizard-connector-${c.id}`}
-                        className="border border-border rounded-lg px-3 py-2.5"
+                        className="surface-float-static surface-float-nested px-3 py-2.5"
                       >
                         <div className="flex items-center gap-3">
                           <span className="text-xl shrink-0" aria-hidden="true">

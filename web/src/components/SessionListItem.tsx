@@ -369,7 +369,7 @@ function SessionListItemBase({
             <div
               role="menu"
               data-testid="session-three-dot-dropdown"
-              className="absolute right-0 top-full mt-1 z-50 min-w-[140px] rounded-md border border-border bg-elevated shadow-md py-1"
+              className="absolute right-0 top-full mt-1 z-50 min-w-[140px] surface-float-pop overflow-hidden py-1"
             >
               {/* Pin leads the menu: it is the action taken most often and the
                   only one that is reversible with no consequence. */}
@@ -430,7 +430,7 @@ function SessionListItemBase({
           }}
         >
           <div
-            className="max-w-sm w-[320px] rounded-lg bg-elevated shadow-xl border border-border p-4"
+            className="max-w-sm w-[320px] surface-float-pop p-4"
             onClick={(e) => e.stopPropagation()}
           >
             <p className="text-sm text-primary font-medium mb-1">{t('sessionItem.deleteConfirm.title')}</p>

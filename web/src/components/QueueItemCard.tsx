@@ -101,7 +101,7 @@ function SourceIcon({
  * sidebar and the Workbench cards do it.
  */
 const CARD =
-  'rounded-xl border border-border/60 bg-card px-4 py-3 shadow-[0_1px_2px_rgb(0_0_0/0.04)] ' +
+  'surface-float-static px-4 py-3 ' +
   'flex flex-col gap-1.5';
 
 /** Quiet metadata line — matches the Workbench card's meta row. */

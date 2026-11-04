@@ -167,7 +167,7 @@ export default function DocumentPreview({
   if (failure || !engineKind || !format) {
     return (
       <div className="flex items-center justify-center h-full p-8" data-testid="document-fallback">
-        <div className="bg-sidebar rounded-lg p-6 max-w-sm w-full text-center">
+        <div className="surface-float-static p-6 max-w-sm w-full text-center">
           <File size={48} className="mx-auto text-secondary mb-4" aria-hidden />
           <p className="font-semibold text-sm text-primary mb-1 break-all">{fileName}</p>
           <p className="text-xs text-secondary mb-4">

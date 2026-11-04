@@ -22,8 +22,8 @@ interface ColdStartCardProps {
 export function ColdStartCard({ folderName, onScan, onSkip, busy, error }: ColdStartCardProps) {
   const t = useT();
   return (
-    <div className="mb-3 rounded-lg border border-border bg-card overflow-hidden">
-      <div className="bg-accent/10 px-4 py-2 border-b border-border">
+    <div className="mb-3 surface-float-static overflow-hidden">
+      <div className="bg-accent/10 px-4 py-2">
         <span className="text-accent font-semibold text-sm">{t('coldStart.header')}</span>
       </div>
       <div className="px-4 py-3.5 space-y-3.5">

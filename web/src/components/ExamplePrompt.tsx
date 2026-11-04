@@ -60,14 +60,14 @@ export default function ExamplePrompt({
     </>
   );
   const shell =
-    'group flex w-full items-center gap-3 rounded-xl border border-border bg-card px-3.5 py-3 text-left shadow-[0_1px_2px_rgb(0_0_0/0.04)]';
-  if (!onClick) return <div className={shell}>{body}</div>;
+    'group flex w-full items-center gap-3 px-3.5 py-3 text-left';
+  if (!onClick) return <div className={`${shell} surface-float-static`}>{body}</div>;
   return (
     <button
       type="button"
       onClick={onClick}
       title={actionLabel}
-      className={`${shell} transition-[border-color,box-shadow,transform] duration-150 hover:border-accent/50 hover:shadow-[0_4px_12px_-4px_rgb(0_0_0/0.12)] active:scale-[0.99] motion-reduce:transition-none motion-reduce:active:scale-100 max-md:min-h-[44px]`}
+      className={`${shell} surface-float active:scale-[0.99] motion-reduce:transition-none motion-reduce:active:scale-100 max-md:min-h-[44px]`}
     >
       {body}
     </button>

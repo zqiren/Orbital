@@ -165,8 +165,7 @@ const MENU_ROW =
   'w-full flex items-center gap-2.5 px-3 py-2 text-[13px] text-primary text-left ' +
   'hover:bg-card-hover/50 max-md:min-h-[52px]';
 
-const ELEVATED = 'bg-elevated border border-border rounded-[10px] ' +
-  'shadow-[0_10px_28px_rgba(24,24,27,0.10),0_2px_6px_rgba(24,24,27,0.05)]';
+const ELEVATED = 'surface-float-pop';
 
 /** Agents whose subscription quota Orbital can read (spec 099 §2.1). */
 const QUOTA_SLUGS = new Set(['claude-code', 'codex']);
@@ -974,7 +973,7 @@ export default function PinTargetSelect({
             ? `flex items-center gap-1 px-1.5 py-1 rounded-md border border-border
                hover:bg-card-hover/50 disabled:opacity-50 focus-visible:outline-none
                focus-visible:bg-card-hover/50 max-md:min-h-[36px]`
-            : `flex items-center gap-1 pl-3 pr-1.5 rounded-l-[7px] border-r border-border
+            : `flex items-center gap-1 pl-3 pr-1.5 rounded-l-[14px] border-r border-border
                hover:bg-card-hover/50 disabled:opacity-50 focus-visible:outline-none
                focus-visible:bg-card-hover/50 max-md:min-w-[48px]`
         }

@@ -157,7 +157,7 @@ export default function ImportProjectsStep({
     );
     if (c.already_imported) {
       return (
-        <li key={c.path} data-testid={`import-candidate-${c.path}`} className="flex items-start gap-3 rounded-lg border border-border px-3 py-2.5 opacity-75">
+        <li key={c.path} data-testid={`import-candidate-${c.path}`} className="flex items-start gap-3 surface-float-static surface-float-nested px-3 py-2.5 opacity-75">
           <Check className="mt-0.5 h-4 w-4 shrink-0 text-success" aria-hidden="true" />
           {body}
         </li>
@@ -165,7 +165,7 @@ export default function ImportProjectsStep({
     }
     return (
       <li key={c.path} data-testid={`import-candidate-${c.path}`}>
-        <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-border px-3 py-2.5 transition-colors duration-150 hover:bg-surface max-md:min-h-[44px]">
+        <label className="flex cursor-pointer items-start gap-3 surface-float surface-float-nested px-3 py-2.5 max-md:min-h-[44px]">
           <input
             type="checkbox"
             checked={checked}
@@ -194,7 +194,7 @@ export default function ImportProjectsStep({
     const reasons = (g.reasons ?? []).map((r) => reasonText(t, r)).filter((s): s is string => !!s);
     const titleId = `import-group-title-${g.id}`;
     return (
-      <li key={g.id} data-testid={`import-group-${g.id}`} className="rounded-lg border border-border px-3 py-2.5">
+      <li key={g.id} data-testid={`import-group-${g.id}`} className="surface-float-static surface-float-nested px-3 py-2.5">
         <div className="flex items-start gap-3">
           <input
             type="checkbox"

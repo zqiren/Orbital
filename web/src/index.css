@@ -85,7 +85,7 @@
   --color-segment-on: var(--color-card);           /* segmented control "on" chip */
   --color-segment-on-text: var(--color-primary);
   --color-tab-active: var(--color-primary);        /* underline tab: text + rule */
-  --color-bubble: var(--color-sidebar);            /* user chat bubble */
+  --color-bubble: color-mix(in srgb, var(--color-accent) 8%, var(--color-card)); /* user chat bubble: accent-soft (owner, 2026-11-04) */
   --color-bubble-text: var(--color-primary);
   --color-send: var(--color-accent);               /* composer send glyph */
   --color-link: var(--color-accent);               /* link text in markdown */
@@ -219,7 +219,7 @@
   --color-segment-on: rgb(83 154 248 / 0.22);
   --color-segment-on-text: #D6E7FF;
   --color-tab-active: #539AF8;
-  --color-bubble: rgb(83 154 248 / 0.14);
+  --color-bubble: color-mix(in srgb, var(--color-accent) 12%, var(--color-card));
   --color-bubble-text: #E8EAED;
   --color-send: #6FAEFB;
   --color-link: #7DB4FB;
@@ -484,6 +484,143 @@ body {
     --color-secondary: #C4C8CF;
     --color-muted: #A3A7AF;
   }
+}
+
+/* ------------------------------------------------------------ Float surfaces
+   The raised-layer look decided on the Workbench (spec 154, "Float"): a card
+   is a white layer on its own plane, carried by a layered soft shadow and a
+   1px inner top highlight. No 1px stroke and no grey fill. Dark mode uses the
+   elevated colour with deeper shadows. workbench.css aliases these tokens, so
+   the Workbench and every other card share one recipe.
+
+     .surface-float         card that is clicked: rises 3px on hover
+     .surface-float-static  card or panel that is not clicked: no lift
+     .surface-float-pop     popover, menu or dialog: stronger shadow, radius 12
+     .surface-float-focus   add to a composer: the accent glow while focused
+     .surface-float-nested  add to a layer that sits on another layer or in a
+                            tight list (rows in a card or dialog): only the
+                            near shadow, so neighbours don't haze together
+
+   The shadow travels in `--tw-shadow`, so Tailwind's ring utilities (focus
+   rings, a selected ring) stack on top of it instead of replacing it.
+   To revert one surface, swap the class back for its old border/bg/shadow
+   utilities; nothing else depends on it. */
+:root {
+  --float-layer: var(--color-card);
+  --float-shadow: 0 2px 2px rgb(0 0 0 / .02), 0 4px 14px rgb(0 0 0 / .04), 0 22px 50px rgb(0 0 0 / .07), inset 0 1px 0 rgb(255 255 255 / .8);
+  --float-shadow-hover: 0 2px 2px rgb(0 0 0 / .02), 0 8px 20px rgb(0 0 0 / .05), 0 32px 64px rgb(0 0 0 / .09), inset 0 1px 0 rgb(255 255 255 / .8);
+  --float-shadow-pop: 0 2px 4px rgb(0 0 0 / .04), 0 16px 40px rgb(0 0 0 / .14);
+  --float-shadow-nested: 0 1px 2px rgb(0 0 0 / .04), 0 3px 10px rgb(0 0 0 / .05), inset 0 1px 0 rgb(255 255 255 / .8);
+  --float-shadow-nested-hover: 0 1px 2px rgb(0 0 0 / .04), 0 6px 16px rgb(0 0 0 / .08), inset 0 1px 0 rgb(255 255 255 / .8);
+  --float-focus: 0 0 0 3px color-mix(in oklab, var(--color-accent) 18%, transparent);
+}
+:root[data-theme="dark"] {
+  --float-layer: var(--color-elevated);
+  --float-shadow: 0 2px 3px rgb(0 0 0 / .45), 0 16px 48px rgb(0 0 0 / .5), inset 0 1px 0 rgb(255 255 255 / .06);
+  --float-shadow-hover: 0 3px 6px rgb(0 0 0 / .45), 0 26px 64px rgb(0 0 0 / .55), inset 0 1px 0 rgb(255 255 255 / .07);
+  --float-shadow-pop: 0 2px 4px rgb(0 0 0 / .4), 0 16px 40px rgb(0 0 0 / .55);
+  --float-shadow-nested: 0 1px 2px rgb(0 0 0 / .35), 0 4px 12px rgb(0 0 0 / .28), inset 0 1px 0 rgb(255 255 255 / .05);
+  --float-shadow-nested-hover: 0 2px 4px rgb(0 0 0 / .4), 0 8px 20px rgb(0 0 0 / .35), inset 0 1px 0 rgb(255 255 255 / .06);
+}
+@layer components {
+  .surface-float,
+  .surface-float-static,
+  .surface-float-pop {
+    background-color: var(--float-layer);
+    border-radius: 14px;
+    --tw-shadow: var(--float-shadow);
+    box-shadow: var(--tw-inset-shadow, 0 0 #0000), var(--tw-inset-ring-shadow, 0 0 #0000),
+      var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow);
+  }
+  .surface-float-pop {
+    border-radius: 12px;
+    --tw-shadow: var(--float-shadow-pop);
+  }
+  .surface-float {
+    transition: transform .15s ease-out, box-shadow .15s ease-out;
+  }
+  .surface-float:hover {
+    transform: translateY(-3px);
+    --tw-shadow: var(--float-shadow-hover);
+  }
+  .surface-float-nested {
+    --tw-shadow: var(--float-shadow-nested);
+  }
+  .surface-float.surface-float-nested:hover {
+    transform: translateY(-1px);
+    --tw-shadow: var(--float-shadow-nested-hover);
+  }
+  .surface-float-focus:focus-within {
+    --tw-shadow: var(--float-focus), var(--float-shadow);
+  }
+  @media (hover: none) {
+    .surface-float:hover { transform: none; --tw-shadow: var(--float-shadow); }
+    .surface-float.surface-float-nested:hover { --tw-shadow: var(--float-shadow-nested); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .surface-float { transition: none; }
+    .surface-float:hover, .surface-float.surface-float-nested:hover { transform: none; }
+  }
+}
+/* High-contrast users asked for defined edges; give the layers a hairline back. */
+@media (prefers-contrast: more) {
+  .surface-float, .surface-float-static, .surface-float-pop { outline: 1px solid var(--color-border); }
+}
+
+/* ------------------------------------------- Float: panel edges and bubbles
+   The project column and the docked right panel keep their full height and
+   tint; the edge toward the chat casts a soft directional shadow instead of a
+   1px line (owner's "Edge", 2026-11-04). The overlay drawer (phone bottom
+   sheet, narrow-window slide-out) drops its line the same way. The user
+   bubble keeps its tint and gets a two-layer near shadow (Float-light): small
+   blur radii, no filter, no hover transform, so long chats scroll the same in
+   WebKit (measured: no change in frame times against the unshadowed bubble).
+   Unlayered on purpose: these must beat the border/shadow utilities on the
+   same nodes. */
+:root {
+  --float-edge-right: 1px 0 3px -1px rgb(0 0 0 / .05), 8px 0 24px -12px rgb(0 0 0 / .16);
+  --float-edge-left: -1px 0 3px -1px rgb(0 0 0 / .05), -8px 0 24px -12px rgb(0 0 0 / .16);
+  --float-drawer-up: 0 -2px 4px rgb(0 0 0 / .04), 0 -16px 40px rgb(0 0 0 / .14);
+  --float-drawer-left: -2px 0 4px rgb(0 0 0 / .04), -16px 0 40px rgb(0 0 0 / .14);
+  --float-bubble: 0 1px 1px rgb(0 0 0 / .03), 0 2px 6px rgb(0 0 0 / .05), inset 0 1px 0 rgb(255 255 255 / .6);
+}
+/* Dark: black on a near-black chat needs more weight to read as a layer — a
+   denser near band plus a wider falloff, still without a hard line. */
+:root[data-theme="dark"] {
+  --float-edge-right: 1px 0 2px rgb(0 0 0 / .45), 4px 0 10px -2px rgb(0 0 0 / .5), 16px 0 36px -12px rgb(0 0 0 / .8);
+  --float-edge-left: -1px 0 2px rgb(0 0 0 / .45), -4px 0 10px -2px rgb(0 0 0 / .5), -16px 0 36px -12px rgb(0 0 0 / .8);
+  --float-drawer-up: 0 -2px 4px rgb(0 0 0 / .4), 0 -16px 40px rgb(0 0 0 / .55);
+  --float-drawer-left: -2px 0 4px rgb(0 0 0 / .4), -16px 0 40px rgb(0 0 0 / .55);
+  --float-bubble: 0 1px 1px rgb(0 0 0 / .3), 0 2px 6px rgb(0 0 0 / .3), inset 0 1px 0 rgb(255 255 255 / .05);
+}
+.float-panel-column { position: relative; z-index: 1; box-shadow: var(--float-edge-right); }
+.float-panel-dock:not([data-maximized="true"]) { border-left-width: 0; z-index: 1; box-shadow: var(--float-edge-left); }
+.float-panel-drawer { border-width: 0; box-shadow: var(--float-drawer-up); }
+@media (min-width: 768px) {
+  .float-panel-drawer { box-shadow: var(--float-drawer-left); }
+}
+/* Closed, the drawer waits just off-screen; its shadow would bleed back over
+   the chat's edge, so it casts none until it opens. */
+.float-panel-drawer[aria-hidden="true"] { box-shadow: none; }
+.float-bubble { box-shadow: var(--float-bubble); }
+
+/* Document reading surface ("Page", owner 2026-11-04). Text, markdown and
+   code read on an inset white page, a Float static card inside the panel;
+   PDF and Office pages sit straight on the panel tint. Marker classes in the
+   previews: .doc-sheet (text, markdown and code scroller), .doc-desk (PDF and
+   image scroller). --doc-desk is also read by the DOCX frame (DocxPreview),
+   which cannot inherit the app's CSS. Code wells inside markdown keep their
+   own tint. */
+:root { --doc-desk: var(--color-background); }
+.doc-sheet {
+  margin: 14px; border-radius: 12px; background-color: var(--float-layer); box-shadow: var(--float-shadow);
+}
+.doc-desk { background-color: transparent; }
+/* The Browser view's viewport takes the same Page treatment: an inset white
+   card under the address line, which stays on the panel tint. Only the frame
+   around the mirror changes; the annotation overlay is inset-0 inside it. */
+.browser-sheet {
+  margin: 12px 14px 4px; border-radius: 12px; background-color: var(--float-layer); box-shadow: var(--float-shadow);
 }
 
 /* Markdown content styles for agent messages */

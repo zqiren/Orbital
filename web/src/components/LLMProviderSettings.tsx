@@ -1090,7 +1090,7 @@ export default function LLMProviderSettings({
             {showModelDropdown &&
               modelSource !== 'freetext' &&
               (filteredModels.length > 0 || modelOptions.length > 0) && (
-              <ul className="absolute z-10 w-full mt-1 max-h-48 overflow-y-auto bg-sidebar border border-border rounded-lg shadow-lg">
+              <ul className="absolute z-10 w-full mt-1 max-h-48 overflow-y-auto surface-float-pop">
                 {filteredModels.map((m) => (
                   <li key={m}>
                     <button

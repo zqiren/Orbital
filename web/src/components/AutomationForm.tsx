@@ -146,7 +146,7 @@ export default function AutomationForm({ trigger, onSubmit, onCancel, agents = [
     <form
       onSubmit={handleSubmit}
       data-testid="automation-form"
-      className="flex flex-col gap-4 rounded-xl border border-border bg-card px-4 py-4"
+      className="flex flex-col gap-4 surface-float-static px-4 py-4"
     >
       <p className="text-[13px] font-medium text-primary">
         {isEdit ? t('trigger.form.title.edit') : t('trigger.new')}

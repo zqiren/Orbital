@@ -136,7 +136,7 @@ export default function NotDetectedRow({
   return (
     <div
       data-testid={`sub-agent-not-detected-${slug}`}
-      className="bg-sidebar/30 border border-border rounded-lg px-4 py-3"
+      className="surface-float-static px-4 py-3"
     >
       <div className="flex items-center gap-2 flex-wrap">
         <MessageAvatar variant="agent" agentHandle={slug} />

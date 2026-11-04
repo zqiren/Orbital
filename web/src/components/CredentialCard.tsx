@@ -87,7 +87,7 @@ export default function CredentialCard({
   const allFilled = credential.fields.every((f) => (values[f] || '').trim().length > 0);
 
   return (
-    <div className="mb-3 shrink-0 rounded-lg border border-border overflow-hidden">
+    <div className="mb-3 shrink-0 surface-float-static overflow-hidden">
       <div className="bg-accent/10 px-4 py-1.5 border-b border-border">
         <span className="text-accent font-semibold text-sm">{t('credCard.header')}</span>
       </div>
