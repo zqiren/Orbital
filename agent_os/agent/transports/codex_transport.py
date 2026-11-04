@@ -50,7 +50,7 @@ from agent_os.utils.subprocess_flags import win_no_window_flags
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_CODEX_VERSION = "0.157.1"
+SUPPORTED_CODEX_VERSION = "0.162.1"
 
 # The app-server's refusal when another app-server (the Codex desktop app
 # with the thread loaded, typically) holds the thread's writer lock. Spec 126:
@@ -165,6 +165,16 @@ class CodexTransport(AgentTransport):
         # omitted and the provider serves the thread's last-used model
         # (wire-verified on both transports).
         self._model: str | None = None
+        # True when Orbital picked ``_model`` itself (no user override): only
+        # then is a model_not_found answered by re-picking (once) and
+        # re-sending the turn. ``_rejected`` holds the error while that runs.
+        self._model_auto = False
+        self._model_repicked = False
+        self._rejected: dict | None = None
+        self._last_input: list | None = None
+        # ORBITAL_* from the spawn env, re-sent as the thread's
+        # shell_environment_policy.set so every command Codex runs sees them.
+        self._orbital_env: dict[str, str] = {}
         # Spec 149: reasoning effort from argv, sent on each turn/start.
         self._effort: str | None = None
         self._autonomy: Autonomy | None = autonomy
@@ -226,6 +236,7 @@ class CodexTransport(AgentTransport):
         self._codex_last_usage: dict[tuple[str, str], dict] = {}
         # Spec 099: strong ref to the post-start quota read.
         self._rate_limit_task: asyncio.Task | None = None
+        self._repick_task: asyncio.Task | None = None
 
     # ------------------------------------------------------------------
     # turn bookkeeping
@@ -365,6 +376,10 @@ class CodexTransport(AgentTransport):
             text = ((params.get("error") or {}).get("message")
                     or params.get("message") or json.dumps(params)[:500])
             self._observe_environment_failure(str(text))
+            if (self._model_auto and not self._model_repicked and self._turn_open
+                    and "model_not_found" in json.dumps(params)):
+                self._rejected = params  # held for the re-pick in _on_turn_completed
+                return
             await self._event_queue.put(TransportEvent(
                 event_type="error", data={"error": params},
                 raw_text=f"Error: {text}"))
@@ -479,6 +494,15 @@ class CodexTransport(AgentTransport):
     async def _on_turn_completed(self, params: dict) -> None:
         turn = params.get("turn") or {}
         status = turn.get("status")
+        if self._rejected is not None:
+            if status == "failed":
+                # Not on the read loop: the re-pick awaits RPC answers it reads.
+                self._turn_id = None
+                self._model_repicked = True
+                self._repick_task = asyncio.create_task(
+                    self._repick_rejected_model(), name=f"codex-repick-{id(self)}")
+                return
+            await self._surface_rejected()
         # Flush agentMessages that streamed deltas but never completed
         # (interrupted mid-message): partial text must not be lost.
         for text in self._message_parts.values():
@@ -512,6 +536,59 @@ class CodexTransport(AgentTransport):
             event_type="turn_complete", data=self._turn_meta(cause)))
         if self._turn_done is not None:
             self._turn_done.set()
+
+    async def _surface_rejected(self) -> None:
+        """Emit the held model_not_found as the error it was."""
+        params, self._rejected = self._rejected, None
+        if params is None:
+            return
+        text = ((params.get("error") or {}).get("message")
+                or params.get("message") or json.dumps(params)[:500])
+        await self._event_queue.put(TransportEvent(
+            event_type="error", data={"error": params}, raw_text=f"Error: {text}"))
+
+    async def _close_failed_turn(self) -> None:
+        await self._surface_rejected()
+        self._turn_id = None
+        self._turn_open = False
+        await self._event_queue.put(TransportEvent(
+            event_type="turn_complete", data=self._turn_meta("error")))
+        if self._turn_done is not None:
+            self._turn_done.set()
+
+    async def _repick_rejected_model(self) -> None:
+        """The server refused a model Orbital picked (a stale model/list
+        cache can still offer a retired one): pick again from the list
+        without it and re-send the same input once, on the same turn
+        bookkeeping, so the worker answers as if nothing happened. Any
+        failure here surfaces the original error and closes the turn."""
+        rejected = self._model
+        try:
+            model = await self._resolve_startup_model(exclude={rejected} if rejected else None)
+            if not model or model == rejected or not self._last_input:
+                await self._close_failed_turn()
+                return
+            logger.info("CodexTransport: %s was rejected (model_not_found); "
+                        "re-sending the turn on %s", rejected, model)
+            self._model, self._effective_model = model, None
+            params = self._turn_start_params(self._last_input)
+            params["model"] = model
+            # Cleared before sending: the new turn can complete before this
+            # task resumes from the await.
+            held, self._rejected = self._rejected, None
+            try:
+                result = await self._request("turn/start", params)
+            except Exception:
+                self._rejected = held
+                raise
+        except Exception:  # noqa: BLE001
+            logger.warning("CodexTransport: re-pick after model_not_found failed",
+                           exc_info=True)
+            await self._close_failed_turn()
+            return
+        turn = result.get("turn") or {}
+        if turn.get("id") and self._turn_open:
+            self._turn_id = turn["id"]
 
     async def _on_item(self, phase: str, item: dict) -> None:
         itype = item.get("type")
@@ -659,6 +736,11 @@ class CodexTransport(AgentTransport):
     # ------------------------------------------------------------------
 
     @staticmethod
+    def _orbital_env_of(env: dict | None) -> dict[str, str]:
+        """The spawn env's ORBITAL_* (session, project, agent attribution)."""
+        return {k: str(v) for k, v in (env or {}).items() if k.startswith("ORBITAL_")}
+
+    @staticmethod
     def _argv_model(args: list[str]) -> str | None:
         """Extract `-m <model>` injected by the config store's flag_template
         ("-m {value}", sub_agent_config_store.py). app-server takes model
@@ -715,28 +797,44 @@ class CodexTransport(AgentTransport):
                         "sandbox": sandbox}
         if self._model:
             params["model"] = self._model
+        if self._orbital_env:
+            # Per key, so the user's own shell_environment_policy (e.g.
+            # inherit = "core") still governs everything else.
+            params["config"] = {f"shell_environment_policy.set.{k}": v
+                                for k, v in self._orbital_env.items()}
         if self._resume_session_id:
             params["threadId"] = self._resume_session_id
             return "thread/resume", params
         return "thread/start", params
 
-    async def _resolve_startup_model(self) -> str:
+    async def _resolve_startup_model(self, exclude: set[str] | None = None) -> str:
         """Pick a known-good startup model from the account's live
         model/list. Fills ONLY the unset fresh-start case — a user override
         wins upstream, and resume omits the model so the provider serves the
         thread's own last-used (the model-is-config amendment). Never
         returns None: a degraded fallback still beats the unqualified
-        server default (the cold-start 400)."""
+        server default (the cold-start 400).
+
+        Codex's own ``isDefault`` entry comes first: it tracks the account
+        and the catalog (0.162.1 listed only gpt-6.x / gpt-5.6, none of the
+        preference names). ``exclude`` drops a model the server refused."""
+        exclude = exclude or set()
         try:
             result = await self._request("model/list", {"includeHidden": False},
                                          timeout=15.0)
-            available = [m.get("id") for m in (result.get("data") or [])
-                         if m.get("id")]
+            entries = [m for m in (result.get("data") or [])
+                       if m.get("id") and m.get("id") not in exclude]
+            available = [m["id"] for m in entries]
         except Exception as e:
             logger.warning(
                 "CodexTransport: model/list failed (%s) — degraded startup "
                 "fallback to %s", e, _PREFERRED_STARTUP_MODELS[0])
             return _PREFERRED_STARTUP_MODELS[0]
+        for entry in entries:
+            if entry.get("isDefault"):
+                logger.info("CodexTransport: startup model %s (Codex's default)",
+                            entry["id"])
+                return entry["id"]
         for preferred in _PREFERRED_STARTUP_MODELS:
             if preferred in available:
                 if preferred != _PREFERRED_STARTUP_MODELS[0]:
@@ -773,6 +871,7 @@ class CodexTransport(AgentTransport):
     async def start(self, command: str, args: list[str], workspace: str,
                     env: dict | None = None) -> None:
         self._workspace = workspace
+        self._orbital_env = self._orbital_env_of(env)
         merged_env = os.environ.copy()
         if env:
             merged_env.update(env)
@@ -826,6 +925,7 @@ class CodexTransport(AgentTransport):
             # override: the thread inherits its OWN last-used model, which
             # is qualified — not the server default this guards against.
             self._model = await self._resolve_startup_model()
+            self._model_auto = True
 
         method, params = self._thread_open_request(workspace)
         try:
@@ -866,6 +966,7 @@ class CodexTransport(AgentTransport):
             fresh = {k: v for k, v in params.items() if k != "threadId"}
             if not fresh.get("model"):
                 self._model = await self._resolve_startup_model()
+                self._model_auto = True
                 fresh["model"] = self._model
             result = await self._request("thread/start", fresh)
             self._resume_outcome = ("fresh", "resume_failed")
@@ -957,22 +1058,11 @@ class CodexTransport(AgentTransport):
         if not self._alive or self._thread_id is None:
             raise RuntimeError("codex transport not started — call start() first")
         self._begin_turn()
-        params: dict = {
-            "threadId": self._thread_id,
-            "input": [{"type": "text", "text": message}],
-        }
-        if self._external_sandbox:
-            # Constraint 7: Orbital's own sandbox wraps the process; Codex
-            # skips internal enforcement. Tagged-object form exists ONLY on
-            # turn/start (param asymmetry).
-            params["sandboxPolicy"] = {"type": "externalSandbox"}
-        effort = getattr(self, "_effort", None)
-        if effort:
-            # Spec 149: the thinking level, per turn (protocol: "this turn and
-            # subsequent turns"). Omitted = the model's own default.
-            params["effort"] = effort
+        self._last_input = [{"type": "text", "text": message}]
+        params = self._turn_start_params(self._last_input)
         logger.info("CodexTransport: turn/start thread=%s model=%s effort=%s",
-                    self._thread_id, self._effective_model or self._model, effort)
+                    self._thread_id, self._effective_model or self._model,
+                    params.get("effort"))
         try:
             result = await self._request("turn/start", params)
         except Exception as e:
@@ -991,6 +1081,20 @@ class CodexTransport(AgentTransport):
         # (the notification hasn't already closed it via turn/completed).
         if turn.get("id") and self._turn_open:
             self._turn_id = turn["id"]
+
+    def _turn_start_params(self, turn_input: list) -> dict:
+        params: dict = {"threadId": self._thread_id, "input": turn_input}
+        if self._external_sandbox:
+            # Constraint 7: Orbital's own sandbox wraps the process; Codex
+            # skips internal enforcement. Tagged-object form exists ONLY on
+            # turn/start (param asymmetry).
+            params["sandboxPolicy"] = {"type": "externalSandbox"}
+        effort = getattr(self, "_effort", None)
+        if effort:
+            # Spec 149: the thinking level, per turn (protocol: "this turn and
+            # subsequent turns"). Omitted = the model's own default.
+            params["effort"] = effort
+        return params
 
     async def send(self, message: str) -> str | None:
         """Blocking ABC variant: dispatch + wait for the turn boundary."""

@@ -2,7 +2,7 @@
 # Copyright (C) 2026 Orbital Contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Unit tests for CodexTransport (codex app-server JSON-RPC, pinned 0.157.1).
+"""Unit tests for CodexTransport (codex app-server JSON-RPC, pinned 0.162.1).
 
 All payloads are verbatim from the probe traces in
 artifacts-2026-06-06-codex-lifecycle/codex_appserver/traces/. No codex
@@ -695,6 +695,134 @@ class TestStartupModelResolution:
             assert await t._resolve_startup_model() == "gpt-5.4-mini"
         assert any("model/list" in r.message for r in caplog.records), \
             "degradation must be surfaced, not silent"
+
+    def _stub_entries(self, t, entries):
+        async def fake_request(method, params=None, timeout=30.0):
+            assert method == "model/list"
+            return {"data": entries}
+        t._request = fake_request
+
+    @pytest.mark.asyncio
+    async def test_follows_the_lists_default_entry(self):
+        # Codex 0.162.1 (2026-11): the catalog moved to gpt-6.x and none of the
+        # preference names were listed; Codex marks its own pick isDefault.
+        t = _transport()
+        self._stub_entries(t, [{"id": "gpt-5.4-mini"},
+                               {"id": "gpt-6.1-sol", "isDefault": True}])
+        assert await t._resolve_startup_model() == "gpt-6.1-sol"
+
+    @pytest.mark.asyncio
+    async def test_a_rejected_model_is_never_picked_again(self):
+        t = _transport()
+        self._stub_entries(t, [{"id": "gpt-5.5", "isDefault": True},
+                               {"id": "gpt-6-luna"}])
+        assert await t._resolve_startup_model(exclude={"gpt-5.5"}) == "gpt-6-luna"
+
+
+MODEL_NOT_FOUND = {"jsonrpc": "2.0", "method": "error", "params": {
+    "error": {"message": '{"type":"error","status":400,"error":{"type":'
+                         '"invalid_request_error","message":"The \'gpt-5.5\' model is '
+                         'not supported when using Codex with a ChatGPT account.",'
+                         '"code":"model_not_found"}}'},
+    "willRetry": False, "threadId": "T1", "turnId": "U1"}}
+TURN_FAILED = {"jsonrpc": "2.0", "method": "turn/completed", "params": {
+    "threadId": "T1", "turn": {"id": "U1", "status": "failed"}}}
+
+
+class TestRejectedStartupModel:
+    """Codex serves model/list from ~/.codex/models_cache.json; a stale cache
+    offered gpt-5.5, which the server had retired (Windows check 2026-11-05).
+    A model Orbital picked itself is re-picked once and the same input
+    re-sent; a model the user chose is the user's to change."""
+
+    async def _frame(self, stdin, n, timeout=2.0):
+        for _ in range(int(timeout / 0.01)):
+            if len(stdin.frames) >= n:
+                return stdin.frames[n - 1]
+            await asyncio.sleep(0.01)
+        raise AssertionError(f"no frame {n}: {stdin.frames}")
+
+    async def _start_turn(self, t, stdin):
+        task = asyncio.create_task(t.dispatch("do it"))
+        start = await self._frame(stdin, 1)
+        await t._route_server_message({"jsonrpc": "2.0", "id": start["id"],
+                                       "result": {"turn": {"id": "U1"}}})
+        await asyncio.wait_for(task, timeout=2.0)
+
+    @pytest.mark.asyncio
+    async def test_an_auto_picked_model_is_repicked_and_the_turn_resent(self):
+        t, stdin = _wired()
+        t._model, t._model_auto = "gpt-5.5", True
+        await self._start_turn(t, stdin)
+        await t._route_server_message(MODEL_NOT_FOUND)
+        await t._route_server_message(TURN_FAILED)
+        listing = await self._frame(stdin, 2)
+        assert listing["method"] == "model/list"
+        await t._route_server_message({"jsonrpc": "2.0", "id": listing["id"], "result": {
+            "data": [{"id": "gpt-5.5"}, {"id": "gpt-6.1-sol", "isDefault": True}]}})
+        resend = await self._frame(stdin, 3)
+        assert resend["method"] == "turn/start"
+        assert resend["params"]["model"] == "gpt-6.1-sol"
+        assert resend["params"]["input"] == [{"type": "text", "text": "do it"}]
+        assert _drain(t) == []  # the rejection never reached the transcript
+        await t._route_server_message({"jsonrpc": "2.0", "id": resend["id"],
+                                       "result": {"turn": {"id": "U2"}}})
+        await t._route_server_message({"jsonrpc": "2.0", "method": "turn/completed",
+            "params": {"threadId": "T1", "turn": {"id": "U2", "status": "completed"}}})
+        [done] = _drain(t)
+        assert done.event_type == "turn_complete" and done.data["cause"] == "success"
+        assert t._model == "gpt-6.1-sol"
+
+    @pytest.mark.asyncio
+    async def test_a_model_the_user_chose_fails_as_before(self):
+        t, stdin = _wired()
+        t._model, t._model_auto = "gpt-5.5", False
+        await self._start_turn(t, stdin)
+        await t._route_server_message(MODEL_NOT_FOUND)
+        await t._route_server_message(TURN_FAILED)
+        error, done = _drain(t)
+        assert error.event_type == "error" and "model_not_found" in error.raw_text
+        assert done.data["cause"] == "error"
+        assert len(stdin.frames) == 1
+
+    @pytest.mark.asyncio
+    async def test_the_repick_is_tried_once(self):
+        t, stdin = _wired()
+        t._model, t._model_auto = "gpt-5.5", True
+        t._model_repicked = True
+        await self._start_turn(t, stdin)
+        await t._route_server_message(MODEL_NOT_FOUND)
+        await t._route_server_message(TURN_FAILED)
+        error, done = _drain(t)
+        assert error.event_type == "error" and done.data["cause"] == "error"
+
+
+class TestOrbitalEnvThroughConfig:
+    """A user's ``shell_environment_policy.inherit = "core"`` keeps the
+    process env's ORBITAL_* away from every command Codex runs, so the job
+    launcher saw no session. The thread's own config sets them per key and
+    leaves the user's policy otherwise alone."""
+
+    def test_fresh_and_resumed_threads_carry_the_orbital_env(self):
+        t = _transport()
+        t._orbital_env = {"ORBITAL_SESSION_ID": "后台任务_b7aacb56", "ORBITAL_AGENT": "codex"}
+        expected = {"shell_environment_policy.set.ORBITAL_SESSION_ID": "后台任务_b7aacb56",
+                    "shell_environment_policy.set.ORBITAL_AGENT": "codex"}
+        method, params = t._thread_open_request("/w")
+        assert method == "thread/start" and params["config"] == expected
+        t._resume_session_id = "R1"
+        method, params = t._thread_open_request("/w")
+        assert method == "thread/resume" and params["config"] == expected
+
+    def test_no_orbital_env_sends_no_config(self):
+        t = _transport()
+        _method, params = t._thread_open_request("/w")
+        assert "config" not in params
+
+    def test_start_keeps_only_orbitals_own_variables(self):
+        assert CodexTransport._orbital_env_of(
+            {"ORBITAL_SESSION_ID": "s", "OPENAI_API_KEY": "sk-x", "PATH": "p"}
+        ) == {"ORBITAL_SESSION_ID": "s"}
 
 
 # ---------------------------------------------------------------------------

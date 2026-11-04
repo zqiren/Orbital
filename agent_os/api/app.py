@@ -472,6 +472,7 @@ def _assemble_app(app: FastAPI, data_dir: str | None) -> FastAPI:
             (p.get("project_id", ""), p.get("workspace") or "")
             for p in project_store.list_projects()
         ],
+        sole_launcher_worker=sub_agent_manager.sole_launcher_worker,
     )
     agent_manager._job_registry = job_registry
     sub_agent_manager._job_registry = job_registry

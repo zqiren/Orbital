@@ -59,6 +59,39 @@ def test_the_worker_instructions_name_the_launcher_per_os():
     assert 'orbital\\bin\\bg.cmd "<command>"' in job_launcher.worker_instructions("windows")
 
 
+def test_windows_codex_is_told_to_run_the_launcher_escalated():
+    # Codex's Windows sandbox denies the WMI process create bg.ps1 needs
+    # (Invoke-CimMethod: access denied, 0x80041003); a child it starts is
+    # killed with the sandboxed command. Workers run hands-off, so the
+    # escalation is approved without a prompt.
+    hint = job_launcher.worker_instructions("windows", codex=True)
+    assert "escalat" in hint.lower() and "sandbox" in hint.lower()
+    for quiet in (job_launcher.worker_instructions("windows"),
+                  job_launcher.worker_instructions("macos", codex=True)):
+        assert "escalat" not in quiet.lower()
+
+
+def test_sole_launcher_worker_is_the_one_codex_or_pi_mid_turn(manager, tmp_path):
+    def adapter(idle):
+        return SimpleNamespace(is_alive=lambda: True, is_idle=lambda: idle)
+    manager._adapters = {}
+    manager._launcher_workers = set()
+    manager._resolve_session_id = lambda sid: sid
+    manager._adapter_status = lambda a, *rest: "idle" if a.is_idle() else "running"
+    env = {}
+    manager._prepare_worker_jobs(_manifest("codex-appserver"), "p", "s1", "codex",
+                                 str(tmp_path), env)
+    manager._adapters[("p", "s1")] = {"codex": adapter(idle=False)}
+    manager._adapters[("p", "s2")] = {"claude-code": adapter(idle=False)}
+    assert manager.sole_launcher_worker("p") == ("s1", "codex")
+    manager._adapters[("p", "s1")] = {"codex": adapter(idle=True)}
+    assert manager.sole_launcher_worker("p") is None
+    manager._prepare_worker_jobs(_manifest("pi-rpc"), "p", "s3", "pi", str(tmp_path), env)
+    manager._adapters[("p", "s1")] = {"codex": adapter(idle=False)}
+    manager._adapters[("p", "s3")] = {"pi": adapter(idle=False)}
+    assert manager.sole_launcher_worker("p") is None  # two candidates: no guess
+
+
 def test_pi_gets_the_paragraph_in_its_system_prompt(tmp_path):
     hint = job_launcher.worker_instructions("macos")
     with_hint = render_sub_agent_prompt(str(tmp_path), None, "pi", ["pi"], background_jobs=hint)

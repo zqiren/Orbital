@@ -1111,8 +1111,9 @@ class SubAgentManager:
         # workspace launcher; the env attributes them to this session.
         jobs_enabled = self._prepare_worker_jobs(
             manifest, project_id, session_id, handle, workspace, env)
-        jobs_hint = worker_instructions(detect_os()) if jobs_enabled else None
         transport_kind = getattr(manifest.runtime, "transport", None)
+        jobs_hint = (worker_instructions(detect_os(), codex=transport_kind == "codex-appserver")
+                     if jobs_enabled else None)
 
         config = AdapterConfig(
             command=config_dict["command"],
@@ -1398,7 +1399,26 @@ class SubAgentManager:
         registry = getattr(self, "_job_registry", None)
         if registry is not None:
             registry.watch(workspace, project_id)
+        self.__dict__.setdefault("_launcher_workers", set()).add(
+            (project_id, session_id, handle))
         return True
+
+    def sole_launcher_worker(self, project_id: str) -> tuple[str, str] | None:
+        """``(session_id, handle)`` of the project's one launcher worker
+        (Codex / Pi) with an open turn, or None when there are none or
+        several. The job registry's owner for a launcher job that arrived
+        without ORBITAL_* (a Codex shell_environment_policy can keep them
+        out of the command). Call on the event loop (``list_active``)."""
+        launchers = getattr(self, "_launcher_workers", set())
+        found = []
+        for (pid, sid) in list(self._adapters):
+            if pid != project_id:
+                continue
+            for entry in self.list_active(project_id, session_id=sid):
+                if (entry["status"] == "running"
+                        and (project_id, sid, entry["handle"]) in launchers):
+                    found.append((sid, entry["handle"]))
+        return found[0] if len(found) == 1 else None
 
     def _fingerprint_of(self, handle: str, config_dict: dict) -> str | None:
         """The spawn fingerprint of ``config_dict``, or None when the setup

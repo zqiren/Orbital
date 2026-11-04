@@ -181,11 +181,17 @@ LAUNCHER_FILES: dict[str, tuple[str, bool]] = {
 }
 
 
-def worker_instructions(os_type: str) -> str:
-    """The paragraph a Codex / Pi worker gets about the launcher."""
+def worker_instructions(os_type: str, *, codex: bool = False) -> str:
+    """The paragraph a Codex / Pi worker gets about the launcher.
+
+    Windows Codex: its sandbox denies the WMI process create bg.ps1 starts the
+    job with (``Invoke-CimMethod``: access denied), and a child started any
+    other way dies with the sandboxed command (Windows check 2026-11-05). So
+    it runs the launcher escalated from the start; workers are hands-off, so
+    Orbital approves that without asking."""
     launcher = ('orbital\\bin\\bg.cmd "<command>"' if os_type == "windows"
                 else 'orbital/bin/bg "<command>"')
-    return (
+    text = (
         "Long-running commands: never wait on a command that can take more than "
         "a couple of minutes (a build, a test suite, training, a download, a "
         f"server, a long script). Start it from the workspace root with `{launcher}` "
@@ -194,6 +200,11 @@ def worker_instructions(os_type: str) -> str:
         "with the exit code and the last output lines when the job finishes, and "
         "checks in every 15 minutes while it runs. Do not sleep or poll for it."
     )
+    if codex and os_type == "windows":
+        text += (" The launcher cannot start a job inside your Windows sandbox "
+                 "(access denied), so run it with escalated permissions, outside "
+                 "the sandbox, on the first try.")
+    return text
 
 
 def launcher_path(workspace: str, os_type: str) -> str:

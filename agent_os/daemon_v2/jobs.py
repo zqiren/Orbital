@@ -375,14 +375,18 @@ class JobRegistry:
     def __init__(self, *, inject: Inject, broadcast: Callable[[str, dict], None],
                  dispatch_worker: Callable[..., Awaitable[object]] | None = None,
                  workspaces: Callable[[], list[tuple[str, str]]] | None = None,
+                 sole_launcher_worker: Callable[[str], tuple[str, str] | None] | None = None,
                  clock: Callable[[], float] = time.monotonic,
                  poll_interval_s: float = POLL_INTERVAL_S) -> None:
         """``inject(project_id, content, *, session_id, meta)`` — the
         ``inject_system_message`` funnel. ``dispatch_worker(project_id,
         session_id, handle, content)`` sends a worker its job message as a
         normal dispatch. ``workspaces()`` lists ``(project_id, workspace)`` for
-        the boot cleanup and retention."""
+        the boot cleanup and retention. ``sole_launcher_worker(project_id)``
+        names the ``(session_id, handle)`` a launcher job with no session
+        belongs to when exactly one launcher worker is mid-turn."""
         self._inject = inject
+        self._sole_launcher_worker = sole_launcher_worker
         self._broadcast_fn = broadcast
         self._dispatch_worker = dispatch_worker
         self._workspaces = workspaces or (lambda: [])
@@ -556,6 +560,19 @@ class JobRegistry:
         session_id = str(data.get("session_id") or "")
         agent = str(data.get("agent") or "") or None
         pid_project = str(data.get("project_id") or project_id or "")
+        if not session_id and pid_project and self._sole_launcher_worker is not None:
+            # The worker's command ran without the ORBITAL_* env (a Codex
+            # shell_environment_policy can keep it out): the one launcher
+            # worker mid-turn in the project started it. Never a guess.
+            try:
+                owner = self._sole_launcher_worker(pid_project)
+            except Exception:  # noqa: BLE001
+                logger.debug("job attribution lookup failed", exc_info=True)
+                owner = None
+            if owner:
+                session_id, agent = owner
+                logger.info("job %s had no session; attributed to %s/%s",
+                            job_id, session_id, agent)
         if group is None:
             gid = str(data.get("group_id") or "")
             with self._lock:

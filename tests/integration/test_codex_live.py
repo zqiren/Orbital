@@ -2,7 +2,7 @@
 # Copyright (C) 2026 Orbital Contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Codex live journeys (TEST RULE 2 + 5): real codex 0.157.1 app-server.
+"""Codex live journeys (TEST RULE 2 + 5): real codex 0.162.1 app-server.
 
 Covers: dispatch -> command + fileChange items -> final answer -> ONE honest
 turn boundary; on-request approval round-trip (decline continues / cancel
@@ -10,7 +10,7 @@ interrupts); kill -9 -> thread/resume -> context recalled; Stop leaves zero
 in-tree survivors.
 
 Heavy + costs live turns — opt-in: not in the default unit/platform run.
-Pinned to codex-cli 0.157.1; on a version bump re-run schema-gen + this file.
+Pinned to codex-cli 0.162.1; on a version bump re-run schema-gen + this file.
 """
 
 from __future__ import annotations
@@ -313,8 +313,10 @@ async def test_cold_start_resolves_model_no_400(tmp_path):
     t = CodexTransport(autonomy=Autonomy.HANDS_OFF)
     await t.start(CODEX, [], str(tmp_path))  # no override anywhere
     try:
-        assert t._model in ("gpt-5.4-mini", "gpt-5.4", "gpt-5.5"), \
-            f"resolved {t._model!r} — expected a preference-order pick"
+        listed = (await t._request("model/list", {"includeHidden": False})).get("data") or []
+        default = next((m["id"] for m in listed if m.get("isDefault")), None)
+        assert t._model_auto and t._model == (default or t._model), \
+            f"resolved {t._model!r} — expected Codex's own default {default!r}"
         assert t._effective_model == t._model, \
             "server must confirm the resolved model"
         await t.dispatch("Say OK. Do not use any tools.")
