@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Orbital Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { flushSync } from 'react-dom';
 import {
   Folder,
@@ -124,6 +124,29 @@ export default function FileExplorer({ projectId, initialPath, onSelectFile }: F
       }
     },
     [projectId],
+  );
+
+  // Spec 065: a restore from the history column rewrote the open file —
+  // re-read it in place (no loading flash; the view keeps its scroll).
+  const selectedPathRef = useRef(selectedPath);
+  useEffect(() => {
+    selectedPathRef.current = selectedPath;
+  });
+  const handleHistoryChanged = useCallback(() => {
+    const path = selectedPathRef.current;
+    if (!path) return;
+    void api<FileContent>(
+      `/api/v2/projects/${encodeURIComponent(projectId)}/files/content?path=${encodeURIComponent(path)}&document_preview=1`,
+    ).then(
+      (data) => {
+        if (selectedPathRef.current === path) setFileContent(data);
+      },
+      () => {},
+    );
+  }, [projectId]);
+  const historyOpts = useMemo(
+    () => ({ projectId, onChanged: handleHistoryChanged }),
+    [projectId, handleHistoryChanged],
   );
 
   const refreshRoot = useCallback(() => {
@@ -382,6 +405,7 @@ export default function FileExplorer({ projectId, initialPath, onSelectFile }: F
           loading={contentLoading}
           selectedPath={selectedPath}
           onSave={saveFileContent}
+          history={historyOpts}
           onReveal={canReveal ? (path) => void handleReveal(path) : undefined}
         />
       </div>

@@ -65,6 +65,14 @@ _CLEANUP_MARKER_FILE = ".memory_cleanup.json"
 _LAST_DAEMON_WRITE: dict[str, int] = {}
 
 
+def _history_recording(path: str):
+    """Spec 065: wrap a daemon-side Layer-1 write so file history records it
+    as Orbital's (exact) under the project's store lock. A plain no-op
+    context when history is not running or the path is not tracked."""
+    from agent_os.history import ORBITAL_ATTRIB, recording
+    return recording(path, ORBITAL_ATTRIB)
+
+
 def _record_daemon_write(path: str) -> None:
     """Remember the mtime we just produced for ``path`` (best effort)."""
     try:
@@ -447,9 +455,10 @@ class WorkspaceFileManager:
         must not fail the read."""
         tmp_path = filepath + ".tmp"
         try:
-            with open(tmp_path, "w", encoding="utf-8") as f:
-                f.write(text)
-            _atomic_replace(tmp_path, filepath)
+            with _history_recording(filepath):
+                with open(tmp_path, "w", encoding="utf-8") as f:
+                    f.write(text)
+                _atomic_replace(tmp_path, filepath)
             _record_daemon_write(filepath)
             logger.info("re-encoded %s as UTF-8", filepath)
         except OSError:
@@ -522,9 +531,12 @@ class WorkspaceFileManager:
         self.ensure_dir()
         filepath = self._file_path(file_key)
         tmp_path = filepath + ".tmp"
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            f.write(content)
-        _atomic_replace(tmp_path, filepath)
+        # Spec 065 D11: the daemon's own Layer-1 writes are versioned with
+        # exact attribution (Orbital). No-op when file history is not running.
+        with _history_recording(filepath):
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                f.write(content)
+            _atomic_replace(tmp_path, filepath)
         _record_daemon_write(filepath)
 
     def append(self, file_key: str, content: str) -> None:
@@ -535,9 +547,10 @@ class WorkspaceFileManager:
         filepath = self._file_path(file_key)
         existing = read_text_lenient(filepath) or ""
         tmp_path = filepath + ".tmp"
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            f.write(existing + content)
-        _atomic_replace(tmp_path, filepath)
+        with _history_recording(filepath):
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                f.write(existing + content)
+            _atomic_replace(tmp_path, filepath)
         _record_daemon_write(filepath)
 
     def read_all(self) -> dict[str, str | None]:

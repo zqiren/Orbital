@@ -266,6 +266,7 @@ class AgentManager:
         self._browser_manager = browser_manager
         self._user_credential_store = user_credential_store
         self._trigger_manager = None  # set after TriggerManager is created
+        self._file_history = None  # spec 065, set by the app factory
         self._provider_registry = provider_registry or ProviderRegistry()
         self._connector_manager = connector_manager
         self._calendar_hub = calendar_hub
@@ -1755,12 +1756,12 @@ class AgentManager:
             pass
         try:
             from agent_os.agent.tools.write import WriteTool
-            registry.register(WriteTool(workspace=config.workspace))
+            registry.register(WriteTool(workspace=config.workspace, session_id=session_id))
         except ImportError:
             pass
         try:
             from agent_os.agent.tools.edit import EditTool
-            registry.register(EditTool(workspace=config.workspace))
+            registry.register(EditTool(workspace=config.workspace, session_id=session_id))
         except ImportError:
             pass
         try:
@@ -1986,8 +1987,10 @@ class AgentManager:
             registry.register(ReadTool(workspace=workspace, read_roots=read_roots_cb,
                                        context_window=None, open_reads=open_reads_cb,
                                        cross_project=cross_project))
-            registry.register(WriteTool(workspace=workspace))
-            registry.register(EditTool(workspace=workspace))
+            registry.register(WriteTool(workspace=workspace, session_id=session_id,
+                                        worker=worker_handle))
+            registry.register(EditTool(workspace=workspace, session_id=session_id,
+                                       worker=worker_handle))
             registry.register(GlobTool(workspace=workspace,
                                        read_roots=read_roots_cb, root_labels=root_labels_cb,
                                        open_reads=open_reads_cb, cross_project=cross_project))
@@ -3661,6 +3664,42 @@ class AgentManager:
             if poll_task is not None and not poll_task.done():
                 return sid
         return None
+
+    def history_candidates(self, project_id: str) -> list[tuple[str, list[str]]]:
+        """Spec 065 §5.4: the sessions that could have written a workspace
+        file of ``project_id`` right now, each with its writer agents.
+
+        A session is a candidate when it holds the project's slot
+        (``current_holder_session_id``) or has a worker turn / background job
+        in flight (``running_session_ids``). Its writers are the handles
+        ``list_active`` reports ``running`` / ``background-running``; with
+        none, the writer is Orbital itself (the manager's shell or a job).
+        Manager and worker in one session are one candidate. Call on the
+        event loop (``running_session_ids`` evicts dead adapters).
+        """
+        sids: set[str] = set()
+        holder = self.current_holder_session_id(project_id)
+        if holder:
+            sids.add(holder)
+        sam = self._sub_agent_manager
+        if sam is not None:
+            try:
+                sids |= set(sam.running_session_ids(project_id))
+            except Exception:
+                logger.debug("history candidates: running_session_ids failed", exc_info=True)
+        out: list[tuple[str, list[str]]] = []
+        for sid in sorted(sids):
+            agents: list[str] = []
+            if sam is not None:
+                try:
+                    agents = [
+                        e["handle"] for e in sam.list_active(project_id, session_id=sid)
+                        if e.get("status") in ("running", "background-running")
+                    ]
+                except Exception:
+                    logger.debug("history candidates: list_active failed", exc_info=True)
+            out.append((sid, agents or ["orbital"]))
+        return out
 
     # ── Pending-input queue (spec 006, Path A) ──────────────────────────
     #

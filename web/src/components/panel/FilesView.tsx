@@ -27,6 +27,7 @@ import { fetchPathWithFallback } from '../../utils/openPathWithFallback';
 import { canRevealInFileManager } from '../../utils/clientPlatform';
 import { useFiles } from '../../hooks/useFiles';
 import { useWebSocket } from '../../hooks/useWebSocket';
+import { bumpFileHistory, SETTLE_MS } from '../../hooks/useFileHistory';
 import { useT } from '../../i18n/useT';
 import type { StringKey } from '../../i18n/strings';
 import FilePreview from '../FilePreview';
@@ -330,6 +331,9 @@ export default function FilesView({
   });
   useEffect(() => {
     if (refreshTick === 0 || file === null) return;
+    // Spec 065: the same moments may have added a version of this file; the
+    // watcher records it after its quiet window, hence the second read.
+    bumpFileHistory(projectId, { again: SETTLE_MS });
     const held = contentRef.current;
     void fetchPathWithFallback(
       (p) => getFileContent(projectId, p, held !== null && held.path === p ? held.revision : undefined),
@@ -349,6 +353,13 @@ export default function FilesView({
     // `file` is read, not watched: a selection change has its own effect above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshTick]);
+
+  // Spec 065: a restore from the history column rewrote the open file.
+  const handleHistoryChanged = useCallback(() => setRefreshTick((n) => n + 1), []);
+  const historyOpts = useMemo(
+    () => ({ projectId, onChanged: handleHistoryChanged }),
+    [projectId, handleHistoryChanged],
+  );
 
   // Spec 078 §5.4: FilePreview reports what the user selected; the shape of
   // the quote decides which annotation form it becomes.
@@ -400,6 +411,7 @@ export default function FilesView({
             onSave={onSave}
             quoting
             onQuote={handleQuote}
+            history={historyOpts}
             panelHeader={{
               onBack: () => onSelectFile(null),
               onOpenInFiles: onOpenInFiles && (() => onOpenInFiles(content?.path ?? file)),

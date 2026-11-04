@@ -1437,3 +1437,142 @@ export interface Trigger {
    */
   agent?: string | null;
 }
+
+// ── Spec 065: file version history (routes under /files/history) ─────────
+
+/** Who wrote a version, as the daemon recorded it (spec 065 §5.4). */
+export interface HistoryAttrib {
+  kind: 'baseline' | 'tool' | 'user' | 'orbital' | 'restore' | 'running' | 'outside' | 'closed';
+  sessions?: Array<{ session_id: string; agents: string[]; name?: string | null }>;
+  ambiguous?: boolean;
+  worker?: string;
+  by?: string;
+  from_v?: number;
+  from_ts?: string;
+}
+
+/** GET /files/history/status. `has_changes` gates every history surface (D10). */
+export interface HistoryStatus {
+  status: 'building' | 'watching' | 'unavailable';
+  /** May hold an absolute path: never shown to the user. */
+  reason?: string;
+  has_changes: boolean;
+  store_bytes?: number;
+  tracked_files?: number;
+  skipped?: { binary?: number; size?: number };
+}
+
+export interface HistoryVersion {
+  v: number;
+  ts: string;
+  kind: 'baseline' | 'create' | 'modify' | 'delete' | 'restore';
+  sha: string | null;
+  prev_sha: string | null;
+  size: number | null;
+  added: number | null;
+  removed: number | null;
+  lines: number | null;
+  attrib: HistoryAttrib;
+  ambiguous: boolean;
+  name: string | null;
+  turn: { session_id: string; from_ts: number; to_ts: number | null } | null;
+  /** Consecutive versions of the file in one turn of one session share it. */
+  group: string;
+  current: boolean;
+}
+
+/** GET /files/history?path= */
+export interface FileHistoryList {
+  path: string;
+  status: HistoryStatus['status'];
+  reason?: string;
+  whole_file_only: boolean;
+  versions: HistoryVersion[];
+  skipped_reason?: 'binary' | 'size' | 'ignored' | 'missing' | null;
+}
+
+/** Version-level attribution of the lines a view tints. */
+export interface HistoryEditor {
+  v: number;
+  ts: string;
+  kind: HistoryAttrib['kind'];
+  agents: string[];
+  ambiguous: boolean;
+  session_id: string | null;
+  session_name: string | null;
+  /** Ambiguous, outside, closed, user and restore versions tint grey. */
+  neutral: boolean;
+}
+
+export interface HistoryViewLine {
+  text: string;
+  op: 'same' | 'add' | 'del';
+  /** Index into `editors`, or null for unchanged lines. */
+  editor: number | null;
+}
+
+/** GET /files/history/view */
+export interface HistoryView {
+  path: string;
+  v: number;
+  sha: string | null;
+  from_v: number | null;
+  from_sha: string | null;
+  editors: HistoryEditor[];
+  whole_file_only: boolean;
+  size: number | null;
+  from_size: number | null;
+  lines: HistoryViewLine[];
+  first_change: number | null;
+}
+
+export interface TurnFile {
+  path: string;
+  kind: 'create' | 'modify' | 'delete';
+  added: number | null;
+  removed: number | null;
+  lines: number | null;
+  /** What undo restores; null when the turn created the file. */
+  before_sha: string | null;
+  turn_sha: string | null;
+  current_sha: string | null;
+  before_size: number | null;
+  turn_size: number | null;
+  /** current_sha === turn_sha: nobody touched it since the turn. */
+  clean: boolean;
+  later_editor: HistoryEditor | null;
+  ambiguous: boolean;
+  whole_file_only: boolean;
+  first_v: number;
+  last_v: number;
+  editor: HistoryEditor;
+}
+
+/** GET /files/history/turn */
+export interface TurnFiles {
+  status: HistoryStatus['status'];
+  reason?: string;
+  session_id: string;
+  session_name?: string | null;
+  from_ts?: string;
+  to_ts?: string | null;
+  files: TurnFile[];
+  no_history: number;
+}
+
+export interface HistoryRestoreItem {
+  path: string;
+  /** Target content; null deletes (a file the turn created). */
+  sha: string | null;
+  /** The current hash the user reviewed; a mismatch is a `conflict`. */
+  expect_sha: string | null;
+  version?: number;
+}
+
+export interface HistoryRestoreResult {
+  path: string;
+  status: 'ok' | 'conflict' | 'busy' | 'refused';
+  current_sha?: string | null;
+  reason?: string;
+  unchanged?: boolean;
+}

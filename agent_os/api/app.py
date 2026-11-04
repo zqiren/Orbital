@@ -498,6 +498,19 @@ def _assemble_app(app: FastAPI, data_dir: str | None) -> FastAPI:
     async def _start_triggers():
         await trigger_manager.start()
 
+    # 6b1. Spec 065: per-file version history. One watcher per project root;
+    # attribution reads the agent manager's running-session predicates.
+    from agent_os.history import FileHistory
+    file_history = FileHistory(project_store, agent_manager.history_candidates)
+    agent_manager._file_history = file_history
+
+    @app.on_event("startup")
+    async def _start_file_history():
+        try:
+            await file_history.start()
+        except Exception:
+            logger.warning("file history failed to start", exc_info=True)
+
     # 6b2. Spec 109 D2: the Windows toolchain grants (spec 077 W1) run here,
     # in a background thread, on every start — no longer in the installer.
     # A toolchain installed after Orbital gets its read grant on the next
@@ -602,6 +615,10 @@ def _assemble_app(app: FastAPI, data_dir: str | None) -> FastAPI:
     async def _stop_triggers():
         await trigger_manager.stop()
 
+    @app.on_event("shutdown")
+    async def _stop_file_history():
+        await file_history.stop()
+
     # Graceful-shutdown contract: drain any pending runtime updates so the
     # last few LLM-call's worth of budget spend lands on disk before exit.
     @app.on_event("shutdown")
@@ -655,6 +672,11 @@ def _assemble_app(app: FastAPI, data_dir: str | None) -> FastAPI:
     # 7b. File browsing routes
     files_v2.configure(project_store, agent_manager=agent_manager, ws_manager=ws_manager)
     app.include_router(files_v2.router)
+
+    # 7b1. File history routes (spec 065)
+    from agent_os.api.routes import history as history_routes
+    history_routes.configure(project_store, agent_manager=agent_manager, file_history=file_history)
+    app.include_router(history_routes.router)
 
     # 7c. Platform routes
     platform_routes.configure(platform_provider, agent_manager=agent_manager, browser_manager=browser_manager)

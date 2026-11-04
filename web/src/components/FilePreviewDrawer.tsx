@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Orbital Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import { ChevronRight, X } from 'lucide-react';
 import type { FileContent } from '../types';
@@ -89,6 +89,20 @@ interface FilePreviewDrawerProps {
   onEscape?: () => void;
   /** Rendered in the content pane INSTEAD of `FilePreview` (the workspace panel). */
   children?: ReactNode;
+  /** Spec 065: the project whose file history the default FilePreview offers. */
+  historyProjectId?: string;
+  /**
+   * Spec 065: the close control. `collapse` (the default) is the panel's
+   * chevron; `close` is a bare × for a sheet that goes away when closed (the
+   * turn undo sheet in the panel slot).
+   */
+  closeIcon?: 'collapse' | 'close';
+  /**
+   * Spec 065: overlay only — stack above the phone's fixed composer (z-60).
+   * For a sheet whose primary action sits at its bottom (the turn undo
+   * sheet); every other overlay keeps its layer.
+   */
+  raised?: boolean;
 }
 
 /**
@@ -114,6 +128,9 @@ export default function FilePreviewDrawer({
   maximized = false,
   onEscape,
   children,
+  historyProjectId,
+  closeIcon = 'collapse',
+  raised = false,
 }: FilePreviewDrawerProps) {
   const t = useT();
   const panelRef = useRef<HTMLDivElement>(null);
@@ -305,8 +322,18 @@ export default function FilePreviewDrawer({
     </div>
   );
 
+  const historyOpts = useMemo(
+    () => (historyProjectId ? { projectId: historyProjectId } : undefined),
+    [historyProjectId],
+  );
   const body = children ?? (
-    <FilePreview fileContent={fileContent} loading={loading} selectedPath={selectedPath} onSave={onSave} />
+    <FilePreview
+      fileContent={fileContent}
+      loading={loading}
+      selectedPath={selectedPath}
+      onSave={onSave}
+      history={historyOpts}
+    />
   );
 
   // ── Docked (spec 078 D13): a real column of ChatTab's grid ────────────────
@@ -319,10 +346,11 @@ export default function FilePreviewDrawer({
         ref={closeBtnRef}
         type="button"
         onClick={onClose}
-        aria-label={t('panel.collapse')}
+        aria-label={closeIcon === 'close' ? t('history.close') : t('panel.collapse')}
+        title={closeIcon === 'close' ? t('history.close') : undefined}
         className="flex items-center justify-center w-7 h-7 shrink-0 rounded-md text-secondary hover:text-primary hover:bg-card-hover transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
       >
-        <ChevronRight size={16} />
+        {closeIcon === 'close' ? <X size={14} /> : <ChevronRight size={16} />}
       </button>
     );
     return (
@@ -368,7 +396,7 @@ export default function FilePreviewDrawer({
       <div
         aria-hidden
         onClick={onClose}
-        className={`absolute inset-0 z-30 bg-black/30 transition-opacity duration-200 ${
+        className={`absolute inset-0 ${raised ? 'z-[65]' : 'z-30'} bg-black/30 transition-opacity duration-200 ${
           open ? 'opacity-100' : 'opacity-0 pointer-events-none'
         }`}
       />
@@ -386,7 +414,7 @@ export default function FilePreviewDrawer({
         onKeyDown={handleTrapTab}
         data-maximized={maximized}
         style={{ '--file-preview-drawer-width': `${drawerWidth}px` } as CSSProperties}
-        className={`absolute z-40 flex flex-col bg-background shadow-xl transition-transform duration-200 ease-out
+        className={`absolute ${raised ? 'z-[70]' : 'z-40'} flex flex-col bg-background shadow-xl transition-transform duration-200 ease-out
           inset-x-0 bottom-0 h-[75%] rounded-t-xl border-t border-border
           md:inset-y-0 md:right-0 md:h-full md:rounded-none md:border-t-0 md:border-l
           ${maximized ? 'md:left-0 md:w-auto md:max-w-none' : 'md:left-auto md:w-[var(--file-preview-drawer-width)] md:max-w-[80%]'}
