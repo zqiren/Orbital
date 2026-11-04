@@ -108,6 +108,9 @@ export interface FilePreviewProps {
    */
   panelHeader?: {
     onBack: () => void;
+    /** Back's label when it does not go back to the file list (the
+     *  Workbench pane's back returns to the chat). Default 返回文件列表. */
+    backLabel?: string;
     /** Spec 137: "Open full width" — maximize the panel on this file.
      *  Absent where the panel cannot maximize (the phone's bottom sheet). */
     onOpenInFiles?: () => void;
@@ -363,12 +366,14 @@ const PREVIEW_REMARK_PLUGINS = [remarkHideHtmlComments];
 function PanelFileHeader({
   fileName,
   onBack,
+  backLabel,
   extras,
   actions,
   menuItems,
 }: {
   fileName: string;
   onBack: () => void;
+  backLabel?: string;
   extras?: ReactNode;
   actions?: ReactNode;
   menuItems: PanelMenuItem[];
@@ -382,8 +387,8 @@ function PanelFileHeader({
       <button
         type="button"
         onClick={onBack}
-        aria-label={t('panel.files.back')}
-        title={t('panel.files.back')}
+        aria-label={backLabel ?? t('panel.files.back')}
+        title={backLabel ?? t('panel.files.back')}
         className="flex items-center justify-center w-7 h-7 shrink-0 rounded-md text-secondary hover:text-primary hover:bg-card-hover transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
       >
         <ChevronLeft size={16} aria-hidden />
@@ -561,6 +566,7 @@ export default function FilePreview({
       <PanelFileHeader
         fileName={name}
         onBack={panelHeader.onBack}
+        backLabel={panelHeader.backLabel}
         extras={headerExtras}
         actions={actions}
         menuItems={menuItems}

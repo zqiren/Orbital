@@ -221,7 +221,7 @@ export default function ChatMessage({ message, agentName, workspace, onOpenPath 
           {/* Dark mode names the agent in its brand colour, lifted toward white
               so it reads on Graphite (palette 1a); light keeps text-secondary. */}
           <span
-            className="text-secondary dark:text-[color-mix(in_srgb,var(--agent-color)_55%,white)]"
+            className="chat-agent-name text-secondary dark:text-[color-mix(in_srgb,var(--agent-color)_55%,white)]"
             style={{ '--agent-color': agentTint(isSubAgent ? message.source : MAIN_AGENT_HANDLE) } as CSSProperties}
           >
             {senderLabel}

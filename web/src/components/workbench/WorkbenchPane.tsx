@@ -23,6 +23,7 @@ import { ArrowRight, Maximize2, Minimize2, X } from 'lucide-react';
 import type { AgentRunStatus, FileContent, Project } from '../../types';
 import { useT } from '../../i18n/useT';
 import { useFiles } from '../../hooks/useFiles';
+import { useCoverWindow } from '../../hooks/useWindowCover';
 import { fetchPathWithFallback } from '../../utils/openPathWithFallback';
 import ChatView from '../ChatView';
 import FilePreview from '../FilePreview';
@@ -58,6 +59,9 @@ export default function WorkbenchPane({
   const [doc, setDoc] = useState<{ session: string; path: string; content: FileContent } | null>(null);
   const shownDoc = doc && doc.session === sessionId ? doc : null;
   const [maximized, setMaximized] = useState(false);
+  // A pinned project list collapses to the strip while the document covers
+  // the window (App, useWindowCover).
+  useCoverWindow(maximized && !!shownDoc);
   const [toast, setToast] = useState<string | null>(null);
   const latestRef = useRef<string | null>(null);
 
@@ -177,7 +181,7 @@ export default function WorkbenchPane({
               loading={false}
               selectedPath={shownDoc.path}
               onSave={(path, content) => saveFileContent(projectId, path, content)}
-              panelHeader={{ onBack: closeDoc }}
+              panelHeader={{ onBack: closeDoc, backLabel: t('workbench.pane.back') }}
               headerExtras={maximizeButton}
               history={{ projectId }}
             />

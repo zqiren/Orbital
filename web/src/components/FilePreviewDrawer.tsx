@@ -8,6 +8,7 @@ import { ChevronRight, X } from 'lucide-react';
 import type { FileContent } from '../types';
 import FilePreview from './FilePreview';
 import { useT } from '../i18n/useT';
+import { useCoverWindow } from '../hooks/useWindowCover';
 
 const FILE_PREVIEW_DRAWER_WIDTH_KEY = 'orbital:filePreviewDrawerWidth';
 /** Docked panel width is remembered separately from the overlay drawer's. */
@@ -138,6 +139,9 @@ export default function FilePreviewDrawer({
   closeLabel,
 }: FilePreviewDrawerProps) {
   const t = useT();
+  // Maximized covers the window except the edge strip: a pinned project list
+  // collapses to the strip meanwhile (App, useWindowCover).
+  useCoverWindow(maximized && (docked || open));
   const panelRef = useRef<HTMLDivElement>(null);
   const closeBtnRef = useRef<HTMLButtonElement>(null);
   const [drawerWidth, setDrawerWidth] = useState(() => readSavedDrawerWidth(docked));

@@ -38,9 +38,9 @@ vi.mock('./ChatView', async () => {
   return { default: ChatViewStub };
 });
 vi.mock('./FilePreview', () => ({
-  default: (props: { selectedPath: string | null; panelHeader?: { onBack: () => void }; headerExtras?: unknown }) => (
+  default: (props: { selectedPath: string | null; panelHeader?: { onBack: () => void; backLabel?: string }; headerExtras?: unknown }) => (
     <div data-testid="file-preview-stub">
-      <button type="button" data-testid="stub-doc-back" onClick={props.panelHeader?.onBack}>back</button>
+      <button type="button" data-testid="stub-doc-back" aria-label={props.panelHeader?.backLabel} onClick={props.panelHeader?.onBack}>back</button>
       <span>{props.selectedPath}</span>
       {props.headerExtras as never}
     </div>
@@ -50,6 +50,7 @@ vi.mock('./FilePreview', () => ({
 import WorkbenchPage from './WorkbenchPage';
 import { __resetWorkbenchFeed, refreshFeed } from '../hooks/useWorkbenchFeed';
 import { __resetCheckedMarks } from '../hooks/useSeenReplies';
+import { getWindowCovered } from '../hooks/useWindowCover';
 import { DRAFT_KEY } from './workbench/sendTask';
 import type { Project, WorkbenchFeedRow } from '../types';
 
@@ -481,6 +482,8 @@ describe('Workbench — reading pane (2026-11-04)', () => {
     fireEvent.click(screen.getByTestId('stub-open-doc'));
     const doc = await screen.findByTestId('wb-pane-doc');
     expect(within(doc).getByTestId('file-preview-stub')).toHaveTextContent('docs/a.md');
+    // The back goes to the chat in the pane: just "Back" (返回), not "Back to files".
+    expect(within(doc).getByTestId('stub-doc-back')).toHaveAttribute('aria-label', 'Back');
     // Over the pane, not a second panel: inside it, and the chat stays mounted.
     expect(pane()!.contains(doc)).toBe(true);
     expect(screen.getAllByTestId('chatview-stub')).toHaveLength(1);
@@ -501,8 +504,11 @@ describe('Workbench — reading pane (2026-11-04)', () => {
     expect(doc.className).not.toContain('panel-max-window');
     fireEvent.click(within(doc).getByTestId('wb-pane-doc-maximize'));
     expect(screen.getByTestId('wb-pane-doc').className).toContain('panel-max-window');
+    // A pinned project list collapses to the strip while this covers the window.
+    expect(getWindowCovered()).toBe(true);
     fireEvent.click(within(screen.getByTestId('wb-pane-doc')).getByTestId('wb-pane-doc-maximize'));
     expect(screen.getByTestId('wb-pane-doc').className).not.toContain('panel-max-window');
+    expect(getWindowCovered()).toBe(false);
   });
 
   it('✓ on the selected card closes the pane with it', async () => {

@@ -2917,3 +2917,50 @@ describe('spec 146: ask rows', () => {
     expect((items[1] as { text: string }).text).toBe('Keep them?');
   });
 });
+
+// A turn can end with no text at all: the reply is the summary of the
+// mark_task_complete call the turn ended with (the verifier's 2026-11-04
+// session; the left-off reader reads the same shape). The capsule keeps the
+// call; the summary renders after it as the agent's reply, in the session's
+// page and in the Workbench pane alike (both are ChatView).
+describe('transformChatHistory — a reply that is only mark_task_complete\'s summary', () => {
+  const SUMMARY = '在 行程.md 写好了五天云南草稿：昆明 → 大理 → 丽江。';
+  const rows = (): ChatMessage[] => [
+    user('写行程'),
+    asst({ content: '我先检查一下工作区。', tool_calls: [tc('r1', 'read', '{"path":"."}')] }),
+    tool('r1', 'AGENTS.md'),
+    asst({ timestamp: TS2, tool_calls: [tc('m1', 'mark_task_complete', JSON.stringify({ summary: SUMMARY }))] }),
+    tool('m1', `Task marked complete: ${SUMMARY}`, TS2),
+  ];
+
+  it('renders the summary as the agent\'s reply, after the capsule that holds the call', () => {
+    const items = transformChatHistory(rows());
+    const last = items[items.length - 1];
+    expect(last).toMatchObject({ type: 'agent_message', content: SUMMARY });
+    const capsule = items[items.length - 2];
+    expect(capsule.type).toBe('agent_run');
+    const names = (capsule as { items: Array<{ type: string; tool_name?: string }> }).items
+      .filter((i) => i.type === 'tool_call_row').map((i) => i.tool_name);
+    expect(names).toContain('mark_task_complete');
+  });
+
+  it('text sent with the call stays the reply; the summary is not added twice', () => {
+    const items = transformChatHistory([
+      user('写行程'),
+      asst({ content: '写好了。', tool_calls: [tc('m1', 'mark_task_complete', JSON.stringify({ summary: SUMMARY }))] }),
+      tool('m1', `Task marked complete: ${SUMMARY}`),
+    ]);
+    const texts = items.filter((i) => i.type === 'agent_message' && (i as { content: string }).content)
+      .map((i) => (i as { content: string }).content);
+    expect(texts).toEqual(['写好了。']);
+  });
+
+  it('an empty summary adds nothing', () => {
+    const items = transformChatHistory([
+      user('写行程'),
+      asst({ tool_calls: [tc('m1', 'mark_task_complete', '{"summary": ""}')] }),
+      tool('m1', 'Task marked complete'),
+    ]);
+    expect(items.some((i) => i.type === 'agent_message' && (i as { content: string }).content)).toBe(false);
+  });
+});

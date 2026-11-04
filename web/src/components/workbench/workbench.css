@@ -193,6 +193,9 @@
 .wb-olink:hover { background: var(--wb-tint); }
 /* The chat itself: the real ChatView, on its own paper. */
 .wb-pbody { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--color-card); }
+/* The chat names the agent in its brand colour in dark mode; in the pane the
+ * name stays the secondary grey, as in light. */
+:root[data-theme="dark"] .wb-pbody .chat-agent-name { color: var(--color-secondary); }
 /* A document opened from the chat comes up over the whole pane (back
  * chevron in its header); full width covers the window (panel-max-window).
  * Above the chat's own layers, the phone's fixed composer (z-60) included. */
@@ -205,7 +208,9 @@
 
 /* Phone: the pane is a bottom sheet over a scrim. It keeps a transform when
  * open, so the chat's fixed composer sits at the sheet's bottom. */
-.wb-scrim { position: absolute; inset: 0; z-index: 40; background: rgb(0 0 0 / .28); animation: wb-fade .2s ease-out; }
+/* One scrim over the whole viewport, the phone header included: a bright
+ * header beside the sheet read as tappable. */
+.wb-scrim { position: fixed; inset: 0; z-index: 40; background: rgb(0 0 0 / .28); animation: wb-fade .2s ease-out; }
 @keyframes wb-fade { from { opacity: 0; } }
 .wb-sheet {
   position: absolute; left: 0; right: 0; bottom: 0; height: 80%; z-index: 41; overflow: hidden;
