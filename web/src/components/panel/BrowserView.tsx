@@ -565,7 +565,11 @@ export default function BrowserView({
           ref={frameAreaRef}
           // Spec 154: App's ⌘0 (go home) skips keys aimed at the agent's page.
           data-browser-live="true"
-          className="relative flex-1 min-h-0 overflow-hidden"
+          // The viewport is a Page card inset in the panel (index.css
+          // .browser-sheet). The canvas is measured from this box's own
+          // client size, so the inset only shrinks the mirror; the agent's
+          // page keeps its size (see paint()).
+          className="browser-sheet relative flex-1 min-h-0 overflow-hidden"
           onKeyDown={handleKeyDown}
           onKeyUp={handleKeyUp}
           onPaste={handlePaste}
@@ -644,7 +648,7 @@ export default function BrowserView({
     return (
       <div ref={wrapperRef} className="flex h-full w-full flex-col">
         {toolbar}
-        <div className="flex flex-1 items-center justify-center overflow-auto bg-sidebar p-2">
+        <div className="browser-sheet flex flex-1 items-center justify-center overflow-auto bg-sidebar p-2">
           <img
             src={fallbackDataUrl}
             alt={fallback?.title ?? ''}

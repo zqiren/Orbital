@@ -8,7 +8,7 @@
  * through SandboxedDocumentFrame, fitted to the page width docx-preview
  * declares on its first section.
  */
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { renderAsync } from 'docx-preview';
 import { sanitizeDocumentHtml } from './documentSanitize';
 import SandboxedDocumentFrame from './SandboxedDocumentFrame';
@@ -18,8 +18,31 @@ import { checkZip } from './zipGuard';
 /** Letter width at 96 dpi, for documents that declare no section width. */
 const DEFAULT_PAGE_PX = 816;
 
-const DOCX_FRAME_CSS =
-  'body{background:#e5e7eb}' +
+/** The desk the pages sit on. The frame is a separate document, so it can't
+ * inherit the app's theme; the colour comes from the `--doc-desk` token on the
+ * app's <html> (index.css), read again when the theme changes.
+ * Without the token (tests, older CSS) it keeps the original grey. */
+const DEFAULT_DESK = '#e5e7eb';
+const SAFE_COLOUR = /^[#a-z0-9(),.%\s/-]+$/i;
+
+function readDesk(): string {
+  if (typeof document === 'undefined') return DEFAULT_DESK;
+  const v = getComputedStyle(document.documentElement).getPropertyValue('--doc-desk').trim();
+  return v && SAFE_COLOUR.test(v) ? v : DEFAULT_DESK;
+}
+
+function useDocDesk(): string {
+  const [desk, setDesk] = useState(readDesk);
+  useEffect(() => {
+    const mo = new MutationObserver(() => setDesk(readDesk()));
+    mo.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+    return () => mo.disconnect();
+  }, []);
+  return desk;
+}
+
+const docxFrameCss = (desk: string) =>
+  `body{background:${desk}}` +
   '.docx-wrapper{background:transparent!important;padding:16px!important}' +
   '.docx-wrapper>section.docx{margin-bottom:16px!important}';
 
@@ -37,6 +60,8 @@ export default function DocxPreview({ bytes, fileName, onNav, onError }: EngineP
   }, [onError]);
 
   const [rendered, setRendered] = useState<{ html: string; pageWidth: number } | null>(null);
+  const desk = useDocDesk();
+  const frameCss = useMemo(() => docxFrameCss(desk), [desk]);
 
   useEffect(() => {
     const guard = checkZip(new Uint8Array(bytes));
@@ -81,7 +106,7 @@ export default function DocxPreview({ bytes, fileName, onNav, onError }: EngineP
       title={fileName}
       html={rendered?.html ?? null}
       pageWidth={rendered?.pageWidth ?? null}
-      frameCss={DOCX_FRAME_CSS}
+      frameCss={frameCss}
       onNav={onNav}
     />
   );

@@ -238,7 +238,7 @@ export default function PdfPreview({ bytes, fileName, onNav, onError }: EnginePr
       ref={scrollerRef}
       onScroll={handleScroll}
       aria-label={fileName}
-      className="absolute inset-0 overflow-auto bg-sidebar"
+      className="doc-desk absolute inset-0 overflow-auto bg-sidebar"
       data-testid="pdf-scroller"
     >
       {password ? (

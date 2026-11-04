@@ -85,7 +85,7 @@
   --color-segment-on: var(--color-card);           /* segmented control "on" chip */
   --color-segment-on-text: var(--color-primary);
   --color-tab-active: var(--color-primary);        /* underline tab: text + rule */
-  --color-bubble: var(--color-sidebar);            /* user chat bubble */
+  --color-bubble: color-mix(in srgb, var(--color-accent) 8%, var(--color-card)); /* user chat bubble: accent-soft (owner, 2026-11-04) */
   --color-bubble-text: var(--color-primary);
   --color-send: var(--color-accent);               /* composer send glyph */
   --color-link: var(--color-accent);               /* link text in markdown */
@@ -219,7 +219,7 @@
   --color-segment-on: rgb(83 154 248 / 0.22);
   --color-segment-on-text: #D6E7FF;
   --color-tab-active: #539AF8;
-  --color-bubble: rgb(83 154 248 / 0.14);
+  --color-bubble: color-mix(in srgb, var(--color-accent) 12%, var(--color-card));
   --color-bubble-text: #E8EAED;
   --color-send: #6FAEFB;
   --color-link: #7DB4FB;
@@ -603,6 +603,25 @@ body {
    the chat's edge, so it casts none until it opens. */
 .float-panel-drawer[aria-hidden="true"] { box-shadow: none; }
 .float-bubble { box-shadow: var(--float-bubble); }
+
+/* Document reading surface ("Page", owner 2026-11-04). Text, markdown and
+   code read on an inset white page, a Float static card inside the panel;
+   PDF and Office pages sit straight on the panel tint. Marker classes in the
+   previews: .doc-sheet (text, markdown and code scroller), .doc-desk (PDF and
+   image scroller). --doc-desk is also read by the DOCX frame (DocxPreview),
+   which cannot inherit the app's CSS. Code wells inside markdown keep their
+   own tint. */
+:root { --doc-desk: var(--color-background); }
+.doc-sheet {
+  margin: 14px; border-radius: 12px; background-color: var(--float-layer); box-shadow: var(--float-shadow);
+}
+.doc-desk { background-color: transparent; }
+/* The Browser view's viewport takes the same Page treatment: an inset white
+   card under the address line, which stays on the panel tint. Only the frame
+   around the mirror changes; the annotation overlay is inset-0 inside it. */
+.browser-sheet {
+  margin: 12px 14px 4px; border-radius: 12px; background-color: var(--float-layer); box-shadow: var(--float-shadow);
+}
 
 /* Markdown content styles for agent messages */
 .markdown-content {
