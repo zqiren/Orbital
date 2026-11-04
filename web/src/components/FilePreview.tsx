@@ -5,6 +5,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type IframeHTMLAttributes,
@@ -31,6 +32,10 @@ import { useDocumentController } from './preview/documentController';
 import type { AnnotationBox } from '../utils/annotations';
 import { revealLabelKey } from '../utils/clientPlatform';
 import { useT } from '../i18n/useT';
+import { api } from '../config';
+import { fileContentPath } from '../hooks/useFiles';
+import { useHistoryPanel } from './history/useHistoryPanel';
+import { bumpFileHistory, SETTLE_MS } from '../hooks/useFileHistory';
 
 export interface FilePreviewProps {
   fileContent: FileContent | null;
@@ -87,6 +92,15 @@ export interface FilePreviewProps {
    * omit it and nothing renders.
    */
   onReveal?: (path: string) => void;
+  /**
+   * Spec 065 — per-file version history. With it, once the project has a
+   * recorded change, the header carries the 历史 glyph and the body can show
+   * the history column and a version's tinted view (a third mode beside
+   * rendered/source and edit). Without it, or before the first change (D10),
+   * the pane renders exactly as before. `onChanged` is told after a restore
+   * rewrote the file so the parent re-reads it.
+   */
+  history?: { projectId: string; onChanged?: () => void };
 }
 
 // Defense-in-depth CSP for the HTML preview iframe (spec 003 §0.1). The
@@ -372,6 +386,7 @@ export default function FilePreview({
   panelHeader,
   headerExtras,
   onReveal,
+  history,
 }: FilePreviewProps) {
   const t = useT();
   const [copied, setCopied] = useState(false);
@@ -459,6 +474,42 @@ export default function FilePreview({
   // Spec 090 x 088: a document engine's navigation + download, lifted so the
   // panel header row can host them. A hook, so it sits before the early returns.
   const docController = useDocumentController();
+
+  // Spec 065: the history mode. After a restore the parent re-reads the file
+  // when it can; otherwise the text view re-reads it here and shows it through
+  // the same override a save uses, so no surface keeps the replaced text.
+  const fileContentRef = useRef(fileContent);
+  useEffect(() => {
+    fileContentRef.current = fileContent;
+  });
+  const historyProjectId = history?.projectId;
+  const historyOnChanged = history?.onChanged;
+  const historyOpts = useMemo(
+    () =>
+      historyProjectId
+        ? {
+            projectId: historyProjectId,
+            onChanged: () => {
+              if (historyOnChanged) {
+                historyOnChanged();
+                return;
+              }
+              const held = fileContentRef.current;
+              if (!held) return;
+              void api<FileContent>(fileContentPath(historyProjectId, held.path)).then(
+                (next) => {
+                  if (next && typeof next.content === 'string' && fileContentRef.current === held) {
+                    setSavedOverride({ over: held.content, text: next.content });
+                  }
+                },
+                () => {},
+              );
+            },
+          }
+        : undefined,
+    [historyProjectId, historyOnChanged],
+  );
+  const hist = useHistoryPanel(historyOpts, selectedPath);
 
   // Spec 088: in the docked panel every state below, loading and error
   // included, leads with the one contextual header row. Nothing in the Files tab.
@@ -711,6 +762,7 @@ export default function FilePreview({
           renderPanelHeader(
             fileName,
             <>
+              {hist.glyph}
               <DocumentNav nav={docController.nav} compact />
               <span
                 role="img"
@@ -728,20 +780,24 @@ export default function FilePreview({
           <div className="px-4 py-3 border-b border-border flex items-center justify-between">
             <h3 className="font-semibold text-sm text-primary truncate">{fileName}</h3>
             <div className="flex items-center gap-2 ml-2 shrink-0">
+              {hist.glyph}
               <span className="text-xs text-secondary">{formatSize(fileContent.size)}</span>
               {revealButton}
             </div>
           </div>
         )}
-        <div className="flex-1 min-h-0">
-          {quoting && onQuote ? (
-            <QuoteRegion source="" exact={false} path={quotePath} onQuote={onQuote} className="h-full">
-              {documentBody}
-            </QuoteRegion>
-          ) : (
-            documentBody
-          )}
-        </div>
+        {hist.wrap(
+          <div className="flex-1 min-h-0">
+            {quoting && onQuote ? (
+              <QuoteRegion source="" exact={false} path={quotePath} onQuote={onQuote} className="h-full">
+                {documentBody}
+              </QuoteRegion>
+            ) : (
+              documentBody
+            )}
+          </div>,
+          false,
+        )}
       </div>
     );
   }
@@ -778,6 +834,7 @@ export default function FilePreview({
           renderPanelHeader(
             fileName,
             <>
+              {hist.glyph}
               <span className="text-xs text-secondary shrink-0 @max-[24rem]:hidden">
                 {formatSize(fileContent.size)}
               </span>
@@ -798,6 +855,7 @@ export default function FilePreview({
           <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-2">
             <h3 className="font-semibold text-sm text-primary truncate">{fileName}</h3>
             <div className="flex items-center gap-2 shrink-0">
+              {hist.glyph}
               <span className="text-xs text-secondary">{formatSize(fileContent.size)}</span>
               {renderedSourceToggle('flex items-center rounded-md border border-border overflow-hidden')}
               <button
@@ -816,7 +874,7 @@ export default function FilePreview({
             <p className="text-xs text-secondary">{t('fileExplorer.truncated')}</p>
           </div>
         )}
-        {showSource ? (
+        {hist.wrap(showSource ? (
           // Spec 105: the scroller owns the background; the <pre> sizes to
           // its content (see TEXT_SCROLLER_CLASS).
           quoting && onQuote ? (
@@ -853,7 +911,7 @@ export default function FilePreview({
               {...({ csp: HTML_IFRAME_CSP } as unknown as IframeHTMLAttributes<HTMLIFrameElement>)}
             />
           </div>
-        )}
+        ), false)}
       </div>
     );
   }
@@ -867,6 +925,7 @@ export default function FilePreview({
   const viewContent = override ?? fileContent.content;
 
   const handleStartEdit = () => {
+    hist.close();
     setDraft(viewContent);
     setSaveError(false);
     setEditView('write');
@@ -882,6 +941,8 @@ export default function FilePreview({
     setSaving(true);
     setSaveError(false);
     const ok = await onSave(fileContent.path, draft);
+    // Spec 065: a Files panel save is a version (attributed to the user).
+    if (ok && historyProjectId) bumpFileHistory(historyProjectId, { again: SETTLE_MS });
     if (ok) {
       // Reflect the save locally (parent doesn't re-fetch) and exit edit mode.
       setSavedOverride({ over: fileContent.content, text: draft });
@@ -979,6 +1040,7 @@ export default function FilePreview({
     </>
   ) : (
     <>
+      {hist.glyph}
       {editButton}
       {tooLargeHint('shrink-0 text-xs text-secondary opacity-70 @max-[24rem]:hidden')}
       <span role="status" className="shrink-0 text-xs text-secondary empty:hidden">
@@ -1010,6 +1072,7 @@ export default function FilePreview({
               </>
             ) : (
               <>
+                {hist.glyph}
                 {editButton}
                 {tooLargeHint('text-xs text-secondary opacity-70')}
                 <button
@@ -1052,7 +1115,7 @@ export default function FilePreview({
           />
         )
       ) : (
-        (() => {
+        hist.wrap((() => {
           const body = isMarkdown ? (
             <div className="p-4">
               <MarkdownContent content={viewContent} remarkPlugins={PREVIEW_REMARK_PLUGINS} />
@@ -1078,7 +1141,7 @@ export default function FilePreview({
               {body}
             </QuoteRegion>
           );
-        })()
+        })(), isMarkdown, PREVIEW_REMARK_PLUGINS)
       )}
     </div>
   );

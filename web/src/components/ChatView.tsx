@@ -73,6 +73,9 @@ import type { StringKey } from '../i18n/strings';
 import type { BuiltinSkillKey } from '../route';
 import { publishSessionMessages, sessionMessagesKey } from '../utils/sessionMessagesStore';
 import { budgetTimelineText } from '../budget/timelineText';
+import TurnChangedLine from './history/TurnChangedLine';
+import { lastCapsuleOfTurns, stripFileEditCounts } from './history/historyModel';
+import { requestHistoryFocus, useCapsuleTurn, useSeenOnce } from '../hooks/useFileHistory';
 
 type AgentRunItem = Extract<DisplayItem, { type: 'agent_run' }>;
 type CapsuleChild = AgentRunItem['items'][number];
@@ -133,7 +136,11 @@ function formatDuration(startedAt: number, endedAt: number | null, tr: CapsuleTr
   return rs ? `${m}m ${rs}s` : `${m}m`;
 }
 
-export function capsuleSummaryText(capsule: AgentRunItem, tr: CapsuleTr = EN_CAPSULE): string {
+export function capsuleSummaryText(
+  capsule: AgentRunItem,
+  tr: CapsuleTr = EN_CAPSULE,
+  opts: { stripFileEdits?: boolean } = {},
+): string {
   // Spec 124 §3.7 follow-up: the tidy pass's capsule says what the pass did
   // (counts from the row, not a tool breakdown) and carries no duration —
   // the row is a one-line report, not a timed step.
@@ -145,7 +152,14 @@ export function capsuleSummaryText(capsule: AgentRunItem, tr: CapsuleTr = EN_CAP
     }
     return tr('chat.capsule.memoryTidy', { archived: t.archived, restored: t.restored });
   }
-  const breakdown = formatToolBreakdown(capsule.tool_call_count_by_name);
+  // Spec 065 §5.9: on a turn's last capsule whose turn changed files, the
+  // changed-files line under it says what was written (shell and worker
+  // writes included), so the breakdown drops its own file-writing counts.
+  const breakdown = formatToolBreakdown(
+    opts.stripFileEdits
+      ? stripFileEditCounts(capsule.tool_call_count_by_name)
+      : capsule.tool_call_count_by_name,
+  );
   const dur = formatDuration(capsule.started_at, capsule.ended_at, tr);
   // Spec 112 A6: the memory record turn's capsule says what it is.
   const head = capsule.memory_record
@@ -458,6 +472,19 @@ interface AgentRunCapsuleProps {
   derivedStatus: AgentRunItem['status'];
   isExpanded: boolean;
   onToggle: (capsuleId: string) => void;
+  /**
+   * Spec 065 §5.9 — set on a turn's LAST capsule only: the turn's span (from
+   * its user row to the next) and whether it has ended. The capsule then
+   * asks the history turn route what the turn changed and, when it changed
+   * something, shows the changed-files line. Primitives, so memo holds.
+   */
+  projectId?: string;
+  sessionId?: string;
+  turnFrom?: string;
+  turnTo?: string | null;
+  turnEnded?: boolean;
+  onUndoTurn?: (turn: { sessionId: string; fromTs: string; toTs: string | null }) => void;
+  onOpenHistory?: (path: string, v: number) => void;
 }
 
 const AgentRunCapsule = memo(function AgentRunCapsule({
@@ -465,13 +492,23 @@ const AgentRunCapsule = memo(function AgentRunCapsule({
   derivedStatus,
   isExpanded,
   onToggle,
+  projectId,
+  sessionId,
+  turnFrom,
+  turnTo = null,
+  turnEnded = false,
+  onUndoTurn,
+  onOpenHistory,
 }: AgentRunCapsuleProps): React.ReactNode {
   const t = useT();
   const isLocked = derivedStatus === 'running';
-  const summary = capsuleSummaryText({ ...item, status: derivedStatus }, t);
+  const [seenRef, seen] = useSeenOnce<HTMLDivElement>();
+  const turn = useCapsuleTurn(projectId, sessionId, turnFrom, turnTo, turnEnded && !isLocked, seen);
+  const summary = capsuleSummaryText({ ...item, status: derivedStatus }, t, { stripFileEdits: turn !== null });
   const Chevron = isExpanded ? ChevronDown : ChevronRight;
   return (
     <div
+      ref={seenRef}
       data-testid="agent_run"
       data-capsule-id={item.capsule_id}
       data-capsule-status={derivedStatus}
@@ -491,6 +528,13 @@ const AgentRunCapsule = memo(function AgentRunCapsule({
         )}
         <span className="truncate text-primary font-medium">{summary}</span>
       </button>
+      {turn && sessionId && turnFrom && (
+        <TurnChangedLine
+          turn={turn}
+          onUndo={onUndoTurn ? () => onUndoTurn({ sessionId, fromTs: turnFrom, toTs: turnTo }) : undefined}
+          onOpenFile={onOpenHistory}
+        />
+      )}
       {isExpanded && item.items.length > 0 && (
         <div className="mt-2 pt-2 border-t border-border/30">
           {item.items.map((child, ci) => {
@@ -792,6 +836,12 @@ interface ChatViewProps {
   onRefreshProject?: (id: string) => void;
   /** Open another session of this project (the left-off cards, spec 138). */
   onOpenSession?: (sessionId: string) => void;
+  /**
+   * Spec 065 §5.9 — open the reviewable undo sheet for one turn (ChatTab puts
+   * it in the docked panel slot, a bottom sheet on the phone). Absent: the
+   * changed-files line shows no undo glyph.
+   */
+  onUndoTurn?: (turn: { sessionId: string; fromTs: string; toTs: string | null }) => void;
 }
 
 interface StreamState {
@@ -836,7 +886,7 @@ interface PendingApproval {
   reason?: string;
 }
 
-export default function ChatView({ projectId, project, agentStatus, statusTick, agents, sessionId, initialAskReply, initialDraft, initialSkill, onDraftConsumed, onRefreshProject, onOpenSession }: ChatViewProps) {
+export default function ChatView({ projectId, project, agentStatus, statusTick, agents, sessionId, initialAskReply, initialDraft, initialSkill, onDraftConsumed, onRefreshProject, onOpenSession, onUndoTurn }: ChatViewProps) {
   const t = useT();
   const { locale } = useLocale();
   // Chrome-only translator for the annotation chip's fallback label (the
@@ -909,6 +959,15 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       return next;
     });
   }, []);
+  // Spec 065 §5.9: a path chip on the changed-files line opens that file
+  // with its history column on the turn's version.
+  const handleOpenHistory = useCallback(
+    (path: string, v: number) => {
+      requestHistoryFocus(projectId, path, v);
+      onOpenPath?.(path);
+    },
+    [projectId, onOpenPath],
+  );
   // Seeded from initialDraft (Workbench prefill doorway) so it's visible on
   // the very first paint — useState's initializer runs once, at mount, so
   // this cannot re-apply on a later re-render with a changed prop.
@@ -1316,6 +1375,14 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   const viewedSessionIsHolder =
     sessionId !== undefined && sessionId === holderSessionId;
   const isActivelyRunning = viewedSessionIsHolder && agentStatus === 'running';
+  // Spec 065 §5.9: the open turn of the viewed session has not ended while
+  // it holds the slot mid-run (waiting on a worker or an approval counts):
+  // its changed-files line would still be growing.
+  const turnInFlight =
+    viewedSessionIsHolder &&
+    (agentStatus === 'running' || agentStatus === 'waiting' || agentStatus === 'pending_approval');
+  // Each turn's last capsule → the turn's span (user row to next user row).
+  const turnSpans = useMemo(() => lastCapsuleOfTurns(items), [items]);
   // Spec 096: `showThinking` is set per project (the status is project-wide
   // and this instance outlives session switches), so it only ever renders on
   // the holder. Holder, not isActivelyRunning: the spinner stays through the
@@ -4208,6 +4275,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
               const isExpanded =
                 derivedStatus === 'running' ||
                 expandedCapsules.has(item.capsule_id);
+              const span = turnSpans.get(item.capsule_id);
               rendered = (
                 <AgentRunCapsule
                   key={`run-${item.capsule_id}`}
@@ -4215,6 +4283,17 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                   derivedStatus={derivedStatus}
                   isExpanded={isExpanded}
                   onToggle={toggleCapsule}
+                  {...(span && sessionId
+                    ? {
+                        projectId,
+                        sessionId,
+                        turnFrom: span.fromTs,
+                        turnTo: span.toTs,
+                        turnEnded: span.toTs !== null || !turnInFlight,
+                        onUndoTurn,
+                        onOpenHistory: handleOpenHistory,
+                      }
+                    : {})}
                 />
               );
             } else if (item.type === 'agent_notify') {

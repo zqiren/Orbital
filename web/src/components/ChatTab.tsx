@@ -67,6 +67,9 @@ import FilesView from './panel/FilesView';
 import BrowserView from './panel/BrowserView';
 import PanelHandle from './panel/PanelHandle';
 import FileExplorer from './FileExplorer';
+import TurnUndoSheet, { type TurnRef } from './history/TurnUndoSheet';
+import { bumpFileHistory, requestHistoryFocus, SETTLE_MS } from '../hooks/useFileHistory';
+import { useT } from '../i18n/useT';
 
 /**
  * Statuses that mean "a turn is in flight". `pending_approval` counts: the
@@ -146,6 +149,7 @@ export default function ChatTab({
   projects,
 }: ChatTabProps) {
   const projectId = project.project_id;
+  const t = useT();
   const { sessions } = useSessions(projectId);
   const { activeSessionId, setActiveSessionId } = useSession(projectId);
   const { selectSession } = useSessionNav(projectId, setRoute);
@@ -280,9 +284,61 @@ export default function ChatTab({
     if (!running && wasRunningRef.current) {
       historyStaleRef.current = true;
       onRunEnd();
+      // Spec 065: the turn may have recorded versions (the watcher settles
+      // shell and worker writes a moment later, hence the second read).
+      bumpFileHistory(projectId, { again: SETTLE_MS });
     }
     wasRunningRef.current = running;
-  }, [agentStatus, onRunStart, onRunEnd]);
+  }, [agentStatus, onRunStart, onRunEnd, projectId]);
+
+  // ── Spec 065 §5.9: the turn undo sheet ─────────────────────────────────
+  // Opened from a turn's changed-files line. It takes the docked panel's
+  // slot while open (the panel's own state is untouched and comes back on
+  // close), and the drawer's bottom sheet below the dock threshold.
+  // Stored with its session key, so a session switch drops it by derivation.
+  const [heldUndo, setHeldUndo] = useState<{ key: string; turn: TurnRef } | null>(null);
+  const undoTurn = heldUndo && heldUndo.key === sessionKey ? heldUndo.turn : null;
+  const setUndoTurn = useCallback(
+    (turn: TurnRef | null) => setHeldUndo(turn ? { key: sessionKey, turn } : null),
+    [sessionKey],
+  );
+  const [undoToast, setUndoToast] = useState<{ text: string; undo: () => Promise<void> } | null>(null);
+  useEffect(() => {
+    if (!undoToast) return;
+    const id = setTimeout(() => setUndoToast(null), 6000);
+    return () => clearTimeout(id);
+  }, [undoToast]);
+  const closeUndo = useCallback(() => setUndoTurn(null), [setUndoTurn]);
+  const handleUndoView = useCallback(
+    (path: string, v: number) => {
+      setUndoTurn(null);
+      requestHistoryFocus(projectId, path, v);
+      setRoute((prev) =>
+        prev.name === 'project' && prev.projectId === projectId ? { ...prev, previewPath: path } : prev,
+      );
+    },
+    [projectId, setRoute, setUndoTurn],
+  );
+  const handleUndoRestored = useCallback(
+    (n: number, undo: () => Promise<void>, done: boolean) => {
+      if (done) setUndoTurn(null);
+      setUndoToast({
+        text: n === 1 ? t('turn.restoredN.one', { n }) : t('turn.restoredN.other', { n }),
+        undo,
+      });
+    },
+    [t, setUndoTurn],
+  );
+  const undoSheet = undoTurn && (
+    <TurnUndoSheet
+      key={`${undoTurn.sessionId}|${undoTurn.fromTs}`}
+      projectId={projectId}
+      turn={undoTurn}
+      onView={handleUndoView}
+      onRestored={handleUndoRestored}
+    />
+  );
+  const undoTitle = <span className="text-[15px] font-semibold text-primary">{t('turn.sheetTitle')}</span>;
 
   const clearPreviewPath = useCallback(() => {
     setRoute((prev) =>
@@ -524,6 +580,7 @@ export default function ChatTab({
             onDraftConsumed={handleDraftConsumed}
             onRefreshProject={onRefreshProject}
             onOpenSession={selectSession}
+            onUndoTurn={setUndoTurn}
           />
         </div>
       </div>
@@ -531,7 +588,20 @@ export default function ChatTab({
           edge handle when collapsed. Only above the push threshold. Spec
           137: a full-height sibling with a left edge only; maximized, it
           takes the whole right area (the project column stays). */}
-      {docked &&
+      {docked && undoTurn ? (
+        <FilePreviewDrawer
+          docked
+          open
+          selectedPath={null}
+          fileContent={null}
+          loading={false}
+          onClose={closeUndo}
+          header={undoTitle}
+          closeIcon="close"
+        >
+          {undoSheet}
+        </FilePreviewDrawer>
+      ) : docked &&
         (panelExpanded ? (
           <FilePreviewDrawer
             docked
@@ -566,6 +636,39 @@ export default function ChatTab({
         >
           {overlayUsed ? panelBody : <div />}
         </FilePreviewDrawer>
+      )}
+      {!docked && (
+        <FilePreviewDrawer
+          open={undoTurn !== null}
+          selectedPath={null}
+          fileContent={null}
+          loading={false}
+          onClose={closeUndo}
+          header={undoTitle}
+          raised
+        >
+          {undoSheet ?? <div />}
+        </FilePreviewDrawer>
+      )}
+      {undoToast && (
+        <div
+          role="status"
+          data-testid="turn-undo-toast"
+          className="fixed bottom-[22px] left-1/2 z-50 flex -translate-x-1/2 items-center gap-3 whitespace-nowrap rounded-[10px] bg-[#18181B] py-2 pl-3.5 pr-2 text-[12.5px] text-white shadow-[0_10px_30px_rgb(0_0_0/0.25)] dark:bg-[#F4F6F9] dark:text-[#18181B]"
+        >
+          <span>{undoToast.text}</span>
+          <button
+            type="button"
+            onClick={() => {
+              const { undo } = undoToast;
+              setUndoToast(null);
+              void undo();
+            }}
+            className="rounded-md px-2 py-[3px] font-medium text-[#8DBBFB] dark:text-[#2A6FD6]"
+          >
+            {t('history.undo')}
+          </button>
+        </div>
       )}
     </div>
   );

@@ -388,6 +388,7 @@ export default function ProjectDetail({
         loading={previewLoading}
         onClose={handleClosePreview}
         onSave={(path, content) => saveFileContent(project.project_id, path, content)}
+        historyProjectId={project.project_id}
       />
       {previewToast && (
         <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-lg bg-primary text-background text-[13px] shadow-lg max-w-[90%] text-center pointer-events-none">

@@ -71,6 +71,10 @@ let chatLatestResponse: unknown[] = [];
 const projectPutCalls: Array<{ path: string; body: unknown }> = [];
 // Spec 132: GET /projects/{pid}/skill-catalog (the `/` skill picker).
 let skillCatalogResponse: unknown[] = [];
+// Spec 065: GET /files/history/status and /files/history/turn. null = the
+// route answers like every unknown path (an empty list), i.e. no history.
+let historyStatusResponse: unknown = null;
+let historyTurnResponse: unknown = null;
 
 vi.mock('../config', () => ({
   api: vi.fn(async (path: string, opts?: { method?: string; body?: string }) => {
@@ -96,6 +100,8 @@ vi.mock('../config', () => ({
     if (!opts?.method && path.includes('/skill-catalog')) {
       return skillCatalogResponse;
     }
+    if (path.includes('/files/history/status') && historyStatusResponse) return historyStatusResponse;
+    if (path.includes('/files/history/turn') && historyTurnResponse) return historyTurnResponse;
     // run-status returns the configured slot holder so ChatView can decide
     // whether the viewed session is the holder.
     if (path.includes('/run-status')) {
@@ -297,6 +303,7 @@ vi.mock('./ChatMessage', async (importOriginal) => {
   return { ...actual, default: CountingChatMessage };
 });
 
+import { __resetFileHistoryStores } from '../hooks/useFileHistory';
 import ChatView, {
   appendLiveReasoning,
   __clearChatHistoryCacheForTests,
@@ -362,6 +369,9 @@ beforeEach(() => {
   chatLatestResponse = [];
   projectPutCalls.length = 0;
   skillCatalogResponse = [];
+  historyStatusResponse = null;
+  historyTurnResponse = null;
+  __resetFileHistoryStores();
   __clearSkillCatalogCacheForTests();
   chatInitialResponse = { data: [], total: 0 };
   chatOlderResponse = { data: [], total: 0 };
@@ -5401,5 +5411,128 @@ describe('ChatView: the / skill picker (spec 132)', () => {
     await type('/n');
     expect(optionNames()).toEqual([]);
     expect(container.textContent ?? '').not.toContain('Start a fresh session');
+  });
+});
+
+
+// ─── Spec 065 §5.9: a turn's changed files under its last capsule ─────────
+
+describe('ChatView: changed-files line (spec 065)', () => {
+  const turnFile = (path: string, over: Record<string, unknown> = {}) => ({
+    path, kind: 'modify', added: 2, removed: 1, lines: 3,
+    before_sha: `b-${path}`, turn_sha: `t-${path}`, current_sha: `t-${path}`,
+    before_size: 10, turn_size: 12, clean: true, later_editor: null, ambiguous: false,
+    whole_file_only: false, first_v: 2, last_v: 3,
+    editor: { v: 3, ts: TS3, kind: 'tool', agents: ['orbital'], ambiguous: false, session_id: 's1', session_name: 'x', neutral: false },
+    ...over,
+  });
+
+  function seedTurn() {
+    chatInitialResponse = {
+      data: [
+        { role: 'user', content: 'edit the notes', source: 'user', timestamp: TS },
+        {
+          role: 'assistant', content: null, source: 'management', timestamp: TS2,
+          tool_calls: [tc('c1', 'edit', '{"path":"notes.md"}'), tc('c2', 'read', '{"path":"a.txt"}'), tc('c3', 'edit', '{"path":"b.md"}')],
+        },
+        { role: 'tool', content: 'ok', source: 'management', timestamp: TS3, tool_call_id: 'c1' },
+        { role: 'tool', content: 'ok', source: 'management', timestamp: TS3, tool_call_id: 'c2' },
+        { role: 'tool', content: 'ok', source: 'management', timestamp: TS3, tool_call_id: 'c3' },
+        { role: 'assistant', content: 'Done.', source: 'management', timestamp: TS4 },
+      ],
+      total: 6,
+    };
+  }
+
+  it('an untouched project (no recorded change) keeps the capsule exactly as before and asks for no turn (D10)', async () => {
+    seedTurn();
+    historyStatusResponse = { status: 'watching', has_changes: false };
+    historyTurnResponse = { status: 'watching', session_id: 's1', files: [turnFile('notes.md')], no_history: 0 };
+    await renderChat({ agentStatus: 'idle', sessionId: 's1' });
+    await flushEffects();
+    await flushEffects();
+    expect(container.querySelector('[data-testid="turn-changed-line"]')).toBeNull();
+    expect(container.querySelector('[data-testid="agent_run"]')?.textContent).toContain('2 edits, read');
+    expect(apiCalls.some((p) => p.includes('/files/history/turn'))).toBe(false);
+  });
+
+  it('shows 改了 N 个文件 from the turn route and drops only the file-writing counts', async () => {
+    seedTurn();
+    historyStatusResponse = { status: 'watching', has_changes: true };
+    // Three files: the shell wrote one the tool counts never saw.
+    historyTurnResponse = {
+      status: 'watching', session_id: 's1',
+      files: [turnFile('notes.md'), turnFile('b.md'), turnFile('out/report.txt')],
+      no_history: 0,
+    };
+    await renderChat({ agentStatus: 'idle', sessionId: 's1' });
+    await flushEffects();
+    await flushEffects();
+    const line = container.querySelector('[data-testid="turn-changed-line"]');
+    expect(line?.textContent).toContain('Changed 3 files');
+    expect(line?.textContent).toContain('report.txt');
+    const summary = container.querySelector('[data-testid="agent_run"] button span.truncate')?.textContent ?? '';
+    expect(summary).toContain('read');
+    expect(summary).not.toContain('edit');
+    const turnCall = apiCalls.find((p) => p.includes('/files/history/turn'))!;
+    expect(turnCall).toContain('session_id=s1');
+    expect(decodeURIComponent(turnCall)).toContain(`from_ts=${TS}`);
+  });
+
+  it('memory files are Orbital bookkeeping: not counted, no chip; a memory-only turn shows no line', async () => {
+    seedTurn();
+    historyStatusResponse = { status: 'watching', has_changes: true };
+    historyTurnResponse = {
+      status: 'watching', session_id: 's1',
+      files: [turnFile('notes.md'), turnFile('orbital/PROJECT_STATE.md'), turnFile('orbital/INDEX.md', { kind: 'create', before_sha: null })],
+      no_history: 0,
+    };
+    await renderChat({ agentStatus: 'idle', sessionId: 's1' });
+    await flushEffects();
+    await flushEffects();
+    const line = container.querySelector('[data-testid="turn-changed-line"]');
+    expect(line?.textContent).toContain('Changed 1 file');
+    expect(line?.textContent).not.toContain('PROJECT_STATE');
+    expect(line?.textContent).not.toContain('INDEX');
+  });
+
+  it('a turn that only touched memory keeps the capsule as it was', async () => {
+    seedTurn();
+    historyStatusResponse = { status: 'watching', has_changes: true };
+    historyTurnResponse = { status: 'watching', session_id: 's1', files: [turnFile('orbital/PROJECT_STATE.md')], no_history: 0 };
+    await renderChat({ agentStatus: 'idle', sessionId: 's1' });
+    await flushEffects();
+    await flushEffects();
+    expect(container.querySelector('[data-testid="turn-changed-line"]')).toBeNull();
+    expect(container.querySelector('[data-testid="agent_run"]')?.textContent).toContain('2 edits, read');
+  });
+
+  it('no line while the turn is still running (the list would still grow)', async () => {
+    seedTurn();
+    runStatusHolder = 's1';
+    historyStatusResponse = { status: 'watching', has_changes: true };
+    historyTurnResponse = { status: 'watching', session_id: 's1', files: [turnFile('notes.md')], no_history: 0 };
+    await renderChat({ agentStatus: 'running', sessionId: 's1' });
+    await flushEffects();
+    await flushEffects();
+    expect(container.querySelector('[data-testid="turn-changed-line"]')).toBeNull();
+  });
+
+  it('the undo glyph hands the turn span to the parent', async () => {
+    seedTurn();
+    historyStatusResponse = { status: 'watching', has_changes: true };
+    historyTurnResponse = { status: 'watching', session_id: 's1', files: [turnFile('notes.md')], no_history: 0 };
+    const onUndoTurn = vi.fn();
+    await act(async () => {
+      root.render(
+        <ChatView projectId="p1" project={project} agentStatus={'idle' as never} agents={[]} sessionId="s1" onUndoTurn={onUndoTurn} />,
+      );
+    });
+    await flushEffects();
+    await flushEffects();
+    const undo = container.querySelector('[data-testid="turn-undo"]') as HTMLButtonElement;
+    expect(undo.getAttribute('aria-label')).toBe("Undo this turn's changes");
+    await act(async () => undo.click());
+    expect(onUndoTurn).toHaveBeenCalledWith({ sessionId: 's1', fromTs: TS, toTs: null });
   });
 });
