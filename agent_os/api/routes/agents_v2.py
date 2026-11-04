@@ -670,15 +670,22 @@ def _pin_fields(project: dict) -> dict:
     default = project.get("default_pinned_target") or None
     if _agent_manager is None or not pid:
         return {"manager_ready": False, "default_pinned_target": default,
-                "effective_pinned_target": None}
+                "effective_pinned_target": None, "available_workers": []}
     try:
         ready = bool(_agent_manager.manager_ready(pid))
         effective = _agent_manager.effective_pinned_target(pid, ready=ready)
     except Exception:
         logger.warning("pin fields failed for %s", pid, exc_info=True)
         ready, effective = False, None
+    # Spec 153 §4.4: the workers a pinned send could reach (the pin
+    # switcher's list); the private-notes card needs two of them.
+    try:
+        workers = list(_agent_manager.available_worker_slugs(pid, project=project) or [])
+    except Exception:
+        logger.warning("available workers failed for %s", pid, exc_info=True)
+        workers = []
     return {"manager_ready": ready, "default_pinned_target": default,
-            "effective_pinned_target": effective}
+            "effective_pinned_target": effective, "available_workers": workers}
 
 
 async def _warm_agent_status() -> None:
@@ -964,8 +971,16 @@ def _seed_new_project(pid: str) -> None:
 async def _ensure_seeded(project_id: str) -> None:
     """First use of a deferred-seed project (spec 138): write its AGENTS.md
     and ``orbital/`` now, then start the queue dispatcher that creation
-    skipped. A no-op for every other project; never raises."""
-    if not ensure_project_seeded(_project_store, project_id):
+    skipped. A no-op for every other project; never raises.
+
+    Spec 153: the seed also folds the agent's private notes (up to a few
+    hundred file copies), so it runs in a worker thread; it takes its own
+    lock. The history scanner's notes list feeds it when the scan is done."""
+    from agent_os.api.routes import onboarding as onboarding_routes
+
+    seeded = await asyncio.to_thread(ensure_project_seeded, _project_store, project_id,
+                                     scanner=onboarding_routes._scanner)
+    if not seeded:
         return
     project = _project_store.get_project(project_id) or {}
     try:
@@ -2705,7 +2720,12 @@ async def new_session(project_id: str, req: SessionScopedRequest | None = None):
 
     The ``session_created`` telemetry emit lives in ``new_session()`` itself
     (spec 063 §3), not here — a route handler only ever measures one of the
-    four callers."""
+    four callers.
+
+    Spec 153: opening a new session is a first use of an imported project
+    (the wizard and the import dialog land here), so the deferred seed runs
+    first — its private-notes fold must be done before that first screen."""
+    await _ensure_seeded(project_id)
     result = await _agent_manager.new_session(
         project_id, session_id=(req.session_id if req else None),
     )

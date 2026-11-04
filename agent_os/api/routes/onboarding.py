@@ -75,8 +75,12 @@ def _report_scan(scanner) -> None:
     from agent_os import telemetry
     from agent_os.telemetry.rollup import history_bucket
 
+    status = scanner.status()
     telemetry.emit("history_sessions_bucket",
-                   {"bucket": history_bucket(scanner.status()["sessions_total"])})
+                   {"bucket": history_bucket(status["sessions_total"])})
+    # Spec 153 §4.5: the private-notes count each agent's wizard row shows.
+    for agent, n in (status.get("notes_by_agent") or {}).items():
+        telemetry.emit("notes_found", {"agent": agent, "n": int(n)})
     if _setup_engine is not None:
         try:
             n = sum(1 for s in _setup_engine.check_all()
@@ -157,7 +161,8 @@ async def importable_projects():
     if analysis is not None:
         try:
             candidates = candidates_from_analysis(
-                analysis, vaults=candidates, existing_workspaces=_existing_workspaces())
+                analysis, vaults=candidates, existing_workspaces=_existing_workspaces(),
+                notes=scanner.notes())
         except Exception:
             logger.exception("importable-projects: rows from the history scan failed")
     try:
@@ -209,7 +214,11 @@ async def _create_imported(folder: str, members: list[dict]) -> dict:
     req = agents_v2.CreateProjectRequest(
         name=os.path.basename(os.path.normpath(folder)) or folder,
         workspace=folder, auto_unique_name=True)
-    extra = {"imported_sessions": members} if members else None
+    from agent_os.onboarding.deferred_seed import IMPORTED_FIELD
+
+    extra = {IMPORTED_FIELD: True}
+    if members:
+        extra["imported_sessions"] = members
     return await agents_v2.create_project_from_request(
         req, deferred_seed=True, extra_fields=extra)
 
@@ -290,6 +299,34 @@ async def project_left_off(project_id: str):
     except Exception:
         logger.exception("left-off failed for %s", project_id)
         return {"last_time": None, "unfinished": []}
+
+
+@projects_router.get("/{project_id}/imported-notes")
+async def project_imported_notes(project_id: str):
+    """Spec 153 §4.4: how many private notes Claude Code kept about this
+    project's folder (the scanner's count, or a direct read of this one
+    workspace before the scan is done) and whether the fold has put them in
+    the project: the seed field is cleared and the imported index exists."""
+    if _project_store is None:
+        raise HTTPException(status_code=503, detail="project store unavailable")
+    project = _project_store.get_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    from agent_os.onboarding.deferred_seed import (
+        IMPORTED_INDEX_PATH, is_deferred, workspace_notes,
+    )
+    from agent_os.onboarding.sources.claude_code import AGENT
+
+    workspace = project.get("workspace") or ""
+    try:
+        notes = await asyncio.to_thread(workspace_notes, workspace, get_scanner())
+    except Exception:
+        logger.exception("imported-notes failed for %s", project_id)
+        notes = []
+    index = os.path.join(workspace, *IMPORTED_INDEX_PATH.split("/")) if workspace else ""
+    folded = not is_deferred(project) and bool(index) and os.path.isfile(index)
+    return {"agent": AGENT, "count": sum(1 for n in notes if n.agent == AGENT),
+            "folded": folded, "index_path": IMPORTED_INDEX_PATH}
 
 
 # --------------------------------------------------------------------------

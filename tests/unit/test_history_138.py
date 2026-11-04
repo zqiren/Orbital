@@ -289,7 +289,8 @@ class TestScanner:
         assert sc.status()["status"] == "scanning"
         assert sc.wait(10)
         st = sc.status()
-        assert st == {"status": "ready", "sessions_total": 2, "by_agent": {"claude-code": 2}}
+        assert st == {"status": "ready", "sessions_total": 2, "by_agent": {"claude-code": 2},
+                      "notes_by_agent": {"claude-code": 0}, "notes_by_folder": []}
         assert src.reads == 2
         sc.collect()
         assert src.reads == 2  # unchanged
@@ -313,7 +314,8 @@ class TestScanner:
 
         sc = h.HistoryScanner(None, home=str(tmp_path), sources=[Boom()])
         assert sc.wait(5)
-        assert sc.status() == {"status": "ready", "sessions_total": 0, "by_agent": {"codex": 0}}
+        assert sc.status() == {"status": "ready", "sessions_total": 0, "by_agent": {"codex": 0},
+                               "notes_by_agent": {}, "notes_by_folder": []}
 
 
 # ---- Grouping ----------------------------------------------------------------

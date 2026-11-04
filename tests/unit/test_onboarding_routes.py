@@ -18,7 +18,7 @@ from agent_os.api.routes import onboarding as onboarding_routes
 from agent_os.onboarding.import_scanner import ImportCandidate
 
 CANDIDATE_KEYS = {"source", "name", "path", "session_count", "last_activity",
-                  "already_imported", "kind", "minor", "is_git", "by_agent"}
+                  "already_imported", "kind", "minor", "is_git", "by_agent", "notes"}
 
 
 class _StubScanner:

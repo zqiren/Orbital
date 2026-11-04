@@ -19,6 +19,29 @@ export interface HistoryStatus {
   sessions_total: number;
   /** A key per agent whose history reader loaded (0 allowed). */
   by_agent: Record<string, number>;
+  /** Spec 153: private notes per agent (absent on an older daemon). */
+  notes_by_agent?: Record<string, number>;
+  /** Spec 153: the same notes by the folder they were kept about; `folder`
+   *  null = the agent's dir holds notes but no transcript names its folder. */
+  notes_by_folder?: NotesFolderRow[];
+}
+
+export interface NotesFolderRow {
+  agent?: string;
+  folder: string | null;
+  /** The agent's own (lossy) dir name, shown when the folder is unknown. */
+  encoded: string;
+  n: number;
+}
+
+/** GET /api/v2/projects/{pid}/imported-notes (spec 153). */
+export interface ImportedNotes {
+  agent: string;
+  count: number;
+  /** The notes are in the project (the fold completed). */
+  folded: boolean;
+  /** Workspace-relative path of the imported index. */
+  index_path: string;
 }
 
 /** One folder from GET /api/v2/onboarding/importable-projects. */
@@ -35,6 +58,8 @@ export interface ImportCandidate {
   minor?: boolean;
   is_git?: boolean;
   by_agent?: Record<string, number>;
+  /** Spec 153: private notes per agent kept about this folder. */
+  notes?: Record<string, number>;
 }
 
 export interface GroupReason {
@@ -270,4 +295,58 @@ export function conversationCount(
 ): number | null {
   const n = byAgent?.[slug];
   return typeof n === 'number' && n > 0 ? n : null;
+}
+
+/** Spec 153: the "N memories only it can use" count of one agent's wizard
+ *  row; null hides the segment (none, or an older daemon). */
+export function notesCount(history: HistoryStatus | null | undefined, slug: string): number | null {
+  const n = history?.notes_by_agent?.[slug];
+  return typeof n === 'number' && n > 0 ? n : null;
+}
+
+export interface NotesBreakdownRow {
+  /** Folder basename, or the agent's dir name when the folder is unknown. */
+  label: string;
+  notFound: boolean;
+  n: number;
+}
+
+/** The click-to-expand breakdown under an agent's row: one row per folder,
+ *  most notes first (the daemon's order; re-sorted so a reorder there cannot
+ *  break it). Rows of other agents are skipped; a row without `agent` (an
+ *  older shape) is Claude Code's, the only reader. */
+export function notesBreakdown(history: HistoryStatus | null | undefined, slug: string): NotesBreakdownRow[] {
+  const rows = (history?.notes_by_folder ?? []).filter(
+    (r) => (r.agent ?? 'claude-code') === slug && typeof r.n === 'number' && r.n > 0,
+  );
+  return rows
+    .map((r) => {
+      const folder = typeof r.folder === 'string' && r.folder ? r.folder : null;
+      const base = folder ? folder.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || folder : r.encoded;
+      return { label: base, notFound: folder === null, n: r.n };
+    })
+    .sort((a, b) => b.n - a.n || Number(a.notFound) - Number(b.notFound) || a.label.localeCompare(b.label));
+}
+
+export function parseImportedNotes(raw: unknown): ImportedNotes | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.count !== 'number' || typeof r.index_path !== 'string' || !r.index_path) return null;
+  return {
+    agent: typeof r.agent === 'string' ? r.agent : 'claude-code',
+    count: r.count,
+    folded: r.folded === true,
+    index_path: r.index_path,
+  };
+}
+
+/** Spec 153 §4.4: the private-notes card shows in an imported project with
+ *  notes to share and at least two workers to share them with — with fewer,
+ *  "every agent here can use them" would be false. */
+export function showNotesCard(
+  notes: ImportedNotes | null,
+  project: { imported?: boolean; available_workers?: string[] } | null | undefined,
+): boolean {
+  if (!notes || notes.count <= 0 || !project?.imported) return false;
+  return (project.available_workers?.length ?? 0) >= 2;
 }

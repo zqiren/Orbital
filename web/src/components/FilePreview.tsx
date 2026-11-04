@@ -4,7 +4,9 @@
 
 import {
   useCallback,
+  useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type IframeHTMLAttributes,
@@ -23,6 +25,7 @@ import {
 } from 'lucide-react';
 import type { FileContent } from '../types';
 import MarkdownContent from './MarkdownContent';
+import { OpenPathContext } from './filePreviewContext';
 import AnnotateOverlay from './panel/AnnotateOverlay';
 import PanelMoreMenu, { type PanelMenuItem } from './panel/PanelMoreMenu';
 import DocumentPreview from './preview/DocumentPreview';
@@ -31,6 +34,37 @@ import { useDocumentController } from './preview/documentController';
 import type { AnnotationBox } from '../utils/annotations';
 import { revealLabelKey } from '../utils/clientPlatform';
 import { useT } from '../i18n/useT';
+
+/**
+ * Spec 153: the workspace path a relative markdown link in the file at
+ * `fromPath` (workspace-relative) points at, or null for anything that is not
+ * a plain relative file link: external / `#` / `mailto:` / any scheme, an
+ * absolute path, or one that climbs out of the workspace.
+ */
+export function resolveRelativeLink(fromPath: string, href: string): string | null {
+  const raw = href.trim();
+  if (!raw || raw.startsWith('#') || raw.startsWith('/') || raw.startsWith('\\')) return null;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(raw)) return null; // http:, mailto:, file:, C: …
+  let target = raw.split('#', 1)[0].split('?', 1)[0];
+  try {
+    target = decodeURIComponent(target);
+  } catch {
+    /* keep the raw text */
+  }
+  if (!target) return null;
+  const parts = fromPath.replace(/\\/g, '/').split('/').filter(Boolean);
+  parts.pop(); // the file itself
+  for (const seg of target.replace(/\\/g, '/').split('/')) {
+    if (!seg || seg === '.') continue;
+    if (seg === '..') {
+      if (parts.length === 0) return null;
+      parts.pop();
+    } else {
+      parts.push(seg);
+    }
+  }
+  return parts.length ? parts.join('/') : null;
+}
 
 export interface FilePreviewProps {
   fileContent: FileContent | null;
@@ -375,6 +409,16 @@ export default function FilePreview({
 }: FilePreviewProps) {
   const t = useT();
   const [copied, setCopied] = useState(false);
+  // Spec 153: a relative link in a markdown file opens the file it names
+  // through the same opener chat paths use (the panel, or the drawer).
+  const openPath = useContext(OpenPathContext);
+  const relativeLink = useMemo(() => {
+    if (!openPath || !selectedPath) return undefined;
+    return (href: string) => {
+      const target = resolveRelativeLink(selectedPath, href);
+      return target ? () => openPath(target) : null;
+    };
+  }, [openPath, selectedPath]);
   // HTML preview view mode. Ephemeral + shared across files (spec 003 §3.6):
   // defaults to "rendered", a toggle drops back to the source <pre>.
   const [htmlViewMode, setHtmlViewMode] = useState<'rendered' | 'source'>('rendered');
@@ -1040,7 +1084,7 @@ export default function FilePreview({
       {editing ? (
         editView === 'preview' ? (
           <div className="flex-1 overflow-auto bg-sidebar p-4 min-h-0">
-            <MarkdownContent content={draft} remarkPlugins={PREVIEW_REMARK_PLUGINS} />
+            <MarkdownContent content={draft} remarkPlugins={PREVIEW_REMARK_PLUGINS} relativeLink={relativeLink} />
           </div>
         ) : (
           <textarea
@@ -1055,7 +1099,7 @@ export default function FilePreview({
         (() => {
           const body = isMarkdown ? (
             <div className="p-4">
-              <MarkdownContent content={viewContent} remarkPlugins={PREVIEW_REMARK_PLUGINS} />
+              <MarkdownContent content={viewContent} remarkPlugins={PREVIEW_REMARK_PLUGINS} relativeLink={relativeLink} />
             </div>
           ) : (
             <pre className={SOURCE_PRE_CLASS}>{viewContent}</pre>

@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import ExamplePrompt from './ExamplePrompt';
 import LeftOffCards from './LeftOffCards';
+import PrivateNotesCard from './PrivateNotesCard';
 import { sendTelemetry } from '../utils/telemetry';
 import OrbitalMark from './OrbitalMark';
 import { api, apiWithTotal, ApiError } from '../config';
@@ -3907,6 +3908,9 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         {!loading && items.length === 0 && !stream && (
           project?.is_empty_workspace === false &&
           sessionId === undefined &&
+          // Spec 153: an imported project skips the scan offer (the scan is
+          // the briefing the import dropped) and shows the cards instead.
+          !project.imported &&
           !coldStartDismissed ? (
             <div className="mt-8">
               <ColdStartCard
@@ -3959,6 +3963,14 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                   FILLS the composer and never sends: the user reads, edits
                   and sends it themselves. Not in Quick Tasks, whose scratch
                   workspace makes "this folder" / "this project" meaningless. */}
+              {/* Spec 153: what Claude Code knew about this project, now in it
+                  for every agent (imported projects only; hides itself). */}
+              <PrivateNotesCard
+                projectId={projectId}
+                project={project}
+                agents={agents}
+                onOpenPath={onOpenPath}
+              />
               {/* Spec 138: with sessions to pick up (its own or imported), the
                   left-off cards take the examples' place. */}
               <LeftOffCards

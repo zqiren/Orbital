@@ -215,6 +215,12 @@ export interface Project {
    * read as null.
    */
   effective_pinned_target?: string | null;
+  /** Spec 153: the project came from the history import (durable; the
+   *  deferred-seed field is cleared on first use). Absent on older rows. */
+  imported?: boolean;
+  /** Spec 153: worker slugs a pinned send could reach right now (the pin
+   *  switcher's list). Absent on an older daemon. */
+  available_workers?: string[];
 }
 
 /** One TOFU network-access ask (Plan 2), as carried by
