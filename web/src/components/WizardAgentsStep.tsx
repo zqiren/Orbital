@@ -13,6 +13,10 @@
  * progress over the WebSocket). Agents that were not detected are chips; a
  * chip expands the existing locate card (NotDetectedRow) as-is, and its Save
  * refetches the list so the agent moves up into the found list.
+ *
+ * Spec 153: an agent that keeps private notes (Claude Code's `memory/`) gets a
+ * third status segment, "N memories only it can use"; clicking it expands the
+ * per-folder breakdown under the row. Hidden at zero.
  */
 
 import { useCallback, useEffect, useState } from 'react';
@@ -23,7 +27,13 @@ import { useT } from '../i18n/useT';
 import { useWebSocket } from '../hooks/useWebSocket';
 import type { WebSocketEvent } from '../types';
 import { pickLoginUrl } from '../utils/loginUrl';
-import { conversationCount, type HistoryStatus } from '../utils/onboarding';
+import {
+  conversationCount,
+  notesBreakdown,
+  notesCount,
+  type HistoryStatus,
+  type NotesBreakdownRow,
+} from '../utils/onboarding';
 import { sendTelemetry } from '../utils/telemetry';
 import MessageAvatar from './MessageAvatar';
 import NotDetectedRow from './NotDetectedRow';
@@ -32,6 +42,8 @@ function AgentRow({
   entry,
   checked,
   conversations,
+  notes = null,
+  breakdown = [],
   onToggle,
   onChanged,
 }: {
@@ -39,12 +51,16 @@ function AgentRow({
   checked: boolean;
   /** null = this agent has no history reader (no count shown). */
   conversations: number | null;
+  /** Spec 153: private notes only this agent can use; null hides the segment. */
+  notes?: number | null;
+  breakdown?: NotesBreakdownRow[];
   onToggle: (checked: boolean) => void;
   onChanged: () => void;
 }) {
   const t = useT();
   const ws = useWebSocket();
   const [busy, setBusy] = useState(false);
+  const [notesOpen, setNotesOpen] = useState(false);
   const [url, setUrl] = useState<string | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
   const signedIn = isSignedIn(entry);
@@ -112,10 +128,25 @@ function AgentRow({
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-medium text-primary">{entry.name}</p>
           <p
-            className={`truncate text-xs ${signedIn ? 'text-secondary' : 'text-warning-text'}`}
+            className={`text-xs ${notes === null ? 'truncate' : 'leading-snug'} ${signedIn ? 'text-secondary' : 'text-warning-text'}`}
             data-testid={`wizard-agent-status-${entry.slug}`}
           >
             {status}
+            {notes !== null && (
+              <>
+                {' · '}
+                <button
+                  type="button"
+                  onClick={() => setNotesOpen((v) => !v)}
+                  aria-expanded={notesOpen}
+                  disabled={breakdown.length === 0}
+                  data-testid={`wizard-agent-notes-${entry.slug}`}
+                  className="whitespace-nowrap border-b border-dotted border-muted text-primary transition-colors duration-150 hover:border-accent hover:text-accent disabled:cursor-default disabled:hover:border-muted disabled:hover:text-primary"
+                >
+                  {t(notes === 1 ? 'wizard.agents.notes.one' : 'wizard.agents.notes.other', { n: notes })}
+                </button>
+              </>
+            )}
           </p>
         </div>
         {!signedIn && !keyOnly && (
@@ -131,6 +162,22 @@ function AgentRow({
           </button>
         )}
       </div>
+      {notesOpen && notes !== null && breakdown.length > 0 && (
+        <ul
+          aria-label={t('wizard.agents.notes.byFolder')}
+          data-testid={`wizard-agent-notes-breakdown-${entry.slug}`}
+          className="mb-0.5 mt-2 flex flex-col gap-[3px] pl-[66px] text-xs"
+        >
+          {breakdown.map((row) => (
+            <li key={`${row.notFound ? 'nf' : 'f'}:${row.label}`} className="flex justify-between gap-3 py-0.5 text-secondary">
+              <span className={`min-w-0 truncate ${row.notFound ? 'italic text-muted' : 'text-primary'}`}>
+                {row.notFound ? `${t('wizard.agents.notes.folderNotFound')} · ${row.label}` : row.label}
+              </span>
+              <span className="shrink-0 font-mono">{row.n}</span>
+            </li>
+          ))}
+        </ul>
+      )}
       {busy && (
         <p className="mt-1.5 pl-[66px] text-xs text-secondary">
           {t('subAgentCard.loginBrowserHint')}{' '}
@@ -246,6 +293,8 @@ export default function WizardAgentsStep({ entries, history, ticks, onToggle, re
               entry={e}
               checked={ticks[e.slug] ?? true}
               conversations={conversationsFor(e.slug)}
+              notes={notesCount(history, e.slug)}
+              breakdown={notesBreakdown(history, e.slug)}
               onToggle={(c) => onToggle(e.slug, c)}
               onChanged={() => { void reload(); }}
             />

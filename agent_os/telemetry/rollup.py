@@ -159,6 +159,10 @@ def build_ping(
         "leftoff_opened": {kind: 0 for kind in LEFTOFF_KINDS},
         "unfinished_opened_by_cause": {cause: 0 for cause in STOP_CAUSES},
         "agent_switch_after_open": 0,
+        # Spec 153: how many private notes each agent keeps that no other
+        # agent can read, as the wizard row shows it — the day's latest count
+        # per agent (allowlisted slugs). A count only, never the notes.
+        "notes_found": {},
     }
     recent: list[dict] = []
     for row in spool.read_day(day):
@@ -239,6 +243,8 @@ def build_ping(
                     counters["unfinished_opened_by_cause"][row["cause"]] += 1
         elif event == "agent_switch_after_open":
             counters["agent_switch_after_open"] += 1
+        elif event == "notes_found":
+            counters["notes_found"][_subagent_bucket(row.get("agent"))] = _count(row.get("n"))
         if event in FAILURE_EVENTS:
             recent.append(sanitize_failure_row(row, agent_bucket=_subagent_bucket))
     # Bounded and newest-last: the spool is append-only in time order.

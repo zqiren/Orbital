@@ -12,6 +12,10 @@ import {
   hasImportables,
   hasLeftOff,
   landingProjectId,
+  notesBreakdown,
+  notesCount,
+  parseImportedNotes,
+  showNotesCard,
   parseLeftOff,
   uncheckedCount,
   type ImportCandidate,
@@ -180,5 +184,48 @@ describe('conversationCount — the Agents step count', () => {
     expect(conversationCount(by, 'kimi-code')).toBeNull();
     expect(conversationCount(by, 'gemini-cli')).toBeNull();
     expect(conversationCount(undefined, 'codex')).toBeNull();
+  });
+});
+
+describe('spec 153 — private notes helpers', () => {
+  const history = {
+    status: 'ready' as const,
+    sessions_total: 10,
+    by_agent: { 'claude-code': 10 },
+    notes_by_agent: { 'claude-code': 9, codex: 0 },
+    notes_by_folder: [
+      { agent: 'claude-code', folder: null, encoded: '-Users-x-gone', n: 4 },
+      { agent: 'claude-code', folder: 'C:\\Users\\x\\app\\', encoded: 'C--Users-x-app', n: 4 },
+      { agent: 'codex', folder: '/x/other', encoded: 'o', n: 2 },
+      { folder: '/Users/x/old-shape', encoded: 'old', n: 1 },
+    ],
+  };
+
+  it('notesCount hides zero, missing fields and other agents', () => {
+    expect(notesCount(history, 'claude-code')).toBe(9);
+    expect(notesCount(history, 'codex')).toBeNull();
+    expect(notesCount({ status: 'ready', sessions_total: 0, by_agent: {} }, 'claude-code')).toBeNull();
+    expect(notesCount(null, 'claude-code')).toBeNull();
+  });
+
+  it('notesBreakdown: one row per folder, most first, known folders before unknown on a tie', () => {
+    expect(notesBreakdown(history, 'claude-code')).toEqual([
+      { label: 'app', notFound: false, n: 4 },
+      { label: '-Users-x-gone', notFound: true, n: 4 },
+      { label: 'old-shape', notFound: false, n: 1 },
+    ]);
+    expect(notesBreakdown(history, 'codex')).toEqual([{ label: 'other', notFound: false, n: 2 }]);
+  });
+
+  it('parseImportedNotes + showNotesCard', () => {
+    const notes = parseImportedNotes({ agent: 'claude-code', count: 3, folded: true, index_path: 'orbital/imported/claude-code/INDEX.md' });
+    expect(notes).toEqual({ agent: 'claude-code', count: 3, folded: true, index_path: 'orbital/imported/claude-code/INDEX.md' });
+    expect(parseImportedNotes({ count: 'x' })).toBeNull();
+    expect(parseImportedNotes(null)).toBeNull();
+    expect(showNotesCard(notes, { imported: true, available_workers: ['a', 'b'] })).toBe(true);
+    expect(showNotesCard(notes, { imported: true, available_workers: ['a'] })).toBe(false);
+    expect(showNotesCard(notes, { imported: false, available_workers: ['a', 'b'] })).toBe(false);
+    expect(showNotesCard(notes, { imported: true })).toBe(false);
+    expect(showNotesCard({ ...notes!, count: 0 }, { imported: true, available_workers: ['a', 'b'] })).toBe(false);
   });
 });

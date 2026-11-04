@@ -33,7 +33,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 from agent_os.onboarding.history_paths import HistoryEnv, has_project_instructions, history_home
-from agent_os.onboarding.history_types import HistorySession, StopInfo
+from agent_os.onboarding.history_types import HistorySession, PrivateNote, StopInfo
 from agent_os.utils.subprocess_flags import win_no_window_flags
 
 logger = logging.getLogger(__name__)
@@ -113,6 +113,9 @@ class HistoryScanner:
         self._sessions: list[HistorySession] = []
         self._analysis: Analysis | None = None
         self._by_agent: dict[str, int] = {}
+        # Spec 153: the agents' private notes, read once per scan.
+        self._notes: list[PrivateNote] = []
+        self._notes_read = False
         self._scan_seconds: float | None = None
 
     # -- configuration -------------------------------------------------------
@@ -143,6 +146,7 @@ class HistoryScanner:
         started = time.monotonic()
         try:
             sessions = self.collect()
+            self.collect_notes()
             analysis = analyze(sessions, self.env())
             with self._lock:
                 self._analysis = analysis
@@ -176,11 +180,64 @@ class HistoryScanner:
         if not by_agent:
             # Every loaded reader has a key, 0 until its sessions are counted.
             by_agent = {getattr(src, "agent", "?"): 0 for src in self.sources()}
+        notes_by_agent, notes_by_folder = self._notes_summary()
         return {
             "status": "ready" if self._ready.is_set() else "scanning",
             "sessions_total": sum(by_agent.values()),
             "by_agent": by_agent,
+            "notes_by_agent": notes_by_agent,
+            "notes_by_folder": notes_by_folder,
         }
+
+    # -- private notes (spec 153) --------------------------------------------
+
+    def collect_notes(self) -> list[PrivateNote]:
+        """Read every loaded agent's private notes (only Claude Code has a
+        reader). Blocking; the scan calls it once, right after the sessions."""
+        from agent_os.onboarding.sources import claude_code
+
+        found: list[PrivateNote] = []
+        read = False
+        if any(getattr(src, "agent", None) == claude_code.AGENT for src in self.sources()):
+            read = True
+            try:
+                found = claude_code.notes(self.home())
+            except Exception:
+                logger.warning("history: Claude notes read failed", exc_info=True)
+        with self._lock:
+            self._notes = found
+            self._notes_read = read
+        return found
+
+    def notes(self) -> list[PrivateNote]:
+        with self._lock:
+            return list(self._notes)
+
+    def notes_for(self, workspace: str) -> list[PrivateNote]:
+        """The notes whose recorded folder is ``workspace`` (same identity key
+        as the import's already-imported match)."""
+        from agent_os.onboarding.import_scanner import path_key
+
+        want = path_key(workspace)
+        return [n for n in self.notes() if n.folder and path_key(n.folder) == want]
+
+    def _notes_summary(self) -> tuple[dict[str, int], list[dict]]:
+        with self._lock:
+            notes, read = list(self._notes), self._notes_read
+        by_agent: dict[str, int] = {}
+        if read:
+            from agent_os.onboarding.sources import claude_code
+            by_agent[claude_code.AGENT] = 0
+        by_folder: dict[tuple, dict] = {}
+        for n in notes:
+            by_agent[n.agent] = by_agent.get(n.agent, 0) + 1
+            key = (n.agent, n.folder, n.encoded)
+            row = by_folder.setdefault(key, {"agent": n.agent, "folder": n.folder,
+                                             "encoded": n.encoded, "n": 0})
+            row["n"] += 1
+        rows = sorted(by_folder.values(),
+                      key=lambda r: (-r["n"], r["folder"] is None, r["folder"] or r["encoded"]))
+        return by_agent, rows
 
     def sessions(self) -> list[HistorySession]:
         with self._lock:

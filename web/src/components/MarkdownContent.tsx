@@ -24,6 +24,13 @@ interface MarkdownContentProps {
   onOpenPath?: (path: string) => void;
   /** Extra remark plugins, run after GFM (FilePreview hides HTML comments — spec 088). */
   remarkPlugins?: Options['remarkPlugins'];
+  /**
+   * Spec 153: a markdown FILE's relative links (`notes.md`, `../a/b.md`).
+   * Returns the opener for `href`, or null to keep it inert. Only consulted
+   * where workspace linkification is off (FilePreview), which knows the
+   * file's own folder.
+   */
+  relativeLink?: (href: string) => (() => void) | null;
 }
 
 /** http(s):// or protocol-relative `//` — anything that would leave the app. */
@@ -161,6 +168,7 @@ export default memo(function MarkdownContent({
   workspace,
   onOpenPath,
   remarkPlugins,
+  relativeLink,
 }: MarkdownContentProps) {
   // Kind-aware path renderers are installed ONLY when a workspace + open
   // handler are supplied (i.e. in chat) — without them, react-markdown falls
@@ -172,6 +180,19 @@ export default memo(function MarkdownContent({
     if (!workspace || !onOpenPath) {
       return {
         a({ href, children }) {
+          const open = href && relativeLink ? relativeLink(href) : null;
+          if (open) {
+            return (
+              <button
+                type="button"
+                onClick={open}
+                title={href}
+                className="cursor-pointer text-accent hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 rounded-sm"
+              >
+                {children}
+              </button>
+            );
+          }
           return renderAnchor(href, children);
         },
         // Per-code-block copy is installed in BOTH modes, unlike the path
@@ -217,7 +238,7 @@ export default memo(function MarkdownContent({
         return <CodeBlock>{children}</CodeBlock>;
       },
     };
-  }, [workspace, onOpenPath]);
+  }, [workspace, onOpenPath, relativeLink]);
 
   return (
     <div className="markdown-content">

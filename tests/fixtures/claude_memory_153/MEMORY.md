@@ -1,0 +1,8 @@
+- [Coupled steps = one commit](feedback_coupled_steps.md) — both sides of one fix in one commit
+- [Release train](project_release_train.md) — Tuesdays; tag from the tested SHA
+- [Path guards need realpath](reference_realpath.md) — realpath both sides + trailing sep
+- [Untyped note](untyped.md) — a note with no type
+- [No description](no_description.md) — hook taken from this index line
+- [Broken frontmatter](broken_yaml.md) — its YAML does not parse
+- [Plain file](no_frontmatter.md) — no frontmatter at all
+- [Gone](deleted_note.md) — the file this points at is not there

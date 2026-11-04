@@ -104,7 +104,8 @@ machine. The exact outbound JSON is also inspectable in-app, verbatim, under
       "usage_limit": 1, "model_unavailable": 0, "network_auth": 0,
       "interrupted": 0, "no_reply": 0
     },
-    "agent_switch_after_open": 1
+    "agent_switch_after_open": 1,
+    "notes_found": { "claude-code": 145 }
   }
 }
 ```
@@ -149,6 +150,7 @@ machine. The exact outbound JSON is also inspectable in-app, verbatim, under
 | `counters.leftoff_opened` | map | Cards opened: `last_time` or `unfinished`. |
 | `counters.unfinished_opened_by_cause` | map | Opened "Didn't finish" cards by why the conversation stopped (fixed enum: `usage_limit`, `model_unavailable`, `network_auth`, `interrupted`, `no_reply`). Never the error text. |
 | `counters.agent_switch_after_open` | int | Times the user picked a different agent after opening a card. |
+| `counters.notes_found` | map | Private notes each coding agent keeps on this computer that no other agent can read (today only Claude Code's `memory/` notes), as the setup wizard's agent row counts them: `{agent: n}`, the day's latest count per agent. Keys follow the `subagent_by_agent` allowlist. A count only — never the notes, their titles or the folders they are about. |
 
 `counters.sessions` counts sessions at the point they are minted, so every
 path produces one: the "+ New session" button, the first-run cold-start scan,

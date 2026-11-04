@@ -104,7 +104,8 @@ def _ready(client):
 
 def test_history_status_starts_the_scan_and_reports_counts(app_env):
     body = _ready(app_env.client)
-    assert body == {"status": "ready", "sessions_total": 3, "by_agent": {"claude-code": 3}}
+    assert body == {"status": "ready", "sessions_total": 3, "by_agent": {"claude-code": 3},
+                    "notes_by_agent": {"claude-code": 0}, "notes_by_folder": []}
 
 
 def test_importable_projects_carries_candidates_and_groups(app_env):

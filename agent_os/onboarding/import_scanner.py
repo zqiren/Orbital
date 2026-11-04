@@ -95,6 +95,8 @@ class ImportCandidate:
     is_git: bool = False
     has_agent_md: bool = False
     minor: bool = False
+    # Spec 153: private notes per agent kept about this folder.
+    notes: dict[str, int] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
@@ -108,6 +110,7 @@ class ImportCandidate:
             "minor": self.minor,
             "is_git": self.is_git,
             "by_agent": dict(self.by_agent),
+            "notes": dict(self.notes),
         }
 
 
@@ -602,7 +605,8 @@ def _rank(candidates: list[ImportCandidate]) -> list[ImportCandidate]:
 
 
 def candidates_from_analysis(analysis, *, vaults: Iterable[ImportCandidate] = (),
-                             existing_workspaces: Iterable[str] = ()) -> list[ImportCandidate]:
+                             existing_workspaces: Iterable[str] = (),
+                             notes: Iterable = ()) -> list[ImportCandidate]:
     """Spec 138 step 2 rows once the history scan is done: one per pass-1
     folder of ``analysis``, plus the Obsidian ``vaults`` (which have no
     history). Unlike the folder scan above, the analysis has dropped the
@@ -635,6 +639,16 @@ def candidates_from_analysis(analysis, *, vaults: Iterable[ImportCandidate] = ()
     imported_keys = {_path_key(w) for w in existing_workspaces if w}
     for cand in out:
         cand.already_imported = _path_key(cand.path) in imported_keys
+    # Spec 153: the scanner's notes list, matched on the folder they were
+    # kept in (a note with no known folder is never attached to a row).
+    by_folder: dict[str, Counter] = {}
+    for note in notes:
+        if getattr(note, "folder", None):
+            by_folder.setdefault(_path_key(note.folder), Counter())[note.agent] += 1
+    for cand in out:
+        counts = by_folder.get(_path_key(cand.path))
+        if counts:
+            cand.notes = dict(counts)
     return _rank(out)
 
 

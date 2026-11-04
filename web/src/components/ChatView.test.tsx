@@ -61,6 +61,8 @@ let pendingApprovalResponder: (path: string) => unknown = () => ({ pending: fals
 // Spec 138: GET /projects/{pid}/left-off and the telemetry events posted.
 let leftOffResponse: unknown = { last_time: null, unfinished: [] };
 const telemetryEvents: string[] = [];
+// Spec 153: GET /projects/{pid}/imported-notes.
+let importedNotesResponse: unknown = { agent: 'claude-code', count: 0, folded: false, index_path: 'orbital/imported/claude-code/INDEX.md' };
 
 // Keyless onboarding: GET /projects/{pid}/sessions (useSessions) answers this
 // list, and PUT /projects/{pid} (the no-session sticky pin) is logged.
@@ -83,6 +85,7 @@ vi.mock('../config', () => ({
       return sessionsListResponse;
     }
     if (path.endsWith('/left-off')) return leftOffResponse;
+    if (path.endsWith('/imported-notes')) return importedNotesResponse;
     if (path === '/api/v2/telemetry/event') {
       telemetryEvents.push(JSON.parse(opts?.body ?? '{}').event);
       return undefined;
@@ -357,6 +360,7 @@ beforeEach(() => {
   runStatusTerminalEvent = null;
   pendingApprovalResponder = () => ({ pending: false });
   leftOffResponse = { last_time: null, unfinished: [] };
+  importedNotesResponse = { agent: 'claude-code', count: 0, folded: false, index_path: 'orbital/imported/claude-code/INDEX.md' };
   telemetryEvents.length = 0;
   sessionsListResponse = [];
   chatLatestResponse = [];
@@ -1454,6 +1458,38 @@ describe('Spec 138: left-off cards in the empty chat', () => {
     // Once per open.
     await pick('Orbital');
     expect(telemetryEvents.filter((e) => e === 'agent_switch_after_open')).toHaveLength(1);
+  });
+});
+
+// Spec 153: an imported project opens on the cards, never the scan offer, and
+// the private-notes card sits above the left-off cards.
+describe('Spec 153: imported project first screen', () => {
+  const imported = { ...project, is_empty_workspace: false, imported: true, available_workers: ['claude-code', 'codex'] };
+
+  it('skips the cold-start card and shows the notes card above the left-off cards', async () => {
+    importedNotesResponse = { agent: 'claude-code', count: 145, folded: true, index_path: 'orbital/imported/claude-code/INDEX.md' };
+    leftOffResponse = { last_time: { session_id: 'imp_codex_1', agent: 'codex', user_text: 'add a hide list', at: new Date().toISOString(), git: null }, unfinished: [] };
+    await act(async () => {
+      root.render(<ChatView projectId="p1" project={imported} agentStatus={'idle' as never} agents={[]} />);
+    });
+    await flushEffects();
+    expect([...container.querySelectorAll('button')].some((b) => /^skip$/i.test((b.textContent ?? '').trim()))).toBe(false);
+    const card = container.querySelector('[data-testid="private-notes-card"]');
+    expect(card?.textContent).toContain('145 memories');
+    const leftOff = container.querySelector('[data-testid="left-off"]');
+    expect(leftOff).not.toBeNull();
+    // Above: the card precedes the left-off block in document order.
+    expect(card!.compareDocumentPosition(leftOff!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('a project that was not imported keeps the cold-start card', async () => {
+    importedNotesResponse = { agent: 'claude-code', count: 145, folded: true, index_path: 'orbital/imported/claude-code/INDEX.md' };
+    await act(async () => {
+      root.render(<ChatView projectId="p1" project={{ ...project, is_empty_workspace: false }} agentStatus={'idle' as never} agents={[]} />);
+    });
+    await flushEffects();
+    expect([...container.querySelectorAll('button')].some((b) => /^skip$/i.test((b.textContent ?? '').trim()))).toBe(true);
+    expect(container.querySelector('[data-testid="private-notes-card"]')).toBeNull();
   });
 });
 

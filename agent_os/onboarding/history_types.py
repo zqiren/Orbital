@@ -65,6 +65,27 @@ class HistorySession:
     branch: str | None = None        # git branch the session ran on, when recorded
 
 
+@dataclass(frozen=True)
+class PrivateNote:
+    """One note an agent keeps for itself that no other agent reads (spec
+    153). The file is the fact; every other field is decoration read from
+    its frontmatter or the agent's own index, and may be missing.
+
+    ``folder`` is the cwd recorded by a transcript next to the notes, or None
+    when the agent's dir holds notes but no transcript (never decoded from
+    the dir name, which is lossy). ``encoded`` is that dir's name.
+    ``index_line`` is the agent's own index line for this note, if any."""
+
+    agent: str
+    folder: str | None
+    encoded: str
+    path: str
+    title: str
+    hook: str | None = None
+    kind: str | None = None
+    index_line: str | None = None
+
+
 class HistorySource(Protocol):
     """One agent's reader. Module ``agent_os.onboarding.sources.<name>``
     exposes ``SOURCE`` implementing this."""
