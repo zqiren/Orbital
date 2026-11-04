@@ -49,7 +49,6 @@ import PricingEditorPage from './components/PricingEditorPage';
 import ChatTab from './components/ChatTab';
 import ErrorBoundary from './components/ErrorBoundary';
 import GlobalSettings, { requestedSettingsSection } from './components/GlobalSettings';
-import CalendarPage from './components/CalendarPage';
 import WorkbenchPage from './components/WorkbenchPage';
 import { useWorkbenchFeed, useWorkbenchFeedSync } from './hooks/useWorkbenchFeed';
 import { useCheckedMarks } from './hooks/useSeenReplies';
@@ -101,7 +100,7 @@ export default function App() {
   // route now that the project is the work interface. In-memory only, never
   // persisted: hiding the list on entering a project is route-driven (D1),
   // so the pin resets whenever a project route is entered from any other
-  // route (home, Calendar, Workbench, Settings — where the full list is on
+  // route (home, the Workbench, Settings — where the full list is on
   // screen anyway). It survives switching projects from inside the docked
   // list: the user pinned it to use it as a switcher.
   const [projectListPinned, setProjectListPinned] = useState(false);
@@ -149,10 +148,6 @@ export default function App() {
       .catch(() => {});
   }, []);
 
-  // Calendar availability (EventKit hub / connected calendar source). Fetched
-  // once on mount; any error (incl. the endpoint not existing until the backend
-  // lands this wave) is treated as unavailable. Gates the per-project calendar
-  // lens tab in ProjectDetail.
   // Sandbox-repair affordance: the wizard's old sandbox step carried the only
   // Retry Setup button; with that step removed (spec 011 §0.7) the warning
   // banner hosts it instead. triggerSetup re-fetches status on success, which
@@ -549,14 +544,7 @@ export default function App() {
     setMobileView('content');
   }
 
-  // Workspace-zone Calendar item — a top-level surface. Mobile behavior mirrors
-  // a project tap (swap to the content pane).
-  function handleSelectCalendar() {
-    setRoute({ name: 'calendar' });
-    setMobileView('content');
-  }
-
-  // Spec 154: the Workbench is home. The brand row, the strip glyph, ⌘0 and
+  // Spec 154: the Workbench is home. The 工作台 row, the strip glyph, ⌘0 and
   // the phone header's mark all land here.
   function handleGoHome() {
     setRoute({ name: 'list' });
@@ -707,8 +695,8 @@ export default function App() {
     route,
     connectionState: mapConnectionState(ws.connectionState, daemonOnline),
     onSelectProject: handleSelectProject,
-    onSelectCalendar: handleSelectCalendar,
     onSelectHome: handleGoHome,
+    waiting: anythingWaiting,
     waitingCounts: projectWaitingCounts,
     onNewProject: handleNewProject,
     onImportProjects: () => setImportOpen(true),
@@ -831,11 +819,6 @@ export default function App() {
             canTakeTour={wizardLandingProjectId(projects) !== null}
           />
         )}
-
-        {/* Global calendar surface (spec 011 §0.4). Placeholder body until
-            Wave 3; the component is kept so that swap is body-only. */}
-        {route.name === 'calendar' && <CalendarPage />}
-
 
         {route.name === 'project' && selectedProject && (
           // Scoped to the project view: a render crash here shows a recoverable

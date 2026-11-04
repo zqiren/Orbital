@@ -240,12 +240,6 @@
   --color-logo-ink: #E8EAED;
   --color-logo-tile: #FFFFFF;
 
-  /* Calendar / Workbench event chips (components/calendar/color.ts): a
-     lighter label and a stronger tint. Light mode leaves these unset and the
-     inline fallbacks apply. */
-  --event-text-l: 74%;
-  --event-fill-a: 0.16;
-
   /* Light-mode shadows (black at 10–13%) vanish against a dark canvas. */
   --shadow-panel: -1px 0 14px -4px rgb(0 0 0 / 0.5);
 }

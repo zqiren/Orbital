@@ -475,6 +475,18 @@ def _finished_facts(workspace: str, row: dict) -> tuple[str | None, dict | None]
     return parsed.reply_line, stop_json
 
 
+def _run_worker(workspace: str, row: dict) -> str | None:
+    """The worker an automation run was handed to, from its JSONL (the
+    left-off reader, cached by path + mtime + size). A trigger-started run
+    never pins its session; a manager-run automation has none (Orbital)."""
+    from agent_os.onboarding.left_off import read_orbital_session
+    uuid = row.get("session_uuid") or row.get("session_id")
+    if not workspace or not isinstance(uuid, str) or any(c in uuid for c in ("/", "\\", "..")):
+        return None
+    parsed = read_orbital_session(ProjectPaths(workspace).session_file(uuid))
+    return parsed.worker if parsed is not None else None
+
+
 def feed_rows(project: dict, sessions: list[dict], now: datetime) -> list[dict]:
     """The Workbench rows of one project (spec 154 §5.2). ``sessions`` are
     list rows already carrying ``worker_running`` and ``checked_reply_at``.
@@ -505,12 +517,19 @@ def feed_rows(project: dict, sessions: list[dict], now: datetime) -> list[dict]:
                 result_line, stop = _finished_facts(workspace, row)
             except Exception:
                 logger.warning("feed: could not read %s", row.get("session_id"), exc_info=True)
+        agent = row.get("pinned_target") or None
+        if agent is None and row.get("trigger_type"):
+            # An automation run: the logo is the agent that ran it.
+            try:
+                agent = _run_worker(workspace, row)
+            except Exception:
+                logger.warning("feed: could not read %s", row.get("session_id"), exc_info=True)
         out.append({
             "project_id": project_id,
             "session_id": row.get("session_id"),
             "session_uuid": row.get("session_uuid"),
             "name": row.get("name"),
-            "agent": row.get("pinned_target") or None,
+            "agent": agent,
             "status": row.get("status"),
             "worker_running": bool(row.get("worker_running")),
             "trigger_type": row.get("trigger_type"),

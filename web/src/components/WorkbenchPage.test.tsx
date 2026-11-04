@@ -116,17 +116,59 @@ describe('Workbench — list', () => {
     expect(within(asked).getByTestId('wb-card-meta')).toHaveTextContent('Sync OSS');
   });
 
-  it('running and approval cards get only the arrow; waiting cards get ✓ and a reply field', async () => {
+  it('no card has an open-session icon: ✓ is the only icon, on waiting cards only', async () => {
     await renderPage();
+    expect(screen.queryAllByTestId('wb-card-open')).toHaveLength(0);
     for (const name of ['Weekly report', 'Deploy']) {
       const c = cardWith(name);
       expect(within(c).queryByTestId('wb-card-confirm')).toBeNull();
       expect(within(c).queryByTestId('wb-card-reply')).toBeNull();
-      expect(within(c).getByTestId('wb-card-open')).toBeInTheDocument();
+      expect(within(c).queryAllByRole('button').map((b) => b.getAttribute('data-testid'))).toEqual(['wb-card-title']);
     }
     const done = cardWith('Hero copy');
     expect(within(done).getByTestId('wb-card-confirm')).toBeInTheDocument();
     expect(within(done).getByTestId('wb-card-reply')).toBeInTheDocument();
+  });
+
+  it('a finished automation run reads "<automation> · <the run\'s first line>", the logo is the agent that ran it', async () => {
+    await renderPage([
+      row({
+        session_id: 'run1', session_uuid: 'run1', trigger_type: 'file_watch', agent: 'codex',
+        name: "[Triggered by file_watch '整理收件箱']\n\nChanged files:…",
+        result_line: 'PONG',
+      }),
+    ]);
+    const c = cardWith('整理收件箱');
+    expect(within(c).getByTestId('wb-card-title')).toHaveTextContent(/^整理收件箱 · PONG$/);
+    // The first line is in the title, so the muted line does not repeat it.
+    expect(within(c).getByTestId('wb-card-meta')).toHaveTextContent(/^Marketing$/);
+    expect(within(c).getByTitle('Codex')).toBeInTheDocument();
+    expect(c.getAttribute('data-dot')).toBe('new');
+  });
+
+  it('a running automation run is in 进行中 under the automation\'s name', async () => {
+    await renderPage([
+      row({
+        session_id: 'run2', session_uuid: 'run2', trigger_type: 'schedule', status: 'running',
+        name: "[Triggered by schedule 'Daily digest' (every day at 9)]…", last_reply_at: null,
+      }),
+    ]);
+    const c = cardWith('Daily digest');
+    expect(within(c).getByTestId('wb-card-title')).toHaveTextContent(/^Daily digest$/);
+    expect(c.getAttribute('data-dot')).toBe('run');
+    expect(screen.getByTestId('workbench-summary')).toHaveTextContent('1 running');
+  });
+
+  it('an automation run with no first line yet shows the stop in the muted line', async () => {
+    await renderPage([
+      row({
+        session_id: 'run3', session_uuid: 'run3', trigger_type: 'schedule',
+        name: "[Triggered by schedule 'Nightly build'…", stop: { cause: 'usage_limit', resets_at: null },
+      }),
+    ]);
+    const c = cardWith('Nightly build');
+    expect(within(c).getByTestId('wb-card-title')).toHaveTextContent(/^Nightly build$/);
+    expect(within(c).getByTestId('wb-card-meta')).toHaveTextContent('Usage limit');
   });
 
   it('empty: the composer alone, its placeholder carries the sentence', async () => {
@@ -200,7 +242,7 @@ describe('Workbench — card actions', () => {
     const { setRoute } = await renderPage(FEED, {
       'POST /api/v2/agents/proj-a/new-session': () => ({ session_id: 'minted-1' }),
     });
-    fireEvent.click(within(cardWith('Renew the domain')).getByTestId('wb-card-open'));
+    fireEvent.click(within(cardWith('Renew the domain')).getByTestId('wb-card-title'));
     await waitFor(() => expect(setRoute).toHaveBeenCalledWith({
       name: 'project', projectId: 'proj-a', sessionId: 'minted-1',
       askReply: { id: 'e5e5e5', text: 'Renew the domain' },

@@ -4,24 +4,30 @@
 
 /**
  * One Workbench card (spec 154 §5.7-5.8): a dot, a title line, a muted line
- * and a time. The title opens the session. On hover (desktop) the time
- * fades, a bare ✓ (确认, the card leaves) and a bare → (打开会话) appear on
- * the title line, and a borderless reply field opens under the text. Running
- * cards get only the arrow. On a phone the reply row is always shown on
- * waiting cards, with send, ✓ and → on its right.
+ * and a time. The title is the way into the session (a slight underline on
+ * hover); there is no separate open icon (2026-11-04). On hover (desktop) the
+ * time fades, a bare ✓ (确认, the card leaves) appears on the title line, and
+ * a borderless reply field opens under the text. ✓ is the card's only icon,
+ * and only waiting cards have it. On a phone the reply row is always shown on
+ * waiting cards, with send and ✓ on its right.
+ *
+ * An automation run (a session a schedule / file-watch trigger started)
+ * reads `<automation name> · <the run's first line>`; the first line is then
+ * not repeated in the muted line.
  *
  * The agent is its LOGO, never its name (the name is the tooltip). The card
  * always renders from the feed row it is given.
  */
 
 import { useEffect, useState, type KeyboardEvent } from 'react';
-import { ArrowRight, Check, Send } from 'lucide-react';
+import { Check, Send } from 'lucide-react';
 import type { WorkbenchFeedRow } from '../../types';
 import { useT } from '../../i18n/useT';
 import type { StringKey } from '../../i18n/strings';
 import { formatRelativeTime } from '../../utils/relativeTime';
 import { getAgentIcon, MAIN_AGENT_HANDLE } from '../../utils/agentIcons';
 import { needsAction } from '../../utils/waitingOnYou';
+import { classifySessionName } from '../../lib/sessionLabel';
 import type { FeedItem } from './feedModel';
 
 const CAUSE_KEY: Record<string, StringKey> = {
@@ -74,7 +80,15 @@ export default function TaskCard({
   const pid = pending ? pending.project_id : row?.project_id ?? null;
   const project = projectName(pid);
 
-  const taskTitle = pending?.text ?? row?.name ?? t('workbench.card.untitled');
+  // An automation run is named by its automation, not by the trigger header
+  // its first message carries.
+  const automation = row?.trigger_type && !pending
+    ? classifySessionName(row.name).displayName
+    : null;
+  const runLine = automation && !ask ? row?.result_line ?? null : null;
+  const taskTitle = pending?.text
+    ?? (automation ? (runLine ? `${automation} · ${runLine}` : automation) : null)
+    ?? row?.name ?? t('workbench.card.untitled');
   const title = ask ? `“${ask.text}”` : taskTitle;
 
   // The muted line's tail: one of activity / result / stop / approval / due.
@@ -83,13 +97,14 @@ export default function TaskCard({
     detail = { text: t('workbench.card.starting'), warn: false };
   } else if (row) {
     if (ask) {
-      const parts = row.name ? [row.name] : [];
+      const name = automation ?? row.name;
+      const parts = name ? [name] : [];
       detail = parts.length ? { text: parts.join(' · '), warn: false } : null;
     } else if (approval) {
       detail = { text: t('workbench.card.approval'), warn: true };
     } else if (item.dot === 'run') {
       detail = activity ? { text: activity, warn: false } : null;
-    } else if (row.result_line) {
+    } else if (row.result_line && !runLine) {
       detail = { text: row.result_line, warn: false };
     } else if (row.stop) {
       const key = CAUSE_KEY[row.stop.cause] ?? 'leftOff.cause.interrupted';
@@ -147,32 +162,21 @@ export default function TaskCard({
     }
   }
 
-  const acts = (
+  // ✓ is the only icon, and only a card that can be confirmed has it.
+  const acts = canConfirm ? (
     <div className="wb-acts">
-      {canConfirm && (
-        <button
-          type="button"
-          className="wb-ab is-ok"
-          data-testid="wb-card-confirm"
-          aria-label={t('workbench.card.confirm')}
-          title={t('workbench.card.confirm')}
-          onClick={confirm}
-        >
-          <Check size={14} strokeWidth={1.75} aria-hidden="true" />
-        </button>
-      )}
       <button
         type="button"
-        className="wb-ab"
-        data-testid="wb-card-open"
-        aria-label={t('workbench.card.open')}
-        title={t('workbench.card.open')}
-        onClick={() => onOpen(item)}
+        className="wb-ab is-ok"
+        data-testid="wb-card-confirm"
+        aria-label={t('workbench.card.confirm')}
+        title={t('workbench.card.confirm')}
+        onClick={confirm}
       >
-        <ArrowRight size={14} strokeWidth={1.75} aria-hidden="true" />
+        <Check size={14} strokeWidth={1.75} aria-hidden="true" />
       </button>
     </div>
-  );
+  ) : null;
 
   const replyRow = canReply ? (
     <div className="wb-rwrap">
@@ -247,7 +251,6 @@ export default function TaskCard({
         </span>
         <span className="wb-rz">
           <span className="wb-time">{timeText}</span>
-          {phone && !canReply && acts}
         </span>
         {!phone && acts}
       </div>

@@ -269,3 +269,86 @@ def test_reply_line_rules():
     long = "字" * 200
     out = reply_line(long)
     assert len(out) == 140 and out.endswith("…")
+
+
+# ── Automation runs (2026-11-04) ───────────────────────────────────────
+
+_TRIGGER_MSG = "[Triggered by file_watch '整理收件箱']\n\nChanged files: inbox/a.md\n\nReply PONG."
+
+
+def _dispatch_row(handle, ts):
+    """The row a worker-assigned trigger writes when it hands the run over."""
+    return {"role": "system", "source": "daemon", "timestamp": ts,
+            "content": f'[Sub-agent] Message sent to {handle}: "…"',
+            "_meta": {"dispatch_id": "x:1", "handle": handle, "suppress_wake": True}}
+
+
+@pytest.mark.asyncio
+async def test_automation_runs_carry_the_agent_that_ran_them(tmp_path):
+    a = _project(tmp_path, "proj_a")
+    # A finished run a Codex-assigned file-watch automation started: the
+    # trigger never pins the session, so only the dispatch names the worker.
+    _write_session(a, "s_auto_done", [
+        {"role": "user", "source": "user", "content": _TRIGGER_MSG, "timestamp": T_USER},
+        _dispatch_row("codex", "2026-11-04T08:00:01+00:00"),
+        {"role": "system", "source": "daemon", "timestamp": "2026-11-04T08:01:00+00:00",
+         "content": "[Sub-agent] codex completed. Summary: PONG",
+         "_meta": {"event": "sub_agent_terminal", "kind": "completed", "reply": "PONG"}},
+        {"role": "assistant", "source": "management", "content": "PONG received.",
+         "timestamp": T_REPLY},
+    ])
+    # A run of the same automation still going: the dispatch is already on disk.
+    _write_session(a, "s_auto_run", [
+        {"role": "user", "source": "user", "content": _TRIGGER_MSG, "timestamp": T_USER},
+        _dispatch_row("codex", "2026-11-04T08:00:01+00:00"),
+    ])
+    # A manager-run automation: Orbital ran it, so no agent.
+    _write_session(a, "s_auto_orbital", [
+        {"role": "user", "source": "user", "content": _TRIGGER_MSG, "timestamp": T_USER},
+        {"role": "assistant", "source": "management", "content": "Done.", "timestamp": T_REPLY},
+    ])
+    # A plain chat where the manager dispatched Codex: the card keeps the
+    # session's own agent (its pin), as before.
+    _write_session(a, "s_chat", [
+        {"role": "user", "source": "user", "content": "ask codex", "timestamp": T_USER},
+        _dispatch_row("codex", "2026-11-04T08:00:01+00:00"),
+        {"role": "assistant", "source": "management", "content": "Asked.", "timestamp": T_REPLY},
+    ])
+    sessions = {"proj_a": [
+        _row("s_auto_done", trigger_type="file_watch"),
+        _row("s_auto_run", trigger_type="file_watch", reply=None),
+        _row("s_auto_orbital", trigger_type="file_watch"),
+        _row("s_chat"),
+    ]}
+    store = CheckedStore.in_dir(str(tmp_path / "data"), now_fn=lambda: NOW)
+    store.seed_if_absent("proj_a", [])
+    client, _, _ = _client(tmp_path, [a], sessions, {"proj_a": {"s_auto_run"}}, store=store)
+    rows = await _feed(client)
+    done = rows[("proj_a", "s_auto_done")]
+    assert done["agent"] == "codex"
+    assert done["trigger_type"] == "file_watch"
+    assert done["result_line"] == "PONG received."
+    running = rows[("proj_a", "s_auto_run")]
+    assert running["worker_running"] is True and running["agent"] == "codex"
+    assert rows[("proj_a", "s_auto_orbital")]["agent"] is None
+    assert rows[("proj_a", "s_chat")]["agent"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_checked_automation_run_leaves_the_feed(tmp_path):
+    a = _project(tmp_path, "proj_a")
+    _write_session(a, "s_auto", [
+        {"role": "user", "source": "user", "content": _TRIGGER_MSG, "timestamp": T_USER},
+        {"role": "assistant", "source": "management", "content": "Done.", "timestamp": T_REPLY},
+    ])
+    sessions = {"proj_a": [_row("s_auto", trigger_type="file_watch")]}
+    store = CheckedStore.in_dir(str(tmp_path / "data"), now_fn=lambda: NOW)
+    store.seed_if_absent("proj_a", [])
+    client, _, ws = _client(tmp_path, [a], sessions, store=store)
+    assert ("proj_a", "s_auto") in await _feed(client)
+    r = await client.post("/api/v2/workbench/checked", json={
+        "project_id": "proj_a", "session_id": "s_auto", "reply_at": T_REPLY})
+    assert r.status_code == 200
+    assert ("proj_a", "s_auto") not in await _feed(client)
+    assert store.project("proj_a") == {"s_auto": T_REPLY}
+    assert ws.events == [("proj_a", {"type": "workbench.changed", "project_id": "proj_a"})]

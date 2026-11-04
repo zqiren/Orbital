@@ -259,27 +259,6 @@ const SHOTS = {
     await settle(page, 1200)
   },
 
-  'calendar': async (page) => {
-    await home(page)
-    await page.locator('aside').getByText(t('workspace.calendar.nav'), { exact: true }).click()
-    await page.locator(
-      '[data-testid="calendar-week-grid"], [data-testid="calendar-agenda"], [data-testid="calendar-empty"], [data-testid="calendar-unavailable"]',
-    )
-      .first()
-      .waitFor({ state: 'visible', timeout: 15_000 })
-    // The current week only projects slots from today forward, so on a Sunday
-    // it renders as one lonely block. Next week shows the full recurring set.
-    await page.locator('[data-testid="calendar-next"]').click()
-    await settle(page, 1200)
-    // The grid opens at midnight; nothing is scheduled before dawn.
-    await page.evaluate(() => {
-      const scroller = document.querySelector('[data-testid="calendar-week-grid"]')
-      const target = scroller?.scrollHeight ? scroller : scroller?.parentElement
-      if (target) target.scrollTop = (target.scrollHeight * 7.5) / 24
-    })
-    await settle(page, 800)
-  },
-
   'scheduled-trigger': async (page) => {
     await home(page)
     await openProject(page, MARKETING)

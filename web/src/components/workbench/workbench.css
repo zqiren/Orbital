@@ -107,7 +107,6 @@
 .wb-meta .wb-lg img { width: 100%; height: 100%; object-fit: contain; display: block; }
 :root[data-theme="dark"] .wb-meta .wb-lg:not(.is-orb) { width: 17px; height: 17px; padding: 2px; margin-left: -2px; vertical-align: -4px; border-radius: 4px; background: #F4F6F9; }
 .wb-rz { flex: none; min-width: 52px; display: flex; justify-content: flex-end; }
-.wb-card.is-waiting .wb-rz { min-width: 96px; }
 .wb-time { font-size: 11.5px; line-height: 19px; color: var(--color-muted); white-space: nowrap; transition: opacity .15s, transform .15s; }
 
 /* Dot: 8px, 10px gap. Amber = needs you; blue = finished, unchecked; green
@@ -122,7 +121,8 @@
 }
 @keyframes wb-ring { 0% { transform: scale(.9); opacity: .5; } 70%, 100% { transform: scale(2.1); opacity: 0; } }
 
-/* Hover actions: a bare ✓ and a bare → on the title line; the time fades. */
+/* Hover action: a bare ✓ on the title line (the card's only icon; the title
+ * opens the session); the time fades. */
 .wb-acts {
   position: absolute; right: -8px; top: 9.5px; transform: translateY(-50%); display: flex; gap: 2px;
   opacity: 0; pointer-events: none; transition: opacity .15s;
@@ -151,8 +151,8 @@
 .wb-rbox:focus-within .wb-snd { color: var(--color-accent); }
 .wb-snd:hover { background: var(--wb-tint); }
 
-/* Phone: no hover. Waiting cards always show the reply row with send, ✓ and
- * → on the right; running cards show → under the time. */
+/* Phone: no hover. Waiting cards always show the reply row with send and ✓
+ * on the right; the title opens the session. */
 .wb-phone .wb-rwrap { grid-template-rows: 1fr; margin-left: 18px; }
 .wb-phone .wb-acts { position: static; transform: none; opacity: 1; pointer-events: auto; margin-right: -7px; flex: none; }
 .wb-phone .wb-ab { color: color-mix(in srgb, var(--color-muted) 80%, transparent); }
