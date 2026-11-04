@@ -101,7 +101,7 @@ function PathCard({
       type="button"
       onClick={() => onOpen(path)}
       aria-label={t('chat.path.openAria', { path })}
-      className="my-2 flex w-full cursor-pointer items-center gap-3 surface-float px-3 py-2.5 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+      className="my-2 flex w-full cursor-pointer items-center gap-3 surface-float surface-float-nested px-3 py-2.5 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
     >
       <FileText size={18} className="shrink-0 text-secondary" />
       <span className="min-w-0 flex-1">

@@ -37,7 +37,7 @@ export default function StreamingMessage({
           <span className="text-secondary">{senderLabel}</span>
           <span className="text-muted"> · {nowTime()}</span>
         </div>
-        <div className="text-[13px] leading-[1.55] text-primary break-words overflow-x-auto">
+        <div className="-mx-4 px-4 -my-1.5 py-1.5 text-[13px] leading-[1.55] text-primary break-words overflow-x-auto">
           <MarkdownContent content={text} />
           {!isComplete && <span className="streaming-cursor">|</span>}
         </div>

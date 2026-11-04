@@ -30,6 +30,18 @@ describe('MarkdownContent — kind-aware clickable paths (spec 002)', () => {
     expect(onOpenPath).toHaveBeenCalledWith('reports/q3.html');
   });
 
+  it('the file card sits on the chat as a nested Float layer: near shadow only, no stroke', () => {
+    // The message body clips horizontally (overflow-x for wide tables), so a
+    // card as wide as the column must carry a shadow that fits the bleed the
+    // body leaves for it, or its sides are cut flat (owner bug, 2026-11-04).
+    render(<MarkdownContent content="See [about](about.html)." workspace={WS} onOpenPath={vi.fn()} />);
+    const card = screen.getByRole('button', { name: 'Open about.html in the preview panel' });
+    const cls = card.className.split(/\s+/);
+    expect(cls).toContain('surface-float');
+    expect(cls).toContain('surface-float-nested');
+    expect(card.className).not.toMatch(/(^|\s)border(-|\s|$)/);
+  });
+
   it('renders a source-file markdown link as an inline chip (not a card)', () => {
     const onOpenPath = vi.fn();
     render(
