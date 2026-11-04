@@ -28,6 +28,7 @@ import type {
 } from '../types';
 import type { Route } from '../route';
 import { __resetPanelState } from '../hooks/usePanelState';
+import { OpenPathContext } from './filePreviewContext';
 import { __resetAnnotationsStore } from '../hooks/useAnnotations';
 
 afterEach(() => cleanup());
@@ -159,6 +160,16 @@ vi.mock('./SessionSidebar', () => ({
     lastSessionSidebarProps = props;
     return null;
   },
+}));
+
+// The undo sheet's own fetching is TurnUndoSheet's test; here only its 查看
+// hand-off matters, so the stub is one row with the eye.
+vi.mock('./history/TurnUndoSheet', () => ({
+  default: (props: { onView: (path: string, v: number) => void }) => (
+    <button type="button" data-testid="stub-undo-view" onClick={() => props.onView('docs/plan.md', 3)}>
+      view
+    </button>
+  ),
 }));
 
 vi.mock('./ChatView', () => ({
@@ -1397,5 +1408,76 @@ describe('ChatTab — /automate hand-off from Tasks (decision 2)', () => {
     >;
     expect(next.draft).toBeUndefined();
     expect(next.draftSkill).toBeUndefined();
+  });
+});
+
+// Spec 065 §5.9 on a phone: 查看 in the undo sheet opens the file in the
+// overlay drawer through the same opener a chat path click uses (it fetches,
+// then routes), not a bare route write that leaves the drawer empty.
+describe('ChatTab — the undo sheet hands 查看 to the opener', () => {
+  beforeEach(() => resetMocks());
+
+  function renderWithOpener(openPath: (path: string) => void) {
+    const route = makeRoute({ sessionId: 'sess-x' });
+    const setRoute = vi.fn();
+    const view = render(
+      <OpenPathContext.Provider value={openPath}>
+        <ChatTab project={PROJECT} agentStatus="idle" agents={[]} route={route} setRoute={setRoute} />
+      </OpenPathContext.Provider>,
+    );
+    return { ...view, setRoute };
+  }
+
+  it('on a phone, 查看 closes the sheet and opens the file through the opener', async () => {
+    setViewportWidth(390);
+    const openPath = vi.fn();
+    await act(async () => {
+      renderWithOpener(openPath);
+    });
+    await act(async () => {
+      (lastChatViewProps.onUndoTurn as (t: unknown) => void)({ sessionId: 'sess-x', fromTs: '2026-11-04T10:00:00Z', toTs: null });
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('stub-undo-view'));
+    });
+    expect(openPath).toHaveBeenCalledWith('docs/plan.md');
+    expect(screen.queryByTestId('stub-undo-view')).toBeNull();
+  });
+
+  it('docked, 查看 still routes to the panel (unchanged)', async () => {
+    setViewportWidth(1440);
+    const openPath = vi.fn();
+    let setRoute: ReturnType<typeof vi.fn> = vi.fn();
+    await act(async () => {
+      ({ setRoute } = renderWithOpener(openPath));
+    });
+    await act(async () => {
+      (lastChatViewProps.onUndoTurn as (t: unknown) => void)({ sessionId: 'sess-x', fromTs: '2026-11-04T10:00:00Z', toTs: null });
+    });
+    setRoute.mockClear();
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('stub-undo-view'));
+    });
+    expect(openPath).not.toHaveBeenCalled();
+    const updater = setRoute.mock.calls[0][0] as (prev: Route) => Route;
+    expect((updater(makeRoute({ sessionId: 'sess-x' })) as { previewPath?: string }).previewPath).toBe('docs/plan.md');
+  });
+});
+
+// The undo sheet's ✕ closes a sheet, not a preview: its own label.
+describe('ChatTab — the phone undo sheet close label', () => {
+  beforeEach(() => resetMocks());
+
+  it('reads Close, not Close preview', async () => {
+    setViewportWidth(390);
+    await act(async () => {
+      renderChatTab();
+    });
+    await act(async () => {
+      (lastChatViewProps.onUndoTurn as (t: unknown) => void)({ sessionId: 'sess-x', fromTs: '2026-11-04T10:00:00Z', toTs: null });
+    });
+    const sheet = screen.getByTestId('stub-undo-view').closest('[role="dialog"]') as HTMLElement;
+    expect(within(sheet).getByRole('button', { name: 'Close' })).toBeInTheDocument();
+    expect(within(sheet).queryByRole('button', { name: 'Close preview' })).toBeNull();
   });
 });

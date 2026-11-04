@@ -74,6 +74,33 @@ describe('PrivateNotesCard', () => {
     expect(card.getAttribute('data-folded')).toBe('false');
   });
 
+  it('before the fold, 打开 runs the seed first and opens the index only once it exists', async () => {
+    answer = { ...FOLDED, folded: false };
+    let seeded = false;
+    apiMock.mockImplementation(async (path: string) => {
+      if (path === '/api/v2/projects/p1/imported-notes?seed=1') {
+        seeded = true;
+        return FOLDED;
+      }
+      if (path === '/api/v2/projects/p1/imported-notes') return answer;
+      return {};
+    });
+    const open = vi.fn(() => expect(seeded).toBe(true));
+    renderCard(TWO, open);
+    const card = await screen.findByTestId('private-notes-card');
+    fireEvent.click(card);
+    await waitFor(() => expect(open).toHaveBeenCalledWith('orbital/imported/claude-code/INDEX.md'));
+    expect(card.getAttribute('data-folded')).toBe('true');
+  });
+
+  it('a folded card opens straight away, no seed call', async () => {
+    answer = FOLDED;
+    const open = renderCard();
+    fireEvent.click(await screen.findByTestId('private-notes-card'));
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(apiMock.mock.calls.some((c) => String(c[0]).includes('seed=1'))).toBe(false);
+  });
+
   it('hides with fewer than two available workers', async () => {
     answer = FOLDED;
     renderCard({ imported: true, available_workers: ['claude-code'] });

@@ -127,3 +127,26 @@ def test_session_ids_threaded_to_tools():
     assert "EditTool(workspace=config.workspace, session_id=session_id)" in src
     assert "WriteTool(workspace=workspace, session_id=session_id," in src
     assert "EditTool(workspace=workspace, session_id=session_id," in src
+
+
+class TestSeedIsOrbitals:
+    """D10 × spec 138/153: the first-use seed's AGENTS.md is Orbital's own
+    write, recorded as such, so a fresh import shows no 历史 glyph."""
+
+    async def test_seeded_agents_md_is_recorded_as_orbital(self, ws, svc):
+        from agent_os.daemon_v2.agent_md_seeder import seed_project_agent_md
+
+        class Store(FakeProjects):
+            pass
+
+        store = Store(ws)
+        store._p["p1"]["name"] = "ws"
+        assert seed_project_agent_md(store, "p1")["status"] == "ok"
+        vs = changes(svc, "AGENTS.md")
+        assert len(vs) == 1 and vs[0]["attrib"] == {"kind": "orbital"}
+        await asyncio.sleep(1.0)
+        assert len(changes(svc, "AGENTS.md")) == 1  # the watcher echo adds nothing
+        assert not svc.get_project("p1").store.has_changes()
+        # one real turn flips it
+        WriteTool(str(ws), session_id="sess-1").execute(path="notes.md", content="turn\n")
+        assert svc.get_project("p1").store.has_changes()

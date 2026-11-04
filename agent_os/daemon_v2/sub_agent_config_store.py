@@ -65,6 +65,23 @@ class _ParamSchema:
     acp_config_option: str | None = None
 
 
+_CLAUDE_ID_RE = re.compile(r"claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?(\[[^\]]+\])?")
+
+
+def claude_model_label(value: str) -> str:
+    """A Claude model's display name from its id or alias, as the CLI's own
+    list words it: ``claude-opus-5-5`` → ``Opus 5.5``, ``opus`` → ``Opus``.
+    Anything else is returned as given."""
+    if value in ("fable", "haiku", "sonnet", "opus"):
+        return value.capitalize()
+    m = _CLAUDE_ID_RE.fullmatch(value)
+    if not m:
+        return value
+    family, major, minor, suffix = m.groups()
+    name = f"{family.capitalize()} {major}" + (f".{minor}" if minor else "")
+    return f"{name} {suffix}" if suffix else name
+
+
 # Authoritative tier-5 stable parameters for each sub-agent. Anything not on
 # this list is rejected by ``validate()`` (returns 400 from the API).
 SCHEMA: dict[str, dict[str, _ParamSchema]] = {
@@ -644,12 +661,19 @@ class SubAgentConfigStore:
         """Return the parameter schema for ``slug`` in JSON-friendly shape.
 
         Used by ``GET /api/v2/settings/sub-agents`` to populate UI dropdowns.
+        The claude-code model fallback carries display names (``labels``):
+        a cold daemon serves it before the CLI's live list lands, and no
+        surface shows a raw model id.
         """
         slug_schema = SCHEMA.get(slug, {})
-        return {
+        out: dict[str, dict[str, object]] = {
             name: {
                 "allowed": list(s.allowed) if s.allowed is not None else None,
                 "default": s.default,
             }
             for name, s in slug_schema.items()
         }
+        model = out.get("model")
+        if slug == "claude-code" and model and model["allowed"]:
+            model["labels"] = {v: claude_model_label(v) for v in model["allowed"]}
+        return out

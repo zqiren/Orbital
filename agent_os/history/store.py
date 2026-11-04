@@ -310,8 +310,17 @@ class HistoryStore:
             return None
 
     def has_changes(self) -> bool:
+        """D10: a baseline is not a change, and neither is an
+        Orbital-attributed version: the daemon's own bookkeeping (the
+        first-use seed's AGENTS.md, the import fold's INDEX.md, memory
+        tidying). Those versions stay recorded; a user's restore (attrib
+        ``restore``) still counts."""
         with self.lock:
-            return any(v.get("kind") != "baseline" for v in self.versions)
+            return any(
+                v.get("kind") != "baseline"
+                and (v.get("attrib") or {}).get("kind") != "orbital"
+                for v in self.versions
+            )
 
     # ── retention ─────────────────────────────────────────────────────
 

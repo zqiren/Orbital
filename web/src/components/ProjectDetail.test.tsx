@@ -6,6 +6,8 @@ import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import ProjectDetail from './ProjectDetail';
 import type { Project, SessionListEntry, Trigger } from '../types';
+import { useContext } from 'react';
+import { OpenPathContext } from './filePreviewContext';
 import type { Route } from '../route';
 import { __resetPanelState, usePanelState } from '../hooks/usePanelState';
 import { renderHook } from '@testing-library/react';
@@ -65,6 +67,28 @@ vi.mock('../hooks/useTriggers', () => ({
 vi.mock('../hooks/useCost', () => ({
   useCost: () => ({ cost: null, loading: false, error: null, refresh: vi.fn() }),
 }));
+// The preview drawer's fetches. Off by default (the real hook); the
+// note-link test turns it on to serve files without a daemon.
+const filesMock = vi.hoisted(() => ({
+  on: false,
+  files: {} as Record<string, string>,
+  getFileContent: vi.fn(),
+}));
+vi.mock('../hooks/useFiles', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../hooks/useFiles')>();
+  return {
+    ...real,
+    useFiles: () => {
+      const hook = real.useFiles();
+      if (!filesMock.on) return hook;
+      return {
+        ...hook,
+        getFileContent: filesMock.getFileContent,
+        resolvePath: async () => null,
+      };
+    },
+  };
+});
 
 const mockProject: Project = {
   project_id: 'proj-42',
@@ -903,5 +927,65 @@ describe('ProjectDetail — maximize and the column', () => {
       unmount();
       __resetPanelState();
     }
+  });
+});
+
+// Spec 153 × phone: a note link inside a markdown file shown in the overlay
+// drawer opens the note it names. The drawer must sit inside the
+// OpenPathContext provider, or every link renders as dead text.
+describe('ProjectDetail — links inside the preview drawer', () => {
+  afterEach(() => {
+    filesMock.on = false;
+    filesMock.files = {};
+    filesMock.getFileContent.mockReset();
+  });
+
+  function Opener() {
+    const open = useContext(OpenPathContext);
+    return (
+      <button type="button" onClick={() => open?.('orbital/imported/claude-code/INDEX.md')}>
+        open-index
+      </button>
+    );
+  }
+
+  it('a relative link in the drawer opens the note through the same opener', async () => {
+    setViewportWidth(390);
+    filesMock.on = true;
+    filesMock.files = {
+      'orbital/imported/claude-code/INDEX.md': '# Notes\n\n- [Deploy rig](deploy-rig.md) — how we ship\n',
+      'orbital/imported/claude-code/deploy-rig.md': '# Deploy rig\n',
+    };
+    filesMock.getFileContent.mockImplementation(async (_pid: string, path: string) => {
+      const content = filesMock.files[path];
+      return content === undefined ? null : { path, content, size: content.length, truncated: false, type: 'text' };
+    });
+    render(
+      <ProjectDetail project={mockProject} agentStatus="idle" route={baseRoute} setRoute={vi.fn()}>
+        <Opener />
+      </ProjectDetail>,
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByText('open-index'));
+    });
+    const link = await screen.findByRole('button', { name: 'Deploy rig', hidden: true });
+    await act(async () => {
+      fireEvent.click(link);
+    });
+    expect(filesMock.getFileContent).toHaveBeenLastCalledWith('proj-42', 'orbital/imported/claude-code/deploy-rig.md');
+  });
+});
+
+// The closed overlay sheets wait just below the project body, which clips
+// them. An overflow-hidden box can still be scrolled (focus, scroll-into-view,
+// a phone keyboard), and a 214px scroll lifted the closed 撤销这一轮 sheet into
+// view under the history sheet. The body clips without being scrollable.
+describe('ProjectDetail — the overlay container cannot scroll', () => {
+  it('the drawers sit in a clip container, not a scrollable overflow-hidden box', () => {
+    setViewportWidth(390);
+    const { container } = renderProjectDetail({ previewPath: 'docs/plan.md' });
+    const body = container.querySelector('[role="dialog"]')!.parentElement as HTMLElement;
+    expect(body).toHaveClass('project-body-clip');
+    expect(body).not.toHaveClass('overflow-hidden');
   });
 });

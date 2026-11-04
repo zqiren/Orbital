@@ -14,7 +14,7 @@
  * always renders from the feed row it is given.
  */
 
-import { useState, type KeyboardEvent } from 'react';
+import { useEffect, useState, type KeyboardEvent } from 'react';
 import { ArrowRight, Check, Send } from 'lucide-react';
 import type { WorkbenchFeedRow } from '../../types';
 import { useT } from '../../i18n/useT';
@@ -101,6 +101,23 @@ export default function TaskCard({
   }
   const overdueDue = ask?.overdue && ask.due ? t('workbench.card.due', { date: ask.due }) : null;
 
+  // The relative time is read at render, so re-render on a clock: every 10 s
+  // while under a minute ("0 秒前" must not stand for half a minute), then
+  // every minute.
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const then = item.time ? Date.parse(item.time) : NaN;
+    if (Number.isNaN(then)) return;
+    let id: number;
+    const schedule = () => {
+      id = window.setTimeout(() => {
+        setTick((n) => n + 1);
+        schedule();
+      }, Date.now() - then < 60_000 ? 10_000 : 60_000);
+    };
+    schedule();
+    return () => window.clearTimeout(id);
+  }, [item.time]);
   const timeText = item.time ? formatRelativeTime(item.time, t) : '';
 
   function confirm() {

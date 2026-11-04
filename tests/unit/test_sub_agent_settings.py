@@ -563,6 +563,29 @@ class TestClaudeLiveModels:
                       "claude-sonnet-5", "claude-haiku-4-5"):
             assert model in allowed
 
+    def test_static_fallback_carries_display_names(self, client, monkeypatch):
+        """The owner's rule (Windows smoke): no raw model ids anywhere. A cold
+        daemon serves the static list before the CLI probe lands, so that
+        list carries display names too."""
+        self._patch_live(monkeypatch, None)
+        model = self._claude(client)["param_schema"]["model"]
+        labels = model["labels"]
+        assert set(labels) == set(model["allowed"])
+        assert labels["claude-opus-5-5"] == "Opus 5.5"
+        assert labels["claude-fable-5-1"] == "Fable 5.1"
+        assert labels["claude-haiku-4-5"] == "Haiku 4.5"
+        assert labels["claude-sonnet-5"] == "Sonnet 5"
+        assert labels["opus"] == "Opus"
+        assert all(labels[v] != v for v in model["allowed"])
+
+    def test_saved_value_appended_to_live_list_gets_a_name(self, client, monkeypatch):
+        self._patch_live(monkeypatch, None)
+        assert client.put("/api/v2/settings/sub-agents/claude-code/config",
+                          json={"model": "claude-opus-4-8"}).status_code == 200
+        self._patch_live(monkeypatch, [{"value": "opus", "label": "Opus 5.5"}])
+        model = self._claude(client)["param_schema"]["model"]
+        assert model["labels"]["claude-opus-4-8"] == "Opus 4.8"
+
     def test_get_keeps_a_saved_value_the_live_list_dropped(self, client,
                                                            monkeypatch):
         """A saved pin the account no longer lists must stay visible as the

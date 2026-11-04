@@ -168,7 +168,7 @@ describe('PinTargetSelect model line', () => {
       'Default(Sonnet 5.5)', 'Sonnet 5.5', 'Opus 5.5',
       'low', 'medium', 'high', 'xhigh', 'max',
     ]);
-    expect(within(card).getByText('This conversation only. Set the default in Settings.')).toBeTruthy();
+    expect(within(card).getByText('Used by new sessions in this project. Change the default in Settings.')).toBeTruthy();
     fireEvent.click(line('claude-code'));
     expect(screen.queryByTestId('pin-model-card')).toBeNull();
   });
@@ -342,7 +342,7 @@ describe('PinTargetSelect model line in Chinese', () => {
     fireEvent.click(screen.getByRole('button', { name: '选择此对话的交流对象' }));
     fireEvent.click(line('claude-code'));
     const card = screen.getByTestId('pin-model-card');
-    expect(within(card).getByText('仅对本对话生效。默认值在设置中修改。')).toBeTruthy();
+    expect(within(card).getByText('本项目的新会话都用它。默认值在设置中修改。')).toBeTruthy();
     expect(within(card).getByText('思考强度')).toBeTruthy();
     localStorage.removeItem('orbital.locale');
   });

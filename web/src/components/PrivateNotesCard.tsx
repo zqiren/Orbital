@@ -13,7 +13,8 @@
  * GET /projects/{pid}/imported-notes reports notes and the project has at
  * least two available workers (with one, "every agent here" is false). Until
  * the fold has completed it shows only the count sentence. A click opens the
- * imported INDEX.md in the Files panel through the chat's path opener.
+ * imported INDEX.md in the Files panel through the chat's path opener; before
+ * the fold, the click runs the first-use seed first (`?seed=1`).
  *
  * Nothing renders while the answer loads or when it fails, so the left-off
  * cards below never jump.
@@ -54,6 +55,27 @@ export default function PrivateNotesCard({ projectId, project, agents, onOpenPat
   }, [projectId, imported]);
 
   const notes = state && state.projectId === projectId ? state.notes : null;
+
+  // Before the fold (no session yet), 打开 runs the first-use seed and opens
+  // the index only once the daemon says it exists: never a 404.
+  async function open(current: ImportedNotes) {
+    if (current.folded) {
+      onOpenPath?.(current.index_path);
+      return;
+    }
+    try {
+      const raw = await api<unknown>(
+        `/api/v2/projects/${encodeURIComponent(projectId)}/imported-notes?seed=1`,
+      );
+      const next = parseImportedNotes(raw);
+      if (!next) return;
+      setState({ projectId, notes: next });
+      if (next.folded) onOpenPath?.(next.index_path);
+    } catch {
+      /* the card stays as it was; the next click retries */
+    }
+  }
+
   if (!notes || !showNotesCard(notes, project)) return null;
 
   const n = notes.count;
@@ -68,7 +90,7 @@ export default function PrivateNotesCard({ projectId, project, agents, onOpenPat
       type="button"
       data-testid="private-notes-card"
       data-folded={notes.folded ? 'true' : 'false'}
-      onClick={() => onOpenPath?.(notes.index_path)}
+      onClick={() => void open(notes)}
       className="group mt-6 -mb-2 flex w-full items-center gap-3 rounded-xl border border-border bg-card px-3.5 py-3 text-left shadow-[0_1px_2px_rgb(0_0_0/0.04)] transition-[border-color,box-shadow,transform] duration-150 hover:border-accent/50 hover:shadow-[0_4px_12px_-4px_rgb(0_0_0/0.12)] active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 motion-reduce:transition-none motion-reduce:active:scale-100"
     >
       <span className="shrink-0 [&>div]:h-8 [&>div]:w-8 [&>div]:rounded-lg [&>div]:p-1">

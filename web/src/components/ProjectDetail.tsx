@@ -344,11 +344,14 @@ export default function ProjectDetail({
   ) : null;
 
   // The page (or the chat) itself. `relative` so the file-preview drawer
-  // (absolute) overlays only this area. The OpenPathContext hands the
-  // drawer-open handler down to the chat's MarkdownContent.
+  // (absolute) overlays only this area. It clips without being scrollable
+  // (`project-body-clip`): every closed sheet (preview, panel, undo) waits
+  // just below it, and a scrolled overflow-hidden box lifted one into view. The OpenPathContext hands the
+  // drawer-open handler down to the chat's MarkdownContent and to the
+  // drawer's own preview (spec 153 note links).
   const body = (
     <div
-      className={`flex-1 overflow-hidden min-h-0 relative ${phone ? 'vt-project-body' : ''} ${
+      className={`flex-1 project-body-clip min-h-0 relative ${phone ? 'vt-project-body' : ''} ${
         pageDef ? 'bg-background' : ''
       }`}
     >
@@ -364,20 +367,22 @@ export default function ProjectDetail({
               onNewAutomation: handleNewAutomation,
             })
           : children}
+        {/* Inside the provider: a relative link in a previewed markdown file
+            (an imported INDEX's notes) opens through the same handler. */}
+        <FilePreviewDrawer
+          open={previewPath !== null && !chatPanelOwnsPreview}
+          // Content-driven (NOT previewPath): the drawer renders its content
+          // while still off-screen so the slide-in reveals an already-painted
+          // layer. Also keeps content during the close slide-out (no empty
+          // "select a file" flash on close either).
+          selectedPath={previewContent?.path ?? null}
+          fileContent={previewContent}
+          loading={previewLoading}
+          onClose={handleClosePreview}
+          onSave={(path, content) => saveFileContent(project.project_id, path, content)}
+          historyProjectId={project.project_id}
+        />
       </OpenPathContext.Provider>
-      <FilePreviewDrawer
-        open={previewPath !== null && !chatPanelOwnsPreview}
-        // Content-driven (NOT previewPath): the drawer renders its content
-        // while still off-screen so the slide-in reveals an already-painted
-        // layer. Also keeps content during the close slide-out (no empty
-        // "select a file" flash on close either).
-        selectedPath={previewContent?.path ?? null}
-        fileContent={previewContent}
-        loading={previewLoading}
-        onClose={handleClosePreview}
-        onSave={(path, content) => saveFileContent(project.project_id, path, content)}
-        historyProjectId={project.project_id}
-      />
       {previewToast && (
         <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-lg bg-primary text-background text-[13px] shadow-lg max-w-[90%] text-center pointer-events-none">
           {previewToast}

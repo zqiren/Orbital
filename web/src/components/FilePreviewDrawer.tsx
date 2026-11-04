@@ -103,6 +103,9 @@ interface FilePreviewDrawerProps {
    * sheet); every other overlay keeps its layer.
    */
   raised?: boolean;
+  /** Overlay only: the ✕'s label when the drawer is not a file preview
+   *  (the turn undo sheet's 关闭). Default: 关闭预览. */
+  closeLabel?: string;
 }
 
 /**
@@ -131,6 +134,7 @@ export default function FilePreviewDrawer({
   historyProjectId,
   closeIcon = 'collapse',
   raised = false,
+  closeLabel,
 }: FilePreviewDrawerProps) {
   const t = useT();
   const panelRef = useRef<HTMLDivElement>(null);
@@ -435,7 +439,7 @@ export default function FilePreviewDrawer({
             ref={closeBtnRef}
             type="button"
             onClick={onClose}
-            aria-label={t('filePreview.close')}
+            aria-label={closeLabel ?? t('filePreview.close')}
             className={`flex items-center justify-center w-7 h-7 shrink-0 rounded-md text-secondary hover:text-primary hover:bg-card-hover transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 ${
               header ? '' : '-mr-1'
             }`}

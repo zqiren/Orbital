@@ -9,6 +9,7 @@ import {
   authorOf,
   buildRows,
   changeLabel,
+  cssText,
   dayLabel,
   defaultChecked,
   editorColor,
@@ -20,6 +21,7 @@ import {
   rowKeyForVersion,
   selectionFor,
   stripFileEditCounts,
+  tintStyle,
   undoneCount,
 } from './historyModel';
 
@@ -191,5 +193,16 @@ describe('capsule', () => {
     expect([...spans.keys()]).toEqual(['c2', 'c3']);
     expect(spans.get('c2')).toEqual({ fromTs: 'T1', toTs: 'T2' });
     expect(spans.get('c3')).toEqual({ fromTs: 'T2', toTs: null });
+  });
+});
+
+// The hast `style` string is parsed back into a React style object; a
+// malformed vendor prefix (`-webkit--box-…`) came back as the unsupported
+// "Webkit-BoxDecorationBreak" and React warned when the history view opened.
+describe('cssText', () => {
+  it('writes the vendor prefix as -webkit-box-decoration-break', () => {
+    const css = cssText(tintStyle('add', '#539AF8'));
+    expect(css).toContain('-webkit-box-decoration-break: clone');
+    expect(css).not.toContain('--box');
   });
 });

@@ -149,6 +149,49 @@ class TestStore:
         assert {v["sha"] for v in s2.versions} == shas
 
 
+class TestHasChanges:
+    """D10 × spec 153: an Orbital-attributed version is the daemon's own
+    bookkeeping (the first-use seed's AGENTS.md, the import fold's INDEX.md,
+    memory tidying). It is recorded but is not a change; every other
+    non-baseline version shows the 历史 glyph."""
+
+    def test_orbital_bookkeeping_under_orbital_is_not_a_change(self, tmp_path):
+        s = HistoryStore(str(tmp_path))
+        s.load()
+        s.record("notes.md", b"a\n", attrib=A, kind="baseline")
+        v = s.record("orbital/INDEX.md", b"- imported notes\n", attrib={"kind": "orbital"})
+        assert v is not None and v["kind"] == "create"  # still recorded
+        assert [r["path"] for r in s.versions_for("orbital/INDEX.md")] == ["orbital/INDEX.md"]
+        assert not s.has_changes()
+
+    def test_a_real_turn_flips_it(self, tmp_path):
+        s = HistoryStore(str(tmp_path))
+        s.load()
+        s.record("orbital/INDEX.md", b"- imported notes\n", attrib={"kind": "orbital"})
+        s.record("plan.md", b"step one\n", attrib={"kind": "tool", "sessions": [{"session_id": "s1", "agents": ["orbital"]}]})
+        assert s.has_changes()
+
+    def test_orbital_bookkeeping_anywhere_is_not_a_change(self, tmp_path):
+        s = HistoryStore(str(tmp_path))
+        s.load()
+        s.record("AGENTS.md", b"# AGENTS.md\n", attrib={"kind": "orbital"})
+        assert s.versions_for("AGENTS.md")  # still recorded
+        assert not s.has_changes()
+
+    def test_a_user_restore_counts(self, tmp_path):
+        s = HistoryStore(str(tmp_path))
+        s.load()
+        s.record("notes.md", b"a\n", attrib=A, kind="baseline")
+        s.record("notes.md", b"b\n", attrib={"kind": "restore"}, kind="restore")
+        assert s.has_changes()
+
+    def test_agent_edit_of_a_memory_file_counts(self, tmp_path):
+        s = HistoryStore(str(tmp_path))
+        s.load()
+        s.record("orbital/PROJECT_STATE.md", b"x\n", attrib={"kind": "running", "sessions": []})
+        assert s.has_changes()
+
+
 class TestCompose:
     def test_group_view_tags_editor_per_line(self):
         base = b"one\ntwo\nthree\n"

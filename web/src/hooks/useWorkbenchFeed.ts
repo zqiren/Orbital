@@ -25,9 +25,12 @@
  * Module-level on purpose: leaving the Workbench mid-send loses nothing.
  */
 
-import { useEffect, useSyncExternalStore } from 'react';
+import { useEffect, useRef, useSyncExternalStore } from 'react';
 import { api } from '../config';
-import type { WebSocketEvent, WorkbenchFeedRow } from '../types';
+import type { ActivityEvent, WebSocketEvent, WorkbenchFeedRow } from '../types';
+import { describeLiveActivity, describeWorkerTool, type ActivityTranslate } from '../utils/chatTransform';
+import { translate } from '../i18n/useT';
+import { useLocale } from '../i18n/LocaleContext';
 import { useWebSocket } from './useWebSocket';
 import { isRunning } from '../utils/waitingOnYou';
 
@@ -197,6 +200,20 @@ export function setActivity(
   set({ activity: { ...state.activity, [key]: { ...cur, [kind]: text } } });
 }
 
+/**
+ * A running card's line for one `agent.activity` event, worded as the chat
+ * words the same event. A tool result is not a new step (the chat only marks
+ * the call done), so it leaves the line as it was: null.
+ */
+export function activityLine(e: Partial<ActivityEvent>, tr: ActivityTranslate): string | null {
+  if (e.category === 'tool_result' || e.worker_event === 'tool_result') return null;
+  if (e.worker_event === 'tool_call') {
+    return describeWorkerTool(e.tool_name || 'tool', e.arguments, undefined, tr);
+  }
+  if (!e.description) return null;
+  return e.tool_name ? describeLiveActivity(e.tool_name, e.arguments, undefined, tr, e.description) : e.description;
+}
+
 /** The live line of a running session, if any. */
 export function activityText(feed: FeedState, projectId: string, sessionId: string | null): string | null {
   if (!sessionId) return null;
@@ -242,6 +259,9 @@ export const FEED_EVENTS: ReadonlyArray<WebSocketEvent['type']> = [
 
 export function useWorkbenchFeedSync(enabled: boolean): void {
   const ws = useWebSocket();
+  const { locale } = useLocale();
+  const localeRef = useRef(locale);
+  useEffect(() => { localeRef.current = locale; }, [locale]);
   const connected = ws.connectionState === 'connected';
   useEffect(() => {
     if (enabled && connected) void refreshFeed();
@@ -256,10 +276,10 @@ export function useWorkbenchFeedSync(enabled: boolean): void {
       }
     };
     const onActivity = (event: WebSocketEvent) => {
-      const e = event as { project_id?: string; session_id?: string; description?: string };
-      if (e.project_id && e.session_id && e.description) {
-        setActivity(e.project_id, e.session_id, 'tool', e.description);
-      }
+      const e = event as Partial<ActivityEvent>;
+      if (!e.project_id || !e.session_id) return;
+      const line = activityLine(e, (k, v) => translate(localeRef.current, k, v));
+      if (line) setActivity(e.project_id, e.session_id, 'tool', line);
     };
     for (const type of FEED_EVENTS) ws.on(type, onEvent);
     ws.on('agent.status_summary', onSummary);

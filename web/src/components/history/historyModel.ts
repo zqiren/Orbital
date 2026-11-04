@@ -297,7 +297,9 @@ export function tintStyle(op: 'add' | 'del', color: string): Record<string, stri
 /** The same style as a CSS declaration string (for hast `style`). */
 export function cssText(style: Record<string, string>): string {
   return Object.entries(style)
-    .map(([k, v]) => `${k.replace(/^Webkit/, '-webkit-').replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}: ${v}`)
+    // `WebkitBoxDecorationBreak` → `-webkit-box-decoration-break`: the
+    // capital W already yields the leading dash.
+    .map(([k, v]) => `${k.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}: ${v}`)
     .join('; ');
 }
 

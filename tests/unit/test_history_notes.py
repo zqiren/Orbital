@@ -261,6 +261,28 @@ def test_imported_notes_endpoint(routes, home, tmp_path):
     assert client.get("/api/v2/projects/proj_nope/imported-notes").status_code == 404
 
 
+def test_imported_notes_seed_runs_the_fold_before_answering(routes, home, tmp_path):
+    """打开 on the memory card must never 404: the click asks with seed=1 and
+    the answer comes after the first-use seed, so the index exists. A plain
+    GET (the card rendering) still writes nothing (spec 138)."""
+    client, store, _ = routes
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    stage_memory(home, str(ws))
+    _ready(client)
+    pid = store.create_project({"name": "ws", "workspace": str(ws), "imported": True,
+                                "deferred_seed": True})
+    idx = ws / "orbital" / "imported" / "claude-code" / "INDEX.md"
+    assert client.get(f"/api/v2/projects/{pid}/imported-notes").json()["folded"] is False
+    assert not idx.exists() and not (ws / "AGENTS.md").exists()
+    r = client.get(f"/api/v2/projects/{pid}/imported-notes", params={"seed": 1})
+    assert r.status_code == 200 and r.json()["folded"] is True
+    assert idx.is_file()
+    assert store.get_project(pid)["deferred_seed"] is False
+    # Idempotent: a second click answers the same without re-seeding.
+    assert client.get(f"/api/v2/projects/{pid}/imported-notes", params={"seed": 1}).json()["folded"] is True
+
+
 def test_imported_notes_before_the_scan_reads_the_workspace_directly(routes, home, tmp_path):
     client, store, sc = routes
     ws = tmp_path / "ws"

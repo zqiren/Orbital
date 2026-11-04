@@ -276,3 +276,28 @@ describe('Workbench — send', () => {
     expect(screen.getByTestId('wb-composer-input')).toHaveValue('');
   });
 });
+
+// "0 s ago" must not sit on a card for half a minute: under a minute the
+// card's relative time refreshes at least every 10 s.
+describe('Workbench — relative time ticks', () => {
+  it('a card a few seconds old moves on without a feed refresh', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false, toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
+    try {
+      const start = new Date('2026-11-04T10:00:00Z').getTime();
+      vi.setSystemTime(start);
+      const fresh = row({
+        project_id: 'proj-b', session_id: 'run', session_uuid: 'run', name: 'Weekly report', status: 'running',
+        last_reply_at: null, last_user_at: new Date(start).toISOString(),
+      });
+      await renderPage([fresh]);
+      const time = () => cardWith('Weekly report').querySelector('.wb-time')?.textContent;
+      expect(time()).toBe('0s ago');
+      await act(async () => { vi.advanceTimersByTime(10_000); });
+      expect(time()).toBe('10s ago');
+      await act(async () => { vi.advanceTimersByTime(10_000); });
+      expect(time()).toBe('20s ago');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

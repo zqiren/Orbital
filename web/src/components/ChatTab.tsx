@@ -31,7 +31,7 @@
  *   ChatView reports the draft applied.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
 import type {
   ActivityEvent,
@@ -68,6 +68,7 @@ import BrowserView from './panel/BrowserView';
 import PanelHandle from './panel/PanelHandle';
 import FileExplorer from './FileExplorer';
 import TurnUndoSheet, { type TurnRef } from './history/TurnUndoSheet';
+import { OpenPathContext } from './filePreviewContext';
 import { bumpFileHistory, requestHistoryFocus, SETTLE_MS } from '../hooks/useFileHistory';
 import { useT } from '../i18n/useT';
 
@@ -309,15 +310,23 @@ export default function ChatTab({
     return () => clearTimeout(id);
   }, [undoToast]);
   const closeUndo = useCallback(() => setUndoTurn(null), [setUndoTurn]);
+  // Below the dock threshold the file opens in ProjectDetail's drawer, which
+  // shows only what its opener fetched: hand 查看 to that opener (the one a
+  // chat path click uses), or the drawer slides in empty.
+  const openPath = useContext(OpenPathContext);
   const handleUndoView = useCallback(
     (path: string, v: number) => {
       setUndoTurn(null);
       requestHistoryFocus(projectId, path, v);
+      if (!docked && openPath) {
+        openPath(path);
+        return;
+      }
       setRoute((prev) =>
         prev.name === 'project' && prev.projectId === projectId ? { ...prev, previewPath: path } : prev,
       );
     },
-    [projectId, setRoute, setUndoTurn],
+    [projectId, setRoute, setUndoTurn, docked, openPath],
   );
   const handleUndoRestored = useCallback(
     (n: number, undo: () => Promise<void>, done: boolean) => {
@@ -646,6 +655,7 @@ export default function ChatTab({
           onClose={closeUndo}
           header={undoTitle}
           raised
+          closeLabel={t('turn.close')}
         >
           {undoSheet ?? <div />}
         </FilePreviewDrawer>

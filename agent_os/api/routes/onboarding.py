@@ -301,12 +301,29 @@ async def project_left_off(project_id: str):
         return {"last_time": None, "unfinished": []}
 
 
+async def _seed_on_open(project_id: str) -> None:
+    """The first-use seed, as the session paths run it (off the event loop,
+    then the queue dispatcher creation skipped); a direct seed when the
+    agents routes are not configured on this same store (unit tests).
+    Never raises."""
+    from agent_os.api.routes import agents_v2
+    from agent_os.onboarding.deferred_seed import ensure_project_seeded
+    if agents_v2._project_store is not None and agents_v2._project_store is _project_store:
+        await agents_v2._ensure_seeded(project_id)
+        return
+    await asyncio.to_thread(ensure_project_seeded, _project_store, project_id,
+                            scanner=get_scanner())
+
+
 @projects_router.get("/{project_id}/imported-notes")
-async def project_imported_notes(project_id: str):
+async def project_imported_notes(project_id: str, seed: bool = False):
     """Spec 153 §4.4: how many private notes Claude Code kept about this
     project's folder (the scanner's count, or a direct read of this one
     workspace before the scan is done) and whether the fold has put them in
-    the project: the seed field is cleared and the imported index exists."""
+    the project: the seed field is cleared and the imported index exists.
+
+    ``seed`` (the card's 打开): run the first-use seed before answering, so
+    the index it opens exists. Without it the read writes nothing (spec 138)."""
     if _project_store is None:
         raise HTTPException(status_code=503, detail="project store unavailable")
     project = _project_store.get_project(project_id)
@@ -315,6 +332,9 @@ async def project_imported_notes(project_id: str):
     from agent_os.onboarding.deferred_seed import (
         IMPORTED_INDEX_PATH, is_deferred, workspace_notes,
     )
+    if seed and is_deferred(project):
+        await _seed_on_open(project_id)
+        project = _project_store.get_project(project_id) or project
     from agent_os.onboarding.sources.claude_code import AGENT
 
     workspace = project.get("workspace") or ""

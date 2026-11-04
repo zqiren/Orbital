@@ -625,6 +625,15 @@ body {
 .vt-settings-back { view-transition-name: settings-back; }
 .vt-project-body { view-transition-name: project-body; }
 
+/* The project body clips its overlay sheets (closed ones wait just below it).
+   `clip`, unlike `hidden`, cannot be scrolled by focus, scroll-into-view or a
+   phone keyboard, so a closed sheet never rises into view; `hidden` stays as
+   the fallback for a WebKit without `clip`. */
+.project-body-clip {
+  overflow: hidden;
+  overflow: clip;
+}
+
 /* The chat's session heading (spec 137 follow-up): the messages scroll under
    a 16px fade below it. Written as a plain gradient on purpose — Tailwind v4's
    `bg-linear-to-b … to-transparent` interpolates in oklab, and WebKit (the

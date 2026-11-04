@@ -844,8 +844,13 @@ async def _augment_claude_live_models(entries: list[dict]) -> list[dict]:
                 allowed.append(saved)
             model_schema["allowed"] = allowed
             # Additive: the CLI's display names ("Opus 5.5") for the dropdown;
-            # older frontends ignore it and show the raw values.
-            model_schema["labels"] = {m["value"]: m["label"] for m in models}
+            # older frontends ignore it and show the raw values. A saved value
+            # the live list dropped gets a derived name: no raw ids anywhere.
+            from agent_os.daemon_v2.sub_agent_config_store import claude_model_label
+            labels = {m["value"]: m["label"] for m in models}
+            for value in allowed:
+                labels.setdefault(value, claude_model_label(value))
+            model_schema["labels"] = labels
     return entries
 
 
@@ -934,6 +939,10 @@ def _serve_last_live(name: str, entries: list[dict]) -> None:
             saved = (entry.get("config") or {}).get(param)
             if isinstance(allowed, list) and saved and saved not in allowed:
                 allowed.append(saved)
+                labels = param_schema.get("labels")
+                if isinstance(labels, dict) and entry.get("slug") == "claude-code":
+                    from agent_os.daemon_v2.sub_agent_config_store import claude_model_label
+                    labels.setdefault(saved, claude_model_label(saved))
         entry["param_schema"] = schema
 
 

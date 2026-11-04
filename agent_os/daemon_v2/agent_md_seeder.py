@@ -182,10 +182,14 @@ def seed_project_agent_md(project_store, project_id: str) -> dict:
         agent_name=project.get("agent_name") or project.get("name") or "(unnamed)",
     )
 
+    from agent_os.history import ORBITAL_ATTRIB, recording
+
     try:
         # newline="\n" so the seeded file is byte-identical on every platform —
-        # it is expected to land in the user's own git repo.
-        with open(dest, "w", encoding="utf-8", newline="\n") as f:
+        # it is expected to land in the user's own git repo. Recorded in file
+        # history as Orbital's own write (spec 065 D10: no 历史 glyph for it).
+        with recording(dest, ORBITAL_ATTRIB), \
+                open(dest, "w", encoding="utf-8", newline="\n") as f:
             f.write(content)
     except OSError:
         logger.error(
