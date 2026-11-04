@@ -490,6 +490,22 @@ async def test_a_launcher_job_is_attributed_and_its_join_is_dispatched_to_the_wo
     assert started and started[0]["meta"]["suppress_wake"] is True
 
 
+async def test_a_launcher_job_in_a_chinese_named_project_reaches_its_session(
+        registry, rec, tmp_path):
+    # Spec 159: the session id starts with the project name; the launcher used
+    # to keep only ASCII, so the join went to "_3ffcfbcb", a session that does
+    # not exist.
+    cn_sid = "中文项目_3ffcfbcb"
+    await registry.start()
+    registry.watch(str(tmp_path), PROJECT)
+    _run_launcher(tmp_path, "echo 完成; exit 0", ORBITAL_SESSION_ID=cn_sid,
+                  ORBITAL_PROJECT_ID=PROJECT, ORBITAL_AGENT="codex")
+    await _tick_until(registry, lambda: rec.dispatched)
+    [d] = rec.dispatched
+    assert (d["project_id"], d["session_id"], d["handle"]) == (PROJECT, cn_sid, "codex")
+    assert "完成" in d["content"]
+
+
 async def test_the_launchers_kill_command_ends_the_job_and_records_143(registry, tmp_path):
     out = _run_launcher(tmp_path, "sleep 60", ORBITAL_SESSION_ID=SID)
     pid = int(out.split("(pid ")[1].split(")")[0])

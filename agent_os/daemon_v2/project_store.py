@@ -19,7 +19,6 @@ import asyncio
 import json
 import logging
 import os
-import re
 import threading
 import time
 from uuid import uuid4
@@ -269,12 +268,6 @@ class ProjectStore:
             project.setdefault("pending_unsandboxed_runs", [])
         return project
 
-    @staticmethod
-    def _sanitize_name(name: str) -> str:
-        """Strip characters that are problematic in filenames."""
-        s = re.sub(r'[^\w\s-]', '', name)
-        return s.strip()
-
     def create_project(self, config: dict) -> str:
         pid = "proj_" + uuid4().hex[:12]
         # Telemetry counter (spec 046 §4). Scratch is auto-created on first
@@ -285,10 +278,14 @@ class ProjectStore:
 
             telemetry.emit("project_created")
             telemetry.latch("first_project")
-        # Sanitize project name to avoid filesystem issues
+        # The name is stored as typed, trimmed (spec 159). It never becomes a
+        # file or folder name: the workspace is the folder the user picked,
+        # sub-agent dirs use the handle, and session ids go through
+        # ``agent_manager._sanitize_project_name``. Rename already kept every
+        # character; create and import now match it.
         raw_name = config.get("name", "")
-        if raw_name:
-            config["name"] = self._sanitize_name(raw_name)
+        if isinstance(raw_name, str) and raw_name:
+            config["name"] = raw_name.strip()
         # Default agent_name to project name if not provided
         config.setdefault("agent_name", config.get("name", ""))
         # Default is_scratch to False

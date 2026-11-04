@@ -4,6 +4,7 @@ than constructing paths directly. See TASK-01.
 """
 
 import os
+import re
 
 # ---------------------------------------------------------------------------
 # Directory and file name constants — single place of truth
@@ -40,6 +41,17 @@ _LEDGER = "ledger"
 _USAGE_LEDGER = "usage.jsonl"
 _BUDGET = "budget"
 _BUDGET_NOTIFY_STATE = "notify_state.json"
+
+
+# The shape of a session stem Orbital minted (the JSONL filename under
+# ``orbital/sessions/`` without ``.jsonl``). It MUST accept every
+# ``AgentManager._mint_session_uuid`` output: those start with the project
+# name, which may be Chinese or any other script (spec 159), so ``\w`` here is
+# Unicode on purpose. It only keeps separators out (no ``/``, ``\``, ``:``,
+# whitespace, NUL or other control bytes, no leading ``.``); the callers'
+# authorization and realpath containment checks are the security boundary.
+# Use ``fullmatch``.
+SESSION_STEM_RE = re.compile(r"[\w-][\w.-]*")
 
 
 def _sanitize_handle(handle: str) -> str:

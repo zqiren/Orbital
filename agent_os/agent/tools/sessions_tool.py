@@ -8,15 +8,13 @@ from collections.abc import Callable, Iterator
 from datetime import datetime, timezone
 import json
 import os
-import re
 from typing import Any
 
-from agent_os.agent.project_paths import ProjectPaths
+from agent_os.agent.project_paths import SESSION_STEM_RE, ProjectPaths
 
 from .base import Tool, ToolResult
 
 
-_SAFE_SESSION_STEM = re.compile(r"^[A-Za-z0-9_.-]+$")
 _MAX_CONTENT_CHARS = 4_000
 _LIST_FIELDS = (
     "session_id",
@@ -276,7 +274,7 @@ class ReadSessionTool(Tool):
             if (
                 not isinstance(stem, str)
                 or ".." in stem
-                or not _SAFE_SESSION_STEM.fullmatch(stem)
+                or not SESSION_STEM_RE.fullmatch(stem)
             ):
                 return ToolResult(content="Error: invalid session_uuid")
 
