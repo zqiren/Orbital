@@ -3,77 +3,109 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 /**
- * useSeenReplies — spec 108: which reply has this device shown the user, per
- * session, per project.
+ * useSeenReplies — which reply the user has checked, per session (spec 108,
+ * moved into the daemon by spec 154 §5.1).
  *
- * `localStorage['orbital:seenReplies:<projectId>']` → `{ [sessionKey]: ISO }`
- * where the value is the server's `last_reply_at` the user has looked at
- * (`sessionKey` = `session_uuid ?? session_id`, see `seenKey`). Per device by
- * design: the phone (relay) and the desktop each keep their own map (spec 108
- * §8 Q2 deferred cross-device read state).
+ * The daemon keeps one checked store for every device (`checked.json`); each
+ * session-list and Workbench row carries its `checked_reply_at`. Checking a
+ * reply (viewing the session, or ✓ on a Workbench card) POSTs
+ * `/api/v2/workbench/checked`, and the daemon broadcasts `workbench.changed`
+ * so the other device updates.
  *
- * Two rules:
- *   - First visit seeds, not floods. When the key is absent for a project,
- *     the first non-empty list writes every row's current reply as seen —
- *     existing history is "read"; only replies that land from now on count.
- *   - Prune on write to the keys present in the current list, so deleted
- *     sessions never accumulate.
+ * Between the POST and the refetch that carries the new time, this module
+ * holds an optimistic mark per (project, session key) so the dot and the card
+ * leave at once. The effective checked time is the later of the row's and the
+ * mark. A failed POST drops the mark again.
  *
- * Storage failures are swallowed (the filter precedent in SessionSidebar):
- * the map still works in memory for this visit.
+ * Retired (spec 154): the per-device map in
+ * `localStorage['orbital:seenReplies:<pid>']`. It is no longer read or
+ * written, and it is left in place, so a downgrade finds its old state.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useSyncExternalStore } from 'react';
+import { api } from '../config';
 import type { SessionListEntry } from '../types';
 import { seenKey } from '../utils/sessionUnread';
+import { laterOf } from '../utils/waitingOnYou';
 
-export type SeenReplies = Readonly<Record<string, string>>;
-
+/** The retired spec-108 key (kept for reference and the downgrade test). */
 export function seenRepliesStorageKey(projectId: string): string {
   return `orbital:seenReplies:${projectId}`;
 }
 
-/** `null` when the key is absent (first visit); `{}` when present but
- * unparseable (treated as present so a corrupt value never re-seeds). */
-function read(storageKey: string | null): SeenReplies | null {
-  if (!storageKey) return null;
-  let raw: string | null;
-  try {
-    raw = localStorage.getItem(storageKey);
-  } catch {
-    return null;
-  }
-  if (raw === null) return null;
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      const out: Record<string, string> = {};
-      for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
-        if (typeof v === 'string') out[k] = v;
-      }
-      return out;
-    }
-  } catch {
-    /* corrupt — fall through */
-  }
-  return {};
+type Marks = ReadonlyMap<string, string>;
+let marks: Marks = new Map();
+const listeners = new Set<() => void>();
+
+function markKey(projectId: string, key: string): string {
+  return `${projectId}\u0000${key}`;
 }
 
-function write(storageKey: string | null, map: SeenReplies): void {
-  if (!storageKey) return;
+function emit(): void {
+  for (const fn of listeners) fn();
+}
+
+function subscribe(fn: () => void): () => void {
+  listeners.add(fn);
+  return () => listeners.delete(fn);
+}
+
+function snapshot(): Marks {
+  return marks;
+}
+
+/** The optimistic mark for one session, if any. */
+export function optimisticChecked(projectId: string, key: string): string | undefined {
+  return marks.get(markKey(projectId, key));
+}
+
+/** The effective checked time of a row: the later of the daemon's and the mark. */
+export function effectiveChecked(
+  projectId: string,
+  key: string,
+  serverValue: string | null | undefined,
+): string | null {
+  return laterOf(serverValue ?? null, optimisticChecked(projectId, key));
+}
+
+/**
+ * Record that the user checked `replyAt` in this session: an optimistic
+ * mark now, the daemon write behind it. Resolves true when the daemon took
+ * it; on failure the mark is dropped (the row badges again).
+ */
+export async function markChecked(projectId: string, key: string, replyAt: string): Promise<boolean> {
+  const k = markKey(projectId, key);
+  const prev = marks.get(k);
+  if (prev === replyAt) return true;
+  const next = new Map(marks);
+  next.set(k, laterOf(prev, replyAt) ?? replyAt);
+  marks = next;
+  emit();
   try {
-    localStorage.setItem(storageKey, JSON.stringify(map));
+    await api('/api/v2/workbench/checked', {
+      method: 'POST',
+      body: JSON.stringify({ project_id: projectId, session_id: key, reply_at: replyAt }),
+    });
+    return true;
   } catch {
-    /* storage unavailable — the map still works for this visit */
+    const back = new Map(marks);
+    if (prev === undefined) back.delete(k);
+    else back.set(k, prev);
+    marks = back;
+    emit();
+    return false;
   }
 }
 
-function pruneTo(map: SeenReplies, keep: ReadonlySet<string>): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const [k, v] of Object.entries(map)) {
-    if (keep.has(k)) out[k] = v;
-  }
-  return out;
+/** Re-render on every optimistic mark (the Workbench and the sidebars). */
+export function useCheckedMarks(): Marks {
+  return useSyncExternalStore(subscribe, snapshot, snapshot);
+}
+
+/** Test seam. */
+export function __resetCheckedMarks(): void {
+  marks = new Map();
+  emit();
 }
 
 export function useSeenReplies(
@@ -83,61 +115,22 @@ export function useSeenReplies(
   seenAt: (key: string) => string | undefined;
   markSeen: (key: string, replyAt: string) => void;
 } {
-  const storageKey = projectId ? seenRepliesStorageKey(projectId) : null;
-
-  // The map for the current project. Derived during render on a project
-  // switch (React's "adjust state from props" pattern) so the first render
-  // of the new project already reads its own map — never the previous one.
-  const [state, setState] = useState<{ key: string | null; map: SeenReplies }>(() => ({
-    key: storageKey,
-    map: read(storageKey) ?? {},
-  }));
-  let current = state;
-  if (state.key !== storageKey) {
-    current = { key: storageKey, map: read(storageKey) ?? {} };
-    setState(current);
-  }
-  // Writes go through a ref (the source of truth between renders — never a
-  // closure variable read inside a setState updater) and are mirrored into
-  // state so consumers re-render.
-  const mapRef = useRef<SeenReplies>(current.map);
-  mapRef.current = current.map;
-  // Keys in the current list — what a write prunes to.
-  const presentRef = useRef<ReadonlySet<string>>(new Set());
-  presentRef.current = new Set(sessions.map(seenKey));
-
-  const commit = useCallback(
-    (key: string | null, next: SeenReplies) => {
-      mapRef.current = next;
-      write(key, next);
-      setState({ key, map: next });
+  const current = useCheckedMarks();
+  const seenAt = useCallback(
+    (key: string) => {
+      if (!projectId) return undefined;
+      const row = sessions.find((s) => seenKey(s) === key);
+      const mark = current.get(markKey(projectId, key));
+      return laterOf(row?.checked_reply_at ?? null, mark) ?? undefined;
     },
-    [],
+    [projectId, sessions, current],
   );
-
-  // Seed on first visit: the key is absent and the list is non-empty.
-  useEffect(() => {
-    if (!storageKey || sessions.length === 0) return;
-    if (read(storageKey) !== null) return; // present (even empty): never re-seed
-    const seeded: Record<string, string> = {};
-    for (const s of sessions) {
-      if (s.last_reply_at) seeded[seenKey(s)] = s.last_reply_at;
-    }
-    commit(storageKey, seeded);
-  }, [storageKey, sessions, commit]);
-
-  const map = current.map;
-  const seenAt = useCallback((key: string) => map[key], [map]);
-
   const markSeen = useCallback(
     (key: string, replyAt: string) => {
-      if (mapRef.current[key] === replyAt) return;
-      const next = pruneTo(mapRef.current, presentRef.current);
-      next[key] = replyAt;
-      commit(storageKey, next);
+      if (!projectId) return;
+      void markChecked(projectId, key, replyAt);
     },
-    [storageKey, commit],
+    [projectId],
   );
-
   return { seenAt, markSeen };
 }

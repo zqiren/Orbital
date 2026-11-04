@@ -80,7 +80,7 @@
      unchanged; the dark block below sets them all explicitly. */
   --color-selected: var(--color-card-hover);       /* selected row on canvas/sidebar */
   --color-nav-selected: var(--color-nav-hover);    /* selected row on the nav column */
-  --color-session-selected: var(--color-card);     /* selected session row (raised) */
+  --color-session-selected: var(--color-card-hover); /* selected session row (item 157: apart from the white New session row) */
   --color-selected-text: var(--color-primary);
   --color-segment-on: var(--color-card);           /* segmented control "on" chip */
   --color-segment-on-text: var(--color-primary);

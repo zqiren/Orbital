@@ -2425,6 +2425,11 @@ async def list_project_sessions(project_id: str):
     )
     for entry in sessions:
         entry["worker_running"] = entry.get("session_id") in running
+    # Spec 154 §5.1 (additive): ``checked_reply_at``, the reply the user has
+    # checked in this session, from the daemon's checked store (seeded once
+    # per project on its first read). One dict lookup per row.
+    from agent_os.api.routes import workbench as workbench_routes
+    workbench_routes.annotate_checked(project_id, sessions)
     return {"project_id": project_id, "sessions": sessions}
 
 
@@ -2645,6 +2650,17 @@ async def patch_session_sub_agent_params(project_id: str, session_id: str,
     except FileLockError:
         raise HTTPException(
             status_code=503, detail="Chat session is busy — please retry")
+    # Item 158: the pick is also the project's, so every session there that
+    # has no pick of its own (a new one included) starts on it; "Default"
+    # clears it back to Settings. Additive project field.
+    if _project_store is not None:
+        project = _project_store.get_project(project_id) or {}
+        stored = dict(project.get("sub_agent_params") or {})
+        if cleaned:
+            stored[req.slug] = dict(cleaned)
+        else:
+            stored.pop(req.slug, None)
+        _project_store.update_project(project_id, {"sub_agent_params": stored})
     logger.info("session %s/%s: %s conversation params -> %s (persisted=%s)",
                 project_id, session_id, req.slug, cleaned, persisted)
     return {"session_id": session_id, "slug": req.slug, "params": cleaned,

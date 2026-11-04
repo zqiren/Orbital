@@ -410,14 +410,37 @@ class SubAgentManager:
             self._session_params[key] = loaded
         return loaded
 
+    def _project_params(self, project_id: str) -> dict[str, dict[str, str]]:
+        """Item 158: the project's last pin-menu pick per worker
+        (``project["sub_agent_params"]``, additive; absent = none)."""
+        store = self._project_store
+        try:
+            project = store.get_project(project_id) if store is not None else None
+        except Exception:
+            project = None
+        raw = project.get("sub_agent_params") if isinstance(project, dict) else None
+        if not isinstance(raw, dict):
+            return {}
+        return {s: {k: v for k, v in p.items() if isinstance(v, str) and v}
+                for s, p in raw.items() if isinstance(s, str) and isinstance(p, dict) and p}
+
     def session_params(self, project_id: str, session_id: str,
                        slug: str | None = None):
-        """``slug``'s overrides for the conversation (``{}`` = follow
-        Settings), or every slug's when ``slug`` is None."""
+        """``slug``'s effective overrides for the conversation (``{}`` =
+        follow Settings), or every slug's when ``slug`` is None.
+
+        Item 158: a slug the conversation never picked follows the project's
+        pick (the last one made in any of its sessions); a pick made in the
+        conversation wins there."""
         every = self._load_session_params(project_id, session_id)
+        project = self._project_params(project_id)
         if slug is None:
-            return {s: dict(p) for s, p in every.items()}
-        return dict(every.get(slug) or {})
+            merged = {s: dict(p) for s, p in project.items()}
+            merged.update({s: dict(p) for s, p in every.items()})
+            return merged
+        if slug in every:
+            return dict(every.get(slug) or {})
+        return dict(project.get(slug) or {})
 
     def set_session_params(self, project_id: str, session_id: str, slug: str,
                            params: dict[str, str]) -> bool:

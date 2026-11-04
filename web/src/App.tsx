@@ -2,8 +2,8 @@
 // Copyright (C) 2026 Orbital Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { ArrowLeft } from 'lucide-react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { PanelLeft } from 'lucide-react';
 import { usePlatform } from './hooks/usePlatform';
 import { useProjects } from './hooks/useProjects';
 import { useTriggers } from './hooks/useTriggers';
@@ -51,6 +51,11 @@ import ErrorBoundary from './components/ErrorBoundary';
 import GlobalSettings, { requestedSettingsSection } from './components/GlobalSettings';
 import CalendarPage from './components/CalendarPage';
 import WorkbenchPage from './components/WorkbenchPage';
+import { useWorkbenchFeed, useWorkbenchFeedSync } from './hooks/useWorkbenchFeed';
+import { useCheckedMarks } from './hooks/useSeenReplies';
+import { useHomeShortcut } from './hooks/useHomeShortcut';
+import { buildFeedGroups, waitingCounts } from './components/workbench/feedModel';
+import { projectDisplayName } from './utils/projectDisplayName';
 import { useT } from './i18n/useT';
 import { api, isRelayMode } from './config';
 import {
@@ -232,9 +237,17 @@ export default function App() {
     fetchAgentAvailability().catch(settleInstalledAgents);
   }, [agentsGeneration]);
 
-  // Mobile panel swap navigation
+  // Mobile panel swap navigation. Spec 154 §5.10: the phone opens on the
+  // content pane (the Workbench) unless this is the first run, which keeps
+  // the project list (decided once, when the first project list loads).
   const [isMobile, setIsMobile] = useState(false);
-  const [mobileView, setMobileView] = useState<'sidebar' | 'content'>('sidebar');
+  const [mobileView, setMobileView] = useState<'sidebar' | 'content'>('content');
+  const mobileViewDecidedRef = useRef(false);
+  useEffect(() => {
+    if (mobileViewDecidedRef.current || projects.length === 0) return;
+    mobileViewDecidedRef.current = true;
+    if (isFirstRun(projects)) setMobileView('sidebar');
+  }, [projects]);
 
   useEffect(() => {
     const mq = window.matchMedia('(max-width: 767px)');
@@ -327,6 +340,22 @@ export default function App() {
       for (const type of SUB_AGENTS_RUNNING_EVENTS) ws.off(type, onWorkerEvent);
     };
   }, [ws, subAgentsSync]);
+
+  // Spec 154 §5.2: one App-level feed behind the Workbench, the strip
+  // glyph's dot and the project-list counts (one predicate, one feed).
+  useWorkbenchFeedSync(setupComplete === true);
+  const feed = useWorkbenchFeed();
+  const checkedMarks = useCheckedMarks();
+  const feedGroups = useMemo(() => buildFeedGroups(feed, checkedMarks), [feed, checkedMarks]);
+  const projectWaitingCounts = useMemo(() => waitingCounts(feedGroups), [feedGroups]);
+  const anythingWaiting = feedGroups.waiting.length > 0;
+
+  // Spec 154 §5.9: ⌘0 / Ctrl+0 goes home from anywhere (not while focus is
+  // in the live browser view, which forwards keys to the agent's page).
+  useHomeShortcut(() => {
+    setRoute({ name: 'list' });
+    setMobileView('content');
+  });
 
   // Spec 146: asks changed in a project. The sidebar badge, an open Workbench
   // and the composer's tray all listen for this window event already.
@@ -527,10 +556,10 @@ export default function App() {
     setMobileView('content');
   }
 
-  // Workbench — a top-level Workspace-zone surface, sibling of Calendar
-  // (spec 2026-07-23 §6). Same mobile behavior as a project/calendar tap.
-  function handleSelectWorkbench() {
-    setRoute({ name: 'workbench' });
+  // Spec 154: the Workbench is home. The brand row, the strip glyph, ⌘0 and
+  // the phone header's mark all land here.
+  function handleGoHome() {
+    setRoute({ name: 'list' });
     setMobileView('content');
   }
 
@@ -659,10 +688,11 @@ export default function App() {
     setTourReplay(true);
   }
 
-  function handleMobileBack() {
+  function handleMobileProjects() {
     setMobileView('sidebar');
   }
 
+  const onHome = route.name === 'list' || route.name === 'create';
   const sidebarHidden = isMobile && mobileView !== 'sidebar';
   const contentHidden = isMobile && mobileView !== 'content';
 
@@ -678,7 +708,8 @@ export default function App() {
     connectionState: mapConnectionState(ws.connectionState, daemonOnline),
     onSelectProject: handleSelectProject,
     onSelectCalendar: handleSelectCalendar,
-    onSelectWorkbench: handleSelectWorkbench,
+    onSelectHome: handleGoHome,
+    waitingCounts: projectWaitingCounts,
     onNewProject: handleNewProject,
     onImportProjects: () => setImportOpen(true),
     onReorderProjects: reorderProjects,
@@ -697,10 +728,16 @@ export default function App() {
           docks it on click (spec 078 D1-D3 + the pin amendment). Every other
           route, and mobile always, render exactly what rendered before this
           spec. */}
-      {route.name === 'project' && !isMobile ? (
+      {/* Spec 154 §5.10: home (the Workbench) renders inside the same
+          edge-strip shell with the list collapsed, so the page's 72% width
+          reads as decided. First run keeps the full list. */}
+      {!isMobile && (route.name === 'project' || (onHome && !isFirstRun(projects))) ? (
         <EdgeStrip
           projects={projects}
-          currentProjectId={route.projectId}
+          currentProjectId={route.name === 'project' ? route.projectId : undefined}
+          waiting={anythingWaiting}
+          onHome={handleGoHome}
+          homeActive={onHome}
           agentStatuses={agentStatuses}
           pendingApprovals={pendingApprovals}
           subAgentsRunning={subAgentsRunning}
@@ -725,16 +762,43 @@ export default function App() {
           with the card-coloured PageToolbar, so it takes the card band
           too. Both classes are inert off macOS, so the non-mac render is
           unchanged. */}
-      <main className={`flex-1 overflow-hidden flex flex-col shadow-panel pt-titlebar ${route.name === 'project' || route.name === 'settings' ? 'titlebar-band-card' : 'titlebar-band-canvas'} ${contentHidden ? 'hidden' : ''}`}>
-        {/* Mobile back button */}
+      <main className={`flex-1 overflow-hidden flex flex-col shadow-panel pt-titlebar ${route.name === 'project' || route.name === 'settings' ? 'titlebar-band-card' : 'titlebar-band-canvas'} ${onHome && !isFirstRun(projects) ? 'wb-band' : ''} ${contentHidden ? 'hidden' : ''}`}>
+        {/* Phone header (spec 154 §5.9): the Orbital mark goes home, the
+            right button opens the project list. Replaces the old Back row. */}
         {isMobile && mobileView === 'content' && (
-          <button
-            onClick={handleMobileBack}
-            className="flex items-center gap-1.5 px-4 pt-3 pb-1 min-h-[44px] text-sm text-secondary hover:text-primary transition-colors"
+          <div
+            data-testid="mobile-header"
+            className={`flex items-center gap-2 pl-4 pr-3 pt-4 pb-2.5 shrink-0 ${
+              onHome && !isFirstRun(projects) ? 'bg-[#FAFBFC] dark:bg-background' : ''
+            }`}
           >
-            <ArrowLeft size={16} />
-            {t('app.mobileBack')}
-          </button>
+            <button
+              type="button"
+              onClick={handleGoHome}
+              aria-label={t('workbench.title')}
+              data-testid="mobile-home"
+              className="flex min-w-0 flex-1 items-center gap-2 min-h-[44px] text-left"
+            >
+              <img src="/icon-192.png" alt="" aria-hidden="true" className="h-6 w-6 shrink-0 rounded-md" />
+              {selectedProject ? (
+                <span className="truncate text-[15px] font-medium text-secondary">
+                  {projectDisplayName(selectedProject, t)}
+                </span>
+              ) : (
+                <span className="text-[17px] font-semibold text-primary">{t('sidebar.wordmark')}</span>
+              )}
+            </button>
+            <button
+              type="button"
+              onClick={handleMobileProjects}
+              aria-label={t('sidebar.projects')}
+              title={t('sidebar.projects')}
+              data-testid="mobile-projects"
+              className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-secondary hover:text-primary"
+            >
+              <PanelLeft size={17} strokeWidth={1.8} aria-hidden="true" />
+            </button>
+          </div>
         )}
 
         {platform.status && platform.status.platform !== 'null' && !platform.status.setup_complete && (
@@ -772,10 +836,6 @@ export default function App() {
             Wave 3; the component is kept so that swap is body-only. */}
         {route.name === 'calendar' && <CalendarPage />}
 
-        {/* Global Workbench surface (spec 2026-07-23 §6) — sibling of
-            Calendar in the Workspace zone. Same mount pattern: one component,
-            no projectId here vs. the per-project lens below. */}
-        {route.name === 'workbench' && <WorkbenchPage setRoute={setRoute} />}
 
         {route.name === 'project' && selectedProject && (
           // Scoped to the project view: a render crash here shows a recoverable
@@ -855,10 +915,16 @@ export default function App() {
         {(route.name === 'list' || route.name === 'create') && isFirstRun(projects) && (
           <FirstRunHome onNewProject={handleNewProject} onImportProjects={() => setImportOpen(true)} />
         )}
-        {route.name === 'list' && !isFirstRun(projects) && (
-          <div className="flex flex-col items-center justify-center flex-1 min-h-0 gap-4">
-            <p className="text-secondary text-sm">{t('app.list.selectPrompt')}</p>
-          </div>
+        {/* Spec 154: home is the Workbench (not first run). 'create' keeps
+            it mounted behind the Create Project dialog's backdrop. */}
+        {onHome && !isFirstRun(projects) && (
+          <WorkbenchPage
+            setRoute={setRoute}
+            projects={projects}
+            agents={agentsAvailable ?? []}
+            phone={isMobile}
+            managerModel={defaultModel}
+          />
         )}
 
         {/* 'blocked' route UI (BlockedBadge view) is a later task — minimal stub for now. */}

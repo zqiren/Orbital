@@ -27,6 +27,9 @@ const SESSION_LIST_EVENTS: ReadonlyArray<WebSocketEvent['type']> = [
   'chat.pending_enqueued',
   'chat.pending_dispatched',
   'chat.pending_cancelled',
+  // Spec 154: a reply checked on another device (or an ask closed) changes
+  // a row's `checked_reply_at`, which the unread dot reads.
+  'workbench.changed',
 ];
 
 // useSessions

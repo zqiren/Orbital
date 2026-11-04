@@ -40,7 +40,29 @@ INDEX_FILENAME = ".session-index.sqlite"
 #   "2": ``last_user_at`` / ``last_reply_at`` (spec 108).
 #   "3": ``imported_from`` / ``imported`` on imported sessions (session
 #        import, 2026-10-21).
-INDEX_VERSION = "3"
+#   "4": ``last_user_at`` skips bookkeeping rows; ``ask_ids`` (spec 154 §5.3).
+INDEX_VERSION = "4"
+
+# ``_kind`` tags of daemon bookkeeping rows (spec 112 A6, 124, 146). Some are
+# ``role: "user"`` (the record turn's [MEMORY] ask), but none is the user's
+# own message: they never set ``last_user_at`` and are never replies.
+BOOKKEEPING_KINDS = frozenset({"memory_record", "memory_tidy", "ask_card"})
+
+
+def is_user_row(rec: dict) -> bool:
+    """The user's own message: a ``user`` row that is not bookkeeping
+    (spec 154 §3: the record turn's ``user`` row landed after the reply and
+    hid every finished worker task from the unread badge)."""
+    return rec.get("role") == "user" and rec.get("_kind") not in BOOKKEEPING_KINDS
+
+
+def ask_card_id(rec: dict) -> str | None:
+    """The ask id an ``ask_card`` row records (spec 146), else None."""
+    if rec.get("_kind") != "ask_card":
+        return None
+    meta = rec.get("_meta")
+    ask_id = meta.get("ask_id") if isinstance(meta, dict) else None
+    return ask_id if isinstance(ask_id, str) and ask_id else None
 
 # ``_meta.event`` values of the system rows that answer the user (spec 108):
 # a worker's terminal marker (completed / error / failed / stopped /
@@ -141,7 +163,7 @@ def is_reply_row(rec: dict) -> bool:
     # Spec 112 A6: rows the end-of-run memory record turn produced (and the
     # row that asked for it) never answer the user — the reply before them
     # is the reply.
-    if rec.get("_kind") in ("memory_record", "memory_tidy", "ask_card"):
+    if rec.get("_kind") in BOOKKEEPING_KINDS:
         return False
     role = rec.get("role")
     if role == "assistant":
@@ -182,6 +204,7 @@ def derive_disk_entry(path: str, uuid: str) -> dict | None:
     last_real = None
     last_user_at = None  # timestamp of the last user row (spec 108)
     last_reply_at = None  # timestamp of the last reply-class row (spec 108)
+    ask_ids: list[str] = []  # asks this session opened, in order (spec 154)
     with open(path, "r", encoding="utf-8") as fh:
         for raw in fh:
             raw = raw.strip()
@@ -218,7 +241,10 @@ def derive_disk_entry(path: str, uuid: str) -> dict | None:
                 continue
             if first_real is None:
                 first_real = rec
-            if rec.get("role") == "user":
+            ask_id = ask_card_id(rec)
+            if ask_id is not None and ask_id not in ask_ids:
+                ask_ids.append(ask_id)
+            if is_user_row(rec):
                 if first_user_content is None:
                     first_user_content = rec.get("content")
                 last_user_at = rec.get("timestamp")
@@ -261,6 +287,11 @@ def derive_disk_entry(path: str, uuid: str) -> dict | None:
         "last_user_at": last_user_at,
         "last_reply_at": last_reply_at,
     }
+    if ask_ids:
+        # Spec 154 §5.3: the link from a session to the asks it opened (the
+        # ASKS.md open event carries no session). Only when non-empty, so
+        # almost every row keeps its exact shape.
+        entry["ask_ids"] = ask_ids
     if imported_from is not None:
         # A materialized imported session (contract §6): the list dedupes the
         # native session's virtual entry on ``imported_from.native_id``, and

@@ -4,11 +4,10 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Dispatch, ReactNode, SetStateAction } from 'react';
-import { PanelRight } from 'lucide-react';
+import { PanelRight, Plus } from 'lucide-react';
 import type { AgentRunStatus, FileContent, Project, Trigger } from '../types';
 import type { ProjectPage, ProjectRoute, Route } from '../route';
 import { pageTrail, routeUp } from '../route';
-import StatusBadge from './StatusBadge';
 import TasksStatusLine, { type TasksPane } from './TasksStatusLine';
 import SettingsIcon from './SettingsIcon';
 import PageToolbar from './PageToolbar';
@@ -32,7 +31,6 @@ import type { SessionListEntry } from '../types';
 import { fetchPathWithFallback } from '../utils/openPathWithFallback';
 import { useT } from '../i18n/useT';
 import { projectDisplayName } from '../utils/projectDisplayName';
-import { displayRunStatus } from '../utils/projectStatus';
 import { useCredentialCards, resolveCard } from '../hooks/useCredentialCards';
 
 interface ProjectDetailProps {
@@ -98,8 +96,8 @@ interface ProjectDetailProps {
 
 export default function ProjectDetail({
   project,
-  agentStatus,
-  subAgentsRunning = false,
+  // agentStatus / subAgentsRunning fed the header badge, which item 157
+  // removed; the props stay so callers need not change.
   statusSummary,
   route,
   setRoute,
@@ -290,14 +288,10 @@ export default function ProjectDetail({
 
   // ── Pieces the column (desktop, narrow) and the phone header share ───────
 
-  // Spec 102: Active while a pinned worker runs with the manager idle; a
-  // manager error/approval/waiting state is shown as-is.
-  const runStatus = displayRunStatus(agentStatus, subAgentsRunning);
-  const badge = <StatusBadge status={runStatus} />;
-
   // Budget corner (P3-G): converted window spend / warn / exhausted pill.
   // Reads the same GET /cost as the settings meter; event-driven (no
   // polling). Click → Budget settings.
+  const budgetPaused = snapshot?.pause_reason === 'budget';
   const budget = (plain: boolean) => (
     <BudgetCorner
       project={project}
@@ -327,12 +321,6 @@ export default function ProjectDetail({
         {credentialLabel}
       </span>
     ) : null;
-  // The column has room for the model alone: a card name reads
-  // "Provider · model", so the column shows what follows the last " · " and
-  // keeps the whole card name as the tooltip.
-  const columnModelLabel = credentialLabel.includes(' · ')
-    ? credentialLabel.slice(credentialLabel.lastIndexOf(' · ') + 3)
-    : credentialLabel;
 
   // Spec 137 gap 3: below the dock threshold there is no panel handle, so the
   // panel gets a button — an overlay on a narrow desktop window, the bottom
@@ -425,17 +413,30 @@ export default function ProjectDetail({
                 {/* data-tour on the title + badge, not the whole flex-1
                     cluster: a half-screen-wide box around a short name points
                     at nothing. */}
+                {/* Item 157: the state badge and the spend pill left this
+                    header (the chat shows what runs; spend is in Settings). */}
                 <div data-tour="project-header" className="flex items-center gap-3 min-w-0">
                   <h1 className="vt-project-title text-lg font-semibold tracking-[-0.01em] text-primary truncate min-w-0">
                     {projectName}
                   </h1>
-                  {badge}
                 </div>
               </div>
-              <div className="flex items-center gap-3 min-w-0 shrink">
-                {budget(false)}
+              <div className="flex items-center gap-1 min-w-0 shrink">
+                {budgetPaused && budget(false)}
                 {credentialChip('max-w-[220px] max-md:hidden')}
                 {panelButton}
+                {/* Item 157: the phone has no session list, so New session
+                    sits here beside the gear. */}
+                <button
+                  type="button"
+                  onClick={handleNewSession}
+                  aria-label={t('sessionSidebar.newSessionRow')}
+                  title={t('sessionSidebar.newSessionRow')}
+                  data-testid="phone-new-session"
+                  className="inline-flex shrink-0 items-center justify-center w-10 h-10 rounded-md text-secondary hover:text-primary hover:bg-card-hover transition-colors"
+                >
+                  <Plus size={16} strokeWidth={1.9} aria-hidden="true" />
+                </button>
                 <span data-tour="project-settings" className="inline-flex">
                   <SettingsIcon onClick={handleSettingsClick} />
                 </span>
@@ -490,33 +491,15 @@ export default function ProjectDetail({
               </span>
             </div>
           </div>
-          {/* ONE quiet meta line: the model, then the spend. The model gives
-              way first (ellipsis); the spend — or a paused budget's short
-              warning — stays whole. The " · " lives on the spend's wrapper, so
-              when BudgetCorner has nothing to say (no spend, no limit) the
-              wrapper is empty, hidden, and leaves no dangling separator. */}
-          <div
-            className="flex items-center min-w-0 text-[11px] text-secondary whitespace-nowrap"
-            data-testid="project-state-row"
-          >
-            {credentialLabel && (
-              <span
-                data-testid="project-credential-chip"
-                title={credentialLabel}
-                className="min-w-0 truncate"
-              >
-                {columnModelLabel}
-              </span>
-            )}
-            <span
-              data-testid="project-spend"
-              className={`flex shrink-0 items-center empty:hidden ${
-                credentialLabel ? "before:mx-1 before:text-muted before:content-['·']" : ''
-              }`}
-            >
+          {/* Item 157: the "model · spend" line is gone — spend lives in
+              project settings (Budget), the model in the composer's pin menu.
+              Only a budget that paused the queue still shows here: that one
+              stops work, so it must not hide in Settings. */}
+          {budgetPaused && (
+            <div className="flex items-center min-w-0 text-[11px] whitespace-nowrap" data-testid="project-spend">
               {budget(true)}
-            </span>
-          </div>
+            </div>
+          )}
           {statusSummaryLine}
         </div>
         {/* The status line — the only way into Tasks (spec 137). Always
