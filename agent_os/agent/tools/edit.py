@@ -21,8 +21,13 @@ from .base import Tool, ToolResult
 class EditTool(Tool):
     """Surgical find and replace within a file in the workspace."""
 
-    def __init__(self, workspace: str):
+    def __init__(self, workspace: str, *, session_id: str | None = None,
+                 worker: str | None = None):
         self._workspace = os.path.realpath(workspace)
+        # Spec 065: who this tool writes for, so the file-history version is
+        # exact (the session's Orbital mark, or the native fanout worker's).
+        self._session_id = session_id
+        self._worker = worker
         self.name = "edit"
         self.description = "Find and replace text in a file within the workspace."
         self.parameters = {
@@ -94,8 +99,12 @@ class EditTool(Tool):
             from agent_os.agent import memory_entries
             new_content, warns = memory_entries.process_on_write(self._workspace, resolved, new_content)
 
-            with open(resolved, "w", encoding="utf-8") as f:
-                f.write(new_content)
+            # Spec 065: the write and its version are one step under the
+            # project's history lock (the watcher echo then records nothing).
+            from agent_os.history import recording, tool_attrib
+            with recording(resolved, tool_attrib(self._session_id, worker=self._worker)):
+                with open(resolved, "w", encoding="utf-8") as f:
+                    f.write(new_content)
 
             out = json.dumps({"path": path, "status": "success", "replacements": 1})
             if warns:

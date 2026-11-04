@@ -405,8 +405,12 @@ async def write_file_content(project_id: str, req: WriteFileRequest):
     data = req.content.encode("utf-8")
     if len(data) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="Content too large")
-    with open(target, "w", encoding="utf-8", newline="") as f:
-        f.write(req.content)
+    # Spec 065: the Files panel save is the user's version (exact), written
+    # and recorded under the project's history lock. Same bytes as before.
+    from agent_os.history import USER_ATTRIB, recording
+    with recording(target, USER_ATTRIB):
+        with open(target, "w", encoding="utf-8", newline="") as f:
+            f.write(req.content)
     return {"path": req.path, "size": len(data)}
 
 

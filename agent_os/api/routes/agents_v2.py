@@ -925,6 +925,7 @@ async def create_project_from_request(req: CreateProjectRequest, *,
             logger.warning(
                 "failed to create dispatcher for new project %s", pid, exc_info=True,
             )
+    await _file_history_add(pid)
     # Session import (contract §6): list the folder's Claude Code / Codex
     # sessions and import its Codex automations now, not on the first list.
     try:
@@ -1410,6 +1411,29 @@ def _cleanup_project_files(workspace: str) -> None:
     _rmtree_safe(paths.orbital_dir)
 
 
+async def _file_history_add(pid: str) -> None:
+    """Spec 065: start watching a new project's folder (best effort)."""
+    fh = getattr(_agent_manager, "_file_history", None)
+    if fh is None:
+        return
+    try:
+        await fh.add_project(pid)
+    except Exception:
+        _cleanup_logger.warning("file history: could not watch project %s", pid, exc_info=True)
+
+
+async def _file_history_remove(pid: str) -> None:
+    """Spec 065: stop watching BEFORE orbital/ is removed, so no late flush
+    recreates the history store in a deleted project's folder."""
+    fh = getattr(_agent_manager, "_file_history", None)
+    if fh is None:
+        return
+    try:
+        await fh.remove_project(pid)
+    except Exception:
+        _cleanup_logger.warning("file history: could not unwatch project %s", pid, exc_info=True)
+
+
 def _rmtree_safe(path: str) -> None:
     """Remove a directory tree, ignoring if it doesn't exist."""
     if os.path.isdir(path):
@@ -1516,6 +1540,7 @@ async def bulk_delete_projects(body: BulkDeleteRequest):
                     pid, session_id=_agent_manager.current_holder_session_id(pid),
                 )
             await _cancel_jobs(pid)
+            await _file_history_remove(pid)
             workspace = p.get("workspace", "")
             if workspace:
                 _cleanup_project_files(workspace)
@@ -1552,6 +1577,7 @@ async def delete_project(project_id: str):
 
     # Spec 134 §3.7: background jobs end before their folders are removed.
     await _cancel_jobs(project_id)
+    await _file_history_remove(project_id)
 
     # Clean up project files on disk
     workspace = project.get("workspace", "")

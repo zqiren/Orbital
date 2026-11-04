@@ -14,8 +14,13 @@ from .base import Tool, ToolResult
 class WriteTool(Tool):
     """Create or overwrite a file within the workspace."""
 
-    def __init__(self, workspace: str):
+    def __init__(self, workspace: str, *, session_id: str | None = None,
+                 worker: str | None = None):
         self._workspace = os.path.realpath(workspace)
+        # Spec 065: who this tool writes for, so the file-history version is
+        # exact (the session's Orbital mark, or the native fanout worker's).
+        self._session_id = session_id
+        self._worker = worker
         self.name = "write"
         self.description = "Create or overwrite a file within the workspace."
         self.parameters = {
@@ -46,8 +51,12 @@ class WriteTool(Tool):
             parent = os.path.dirname(resolved)
             os.makedirs(parent, exist_ok=True)
 
-            with open(resolved, "w", encoding="utf-8") as f:
-                n = f.write(content)
+            # Spec 065: the write and its version are one step under the
+            # project's history lock (the watcher echo then records nothing).
+            from agent_os.history import recording, tool_attrib
+            with recording(resolved, tool_attrib(self._session_id, worker=self._worker)):
+                with open(resolved, "w", encoding="utf-8") as f:
+                    n = f.write(content)
 
             payload = {"path": resolved, "status": "success", "bytes": n}
             out = json.dumps(payload)
