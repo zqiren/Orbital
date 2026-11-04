@@ -32,6 +32,7 @@ import SetupGate from './components/SetupGate';
 import SetupWizard from './components/SetupWizard';
 import Sidebar from './components/Sidebar';
 import EdgeStrip from './components/EdgeStrip';
+import { effectivePinned, useWindowCovered } from './hooks/useWindowCover';
 import CreateProject from './components/CreateProject';
 import { requestOnboardingKickoff } from './utils/onboardingKickoff';
 import FirstRunHome from './components/FirstRunHome';
@@ -113,6 +114,9 @@ export default function App() {
   function toggleProjectListPinned() {
     setProjectListPinned((pinned) => !pinned);
   }
+  // 2026-11-04: a maximized document covers the window except the 20px strip,
+  // so a pinned list shows as the strip meanwhile and comes back after.
+  const windowCovered = useWindowCovered();
 
   const [agentStatuses, setAgentStatuses] = useState<Record<string, AgentRunStatus>>({});
   const [statusTicks, setStatusTicks] = useState<Record<string, number>>({});
@@ -729,7 +733,7 @@ export default function App() {
           agentStatuses={agentStatuses}
           pendingApprovals={pendingApprovals}
           subAgentsRunning={subAgentsRunning}
-          pinned={projectListPinned}
+          pinned={effectivePinned(projectListPinned, windowCovered)}
           onTogglePin={toggleProjectListPinned}
         >
           <Sidebar {...sidebarProps} narrow />

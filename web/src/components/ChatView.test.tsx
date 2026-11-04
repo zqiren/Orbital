@@ -5628,3 +5628,38 @@ describe('ChatView: embedded in the Workbench pane', () => {
     expect(onUserSend).toHaveBeenCalledTimes(1);
   });
 });
+
+// A turn that ends with mark_task_complete and no text: its summary is the
+// reply. Both the session's page and the Workbench pane render ChatView, so
+// both show it (2026-11-04, the verifier's 行程.md session).
+describe('ChatView: the reply carried by mark_task_complete', () => {
+  const SUMMARY = '在 行程.md 写好了五天云南草稿：昆明 → 大理 → 丽江。';
+  const history = {
+    data: [
+      { role: 'user', source: 'user', content: '写行程', timestamp: '2026-11-04T13:04:00Z' },
+      { role: 'assistant', source: 'management', content: null, timestamp: '2026-11-04T13:04:05Z',
+        tool_calls: [{ id: 'm1', type: 'function', function: { name: 'mark_task_complete', arguments: JSON.stringify({ summary: SUMMARY }) } }] },
+      { role: 'tool', source: 'management', tool_call_id: 'm1', content: `Task marked complete: ${SUMMARY}`, timestamp: '2026-11-04T13:04:05Z' },
+    ],
+    total: 3,
+  };
+
+  it('the session page shows it', async () => {
+    chatInitialResponse = history;
+    await renderChat({ sessionId: 's1' });
+    await flushEffects();
+    expect(container.textContent ?? '').toContain(SUMMARY);
+  });
+
+  it('the Workbench pane (checksOnView={false}) shows it too', async () => {
+    chatInitialResponse = history;
+    await act(async () => {
+      root.render(
+        <ChatView projectId="p1" project={project} agentStatus={'idle' as never} agents={[]}
+          sessionId="s1" checksOnView={false} />,
+      );
+    });
+    await flushEffects();
+    expect(container.textContent ?? '').toContain(SUMMARY);
+  });
+});

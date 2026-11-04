@@ -611,6 +611,21 @@ describe('FilePreview — panel header (spec 088)', () => {
     expect(header.onBack).toHaveBeenCalledTimes(1);
   });
 
+  it('Back can carry another label (the Workbench pane: back to the chat, not to files)', () => {
+    render(
+      <FilePreview
+        fileContent={mdContent({ path: 'docs/notes.md' })}
+        loading={false}
+        selectedPath="docs/notes.md"
+        panelHeader={{ onBack: vi.fn(), backLabel: 'Back' }}
+      />,
+    );
+    const row = screen.getByTestId('file-preview-panel-header');
+    const back = within(row).getByRole('button', { name: 'Back' });
+    expect(back).toHaveAttribute('title', 'Back');
+    expect(within(row).queryByRole('button', { name: 'Back to files' })).toBeNull();
+  });
+
   it('More holds Copy and Open full width', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });

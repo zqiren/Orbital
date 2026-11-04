@@ -1043,6 +1043,21 @@ export function transformChatHistory(
     return Number.isFinite(n) ? n : 0;
   }
 
+  // A turn that ends with mark_task_complete and no text: the call's summary
+  // IS the reply (the left-off reader reads it the same way). Held by call id
+  // until that call's result has paired with its row in the capsule, then
+  // rendered after the capsule as the agent's message. 2026-11-04: the
+  // Workbench pane and the session page both dropped it.
+  const completionReplies = new Map<string, { content: string; source: string; timestamp: string }>();
+  function flushCompletionReplies(onlyId?: string): void {
+    for (const [id, reply] of completionReplies) {
+      if (onlyId !== undefined && id !== onlyId) continue;
+      completionReplies.delete(id);
+      finalizeCapsule();
+      items.push({ type: 'agent_message', content: reply.content, source: reply.source, timestamp: reply.timestamp });
+    }
+  }
+
   function openCapsuleAt(ts: string, defaultExpanded = false): OpenCapsule {
     const ms = tsToMs(ts);
     return { items: [], startedAtMs: ms, endedAtMs: ms, defaultExpanded };
@@ -1610,6 +1625,7 @@ export function transformChatHistory(
     }
 
     if (msg.role === 'user') {
+      flushCompletionReplies();
       finalizeCapsule();
       items.push({
         type: 'user_message',
@@ -1765,6 +1781,17 @@ export function transformChatHistory(
             });
             currentCapsule.endedAtMs = msTime;
           }
+          if (!text) {
+            for (const tc of msg.tool_calls!) {
+              if (tc.function.name !== 'mark_task_complete') continue;
+              const summary = parseToolArgs(tc.function.arguments)?.summary;
+              if (typeof summary === 'string' && summary.trim()) {
+                completionReplies.set(tc.id, {
+                  content: summary.trim(), source: msg.source ?? 'management', timestamp: msg.timestamp,
+                });
+              }
+            }
+          }
         }
       }
 
@@ -1853,6 +1880,8 @@ export function transformChatHistory(
       }
       // Orphan tool results (no open capsule, or no matching call) are
       // dropped — the LLM never associated them with a visible call.
+      // A mark_task_complete's summary reply follows its paired result.
+      if (msg.tool_call_id) flushCompletionReplies(msg.tool_call_id);
       i++;
       continue;
     }
@@ -1865,6 +1894,7 @@ export function transformChatHistory(
   // "running" status is applied at render time in ChatView (FE-A1) based on
   // the live agentStatus + viewingHolder, so this stays a pure transform.
   finalizeCapsule('completed');
+  flushCompletionReplies();
 
   // Mark items from historical sessions
   let lastSepIndex = -1;
