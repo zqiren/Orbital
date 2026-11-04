@@ -35,7 +35,7 @@ WEB_SRC = Path(__file__).resolve().parents[2] / "web" / "src"
 
 
 def _read(rel: str) -> str:
-    return (WEB_SRC / rel).read_text()
+    return (WEB_SRC / rel).read_text(encoding="utf-8")
 
 
 # ---- App.tsx ---------------------------------------------------------------

@@ -12,6 +12,7 @@ offline edit, and the watcher-not-running states.
 """
 import asyncio
 import os
+import sys
 import time
 
 import pytest
@@ -71,15 +72,15 @@ def changes(svc, pid, rel):
 def ws(tmp_path):
     w = tmp_path / "ws"
     w.mkdir()
-    (w / "notes.md").write_text("# notes\nline one\n", encoding="utf-8")
+    (w / "notes.md").write_text("# notes\nline one\n", encoding="utf-8", newline="\n")
     (w / "src").mkdir()
-    (w / "src" / "a.py").write_text("print('a')\n", encoding="utf-8")
+    (w / "src" / "a.py").write_text("print('a')\n", encoding="utf-8", newline="\n")
     (w / "node_modules" / "pkg").mkdir(parents=True)
-    (w / "node_modules" / "pkg" / "index.js").write_text("x\n")
+    (w / "node_modules" / "pkg" / "index.js").write_text("x\n", newline="\n")
     (w / "nested" / "orbital").mkdir(parents=True)
-    (w / "nested" / "orbital" / "PROJECT_STATE.md").write_text("other project\n")
+    (w / "nested" / "orbital" / "PROJECT_STATE.md").write_text("other project\n", newline="\n")
     (w / "orbital" / "sessions").mkdir(parents=True)
-    (w / "orbital" / "sessions" / "s1.jsonl").write_text("{}\n")
+    (w / "orbital" / "sessions" / "s1.jsonl").write_text("{}\n", newline="\n")
     (w / "big.txt").write_bytes(b"y" * (rules.TEXT_MAX_BYTES + 10))
     (w / "pic.png").write_bytes(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR")
     return w
@@ -106,7 +107,7 @@ class TestBaseline:
         assert [v["kind"] for v in versions(svc, "p1", "notes.md")] == ["baseline"]
 
     async def test_layer1_files_tracked(self, ws, tmp_path):
-        (ws / "orbital" / "PROJECT_STATE.md").write_text("# Project State\n")
+        (ws / "orbital" / "PROJECT_STATE.md").write_text("# Project State\n", newline="\n")
         s = FileHistory(FakeProjects(p1=ws), None, quiet=QUIET, reconcile_every=0)
         await s.start()
         await s.wait_ready("p1")
@@ -121,7 +122,7 @@ class TestBaseline:
 
         def racing_listing(workspace, nested=()):
             # the watch is already scheduled; a write lands before the read
-            (ws / "notes.md").write_text("written during baseline\n")
+            (ws / "notes.md").write_text("written during baseline\n", newline="\n")
             return real(workspace, nested)
 
         monkeypatch.setattr(rules, "list_tracked", racing_listing)
@@ -141,7 +142,7 @@ class TestBaseline:
 class TestWatcherAttribution:
     async def test_external_write_while_one_session_runs(self, ws, svc):
         svc.running.now["p1"] = [("sess-A", ["claude-code"])]
-        (ws / "notes.md").write_text("# notes\nrewritten by a worker\n")
+        (ws / "notes.md").write_text("# notes\nrewritten by a worker\n", newline="\n")
         assert await until(lambda: changes(svc, "p1", "notes.md"))
         v = changes(svc, "p1", "notes.md")[0]
         assert v["kind"] == "modify"
@@ -151,13 +152,13 @@ class TestWatcherAttribution:
 
     async def test_two_sessions_running_is_ambiguous(self, ws, svc):
         svc.running.now["p1"] = [("sess-A", ["claude-code"]), ("sess-B", ["codex"])]
-        (ws / "notes.md").write_text("both\n")
+        (ws / "notes.md").write_text("both\n", newline="\n")
         assert await until(lambda: changes(svc, "p1", "notes.md"))
         a = changes(svc, "p1", "notes.md")[0]["attrib"]
         assert a["ambiguous"] is True and [s["session_id"] for s in a["sessions"]] == ["sess-A", "sess-B"]
 
     async def test_nobody_running_is_outside(self, ws, svc):
-        (ws / "new.md").write_text("hello\n")
+        (ws / "new.md").write_text("hello\n", newline="\n")
         assert await until(lambda: changes(svc, "p1", "new.md"))
         v = changes(svc, "p1", "new.md")[0]
         assert v["kind"] == "create" and v["attrib"] == {"kind": "outside"}
@@ -168,7 +169,7 @@ class TestWatcherAttribution:
         await s.wait_ready("p1")
         try:
             for i in range(20):
-                (ws / "notes.md").write_text(f"draft {i}\n")
+                (ws / "notes.md").write_text(f"draft {i}\n", newline="\n")
                 await asyncio.sleep(0.1)
             assert await until(lambda: changes(s, "p1", "notes.md"), timeout=6)
             await asyncio.sleep(1.5)
@@ -178,6 +179,11 @@ class TestWatcherAttribution:
         finally:
             await s.stop()
 
+    @pytest.mark.xfail(
+        sys.platform == "win32", strict=False,
+        reason="watchdog 7's Windows emitter delivers no events until writes pause "
+               "(~1 s); a file written without pause is caught when it pauses or "
+               "by the reconcile pass")
     async def test_max_wait_flushes_a_file_written_without_pause(self, ws):
         s = FileHistory(FakeProjects(p1=ws), None, quiet=0.5, max_wait=1.0, reconcile_every=0)
         await s.start()
@@ -215,21 +221,21 @@ class TestWatcherAttribution:
         assert v["added"] is None and v["size"] == 400
 
     async def test_store_excludes_itself_sessions_and_deps(self, ws, svc):
-        (ws / "orbital" / "sessions" / "s1.jsonl").write_text("{}\n{}\n")
+        (ws / "orbital" / "sessions" / "s1.jsonl").write_text("{}\n{}\n", newline="\n")
         (ws / "orbital" / "backups").mkdir()
-        (ws / "orbital" / "backups" / "PROJECT_STATE.md").write_text("old\n")
-        (ws / "node_modules" / "pkg" / "index.js").write_text("y\n")
-        (ws / "nested" / "orbital" / "PROJECT_STATE.md").write_text("changed\n")
-        (ws / "notes.md").write_text("trigger a flush that writes the store\n")
+        (ws / "orbital" / "backups" / "PROJECT_STATE.md").write_text("old\n", newline="\n")
+        (ws / "node_modules" / "pkg" / "index.js").write_text("y\n", newline="\n")
+        (ws / "nested" / "orbital" / "PROJECT_STATE.md").write_text("changed\n", newline="\n")
+        (ws / "notes.md").write_text("trigger a flush that writes the store\n", newline="\n")
         assert await until(lambda: changes(svc, "p1", "notes.md"))
         await asyncio.sleep(QUIET * 3)  # the store's own writes must not echo
         paths = {v["path"] for v in svc.get_project("p1").store.versions}
         assert paths == {"notes.md", "src/a.py"}
 
     async def test_gitignored_new_file_is_not_tracked(self, ws, svc):
-        (ws / ".gitignore").write_text("out/\n")
+        (ws / ".gitignore").write_text("out/\n", newline="\n")
         (ws / "out").mkdir()
-        (ws / "out" / "gen.txt").write_text("generated\n")
+        (ws / "out" / "gen.txt").write_text("generated\n", newline="\n")
         assert await until(lambda: changes(svc, "p1", ".gitignore"))
         await asyncio.sleep(QUIET * 3)
         assert not versions(svc, "p1", "out/gen.txt")
@@ -252,7 +258,7 @@ class TestOwnWrites:
         svc.running.now["p1"] = [("sess-A", ["orbital"]), ("sess-B", ["codex"])]
         path = os.path.join(str(ws), "notes.md")
         with recording(path, tool_attrib("sess-A")):
-            with open(path, "w", encoding="utf-8") as f:
+            with open(path, "w", encoding="utf-8", newline="\n") as f:
                 f.write("written by orbital's write tool\n")
         vs = changes(svc, "p1", "notes.md")
         assert len(vs) == 1
@@ -284,7 +290,7 @@ class TestOwnWrites:
 class TestRestore:
     async def test_stale_expected_hash_is_refused(self, ws, svc):
         base = versions(svc, "p1", "notes.md")[0]
-        (ws / "notes.md").write_text("someone else wrote after the review\n")
+        (ws / "notes.md").write_text("someone else wrote after the review\n", newline="\n")
         reviewed = sha256(b"# notes\nline one\n")
         res = await asyncio.to_thread(svc.restore, "p1",
                                       [{"path": "notes.md", "sha": base["sha"], "expect_sha": sha256(b"stale")}])
@@ -296,7 +302,7 @@ class TestRestore:
     async def test_restore_records_what_it_replaces_first(self, ws, svc):
         base = versions(svc, "p1", "notes.md")[0]
         svc.running.now["p1"] = [("sess-A", ["pi"])]
-        (ws / "notes.md").write_text("unflushed agent text\n")
+        (ws / "notes.md").write_text("unflushed agent text\n", newline="\n")
         cur = sha256(b"unflushed agent text\n")
         # restore immediately, before the debounce flushes the write
         res = await asyncio.to_thread(svc.restore, "p1",
@@ -312,7 +318,7 @@ class TestRestore:
 
     async def test_restore_of_a_restore(self, ws, svc):
         base = versions(svc, "p1", "notes.md")[0]
-        (ws / "notes.md").write_text("v2\n")
+        (ws / "notes.md").write_text("v2\n", newline="\n")
         assert await until(lambda: changes(svc, "p1", "notes.md"))
         await asyncio.to_thread(svc.restore, "p1",
                                 [{"path": "notes.md", "sha": base["sha"], "expect_sha": sha256(b"v2\n")}])
@@ -329,7 +335,7 @@ class TestRestore:
         assert (ws / "orbital" / "sessions" / "s1.jsonl").exists()
 
     async def test_created_file_restore_deletes_it(self, ws, svc):
-        (ws / "made.md").write_text("by the turn\n")
+        (ws / "made.md").write_text("by the turn\n", newline="\n")
         assert await until(lambda: changes(svc, "p1", "made.md"))
         res = await asyncio.to_thread(svc.restore, "p1",
                                       [{"path": "made.md", "sha": None, "expect_sha": sha256(b"by the turn\n")}])
@@ -338,7 +344,7 @@ class TestRestore:
 
     async def test_busy_when_replace_is_denied(self, ws, svc, monkeypatch):
         base = versions(svc, "p1", "notes.md")[0]
-        (ws / "notes.md").write_text("locked\n")
+        (ws / "notes.md").write_text("locked\n", newline="\n")
         import agent_os.agent.workspace_files as wf
 
         def deny(src, dst):
@@ -392,7 +398,7 @@ class TestLifecycle:
         await s.wait_ready("p1")
         await s.stop()
         time.sleep(0.01)
-        (ws / "notes.md").write_text("edited in TextEdit while Orbital was closed\n")
+        (ws / "notes.md").write_text("edited in TextEdit while Orbital was closed\n", newline="\n")
         os.remove(ws / "src" / "a.py")
         s2 = FileHistory(FakeProjects(p1=ws), None, quiet=QUIET, reconcile_every=0)
         await s2.start()
@@ -452,7 +458,7 @@ class TestLifecycle:
         proj = s.get_project("p1")
         projects.remove("p1")
         await s.remove_project("p1")
-        (ws / "notes.md").write_text("after delete\n")
+        (ws / "notes.md").write_text("after delete\n", newline="\n")
         await asyncio.sleep(QUIET * 3)
         try:
             assert proj.closed and not [v for v in proj.store.versions if v["kind"] != "baseline"]
@@ -463,7 +469,7 @@ class TestLifecycle:
     async def test_nested_project_owns_its_files(self, ws, tmp_path):
         inner = ws / "inner"
         inner.mkdir()
-        (inner / "own.md").write_text("inner file\n")
+        (inner / "own.md").write_text("inner file\n", newline="\n")
         running = Running()
         s = FileHistory(FakeProjects(outer=ws, inner=inner), running, quiet=QUIET, reconcile_every=0)
         await s.start()
@@ -473,7 +479,7 @@ class TestLifecycle:
             assert "inner/own.md" not in s.get_project("outer").store.index
             assert "own.md" in s.get_project("inner").store.index
             running.now["outer"] = [("outer-sess", ["codex"])]
-            (inner / "own.md").write_text("written from the outer session\n")
+            (inner / "own.md").write_text("written from the outer session\n", newline="\n")
             assert await until(lambda: changes(s, "inner", "own.md"))
             # candidates include enclosing projects' sessions
             assert changes(s, "inner", "own.md")[0]["attrib"]["sessions"][0]["session_id"] == "outer-sess"

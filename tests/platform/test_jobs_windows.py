@@ -6,6 +6,7 @@
 in a kill-on-close Job Object, tree cancel, quit, and the bg.cmd launcher."""
 
 import asyncio
+import json
 import os
 import subprocess
 import sys
@@ -98,6 +99,26 @@ def test_the_bg_cmd_launcher_records_output_and_exit_code(tmp_path):
     asyncio.run(reg.tick())
     [row] = reg.list_jobs("p")
     assert row["session_id"] == SID
+
+
+def test_the_bg_cmd_launcher_keeps_a_chinese_session_id(tmp_path):
+    # Spec 159: bg.ps1's Clean keeps Unicode word characters, so the job-end
+    # message reaches a session of a Chinese-named project; quotes still go.
+    job_launcher.ensure_launcher(str(tmp_path))
+    sid = "记忆测试_v1_0_13100333"
+    env = {**os.environ, "ORBITAL_SESSION_ID": sid + '"', "ORBITAL_AGENT": "codex",
+           "ORBITAL_PROJECT_ID": "p"}
+    out = subprocess.run(
+        [os.path.join(str(tmp_path), "orbital", "bin", "bg.cmd"), "echo hi"],
+        cwd=str(tmp_path), capture_output=True, text=True, env=env, timeout=60)
+    assert out.returncode == 0, out.stderr
+    assert "Orbital will send you a message when it finishes" in out.stdout
+    job_id = out.stdout.split("Started background job ")[1].split(" ")[0]
+    with open(os.path.join(str(tmp_path), "orbital", "jobs", job_id, "job.json"),
+              encoding="utf-8") as f:
+        record = json.load(f)
+    assert record["session_id"] == sid
+    assert record["agent"] == "codex"
 
 
 def test_the_bg_cmd_job_sees_the_callers_path(tmp_path):

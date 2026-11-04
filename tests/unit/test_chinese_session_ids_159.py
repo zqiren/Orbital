@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 
 import pytest
 
@@ -160,6 +161,12 @@ def _run_bg(ws, **env):
         return json.load(f), out.stdout
 
 
+posix_bg = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="POSIX bg script; tests/platform/test_jobs_windows.py runs bg.cmd")
+
+
+@posix_bg
 def test_bg_writes_a_chinese_session_id_intact(tmp_path):
     record, stdout = _run_bg(tmp_path, ORBITAL_SESSION_ID=CN_STEM,
                              ORBITAL_PROJECT_ID="proj_abc", ORBITAL_AGENT="codex")
@@ -167,6 +174,7 @@ def test_bg_writes_a_chinese_session_id_intact(tmp_path):
     assert "Orbital will send you a message when it finishes" in stdout
 
 
+@posix_bg
 def test_bg_still_strips_json_breaking_bytes(tmp_path):
     record, _ = _run_bg(tmp_path, ORBITAL_SESSION_ID=CN_STEM + '"\\x\t',
                         ORBITAL_AGENT='co"dex')

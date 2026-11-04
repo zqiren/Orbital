@@ -46,8 +46,8 @@ def iso(dt):
 def ws(tmp_path):
     w = tmp_path / "ws"
     w.mkdir()
-    (w / "notes.md").write_text("one\ntwo\nthree\n", encoding="utf-8")
-    (w / "plan.md").write_text("plan v1\n", encoding="utf-8")
+    (w / "notes.md").write_text("one\ntwo\nthree\n", encoding="utf-8", newline="\n")
+    (w / "plan.md").write_text("plan v1\n", encoding="utf-8", newline="\n")
     (w / "pic.png").write_bytes(b"\x89PNG\x00\x00")
     (w / "orbital" / "sessions").mkdir(parents=True)
     return w
@@ -81,7 +81,7 @@ def write_as(fh, ws, rel, text, sid):
     path = os.path.join(str(ws), rel)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with recording(path, tool_attrib(sid)):
-        with open(path, "w", encoding="utf-8") as f:
+        with open(path, "w", encoding="utf-8", newline="\n") as f:
             f.write(text)
 
 

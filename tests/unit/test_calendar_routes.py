@@ -39,7 +39,9 @@ def test_the_daemon_serves_no_calendar_route(tmp_path, monkeypatch):
     from agent_os.api.app import create_app
 
     app = create_app(data_dir=str(tmp_path))
-    paths = [getattr(r, "path", "") for r in app.routes]
+    # The OpenAPI paths, not ``app.routes``: FastAPI 0.162 keeps an included
+    # router as one nested entry with no path of its own.
+    paths = list(app.openapi()["paths"])
     assert not [p for p in paths if p.startswith("/api/v2/calendar")]
     # The connectors (Google Calendar among them) are a different feature.
     assert any(p.startswith("/api/v2/connectors") for p in paths)

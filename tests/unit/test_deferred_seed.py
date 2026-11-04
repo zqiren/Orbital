@@ -33,6 +33,13 @@ def home(tmp_path, monkeypatch):
     h = tmp_path / "home"
     h.mkdir()
     monkeypatch.setenv("ORBITAL_HISTORY_HOME", str(h))
+    # The INDEX header shortens paths under the user's real home to ``~``.
+    # On Windows pytest's tmp_path sits under it (%LOCALAPPDATA%\Temp), so
+    # point ``~`` elsewhere and keep the header's full path.
+    user = tmp_path / "user"
+    user.mkdir()
+    monkeypatch.setenv("HOME", str(user))
+    monkeypatch.setenv("USERPROFILE", str(user))
     return str(h)
 
 
