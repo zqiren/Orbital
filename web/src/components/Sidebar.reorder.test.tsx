@@ -108,7 +108,6 @@ function renderSidebar(projects: Project[]) {
       route={{ name: 'list' }}
       connectionState="connected"
       onSelectProject={vi.fn()}
-      onSelectCalendar={vi.fn()}
       onSelectHome={vi.fn()}
       onNewProject={vi.fn()}
       onSettings={vi.fn()}

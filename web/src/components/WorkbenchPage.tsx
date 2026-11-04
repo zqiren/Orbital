@@ -14,14 +14,19 @@
  * composer alone and its placeholder carries the one sentence the empty state
  * has (§5.7) — no illustration, no "All clear".
  *
- * Card actions (§5.8):
- *  - the title or → opens the session (viewing it checks its reply on every
+ * Card actions (§5.8, amended 2026-11-04):
+ *  - the title opens the session (viewing it checks its reply on every
  *    device); a session-less ask keeps the old doorway (mint + ask quoted);
+ *  - a click on the card body selects it and opens its session in the
+ *    reading pane (WorkbenchPane: a right docked panel, a bottom sheet on a
+ *    phone); a second click, or ×, closes it. Nothing selected, the page is
+ *    unchanged;
  *  - ✓ closes an ask by:user and/or checks the reply; the session itself is
  *    untouched;
- *  - a reply goes into that session exactly as the chat sends it (an ask's
- *    answer closes it by:user) and the card keeps its place in 等你 until the
- *    agent's turn ends.
+ *  - a reply (from the card's field or the pane) goes into that session
+ *    exactly as the chat sends it (an ask's answer closes it by:user); the
+ *    card moves to 进行中 at once and comes back to 等你 as finished and
+ *    unchecked when the agent's turn ends.
  *
  * Removed with spec 154 (their routes stay for cached phone SPAs): the page
  * header and project filter, the Today strip, Recently closed, the migrate
@@ -30,7 +35,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
-import type { Project } from '../types';
+import type { AgentRunStatus, Project } from '../types';
 import type { Route } from '../route';
 import { api } from '../config';
 import { useT } from '../i18n/useT';
@@ -42,9 +47,11 @@ import {
 import { projectDisplayName } from '../utils/projectDisplayName';
 import { formatAskAnswer } from '../utils/askAnswer';
 import { buildFeedGroups, type FeedItem } from './workbench/feedModel';
+import { classifySessionName } from '../lib/sessionLabel';
 import { recoverDraft, sendWorkbenchTask, type SendChoice } from './workbench/sendTask';
 import TaskCard from './workbench/TaskCard';
 import WorkbenchComposer from './workbench/WorkbenchComposer';
+import WorkbenchPane from './workbench/WorkbenchPane';
 import './workbench/workbench.css';
 
 export interface WorkbenchPageProps {
@@ -55,6 +62,9 @@ export interface WorkbenchPageProps {
   phone?: boolean;
   /** Orbital's own model line in the agent picker. */
   managerModel?: string;
+  /** Per project: the manager's run status and its tick (the pane's chat). */
+  agentStatuses?: Record<string, AgentRunStatus>;
+  statusTicks?: Record<string, number>;
 }
 
 function newNonce(): string {
@@ -66,6 +76,7 @@ function newNonce(): string {
 
 export default function WorkbenchPage({
   setRoute, projects, agents, phone = false, managerModel,
+  agentStatuses = {}, statusTicks = {},
 }: WorkbenchPageProps) {
   const t = useT();
   const feed = useWorkbenchFeed();
@@ -81,6 +92,17 @@ export default function WorkbenchPage({
   const groups = useMemo(() => buildFeedGroups(feed, marks), [feed, marks]);
   const items = useMemo(() => [...groups.waiting, ...groups.running], [groups]);
   const empty = feed.loaded && items.length === 0;
+
+  // The reading pane: the selected card, by key. A card that leaves the list
+  // (✓, checked elsewhere) closes it.
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const selected = selectedKey ? items.find((i) => i.key === selectedKey) ?? null : null;
+  useEffect(() => {
+    if (selectedKey && feed.loaded && !selected) setSelectedKey(null);
+  }, [selectedKey, selected, feed.loaded]);
+  const handleSelect = useCallback((item: FeedItem) => {
+    setSelectedKey((cur) => (cur === item.key ? null : item.key));
+  }, []);
 
   // Sidebar order, minus projects excluded from the Workbench.
   const pickable = useMemo(
@@ -183,6 +205,19 @@ export default function WorkbenchPage({
     }
   }
 
+  // The pane's subject: a real session in a known project.
+  const paneRow = selected?.row && selected.row.session_id ? selected.row : null;
+  const paneProject = paneRow ? projects.find((p) => p.project_id === paneRow.project_id) : undefined;
+  const paneTitle = paneRow
+    ? (paneRow.trigger_type ? classifySessionName(paneRow.name).displayName : null)
+      ?? paneRow.name ?? t('workbench.card.untitled')
+    : '';
+  const handlePaneSend = useCallback(() => {
+    if (!paneRow) return;
+    holdCard(paneRow);
+    void refreshFeed();
+  }, [paneRow]);
+
   const summary = [
     groups.waiting.length ? t('workbench.summary.waiting', { n: groups.waiting.length }) : '',
     groups.running.length ? t('workbench.summary.running', { n: groups.running.length }) : '',
@@ -190,10 +225,10 @@ export default function WorkbenchPage({
 
   return (
     <div
-      className={`wb-page flex-1 min-h-0 flex flex-col ${phone ? 'wb-phone' : ''}`}
+      className={`wb-page relative flex-1 min-h-0 flex ${phone ? 'wb-phone' : ''}`}
       data-testid="workbench-page"
     >
-      <div className="flex-1 min-h-0 overflow-y-auto">
+      <div className="flex-1 min-w-0 min-h-0 overflow-y-auto">
         <div className="wb-col">
           {openError && (
             <div
@@ -227,6 +262,8 @@ export default function WorkbenchPage({
                     onOpen={handleOpen}
                     onConfirm={handleConfirm}
                     onReply={handleReply}
+                    selected={item.key === selectedKey}
+                    onSelect={item.row?.session_id ? handleSelect : undefined}
                   />
                 ))}
               </div>
@@ -234,6 +271,21 @@ export default function WorkbenchPage({
           )}
         </div>
       </div>
+      {paneRow && paneProject && selected && (
+        <WorkbenchPane
+          project={paneProject}
+          sessionId={paneRow.session_id!}
+          title={paneTitle}
+          dot={selected.dot}
+          agentStatus={agentStatuses[paneRow.project_id] ?? 'idle'}
+          statusTick={statusTicks[paneRow.project_id]}
+          agents={agents}
+          phone={phone}
+          onClose={() => setSelectedKey(null)}
+          onOpenSession={(sid) => setRoute({ name: 'project', projectId: paneRow.project_id, sessionId: sid })}
+          onUserSend={handlePaneSend}
+        />
+      )}
     </div>
   );
 }

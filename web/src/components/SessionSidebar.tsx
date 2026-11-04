@@ -47,7 +47,7 @@
  * `isUnchecked` predicate, with its 14-day window). The row being viewed
  * never shows it — its reply is checked the moment the list learns of it —
  * and the user's own newer message clears it without a write. A collapsed
- * automation group shows the same dot while any hidden run waits on the user
+ * automation group shows how many of its runs wait on the user (a number)
  * (spec 150, folded into 154).
  *
  * Selection is CONTROLLED: the highlighted (active) session is driven by the
@@ -342,11 +342,17 @@ export function SessionSidebar({
         );
     const kindLabel = t(GROUP_KIND_KEY[group.kind]);
     const KindIcon = GROUP_KIND_ICON[group.kind];
-    // Spec 150 (folded into 154): a collapsed group shows the row's unread
-    // dot while any run in it waits on the user. Open, the runs show their own.
-    const waitingRun = !open && group.runs.some(
+    // Spec 150 (folded into 154), as a number since 2026-11-04: a collapsed
+    // group shows how many of its runs wait on the user, by the one
+    // `isWaiting` predicate the project count uses. Open, the runs carry their
+    // own dots and the header shows nothing extra.
+    const waitingRuns = open ? 0 : group.runs.filter(
       (r) => r.session_id !== selectedSessionId &&
         isWaiting({ ...r, checked_reply_at: seenAt(seenKey(r)) ?? null }),
+    ).length;
+    const waitingLabel = t(
+      waitingRuns === 1 ? 'sidebar.project.waiting.one' : 'sidebar.project.waiting.other',
+      { n: waitingRuns },
     );
     return (
       <div key={`group:${group.key}`} data-testid="session-automation-group">
@@ -380,14 +386,16 @@ export function SessionSidebar({
             >
               {group.name ?? kindLabel}
             </span>
-            {waitingRun && (
+            {waitingRuns > 0 && (
               <span
-                data-testid="session-group-unread-dot"
+                data-testid="session-group-waiting-count"
                 role="img"
-                aria-label={t('sessionItem.unread')}
-                title={t('sessionItem.unread')}
-                className="w-1.5 h-1.5 rounded-full bg-accent shrink-0 self-center"
-              />
+                aria-label={waitingLabel}
+                title={waitingLabel}
+                className="shrink-0 self-center font-mono text-2xs font-medium leading-none px-1.5 py-0.5 rounded-full text-secondary bg-nav-hover"
+              >
+                {waitingRuns > 99 ? '99+' : waitingRuns}
+              </span>
             )}
             <span className="text-2xs text-secondary shrink-0">
               {t('sessionSidebar.group.runs', { n: group.runs.length })}

@@ -1419,36 +1419,8 @@ export const STRINGS = {
   "wizard.steps.projects": { en: "Projects", zh: "项目" },
   "wizard.welcome": { en: "Welcome to Orbital", zh: "欢迎使用 Orbital" },
 
-  // workspace — two-zone sidebar Workspace zone + calendar surface (spec 011 §0.5)
+  // workspace — the sidebar's Workspace zone (its one row is the Workbench)
   "workspace.zone.label": { en: "Workspace", zh: "工作区" },
-  "workspace.calendar.nav": { en: "Calendar", zh: "日历" },
-  "workspace.calendar.title": { en: "Calendar", zh: "日历" },
-  "workspace.calendar.comingSoon": { en: "The calendar surface is coming in this branch.", zh: "日历功能即将在此版本中推出。" },
-
-  // calendar — the calendar surface (week grid / agenda, range nav, refresh,
-  // event detail + link-to-project); spec 011 §0.4, Task H1. Reuses
-  // workspace.calendar.title for the header.
-  "calendar.nav.prev": { en: "Previous week", zh: "上一周" },
-  "calendar.nav.next": { en: "Next week", zh: "下一周" },
-  "calendar.nav.today": { en: "Today", zh: "今天" },
-  "calendar.refresh": { en: "Refresh", zh: "刷新" },
-  "calendar.refreshing": { en: "Refreshing…", zh: "正在刷新…" },
-  "calendar.loading": { en: "Loading calendar…", zh: "正在加载日历…" },
-  "calendar.error.load": { en: "Couldn't load calendar events", zh: "无法加载日历事件" },
-  "calendar.retry": { en: "Retry", zh: "重试" },
-  "calendar.empty.title": { en: "No events this week", zh: "本周暂无事件" },
-  "calendar.allDay": { en: "All day", zh: "全天" },
-  "calendar.unavailable.title": { en: "No calendar connected", zh: "未连接日历" },
-  "calendar.unavailable.body": { en: "Connect a calendar in Settings → Connectors, or enable the macOS calendar.", zh: "请在“设置 → 连接器”中连接日历，或启用 macOS 日历。" },
-  "calendar.detail.aria": { en: "Event details", zh: "事件详情" },
-  "calendar.detail.untitled": { en: "(untitled)", zh: "（无标题）" },
-  "calendar.detail.close": { en: "Close", zh: "关闭" },
-  "calendar.detail.open": { en: "Open", zh: "打开" },
-  "calendar.detail.attendeesMore": { en: "+{n} more", zh: "还有 {n} 位" },
-  "calendar.detail.link": { en: "Link to project", zh: "关联到项目" },
-  "calendar.detail.linkNone": { en: "Not linked", zh: "未关联" },
-  "calendar.detail.linkedTo": { en: "Linked to {name}", zh: "已关联到 {name}" },
-  "calendar.detail.linkError": { en: "Couldn't update the link", zh: "无法更新关联" },
 
   // Workbench surface (spec 2026-07-23 §5.3/§5.4/§6) — flagged [user] entries,
   // global tab + per-project lens.
@@ -1481,7 +1453,6 @@ export const STRINGS = {
   "workbench.closed.title": { en: "Recently closed", zh: "最近关闭" },
   "workbench.conflict.notice": { en: "That entry changed — refreshed the list.", zh: "该条目已发生变化——列表已刷新。" },
   "workbench.today.title": { en: "Today", zh: "今天" },
-  "workbench.today.openCalendar": { en: "Open Calendar →", zh: "打开日历 →" },
   "workbench.badge.aria.one": { en: "{n} item needs you", zh: "有 {n} 项需要你处理" },
   "workbench.badge.aria.other": { en: "{n} items need you", zh: "有 {n} 项需要你处理" },
   "workbench.card.approval": { en: "Needs approval", zh: "需要批准" },
@@ -1498,6 +1469,7 @@ export const STRINGS = {
   "workbench.composer.project": { en: "Project", zh: "项目" },
   "workbench.composer.send": { en: "Send", zh: "发送" },
   "workbench.filter.all": { en: "All projects", zh: "全部项目" },
+  "workbench.pane.close": { en: "Close", zh: "关闭" },
   "workbench.summary.running": { en: "{n} running", zh: "{n} 件进行中" },
   "workbench.summary.waiting": { en: "{n} waiting on you", zh: "{n} 件等你" },
   "settings.workbench.label": { en: "Workbench", zh: "工作台" },

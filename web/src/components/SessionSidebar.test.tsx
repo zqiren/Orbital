@@ -938,13 +938,13 @@ describe('SessionSidebar — unread badge (spec 108 on the daemon checked state)
     expect(dotIn('b')).toBeNull();
   });
 
-  it('a collapsed automation group shows a dot while a hidden run waits (spec 150); expanding shows the run dots', async () => {
-    // The badge does not change grouping or visibility: only active and
+  it('a collapsed automation group shows how many runs wait (spec 150, now a number); expanded, only the runs carry dots', async () => {
+    // The count does not change grouping or visibility: only active and
     // selected runs escape a collapsed group.
     const user = userEvent.setup();
     resetMocks();
-    const daily = (id: string, replyAt: string) => ({
-      ...replied(id, replyAt),
+    const daily = (id: string, replyAt: string, checked: string | null = null) => ({
+      ...replied(id, replyAt, at(0), checked),
       name: "[Triggered by schedule 'Daily' (9am)]\n\nrun",
       trigger_type: 'schedule' as const,
     });
@@ -952,19 +952,40 @@ describe('SessionSidebar — unread badge (spec 108 on the daemon checked state)
       replied('chat', at(10), at(0), at(10)),
       daily('run1', at(20)),
       daily('run2', at(30)),
+      daily('run3', at(40), at(40)),
     ];
     render(<SessionSidebar projectId="proj-1" selectedSessionId="chat" />);
     expect(screen.queryByTestId('session-list-item-run1')).toBeNull();
     expect(screen.queryByTestId('session-list-item-run2')).toBeNull();
-    expect(screen.getByTestId('session-group-unread-dot')).toBeInTheDocument();
-    await user.click(screen.getByTestId('session-automation-group-toggle'));
+    const count = screen.getByTestId('session-group-waiting-count');
+    expect(count).toHaveTextContent(/^2$/);
+    expect(count).toHaveAttribute('aria-label', '2 waiting on you');
     expect(screen.queryByTestId('session-group-unread-dot')).toBeNull();
+    await user.click(screen.getByTestId('session-automation-group-toggle'));
+    expect(screen.queryByTestId('session-group-waiting-count')).toBeNull();
     expect(dotIn('run1')).not.toBeNull();
     expect(dotIn('run2')).not.toBeNull();
+    expect(dotIn('run3')).toBeNull();
     expect(dotIn('chat')).toBeNull();
   });
 
-  it('a collapsed group with every run checked shows no group dot', () => {
+  it('the group count follows the checked state: a run checked elsewhere leaves the count', () => {
+    resetMocks();
+    const daily = (id: string, replyAt: string, checked: string | null = null) => ({
+      ...replied(id, replyAt, at(0), checked),
+      name: "[Triggered by schedule 'Daily' (9am)]\n\nrun",
+      trigger_type: 'schedule' as const,
+    });
+    mockSessions = [replied('chat', at(10), at(0), at(10)), daily('run1', at(20)), daily('run2', at(30))];
+    const { rerender } = render(<SessionSidebar projectId="proj-1" selectedSessionId="chat" />);
+    expect(screen.getByTestId('session-group-waiting-count')).toHaveTextContent(/^2$/);
+    mockSessions = [replied('chat', at(10), at(0), at(10)), daily('run1', at(20), at(20)), daily('run2', at(30))];
+    rerender(<SessionSidebar projectId="proj-1" selectedSessionId="chat" />);
+    expect(screen.getByTestId('session-group-waiting-count')).toHaveTextContent(/^1$/);
+    expect(screen.getByTestId('session-group-waiting-count')).toHaveAttribute('aria-label', '1 waiting on you');
+  });
+
+  it('a collapsed group with every run checked shows no count', () => {
     resetMocks();
     mockSessions = [
       replied('chat', at(10), at(0), at(10)),
@@ -972,6 +993,7 @@ describe('SessionSidebar — unread badge (spec 108 on the daemon checked state)
       { ...replied('run2', at(30), at(0), at(30)), name: "[Triggered by schedule 'Daily' (9am)]", trigger_type: 'schedule' as const },
     ];
     render(<SessionSidebar projectId="proj-1" selectedSessionId="chat" />);
+    expect(screen.queryByTestId('session-group-waiting-count')).toBeNull();
     expect(screen.queryByTestId('session-group-unread-dot')).toBeNull();
   });
 });

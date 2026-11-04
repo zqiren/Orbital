@@ -693,10 +693,8 @@ def _assemble_app(app: FastAPI, data_dir: str | None) -> FastAPI:
     connector_routes.configure(connector_manager)
     app.include_router(connector_routes.router)
 
-    # 7c3. Calendar routes (spec 011 §0.4, Task G1)
-    from agent_os.api.routes import calendar as calendar_routes
-    calendar_routes.configure(calendar_hub)
-    app.include_router(calendar_routes.router)
+    # 7c3. (The Calendar page's REST routes were removed on 2026-11-04; the
+    # hub above still serves the agent's calendar_read tool and the Workbench.)
 
     # 7c4. Workbench routes (user-flagged memory): flagged-entry mirror + two
     # exits. Shares the agent manager's dispatch seam for /migrate and

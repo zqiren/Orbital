@@ -4,7 +4,7 @@
 
 import type { ReactNode } from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Calendar, ChevronUp, FolderInput, GripVertical, X } from 'lucide-react';
+import { ChevronUp, FolderInput, GripVertical, LayoutGrid, X } from 'lucide-react';
 import {
   DndContext,
   MouseSensor,
@@ -25,7 +25,6 @@ import type { Project, AgentRunStatus } from '../types';
 import type { Route } from '../route';
 import { useT } from '../i18n/useT';
 import { projectDisplayName } from '../utils/projectDisplayName';
-import BetaBadge from './BetaBadge';
 import { getProjectDotColor } from '../utils/projectStatus';
 
 type ConnectionState = 'connected' | 'reconnecting' | 'disconnected' | 'daemon_offline';
@@ -40,9 +39,10 @@ interface SidebarProps {
   route: Route;
   connectionState: ConnectionState;
   onSelectProject: (id: string) => void;
-  onSelectCalendar: () => void;
-  /** Spec 154: the Orbital brand row is the way home (the Workbench). */
+  /** The 工作台 row under 工作区: the way home (the Workbench). */
   onSelectHome: () => void;
+  /** Anything waits on the user (spec 154): the row glyph's blue dot. */
+  waiting?: boolean;
   /** Spec 151 folded into 154: each project's number of 等你 cards. */
   waitingCounts?: Record<string, number>;
   onNewProject: () => void;
@@ -158,8 +158,8 @@ export default function Sidebar({
   route,
   connectionState,
   onSelectProject,
-  onSelectCalendar,
   onSelectHome,
+  waiting: anythingWaiting = false,
   waitingCounts = {},
   onNewProject,
   onImportProjects,
@@ -280,8 +280,8 @@ export default function Sidebar({
           isActive ? 'bg-nav-selected' : 'hover:bg-nav-hover/50'
         }`}
       >
-        {/* The dot rides in a 14px box — the width of the Calendar and
-            Workbench icons in the zone above — so every label in this column
+        {/* The dot rides in a 14px box — the width of the 工作台 row's
+            icon in the zone above — so every label in this column
             starts on one vertical line instead of the project names sitting
             6px right of the nav rows. It was also `mt-1.5` under
             `items-center`, which pushed it ~3px BELOW centre on the one-line
@@ -333,19 +333,9 @@ export default function Sidebar({
   // goes. Mobile has no rail and no insets (max-md:w-full).
   return (
     <aside className={`${narrow ? 'w-[248px] pr-1' : 'w-[260px] md:pl-3 md:pr-1'} shrink-0 bg-nav border-r border-border flex flex-col h-full max-md:w-full pt-titlebar`}>
-      {/* Wordmark — spec 154: the brand row IS the Workbench (home). The
-          separate Workbench row it replaced was hard to find once the list
-          was collapsed. */}
-      <button
-        type="button"
-        onClick={onSelectHome}
-        aria-label={t('workbench.title')}
-        aria-current={route.name === 'list' ? 'page' : undefined}
-        data-testid="sidebar-brand-home"
-        className={`mx-2 mt-2 mb-1 px-2 pt-2 pb-2 flex items-center gap-2 rounded-sm text-left transition-colors duration-150 max-md:min-h-[44px] ${
-          route.name === 'list' ? 'bg-nav-selected' : 'hover:bg-nav-hover/50'
-        }`}
-      >
+      {/* Wordmark — plain again (2026-11-04): the way home is the 工作台 row
+          under 工作区 below, which the edge strip's glyph lines up with. */}
+      <div className="mx-2 mt-2 mb-1 px-2 pt-2 pb-2 flex items-center gap-2 max-md:min-h-[44px]">
         {/* Served straight from web/public (vite copies it to the dist root, so
             it resolves in the desktop bundle too) — no new asset, no import.
             Decorative: the text beside it already names the app, so alt=""
@@ -363,7 +353,7 @@ export default function Sidebar({
         <span className="text-lg font-semibold text-primary tracking-tight">
           {t('sidebar.wordmark')}
         </span>
-      </button>
+      </div>
 
       {/* The global "Blocked" row used to sit here. It was removed because it
           read as a status readout rather than a control: it was rendered
@@ -373,8 +363,10 @@ export default function Sidebar({
           project awaiting approval already shows an amber dot in the list
           below (see getProjectDotColor). BlockedBadge itself is kept for the
           dedicated 'blocked' route it was always headed for. */}
-      {/* Workspace zone — global surfaces (Calendar), above Projects. The
-          Workbench is the brand row above (spec 154). */}
+      {/* Workspace zone, above Projects: the 工作台 row (the Workbench, home).
+          Its icon is the edge strip's Workbench glyph, at the same height as
+          the glyph on the collapsed strip (EdgeStrip), so collapsing or
+          expanding the list leaves the icon where it was. */}
       <div className="flex items-center px-4 pt-2 pb-1">
         <span className="text-2xs uppercase tracking-[0.08em] text-secondary font-medium">
           {t('workspace.zone.label')}
@@ -382,17 +374,27 @@ export default function Sidebar({
       </div>
       <div className="px-2 pb-1 space-y-0.5">
         <button
-          onClick={onSelectCalendar}
-          aria-current={route.name === 'calendar' ? 'page' : undefined}
+          type="button"
+          onClick={onSelectHome}
+          data-testid="sidebar-workbench"
+          aria-current={route.name === 'list' ? 'page' : undefined}
           className={`w-full text-left px-3 py-2 rounded-sm flex items-center gap-2.5 transition-all duration-150 max-md:min-h-[44px] ${
-            route.name === 'calendar' ? 'bg-nav-selected' : 'hover:bg-nav-hover/50'
+            route.name === 'list' ? 'bg-nav-selected' : 'hover:bg-nav-hover/50'
           }`}
         >
-          <Calendar size={14} className="shrink-0 text-secondary" aria-hidden="true" />
-          <span className="text-xs font-medium text-primary block truncate">
-            {t('workspace.calendar.nav')}
+          <span className="relative flex w-3.5 shrink-0 items-center justify-center text-secondary">
+            <LayoutGrid size={14} strokeWidth={2} aria-hidden="true" />
+            {anythingWaiting && route.name !== 'list' && (
+              <span
+                data-testid="sidebar-workbench-dot"
+                aria-hidden="true"
+                className="absolute -right-[3px] -top-[3px] h-1.5 w-1.5 rounded-full bg-accent shadow-[0_0_0_1.5px_var(--color-nav)]"
+              />
+            )}
           </span>
-          <BetaBadge />
+          <span className="text-xs font-medium text-primary block truncate">
+            {t('workbench.title')}
+          </span>
         </button>
       </div>
 

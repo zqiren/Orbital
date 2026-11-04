@@ -42,7 +42,6 @@ const defaultProps = {
   route: { name: 'list' } as const,
   connectionState: 'connected' as const,
   onSelectProject: vi.fn(),
-  onSelectCalendar: vi.fn(),
   onSelectHome: vi.fn(),
   onNewProject: vi.fn(),
   onSettings: vi.fn(),
@@ -95,23 +94,42 @@ describe('Sidebar — Workspace zone (two-zone IA)', () => {
     is_scratch: true,
   };
 
-  it('renders the Workspace zone label and a Calendar item', () => {
+  it('renders the Workspace zone label and a Workbench row, and no Calendar row', () => {
     render(<Sidebar {...defaultProps} />);
     expect(screen.getByText('Workspace')).toBeInTheDocument();
-    expect(screen.getByText('Calendar')).toBeInTheDocument();
+    expect(screen.getByTestId('sidebar-workbench')).toHaveTextContent('Workbench');
+    expect(screen.queryByText('Calendar')).toBeNull();
   });
 
-  it('clicking Calendar calls onSelectCalendar', () => {
-    const onSelectCalendar = vi.fn();
-    render(<Sidebar {...defaultProps} onSelectCalendar={onSelectCalendar} />);
-    fireEvent.click(screen.getByText('Calendar'));
-    expect(onSelectCalendar).toHaveBeenCalledOnce();
+  it('clicking the Workbench row goes home', () => {
+    const onSelectHome = vi.fn();
+    render(<Sidebar {...defaultProps} onSelectHome={onSelectHome} />);
+    fireEvent.click(screen.getByTestId('sidebar-workbench'));
+    expect(onSelectHome).toHaveBeenCalledOnce();
   });
 
-  it('marks the Calendar item active (aria-current) when route.name is calendar', () => {
-    render(<Sidebar {...defaultProps} route={{ name: 'calendar' }} />);
-    const calBtn = screen.getByText('Calendar').closest('button');
-    expect(calBtn).toHaveAttribute('aria-current', 'page');
+  it('marks the Workbench row selected on home only', () => {
+    const { rerender } = render(<Sidebar {...defaultProps} route={{ name: 'list' }} />);
+    const row = screen.getByTestId('sidebar-workbench');
+    expect(row).toHaveAttribute('aria-current', 'page');
+    expect(row.className).toContain('bg-nav-selected');
+    rerender(<Sidebar {...defaultProps} route={{ name: 'settings' }} />);
+    expect(screen.getByTestId('sidebar-workbench')).not.toHaveAttribute('aria-current');
+    expect(screen.getByTestId('sidebar-workbench').className).not.toContain('bg-nav-selected');
+  });
+
+  it('the Workbench row carries the Workbench glyph as its icon', () => {
+    render(<Sidebar {...defaultProps} />);
+    expect(screen.getByTestId('sidebar-workbench').querySelector('svg.lucide-layout-grid')).not.toBeNull();
+  });
+
+  it('the row glyph shows the blue dot while something waits, except on home', () => {
+    const { rerender } = render(<Sidebar {...defaultProps} route={{ name: 'settings' }} waiting={false} />);
+    expect(screen.queryByTestId('sidebar-workbench-dot')).toBeNull();
+    rerender(<Sidebar {...defaultProps} route={{ name: 'settings' }} waiting />);
+    expect(screen.getByTestId('sidebar-workbench-dot').className).toContain('bg-accent');
+    rerender(<Sidebar {...defaultProps} route={{ name: 'list' }} waiting />);
+    expect(screen.queryByTestId('sidebar-workbench-dot')).toBeNull();
   });
 
   it('pins the is_scratch project at the top of the Projects list, above the rest', () => {
@@ -224,26 +242,22 @@ describe('Sidebar — manual project order (spec 056)', () => {
   });
 });
 
-describe('Sidebar — the brand row is home (spec 154)', () => {
-  it('has no separate Workbench row any more', () => {
-    render(<Sidebar {...defaultProps} />);
-    expect(screen.queryByText('Workbench', { selector: 'span' })).toBeNull();
-    expect(screen.queryByTestId('workbench-badge-count')).toBeNull();
-    expect(apiMock).not.toHaveBeenCalledWith('/api/v2/workbench');
-  });
-
-  it('clicking the Orbital brand row goes home', () => {
+describe('Sidebar — the brand row is plain again (2026-11-04)', () => {
+  it('the Orbital wordmark is not a control', () => {
     const onSelectHome = vi.fn();
     render(<Sidebar {...defaultProps} onSelectHome={onSelectHome} />);
-    fireEvent.click(screen.getByTestId('sidebar-brand-home'));
-    expect(onSelectHome).toHaveBeenCalledOnce();
+    expect(screen.queryByTestId('sidebar-brand-home')).toBeNull();
+    const word = screen.getByText('Orbital');
+    expect(word.closest('button')).toBeNull();
+    fireEvent.click(word);
+    expect(onSelectHome).not.toHaveBeenCalled();
   });
 
-  it('marks the brand row current on home only', () => {
-    const { rerender } = render(<Sidebar {...defaultProps} />);
-    expect(screen.getByTestId('sidebar-brand-home')).toHaveAttribute('aria-current', 'page');
-    rerender(<Sidebar {...defaultProps} route={{ name: 'calendar' }} />);
-    expect(screen.getByTestId('sidebar-brand-home')).not.toHaveAttribute('aria-current');
+  it('there is exactly one way home in the list: the Workbench row', () => {
+    render(<Sidebar {...defaultProps} />);
+    expect(screen.getAllByRole('button', { name: /^Workbench/ })).toHaveLength(1);
+    expect(screen.queryByTestId('workbench-badge-count')).toBeNull();
+    expect(apiMock).not.toHaveBeenCalledWith('/api/v2/workbench');
   });
 });
 

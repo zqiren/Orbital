@@ -312,6 +312,41 @@ describe('FilePreviewDrawer — maximized (spec 137)', () => {
     expect(localStorage.getItem('orbital:workspacePanelWidth')).toBe('500');
   });
 
+  // 2026-11-04 (supersedes the October rule that kept the project column):
+  // maximized covers the whole window except the 20px edge strip, docked or
+  // as an overlay, so one click on the strip returns.
+  it('docked + maximized covers the window except the edge strip', () => {
+    const { rerender } = render(
+      <FilePreviewDrawer docked maximized open selectedPath={null} fileContent={null} loading={false} onClose={vi.fn()}>
+        <div data-testid="body" />
+      </FilePreviewDrawer>,
+    );
+    expect(screen.getByTestId('workspace-panel-column').className).toContain('panel-max-window');
+    rerender(
+      <FilePreviewDrawer docked open selectedPath={null} fileContent={null} loading={false} onClose={vi.fn()}>
+        <div data-testid="body" />
+      </FilePreviewDrawer>,
+    );
+    expect(screen.getByTestId('workspace-panel-column').className).not.toContain('panel-max-window');
+  });
+
+  it('as an overlay, maximized covers the window too and drops its scrim', () => {
+    const { container, rerender } = render(
+      <FilePreviewDrawer open maximized selectedPath={null} fileContent={null} loading={false} onClose={vi.fn()}>
+        <div data-testid="body" />
+      </FilePreviewDrawer>,
+    );
+    expect(screen.getByRole('dialog').className).toContain('panel-max-window');
+    expect(container.querySelector('[data-testid="file-preview-scrim"]')).toBeNull();
+    rerender(
+      <FilePreviewDrawer open selectedPath={null} fileContent={null} loading={false} onClose={vi.fn()}>
+        <div data-testid="body" />
+      </FilePreviewDrawer>,
+    );
+    expect(screen.getByRole('dialog').className).not.toContain('panel-max-window');
+    expect(container.querySelector('[data-testid="file-preview-scrim"]')).not.toBeNull();
+  });
+
   it('as an overlay with a header slot, shows that header in place of the "File preview" label', () => {
     render(
       <FilePreviewDrawer

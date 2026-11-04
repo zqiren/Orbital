@@ -881,8 +881,10 @@ describe('ProjectDetail — the project column (desktop, narrow)', () => {
   });
 });
 
-// Spec 137 item 12: maximized Files fills the right area while the column
-// stays, and opening anything from the column needs the right area back.
+// Spec 137 item 12, amended 2026-11-04: maximized, the panel covers the whole
+// window except the 20px edge strip (FilePreviewDrawer's window-cover class),
+// so the column is no longer kept visible beside it. It stays mounted under
+// the panel, and opening anything from it needs the right area back.
 describe('ProjectDetail — maximize and the column', () => {
   function maximized() {
     setViewportWidth(1440);
@@ -894,7 +896,7 @@ describe('ProjectDetail — maximize and the column', () => {
     return panel;
   }
 
-  it('the column stays visible while the panel is maximized', () => {
+  it('the column stays mounted under the window-wide panel, so restore brings it back as it was', () => {
     maximized();
     renderProjectDetail();
     const column = screen.getByTestId('project-column');

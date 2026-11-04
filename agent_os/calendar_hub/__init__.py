@@ -7,7 +7,8 @@
 Normalizes calendar sources (macOS EventKit, a connected Google-Calendar MCP
 connector, future CalDAV/Outlook) into one event feed with a project-linkage
 layer. ``CalendarHub`` is a global singleton wired beside ``AgentManager`` in
-the app factory and driven by ``agent_os/api/routes/calendar.py``.
+the app factory and read by the agent's ``calendar_read`` tool (the Calendar
+page and its REST routes were removed on 2026-11-04).
 """
 
 from .hub import CalendarHub

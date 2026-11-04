@@ -306,7 +306,7 @@ export default function EdgeStrip({
             declarations never compete on one element. pt-5 centres the 12px
             chevron on the wordmark row's 20px logo (pt-4 + 10) so the two
             read as one header line when the list is visible. */}
-        <span className={`flex flex-col items-center gap-2 pb-3 ${onHome ? 'pt-[48px]' : 'pt-5'}`}>
+        <span className="flex flex-col items-center gap-2 pb-3 pt-5">
           <Chevron size={12} aria-hidden="true" className="shrink-0 text-secondary" />
           {dotColor && !pinned && (
             <span
@@ -319,11 +319,15 @@ export default function EdgeStrip({
       </button>
 
       {/* Spec 154: the Workbench glyph, a sibling above the rail (a button
-          cannot hold a button). Centred on the wordmark row's logo (26px
-          below the titlebar band) so the glyph and the brand row read as one
-          line when the list is visible. The band itself passes clicks to the
-          rail; only the glyph takes them. */}
-      {onHome && (
+          cannot hold a button). It sits at the height of the list's 工作台
+          row icon (2026-11-04), so collapsing or expanding the list keeps the
+          icon in place: brand row 56px + 工作区 header 26px + half the 32px
+          row = 98px below the titlebar band, minus half its own 22px = 87.
+          Docked, the list's row is on screen at that height, so the glyph
+          steps aside; floated by hover it stays, since the pointer may be on
+          its way to it. The band itself passes clicks to the rail; only the
+          glyph takes them. */}
+      {onHome && !pinned && (
         <div className="pointer-events-none absolute inset-x-0 top-0 z-[22] w-5 pt-titlebar">
           <button
             type="button"
@@ -332,7 +336,7 @@ export default function EdgeStrip({
             aria-current={homeActive ? 'page' : undefined}
             aria-keyshortcuts={homeShortcutLabel() === '⌘0' ? 'Meta+0' : 'Control+0'}
             onClick={onHome}
-            className={`group pointer-events-auto relative mt-[15px] flex h-[22px] w-5 items-center justify-center rounded-[5px] focus:outline-none focus-visible:ring-1 focus-visible:ring-accent ${
+            className={`group pointer-events-auto relative mt-[87px] flex h-[22px] w-5 items-center justify-center rounded-[5px] focus:outline-none focus-visible:ring-1 focus-visible:ring-accent ${
               homeActive ? 'text-accent' : 'text-secondary hover:text-primary'
             }`}
           >

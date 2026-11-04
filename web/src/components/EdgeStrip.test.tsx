@@ -444,6 +444,25 @@ describe('EdgeStrip — Workbench glyph (spec 154)', () => {
     expect(screen.getByTestId('strip-workbench')).toHaveAttribute('aria-current', 'page');
   });
 
+  it('docked, the glyph steps aside: the list\'s own Workbench row sits at the same height', () => {
+    const { setPinned } = renderStrip({ onHome: vi.fn(), pinned: false });
+    expect(screen.getByTestId('strip-workbench')).toBeInTheDocument();
+    setPinned(true);
+    expect(screen.queryByTestId('strip-workbench')).toBeNull();
+  });
+
+  it('floated by hover, the glyph stays (the pointer may be on its way to it)', () => {
+    vi.useFakeTimers();
+    try {
+      renderStrip({ onHome: vi.fn(), pinned: false });
+      fireEvent.mouseEnter(getStrip());
+      act(() => { vi.advanceTimersByTime(200); });
+      expect(screen.getByTestId('strip-workbench')).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('its tooltip names the Workbench and the shortcut', () => {
     renderStrip({ onHome: vi.fn() });
     const tip = screen.getByRole('tooltip');

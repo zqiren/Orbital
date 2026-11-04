@@ -5572,3 +5572,59 @@ describe('ChatView: changed-files line (spec 065)', () => {
     expect(onUndoTurn).toHaveBeenCalledWith({ sessionId: 's1', fromTs: TS, toTs: null });
   });
 });
+
+// ─── Workbench reading pane (2026-11-04) ───────────────────────────────────
+// The pane embeds this view. It must not check the session's reply just
+// because it is on screen (the card has to stay, and come back to 等你 when
+// a turn ends while the pane is open), and it tells the pane when the user
+// sent, so the card moves to 进行中 at once.
+describe('ChatView: embedded in the Workbench pane', () => {
+  const REPLIED = {
+    session_id: 's1', session_uuid: 's1', status: 'idle', last_terminal_event: null,
+    pinned_target: null, last_user_at: '2026-11-04T08:00:00Z', last_reply_at: '2026-11-04T08:05:00Z',
+    checked_reply_at: null,
+  };
+  const checkedPosts = () => apiCalls.filter((p) => p === '/api/v2/workbench/checked');
+
+  beforeEach(async () => {
+    const { __resetCheckedMarks } = await import('../hooks/useSeenReplies');
+    __resetCheckedMarks();
+  });
+
+  it('by default, viewing a session checks its reply (unchanged)', async () => {
+    sessionsListResponse = [REPLIED];
+    await renderChat({ sessionId: 's1' });
+    await flushEffects();
+    expect(checkedPosts().length).toBe(1);
+  });
+
+  it('checksOnView={false}: viewing does not check the reply', async () => {
+    sessionsListResponse = [REPLIED];
+    await act(async () => {
+      root.render(
+        <ChatView projectId="p1" project={project} agentStatus={'idle' as never} agents={[]}
+          sessionId="s1" checksOnView={false} />,
+      );
+    });
+    await flushEffects();
+    expect(checkedPosts().length).toBe(0);
+  });
+
+  it('onUserSend fires once the user\'s message went out', async () => {
+    const onUserSend = vi.fn();
+    await act(async () => {
+      root.render(
+        <ChatView projectId="p1" project={project} agentStatus={'idle' as never} agents={[]}
+          sessionId="s1" onUserSend={onUserSend} />,
+      );
+    });
+    await flushEffects();
+    expect(onUserSend).not.toHaveBeenCalled();
+    await act(async () => { typeInComposer('go on'); });
+    await flushEffects();
+    await act(async () => { pressKey('Enter'); });
+    await flushEffects();
+    expect(injectCalls).toHaveLength(1);
+    expect(onUserSend).toHaveBeenCalledTimes(1);
+  });
+});

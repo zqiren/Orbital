@@ -66,10 +66,11 @@ def reply_line(text: str | None) -> str | None:
 
 
 class OrbitalSession:
-    __slots__ = ("session_id", "agent", "entry", "own_rows", "skip", "reply_text")
+    __slots__ = ("session_id", "agent", "entry", "own_rows", "skip", "reply_text", "worker")
 
     def __init__(self, session_id: str, agent: str | None, entry: LeftOffEntry,
-                 own_rows: bool, skip: bool, reply_text: str | None = None):
+                 own_rows: bool, skip: bool, reply_text: str | None = None,
+                 worker: str | None = None):
         self.session_id = session_id
         self.agent = agent
         self.entry = entry
@@ -79,6 +80,11 @@ class OrbitalSession:
         # completed / continued worker's ``_meta.reply``); None after any
         # other ending.
         self.reply_text = reply_text
+        # The worker the session's last dispatch handed work to (the
+        # ``_meta.handle`` of a ``[Sub-agent] Message sent to …`` row), or
+        # None. A trigger-started run never pins its session, so this is how
+        # the Workbench names the agent that ran an automation.
+        self.worker = worker
 
     @property
     def reply_line(self) -> str | None:
@@ -145,6 +151,7 @@ def _read_orbital(path: str) -> OrbitalSession | None:
     own_rows = False
     any_row = False
     reply_text: str | None = None
+    worker: str | None = None
     # mark_task_complete ends the run: its call (and the result row the loop
     # writes for it) is the finish, not "still working".
     complete_ids: set[str] = set()
@@ -197,6 +204,9 @@ def _read_orbital(path: str) -> OrbitalSession | None:
             elif role == "system":
                 content = row.get("content") if isinstance(row.get("content"), str) else ""
                 event = meta.get("event")
+                handle = meta.get("handle")
+                if meta.get("dispatch_id") and isinstance(handle, str) and handle:
+                    worker = handle
                 if event == "sub_agent_terminal":
                     any_row = True
                     own_rows = own_rows or not imported
@@ -235,7 +245,7 @@ def _read_orbital(path: str) -> OrbitalSession | None:
         stop=probe.stop,
     )
     return OrbitalSession(entry.session_id, entry.agent, entry, own_rows,
-                          skip or probe.automation, reply_text)
+                          skip or probe.automation, reply_text, worker)
 
 
 def _orbital_entries(workspace: str) -> list[OrbitalSession]:
