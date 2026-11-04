@@ -70,6 +70,7 @@ from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, timezone
 
 from agent_os.agent import user_flags
+from agent_os.agent.project_paths import SESSION_STEM_RE
 from agent_os.utils.text_io import read_text_lenient
 
 logger = logging.getLogger(__name__)
@@ -511,7 +512,6 @@ _QUOTE_CHARS = ('"', "“", "”", "「", "」", "『", "』")
 # A close may cite the session the user's words come from (spec 124 §3.7
 # follow-up): ``session:<uuid>`` anywhere in the note.
 _SESSION_CITE_RE = re.compile(r"(?<!\S)session[:=](?P<uuid>\S+)")
-_SESSION_STEM_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 _MAX_QUOTE_CHARS = 500
 
 
@@ -531,7 +531,7 @@ def _quoted_text(note: str) -> str:
 def _session_user_texts(sessions_dir: str, stem: str) -> list[str]:
     """The user's own messages in ``<sessions_dir>/<stem>.jsonl`` (not
     injected or daemon rows), whitespace-normalised. [] when unreadable."""
-    if not _SESSION_STEM_RE.match(stem):
+    if not SESSION_STEM_RE.fullmatch(stem):
         return []
     texts: list[str] = []
     raw = read_text_lenient(os.path.join(sessions_dir, stem + ".jsonl"))

@@ -49,7 +49,7 @@ if [ $# -eq 0 ]; then
   echo 'usage: orbital/bin/bg "<command>"' >&2
   exit 2
 fi
-clean() { printf '%s' "$1" | tr -cd 'A-Za-z0-9_.:-'; }
+clean() { printf '%s' "$1" | LC_ALL=C tr -cd 'A-Za-z0-9_.:\200-\377-'; }
 here=$(cd "$(dirname "$0")" && pwd)
 jobs_dir=$(dirname "$here")/jobs
 id=job_$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')
@@ -119,7 +119,7 @@ BG_PS1 = r'''# Orbital background-job launcher. Usage: orbital\bin\bg.cmd "<comm
 $ErrorActionPreference = 'Stop'
 $cmd = ($args -join ' ')
 if (-not $cmd) { [Console]::Error.WriteLine('usage: orbital\bin\bg.cmd "<command>"'); exit 2 }
-function Clean([string]$v) { if ($v) { return ($v -replace '[^A-Za-z0-9_.:-]', '') } else { return '' } }
+function Clean([string]$v) { if ($v) { return ($v -replace '[^\w.:-]', '') } else { return '' } }
 $bin = Split-Path -Parent $MyInvocation.MyCommand.Path
 $jobs = Join-Path (Split-Path -Parent $bin) 'jobs'
 $id = 'job_' + (-join ((1..8) | ForEach-Object { '{0:x}' -f (Get-Random -Maximum 16) }))
