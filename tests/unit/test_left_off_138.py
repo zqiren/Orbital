@@ -258,3 +258,76 @@ def test_orbital_run_native_threads_are_not_the_users(world, monkeypatch):
     monkeypatch.setattr(si, "orbital_thread_ids", lambda workspace: {"019a-orb"}, raising=False)
     out = lo.left_off_for_project({"workspace": ws}, scanner)
     assert [u["session_id"] for u in out["unfinished"]] == [imported_session_id("codex", "019a-mine")]
+
+
+def _complete_call(cid, summary):
+    return {"id": cid, "type": "function",
+            "function": {"name": "mark_task_complete",
+                         "arguments": json.dumps({"summary": summary})}}
+
+
+def test_text_and_mark_task_complete_in_one_row_is_finished(world):
+    """Workbench walkthrough: a finished Bakery task read as 已中断. The
+    agent's last row carries its answer AND mark_task_complete; the loop then
+    writes the tool result and a "Task completed" system row. Finished."""
+    _home, ws, _desk, scanner = world
+    orbital_session(ws, "orb_done", [
+        {"role": "user", "source": "user", "content": "add opening hours", "timestamp": iso(1)},
+        {"role": "assistant", "source": "management", "content": "Added the hours to index.html.",
+         "tool_calls": [_complete_call("c1", "Opening hours added")], "timestamp": iso(1)},
+        {"role": "tool", "tool_call_id": "c1", "content": "Task marked complete.",
+         "timestamp": iso(1)},
+        {"role": "system", "content": "Task completed: Opening hours added",
+         "source": "queue_signal", "signal": "complete",
+         "payload": {"summary": "Opening hours added"}, "timestamp": iso(1)},
+    ])
+    parsed = lo.read_orbital_session(os.path.join(ws, "orbital", "sessions", "orb_done.jsonl"))
+    assert parsed.entry.stop is None
+    assert parsed.reply_line == "Added the hours to index.html."
+    out = lo.left_off_for_project({"workspace": ws}, scanner)
+    assert out["unfinished"] == []
+    assert out["last_time"]["session_id"] == "orb_done"
+
+
+def test_mark_task_complete_alone_is_finished_with_its_summary(world):
+    _home, ws, _desk, scanner = world
+    orbital_session(ws, "orb_sig", [
+        {"role": "user", "source": "user", "content": "fix the menu grid", "timestamp": iso(1)},
+        {"role": "assistant", "source": "management", "content": None,
+         "tool_calls": [_complete_call("c2", "Menu grid fixed on mobile")], "timestamp": iso(1)},
+        {"role": "tool", "tool_call_id": "c2", "content": "Task marked complete.",
+         "timestamp": iso(1)},
+    ])
+    parsed = lo.read_orbital_session(os.path.join(ws, "orbital", "sessions", "orb_sig.jsonl"))
+    assert parsed.entry.stop is None
+    assert parsed.reply_line == "Menu grid fixed on mobile"
+
+
+def test_tool_use_then_final_text_is_finished(world):
+    _home, ws, _desk, scanner = world
+    orbital_session(ws, "orb_tools", [
+        {"role": "user", "source": "user", "content": "read the menu", "timestamp": iso(1)},
+        {"role": "assistant", "source": "management", "content": "",
+         "tool_calls": [{"id": "r1", "type": "function",
+                         "function": {"name": "read", "arguments": "{\"path\": \"menu.html\"}"}}],
+         "timestamp": iso(1)},
+        {"role": "tool", "tool_call_id": "r1", "content": "<html>…", "timestamp": iso(1)},
+        {"role": "assistant", "source": "management", "content": "The menu has 12 items.",
+         "timestamp": iso(1)},
+    ])
+    parsed = lo.read_orbital_session(os.path.join(ws, "orbital", "sessions", "orb_tools.jsonl"))
+    assert parsed.entry.stop is None and parsed.reply_line == "The menu has 12 items."
+
+
+def test_a_tool_call_left_hanging_is_still_interrupted(world):
+    _home, ws, _desk, scanner = world
+    orbital_session(ws, "orb_hang", [
+        {"role": "user", "source": "user", "content": "deploy", "timestamp": iso(1)},
+        {"role": "assistant", "source": "management", "content": "Deploying now.",
+         "tool_calls": [{"id": "s1", "type": "function",
+                         "function": {"name": "shell", "arguments": "{\"command\": \"make\"}"}}],
+         "timestamp": iso(1)},
+        {"role": "tool", "tool_call_id": "s1", "content": "ok", "timestamp": iso(1)},
+    ])
+    parsed = lo.read_orbital_session(os.path.join(ws, "orbital", "sessions", "orb_hang.jsonl"))
+    assert parsed.entry.stop is not None and parsed.entry.stop.cause == "interrupted"

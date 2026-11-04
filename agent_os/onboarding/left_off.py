@@ -14,6 +14,7 @@ own rows decide. Blocking I/O — call off the event loop.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -108,6 +109,32 @@ def read_orbital_session(path: str) -> OrbitalSession | None:
     return result
 
 
+def _completion_summary(tool_calls: object, complete_ids: set[str]) -> str | None:
+    """The summary of a ``mark_task_complete`` call in ``tool_calls`` ("" when
+    it has none), recording the call's id; None when the row has no such
+    call."""
+    if not isinstance(tool_calls, list):
+        return None
+    found: str | None = None
+    for tc in tool_calls:
+        if not isinstance(tc, dict):
+            continue
+        fn = tc.get("function") if isinstance(tc.get("function"), dict) else tc
+        if fn.get("name") != "mark_task_complete":
+            continue
+        if isinstance(tc.get("id"), str):
+            complete_ids.add(tc["id"])
+        args = fn.get("arguments")
+        if isinstance(args, str):
+            try:
+                args = json.loads(args)
+            except ValueError:
+                args = {}
+        summary = args.get("summary") if isinstance(args, dict) else None
+        found = summary.strip() if isinstance(summary, str) else ""
+    return found
+
+
 def _read_orbital(path: str) -> OrbitalSession | None:
     stem = os.path.basename(path)[:-len(".jsonl")]
     probe = HistorySession(agent="orbital", native_id=stem, path=path)
@@ -118,6 +145,9 @@ def _read_orbital(path: str) -> OrbitalSession | None:
     own_rows = False
     any_row = False
     reply_text: str | None = None
+    # mark_task_complete ends the run: its call (and the result row the loop
+    # writes for it) is the finish, not "still working".
+    complete_ids: set[str] = set()
     try:
         for row in iter_json_lines(path):
             if session_id is None and isinstance(row.get("session_id"), str):
@@ -150,14 +180,20 @@ def _read_orbital(path: str) -> OrbitalSession | None:
                 any_row = True
                 own_rows = own_rows or not imported
                 probe.ended_at = ts or probe.ended_at
-                if row.get("tool_calls"):
-                    turn.working()
-                elif isinstance(row.get("content"), str) and row["content"].strip():
+                text = row["content"] if isinstance(row.get("content"), str) else ""
+                summary = _completion_summary(row.get("tool_calls"), complete_ids)
+                if summary is not None:
                     turn.answered()
-                    reply_text = row["content"]
+                    reply_text = text if text.strip() else (summary or None)
+                elif row.get("tool_calls"):
+                    turn.working()
+                elif text.strip():
+                    turn.answered()
+                    reply_text = text
             elif role == "tool":
                 any_row = True
-                turn.working()
+                if row.get("tool_call_id") not in complete_ids:
+                    turn.working()
             elif role == "system":
                 content = row.get("content") if isinstance(row.get("content"), str) else ""
                 event = meta.get("event")
