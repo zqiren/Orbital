@@ -239,7 +239,10 @@ export default function ChatMessage({ message, agentName, workspace, onOpenPath 
           )}
         </div>
         {!isHeaderOnly && (
-          <div className="text-[13px] leading-[1.55] text-primary break-words overflow-x-auto">
+          // overflow-x clips a card's shadow at this box's edge; the bleed
+          // (negative margin + equal padding) moves that edge out so file
+          // cards keep their soft sides, and the text does not move.
+          <div className="-mx-4 px-4 -my-1.5 py-1.5 text-[13px] leading-[1.55] text-primary break-words overflow-x-auto">
             <MarkdownContent content={message.content} workspace={workspace} onOpenPath={onOpenPath} />
           </div>
         )}

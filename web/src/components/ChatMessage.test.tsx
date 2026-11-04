@@ -334,3 +334,15 @@ describe('ChatMessage — user_message with an appended Annotations block', () =
     expect(screen.getByText('Annotations: are a nice idea')).toBeInTheDocument();
   });
 });
+
+describe('ChatMessage — the agent body leaves room for card shadows', () => {
+  it('widens its clip box with a matching bleed so the text does not move', () => {
+    // overflow-x-auto clips a child's box-shadow at the body's edge; the
+    // negative margin + equal padding moves that edge out without moving text.
+    const { container } = render(<ChatMessage message={agentMsg('Wrote [about](about.html).')} />);
+    const body = [...container.querySelectorAll('div')].find((d) => d.className.includes('overflow-x-auto'));
+    expect(body).toBeTruthy();
+    const cls = body!.className.split(/\s+/);
+    for (const c of ['-mx-4', 'px-4', '-my-1.5', 'py-1.5']) expect(cls).toContain(c);
+  });
+});
