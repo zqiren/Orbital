@@ -468,7 +468,7 @@ export default function ProjectDetail({
         // 260 beside a docked panel, 220 on a narrow window (the column the
         // session list had, now holding the whole project).
         style={{ width: dockable ? 260 : 220 }}
-        className="project-column flex flex-col shrink-0 min-h-0 bg-sidebar"
+        className="project-column float-panel-column flex flex-col shrink-0 min-h-0 bg-sidebar"
       >
         <div className="flex flex-col gap-1.5 px-4 pt-[18px] pb-1.5 shrink-0">
           <div className="flex items-center gap-2 min-w-0">

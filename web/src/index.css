@@ -567,6 +567,43 @@ body {
   .surface-float, .surface-float-static, .surface-float-pop { outline: 1px solid var(--color-border); }
 }
 
+/* ------------------------------------------- Float: panel edges and bubbles
+   The project column and the docked right panel keep their full height and
+   tint; the edge toward the chat casts a soft directional shadow instead of a
+   1px line (owner's "Edge", 2026-11-04). The overlay drawer (phone bottom
+   sheet, narrow-window slide-out) drops its line the same way. The user
+   bubble keeps its tint and gets a two-layer near shadow (Float-light): small
+   blur radii, no filter, no hover transform, so long chats scroll the same in
+   WebKit (measured: no change in frame times against the unshadowed bubble).
+   Unlayered on purpose: these must beat the border/shadow utilities on the
+   same nodes. */
+:root {
+  --float-edge-right: 1px 0 3px -1px rgb(0 0 0 / .05), 8px 0 24px -12px rgb(0 0 0 / .16);
+  --float-edge-left: -1px 0 3px -1px rgb(0 0 0 / .05), -8px 0 24px -12px rgb(0 0 0 / .16);
+  --float-drawer-up: 0 -2px 4px rgb(0 0 0 / .04), 0 -16px 40px rgb(0 0 0 / .14);
+  --float-drawer-left: -2px 0 4px rgb(0 0 0 / .04), -16px 0 40px rgb(0 0 0 / .14);
+  --float-bubble: 0 1px 1px rgb(0 0 0 / .03), 0 2px 6px rgb(0 0 0 / .05), inset 0 1px 0 rgb(255 255 255 / .6);
+}
+/* Dark: black on a near-black chat needs more weight to read as a layer — a
+   denser near band plus a wider falloff, still without a hard line. */
+:root[data-theme="dark"] {
+  --float-edge-right: 1px 0 2px rgb(0 0 0 / .45), 4px 0 10px -2px rgb(0 0 0 / .5), 16px 0 36px -12px rgb(0 0 0 / .8);
+  --float-edge-left: -1px 0 2px rgb(0 0 0 / .45), -4px 0 10px -2px rgb(0 0 0 / .5), -16px 0 36px -12px rgb(0 0 0 / .8);
+  --float-drawer-up: 0 -2px 4px rgb(0 0 0 / .4), 0 -16px 40px rgb(0 0 0 / .55);
+  --float-drawer-left: -2px 0 4px rgb(0 0 0 / .4), -16px 0 40px rgb(0 0 0 / .55);
+  --float-bubble: 0 1px 1px rgb(0 0 0 / .3), 0 2px 6px rgb(0 0 0 / .3), inset 0 1px 0 rgb(255 255 255 / .05);
+}
+.float-panel-column { position: relative; z-index: 1; box-shadow: var(--float-edge-right); }
+.float-panel-dock:not([data-maximized="true"]) { border-left-width: 0; z-index: 1; box-shadow: var(--float-edge-left); }
+.float-panel-drawer { border-width: 0; box-shadow: var(--float-drawer-up); }
+@media (min-width: 768px) {
+  .float-panel-drawer { box-shadow: var(--float-drawer-left); }
+}
+/* Closed, the drawer waits just off-screen; its shadow would bleed back over
+   the chat's edge, so it casts none until it opens. */
+.float-panel-drawer[aria-hidden="true"] { box-shadow: none; }
+.float-bubble { box-shadow: var(--float-bubble); }
+
 /* Markdown content styles for agent messages */
 .markdown-content {
   font-size: 0.8125rem;
