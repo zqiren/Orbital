@@ -61,7 +61,7 @@ const CAUSE_KEY: Record<StopCause, StringKey> = {
 const sectionLabel = 'block text-secondary font-semibold';
 const sectionLabelStyle = { fontSize: '9.5px', letterSpacing: '0.8px', textTransform: 'uppercase' } as const;
 const cardShell =
-  'group flex w-full flex-col gap-1.5 rounded-xl border border-border bg-card px-3.5 py-3 text-left shadow-[0_1px_2px_rgb(0_0_0/0.04)] transition-[border-color,box-shadow,transform] duration-150 hover:border-accent/50 hover:shadow-[0_4px_12px_-4px_rgb(0_0_0/0.12)] active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 motion-reduce:transition-none motion-reduce:active:scale-100';
+  'group flex w-full flex-col gap-1.5 surface-float px-3.5 py-3 text-left active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 motion-reduce:transition-none motion-reduce:active:scale-100';
 const chip = 'rounded-full border border-border bg-sidebar px-2 py-0.5 text-[11px] text-secondary';
 
 export default function LeftOffCards({ projectId, agents, onOpen, fallback }: LeftOffCardsProps) {

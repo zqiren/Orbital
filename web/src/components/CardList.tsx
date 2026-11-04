@@ -290,10 +290,10 @@ export default function CardList({
               aria-checked={selectedId === null && !dangling}
               data-testid={`${testId}-global-default`}
               onClick={() => select(null)}
-              className={`w-full text-left border rounded-lg px-3 py-2.5 transition-all duration-150 ${
+              className={`w-full text-left surface-float px-3 py-2.5 ${
                 selectedId === null && !dangling
-                  ? 'border-accent bg-accent/5 ring-1 ring-accent/30'
-                  : 'border-border bg-sidebar hover:border-accent/40'
+                  ? 'bg-accent/5 ring-1 ring-accent/30'
+                  : ''
               }`}
             >
               <span className="flex items-center gap-2">
@@ -319,10 +319,10 @@ export default function CardList({
           return (
             <li key={card.id} data-testid={`card-row-${card.id}`}>
               <div
-                className={`border rounded-lg transition-all duration-150 ${
+                className={`surface-float ${
                   isSelected
-                    ? 'border-accent bg-accent/5 ring-1 ring-accent/30'
-                    : 'border-border bg-sidebar hover:border-accent/40'
+                    ? 'bg-accent/5 ring-1 ring-accent/30'
+                    : ''
                 }`}
               >
                 <div className="flex items-start gap-3 px-3 py-2.5">
@@ -637,7 +637,7 @@ export function CardFormModal({
         aria-modal="true"
         aria-label={card ? t('cards.modal.editTitle') : t('cards.modal.addTitle')}
         data-testid="card-modal"
-        className="bg-background rounded-xl shadow-xl border border-border w-full max-w-[560px] max-h-[85vh] flex flex-col mx-4 max-md:max-w-full max-md:max-h-full max-md:h-full max-md:mx-0 max-md:rounded-none"
+        className="surface-float-pop w-full max-w-[560px] max-h-[85vh] flex flex-col mx-4 max-md:max-w-full max-md:max-h-full max-md:h-full max-md:mx-0 max-md:rounded-none"
       >
         <div className="flex items-center justify-between px-5 py-3.5 border-b border-border shrink-0">
           <h2 className="text-sm font-semibold text-primary">

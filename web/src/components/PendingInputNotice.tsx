@@ -91,7 +91,7 @@ export default function PendingInputNotice({
   return (
     <div
       data-testid="pending-input-notice"
-      className="mb-3 rounded-sm border border-border bg-background px-4 py-3 shadow-lg"
+      className="mb-3 surface-float-static px-4 py-3"
       role="status"
       aria-live="polite"
     >

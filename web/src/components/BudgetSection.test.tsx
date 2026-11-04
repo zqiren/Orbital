@@ -162,3 +162,27 @@ describe('BudgetSection spend meter loading/error states (bug #36)', () => {
     expect(screen.queryByText('Loading spend…')).toBeNull();
   });
 });
+
+// Float pass (1104): a radio choice tile is a Float static layer with no
+// border; the selected one adds the accent ring (and keeps its accent tint).
+function expectFloatTile(title: string, selected: boolean) {
+  const tile = screen.getByText(title).closest('button') as HTMLButtonElement;
+  const cls = tile.className.split(/\s+/);
+  expect(cls).toContain('surface-float-static');
+  expect(tile.className).not.toMatch(/(^|\s)border(-|\s|$)/);
+  if (selected) {
+    expect(cls).toContain('ring-1');
+    expect(tile.className).toContain('ring-accent');
+  } else {
+    expect(tile.className).not.toMatch(/(^|\s)ring-/);
+  }
+}
+
+describe('BudgetSection limit-action tiles (Float)', () => {
+  it('are Float static with no border; the selected one carries the accent ring', () => {
+    mockUseCost.mockReturnValue({ cost: costOf(0), loading: false, error: null, refresh: vi.fn() });
+    renderSection();
+    expectFloatTile('Pause project', true);
+    expectFloatTile('Stop', false);
+  });
+});

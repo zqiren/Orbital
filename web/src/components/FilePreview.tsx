@@ -641,7 +641,7 @@ export default function FilePreview({
           </div>
         )}
         <div className="flex-1 flex items-center justify-center p-8">
-          <div className="bg-sidebar rounded-lg p-6 max-w-sm w-full text-center">
+          <div className="surface-float-static p-6 max-w-sm w-full text-center">
             <File size={48} className="mx-auto text-secondary mb-4" />
             <p className="font-semibold text-sm text-primary mb-1">{fileName}</p>
             <p className="text-xs text-secondary mb-1">{formatSize(fileContent.size)}</p>

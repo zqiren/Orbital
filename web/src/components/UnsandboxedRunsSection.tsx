@@ -85,7 +85,7 @@ export function UnsandboxedRunsSection({
               return (
                 <div
                   key={run.id}
-                  className="bg-sidebar border border-border rounded-lg px-3 py-2 space-y-2"
+                  className="surface-float-static px-3 py-2 space-y-2"
                 >
                   <code className="block text-xs font-mono text-primary whitespace-pre-wrap break-all">
                     {run.command}

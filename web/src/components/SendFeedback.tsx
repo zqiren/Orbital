@@ -145,7 +145,7 @@ export function SendFeedbackDialog({
         aria-modal="true"
         aria-label={t('feedback.button')}
         data-testid="feedback-dialog"
-        className="w-full max-w-2xl max-h-[85vh] flex flex-col rounded-xl border border-border bg-elevated shadow-lg"
+        className="w-full max-w-2xl max-h-[85vh] flex flex-col surface-float-pop"
       >
         <div className="px-5 pt-4 pb-2">
           <h2 className="text-[15px] font-semibold text-primary">{t('feedback.button')}</h2>

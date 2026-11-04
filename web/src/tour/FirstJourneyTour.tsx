@@ -258,7 +258,7 @@ export default function FirstJourneyTour({ folderName, agentNames, onClose }: Fi
         aria-labelledby={titleId}
         data-testid="tour-card"
         data-step={step.id}
-        className="fixed z-[202] rounded-xl border border-border bg-card p-4 shadow-[0_18px_40px_-12px_rgb(0_0_0/0.35)]"
+        className="fixed z-[202] surface-float-pop p-4"
         style={{ left: pos.left, top: pos.top, width: CARD_WIDTH }}
       >
         <h2 id={titleId} className="text-sm font-semibold text-primary">

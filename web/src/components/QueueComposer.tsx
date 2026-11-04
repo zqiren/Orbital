@@ -124,7 +124,7 @@ export default function QueueComposer({
           ))}
         </div>
       )}
-      <div className="flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 focus-within:border-accent transition-colors max-md:gap-1.5">
+      <div className="flex items-center gap-2 surface-float-static surface-float-focus px-3 py-2 transition-[box-shadow] max-md:gap-1.5">
         {/* Who runs this item — the chat composer's pin mark, in the chat
             composer's place (2026-09-05: in the option row its menu opened
             downward off the bottom of the window, where it could not be seen

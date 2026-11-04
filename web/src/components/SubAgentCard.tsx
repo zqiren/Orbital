@@ -75,7 +75,7 @@ export default function SubAgentCard({
 
   return (
     <div
-      className={`bg-sidebar/30 border border-border rounded-lg transition-opacity duration-150 ${
+      className={`surface-float-static transition-opacity duration-150 ${
         enabled ? '' : 'opacity-50'
       }`}
     >

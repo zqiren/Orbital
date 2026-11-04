@@ -47,7 +47,7 @@ export default function AgentErrorNotice({
   return (
     <div
       data-testid="agent-error-notice"
-      className="mb-3 rounded-sm border border-error/40 bg-background px-4 py-3 shadow-lg"
+      className="mb-3 surface-float-static px-4 py-3"
       role="alert"
       aria-live="polite"
     >

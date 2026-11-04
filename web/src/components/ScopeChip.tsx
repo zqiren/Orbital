@@ -258,7 +258,7 @@ export default function ScopeChip({ project, projects, sessionId }: ScopeChipPro
           role="dialog"
           aria-label={t('scopeChip.popover.aria')}
           data-testid="scope-chip-popover"
-          className="absolute left-0 top-full mt-1 z-50 w-64 rounded-md border border-border bg-elevated shadow-md p-3"
+          className="absolute left-0 top-full mt-1 z-50 w-64 surface-float-pop p-3"
         >
           {/* Master toggle */}
           <label className="flex items-center gap-2 text-xs text-primary cursor-pointer">

@@ -888,7 +888,7 @@ function SubAgentCard({ entry, onChanged, onChangeLocation }: CardProps) {
   };
 
   return (
-    <div className="bg-sidebar/30 border border-border rounded-lg p-4">
+    <div className="surface-float-static p-4">
       <div className="flex items-start justify-between gap-3 mb-2">
         <div>
           <div className="flex items-center gap-2">

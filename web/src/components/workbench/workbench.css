@@ -10,21 +10,18 @@
 
 .wb-page {
   --wb-page: #FAFBFC;
-  --wb-layer: var(--color-card);
-  --wb-float: 0 2px 2px rgb(0 0 0 / .02), 0 4px 14px rgb(0 0 0 / .04), 0 22px 50px rgb(0 0 0 / .07), inset 0 1px 0 rgb(255 255 255 / .8);
-  --wb-float-hover: 0 2px 2px rgb(0 0 0 / .02), 0 8px 20px rgb(0 0 0 / .05), 0 32px 64px rgb(0 0 0 / .09), inset 0 1px 0 rgb(255 255 255 / .8);
+  /* The Float layer and shadows are the shared ones in index.css. */
+  --wb-layer: var(--float-layer);
+  --wb-float: var(--float-shadow);
+  --wb-float-hover: var(--float-shadow-hover);
   --wb-tint: rgb(83 154 248 / .09);
-  --wb-pop: 0 2px 4px rgb(0 0 0 / .04), 0 16px 40px rgb(0 0 0 / .14);
+  --wb-pop: var(--float-shadow-pop);
   background: var(--wb-page);
   color: var(--color-primary);
 }
 :root[data-theme="dark"] .wb-page {
   --wb-page: var(--color-background);
-  --wb-layer: var(--color-elevated);
-  --wb-float: 0 2px 3px rgb(0 0 0 / .45), 0 16px 48px rgb(0 0 0 / .5), inset 0 1px 0 rgb(255 255 255 / .06);
-  --wb-float-hover: 0 3px 6px rgb(0 0 0 / .45), 0 26px 64px rgb(0 0 0 / .55), inset 0 1px 0 rgb(255 255 255 / .07);
   --wb-tint: rgb(83 154 248 / .14);
-  --wb-pop: 0 2px 4px rgb(0 0 0 / .4), 0 16px 40px rgb(0 0 0 / .55);
 }
 
 /* Cards, summary and composer share one column: min(820px, 72%) on desktop. */

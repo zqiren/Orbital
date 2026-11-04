@@ -79,7 +79,7 @@ export default function EventDetail({ event, projects, onClose, onLink }: EventD
         role="dialog"
         aria-label={t('calendar.detail.aria')}
         data-testid="calendar-event-detail"
-        className="w-full max-w-sm rounded-lg border border-border bg-elevated shadow-lg"
+        className="w-full max-w-sm surface-float-pop"
       >
         {/* Header: accent bar + title + close */}
         <div className="flex items-start gap-2 p-4 border-b border-border">

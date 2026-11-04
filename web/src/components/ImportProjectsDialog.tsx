@@ -45,7 +45,7 @@ export default function ImportProjectsDialog({ onClose, onImported }: ImportProj
         aria-modal="true"
         aria-labelledby={titleId}
         data-testid="import-projects-dialog"
-        className="flex max-h-[85vh] w-full max-w-xl flex-col rounded-xl border border-border bg-elevated shadow-lg"
+        className="flex max-h-[85vh] w-full max-w-xl flex-col surface-float-pop"
       >
         <div className="flex items-start gap-3 border-b border-border pt-5 pb-3 pl-6 pr-4">
           <div className="min-w-0 flex-1">

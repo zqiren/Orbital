@@ -131,7 +131,7 @@ export default function CredentialStore({ projectId }: { projectId?: string }) {
   );
 
   const formUI = showForm ? (
-    <div className="border border-border rounded-lg px-4 py-3 bg-sidebar/50 space-y-3">
+    <div className="surface-float-static px-4 py-3 space-y-3">
       <div className="flex items-center justify-between">
         <span className="text-sm font-medium text-primary">{t('credStore.form.title')}</span>
         <button onClick={() => { setShowForm(false); setFormError(''); }} className="p-1 text-secondary hover:text-primary">
@@ -231,7 +231,7 @@ export default function CredentialStore({ projectId }: { projectId?: string }) {
       {credentials.map(cred => (
         <div
           key={cred.name}
-          className="border border-border rounded-lg px-4 py-3 bg-sidebar/50"
+          className="surface-float-static px-4 py-3"
         >
           <div className="flex items-start justify-between gap-3">
             <div className="flex items-center gap-2.5 min-w-0">

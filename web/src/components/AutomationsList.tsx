@@ -135,7 +135,7 @@ function AutomationRow({
     // second visual language. The left slot reinforces it: queue items carry a
     // state dot, automations carry a type icon.
     <div
-      className="flex flex-col gap-2 rounded-xl border border-border/50 bg-card px-4 py-3"
+      className="flex flex-col gap-2 surface-float-static px-4 py-3"
       data-testid={`automation-card-${trigger.id}`}
     >
       <div className="flex items-center gap-2">

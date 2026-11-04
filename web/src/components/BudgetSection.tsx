@@ -239,10 +239,10 @@ export default function BudgetSection({
                 key={opt.value}
                 type="button"
                 onClick={() => onActionChange(opt.value)}
-                className={`text-left border rounded-lg p-3 transition-all duration-150 max-md:min-h-[44px] ${
+                className={`text-left surface-float-static p-3 transition-all duration-150 max-md:min-h-[44px] ${
                   action === opt.value
-                    ? 'border-accent bg-accent/5'
-                    : 'border-border hover:border-secondary/40'
+                    ? 'bg-accent/5 ring-1 ring-accent/30'
+                    : ''
                 }`}
               >
                 <span className="text-sm font-medium text-primary block">{t(opt.titleKey)}</span>

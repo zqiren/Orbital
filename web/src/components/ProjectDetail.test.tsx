@@ -547,10 +547,9 @@ describe('ProjectDetail — the status line', () => {
     const line = screen.getByTestId('trigger-summary');
     expect(line.className).toContain('whitespace-nowrap');
     expect(line.className).not.toMatch(/flex-wrap/);
-    // A soft surface: white + the standard shadow at rest, tinted on hover.
-    expect(line.className).toMatch(/(^|\s)bg-card(\s|$)/);
-    expect(line.className).toContain('shadow-[');
-    expect(line.className).toContain('hover:bg-card-hover');
+    // A Float card: the raised layer that lifts on hover, never a grey tint.
+    expect(line.className).toMatch(/(^|\s)surface-float(\s|$)/);
+    expect(line.className).not.toContain('hover:bg-card-hover');
     expect(line.className).not.toMatch(/border/);
     expect(line).toHaveAttribute('title', '2 automations 1 off');
   });
@@ -559,7 +558,7 @@ describe('ProjectDetail — the status line', () => {
     renderProjectDetail({ page: 'tasks' });
     const line = screen.getByTestId('trigger-summary');
     expect(line).toHaveAttribute('aria-current', 'page');
-    expect(line.className).toMatch(/(^|\s)bg-card(\s|$)/);
+    expect(line.className).toMatch(/(^|\s)surface-float(\s|$)/);
     expect(line.className).toContain('ring-accent');
     expect(line.className).not.toContain('hover:bg-card-hover');
   });

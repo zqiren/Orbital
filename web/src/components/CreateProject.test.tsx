@@ -499,3 +499,28 @@ describe('CreateProject — Safe mode switch (spec 117)', () => {
     }
   });
 });
+
+// Float pass (1104): a radio choice tile is a Float static layer with no
+// border; the selected one adds the accent ring (and keeps its accent tint).
+function expectFloatTile(title: string, selected: boolean) {
+  const tile = screen.getByText(title).closest('button') as HTMLButtonElement;
+  const cls = tile.className.split(/\s+/);
+  expect(cls).toContain('surface-float-static');
+  expect(tile.className).not.toMatch(/(^|\s)border(-|\s|$)/);
+  if (selected) {
+    expect(cls).toContain('ring-1');
+    expect(tile.className).toContain('ring-accent');
+  } else {
+    expect(tile.className).not.toMatch(/(^|\s)ring-/);
+  }
+}
+
+describe('CreateProject autonomy tiles (Float)', () => {
+  it('are Float static with no border; the selected one carries the accent ring', () => {
+    render(<CreateProject onSubmit={vi.fn()} onCancel={vi.fn()} />);
+    fireEvent.click(screen.getByText('Advanced options'));
+    expectFloatTile('Hands-off', true);
+    expectFloatTile('Check-in', false);
+    expectFloatTile('Supervised', false);
+  });
+});

@@ -486,6 +486,87 @@ body {
   }
 }
 
+/* ------------------------------------------------------------ Float surfaces
+   The raised-layer look decided on the Workbench (spec 154, "Float"): a card
+   is a white layer on its own plane, carried by a layered soft shadow and a
+   1px inner top highlight. No 1px stroke and no grey fill. Dark mode uses the
+   elevated colour with deeper shadows. workbench.css aliases these tokens, so
+   the Workbench and every other card share one recipe.
+
+     .surface-float         card that is clicked: rises 3px on hover
+     .surface-float-static  card or panel that is not clicked: no lift
+     .surface-float-pop     popover, menu or dialog: stronger shadow, radius 12
+     .surface-float-focus   add to a composer: the accent glow while focused
+     .surface-float-nested  add to a layer that sits on another layer or in a
+                            tight list (rows in a card or dialog): only the
+                            near shadow, so neighbours don't haze together
+
+   The shadow travels in `--tw-shadow`, so Tailwind's ring utilities (focus
+   rings, a selected ring) stack on top of it instead of replacing it.
+   To revert one surface, swap the class back for its old border/bg/shadow
+   utilities; nothing else depends on it. */
+:root {
+  --float-layer: var(--color-card);
+  --float-shadow: 0 2px 2px rgb(0 0 0 / .02), 0 4px 14px rgb(0 0 0 / .04), 0 22px 50px rgb(0 0 0 / .07), inset 0 1px 0 rgb(255 255 255 / .8);
+  --float-shadow-hover: 0 2px 2px rgb(0 0 0 / .02), 0 8px 20px rgb(0 0 0 / .05), 0 32px 64px rgb(0 0 0 / .09), inset 0 1px 0 rgb(255 255 255 / .8);
+  --float-shadow-pop: 0 2px 4px rgb(0 0 0 / .04), 0 16px 40px rgb(0 0 0 / .14);
+  --float-shadow-nested: 0 1px 2px rgb(0 0 0 / .04), 0 3px 10px rgb(0 0 0 / .05), inset 0 1px 0 rgb(255 255 255 / .8);
+  --float-shadow-nested-hover: 0 1px 2px rgb(0 0 0 / .04), 0 6px 16px rgb(0 0 0 / .08), inset 0 1px 0 rgb(255 255 255 / .8);
+  --float-focus: 0 0 0 3px color-mix(in oklab, var(--color-accent) 18%, transparent);
+}
+:root[data-theme="dark"] {
+  --float-layer: var(--color-elevated);
+  --float-shadow: 0 2px 3px rgb(0 0 0 / .45), 0 16px 48px rgb(0 0 0 / .5), inset 0 1px 0 rgb(255 255 255 / .06);
+  --float-shadow-hover: 0 3px 6px rgb(0 0 0 / .45), 0 26px 64px rgb(0 0 0 / .55), inset 0 1px 0 rgb(255 255 255 / .07);
+  --float-shadow-pop: 0 2px 4px rgb(0 0 0 / .4), 0 16px 40px rgb(0 0 0 / .55);
+  --float-shadow-nested: 0 1px 2px rgb(0 0 0 / .35), 0 4px 12px rgb(0 0 0 / .28), inset 0 1px 0 rgb(255 255 255 / .05);
+  --float-shadow-nested-hover: 0 2px 4px rgb(0 0 0 / .4), 0 8px 20px rgb(0 0 0 / .35), inset 0 1px 0 rgb(255 255 255 / .06);
+}
+@layer components {
+  .surface-float,
+  .surface-float-static,
+  .surface-float-pop {
+    background-color: var(--float-layer);
+    border-radius: 14px;
+    --tw-shadow: var(--float-shadow);
+    box-shadow: var(--tw-inset-shadow, 0 0 #0000), var(--tw-inset-ring-shadow, 0 0 #0000),
+      var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow);
+  }
+  .surface-float-pop {
+    border-radius: 12px;
+    --tw-shadow: var(--float-shadow-pop);
+  }
+  .surface-float {
+    transition: transform .15s ease-out, box-shadow .15s ease-out;
+  }
+  .surface-float:hover {
+    transform: translateY(-3px);
+    --tw-shadow: var(--float-shadow-hover);
+  }
+  .surface-float-nested {
+    --tw-shadow: var(--float-shadow-nested);
+  }
+  .surface-float.surface-float-nested:hover {
+    transform: translateY(-1px);
+    --tw-shadow: var(--float-shadow-nested-hover);
+  }
+  .surface-float-focus:focus-within {
+    --tw-shadow: var(--float-focus), var(--float-shadow);
+  }
+  @media (hover: none) {
+    .surface-float:hover { transform: none; --tw-shadow: var(--float-shadow); }
+    .surface-float.surface-float-nested:hover { --tw-shadow: var(--float-shadow-nested); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .surface-float { transition: none; }
+    .surface-float:hover, .surface-float.surface-float-nested:hover { transform: none; }
+  }
+}
+/* High-contrast users asked for defined edges; give the layers a hairline back. */
+@media (prefers-contrast: more) {
+  .surface-float, .surface-float-static, .surface-float-pop { outline: 1px solid var(--color-border); }
+}
+
 /* Markdown content styles for agent messages */
 .markdown-content {
   font-size: 0.8125rem;

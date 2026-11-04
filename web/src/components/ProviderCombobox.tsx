@@ -119,7 +119,7 @@ export default function ProviderCombobox({ options, custom, value, onChange, lab
         className="pointer-events-none absolute right-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-secondary"
       />
       {open && (
-        <div className="absolute left-0 right-0 top-full z-20 mt-1 overflow-hidden rounded-lg border border-border bg-elevated shadow-lg">
+        <div className="absolute left-0 right-0 top-full z-20 mt-1 overflow-hidden surface-float-pop">
           {matches.length === 0 && (
             <p className="px-3 pt-2 pb-1 text-xs text-secondary" data-testid="provider-combobox-empty">
               {t('llm.provider.noMatch')}

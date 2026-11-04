@@ -112,10 +112,10 @@ export default function TasksStatusLine({
   if (row) {
     // The facts: ONE line, then the chevron; anything that does not fit ends
     // in an ellipsis and the facts are the tooltip. Nothing scheduled: two
-    // deliberate lines (title, then the /automate hint under it). A soft
-    // surface (spec 137 round 3): white with the standard shadow at rest, so
-    // the automations read as their own group on the tinted column without a
-    // line; hover tints it; while Tasks is open an accent ring marks it chosen.
+    // deliberate lines (title, then the /automate hint under it). A Float
+    // card (the Workbench recipe, index.css): a raised white layer, so the
+    // automations read as their own group on the tinted column without a
+    // line; hover lifts it; while Tasks is open an accent ring marks it chosen.
     const title = empty
       ? `${t('statusLine.teach.title')} · ${before}/automate${after}`
       : facts.map((f) => (f.off ? `${f.text} ${f.off}` : f.text)).join(' · ');
@@ -128,9 +128,9 @@ export default function TasksStatusLine({
         data-testid="trigger-summary"
         data-tour="status-line"
         data-state={state}
-        className={`mx-2 mt-1.5 mb-1 flex min-w-0 gap-2 rounded-lg px-2 py-[7px] text-left text-xs text-secondary whitespace-nowrap transition-[background-color,box-shadow] duration-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 ${
+        className={`mx-2 mt-1.5 mb-1 flex min-w-0 gap-2 surface-float px-2 py-[7px] text-left text-xs text-secondary whitespace-nowrap focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 ${
           empty ? 'items-start' : 'items-center'
-        } bg-card shadow-[0_1px_2px_rgb(0_0_0/0.06)] ${selected ? 'ring-1 ring-accent/45' : 'hover:bg-card-hover'}`}
+        } ${selected ? 'ring-1 ring-accent/45' : ''}`}
       >
         {empty ? (
           <>

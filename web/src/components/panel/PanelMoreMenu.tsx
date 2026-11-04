@@ -134,7 +134,7 @@ export default function PanelMoreMenu({ items, className }: PanelMoreMenuProps) 
           role="menu"
           aria-label={t('panel.more')}
           onKeyDown={handleMenuKeyDown}
-          className="absolute right-0 top-full mt-1 z-50 min-w-[9rem] rounded-md border border-border bg-elevated shadow-md py-1"
+          className="absolute right-0 top-full mt-1 z-50 min-w-[9rem] surface-float-pop overflow-hidden py-1"
         >
           {items.map((item) => (
             <button

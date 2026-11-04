@@ -164,7 +164,7 @@ export default function SubAgentStatusBar({ projectId, sessionId, live }: Props)
           onClick={() => setConfirming(null)}
         >
           <div
-            className="w-full max-w-sm rounded-lg border border-border bg-elevated p-4 text-sm text-primary shadow-[0_10px_28px_rgba(24,24,27,0.10),0_2px_6px_rgba(24,24,27,0.05)]"
+            className="w-full max-w-sm surface-float-pop p-4 text-sm text-primary"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="font-medium mb-2">{t('subAgentBar.confirm.title', { name: confirming.display_name })}</div>

@@ -98,7 +98,7 @@ function AgentRow({
   else status = t(conversations === 1 ? 'wizard.agents.signedInCount.one' : 'wizard.agents.signedInCount.other', { n: conversations });
 
   return (
-    <li data-testid={`wizard-agent-${entry.slug}`} className="rounded-lg border border-border px-3 py-2.5">
+    <li data-testid={`wizard-agent-${entry.slug}`} className="surface-float-static surface-float-nested px-3 py-2.5">
       <div className="flex items-center gap-3">
         <input
           type="checkbox"
