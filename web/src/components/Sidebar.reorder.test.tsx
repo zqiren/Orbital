@@ -109,7 +109,7 @@ function renderSidebar(projects: Project[]) {
       connectionState="connected"
       onSelectProject={vi.fn()}
       onSelectCalendar={vi.fn()}
-      onSelectWorkbench={vi.fn()}
+      onSelectHome={vi.fn()}
       onNewProject={vi.fn()}
       onSettings={vi.fn()}
       onReorderProjects={onReorderProjects}

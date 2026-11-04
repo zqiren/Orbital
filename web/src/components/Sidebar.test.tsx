@@ -5,7 +5,7 @@
 // @vitest-environment jsdom
 
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
-import { render, screen, waitFor, cleanup, fireEvent, within } from '@testing-library/react';
+import { render, screen, cleanup, fireEvent, within } from '@testing-library/react';
 import type { Project } from '../types';
 
 afterEach(() => cleanup());
@@ -43,7 +43,7 @@ const defaultProps = {
   connectionState: 'connected' as const,
   onSelectProject: vi.fn(),
   onSelectCalendar: vi.fn(),
-  onSelectWorkbench: vi.fn(),
+  onSelectHome: vi.fn(),
   onNewProject: vi.fn(),
   onSettings: vi.fn(),
   onReorderProjects: vi.fn().mockResolvedValue([]),
@@ -224,66 +224,45 @@ describe('Sidebar — manual project order (spec 056)', () => {
   });
 });
 
-describe('Sidebar — Workbench nav item', () => {
-  it('renders a Workbench item in the Workspace zone', () => {
+describe('Sidebar — the brand row is home (spec 154)', () => {
+  it('has no separate Workbench row any more', () => {
     render(<Sidebar {...defaultProps} />);
-    expect(screen.getByText('Workbench')).toBeInTheDocument();
-  });
-
-  it('clicking Workbench calls onSelectWorkbench', () => {
-    const onSelectWorkbench = vi.fn();
-    render(<Sidebar {...defaultProps} onSelectWorkbench={onSelectWorkbench} />);
-    fireEvent.click(screen.getByText('Workbench'));
-    expect(onSelectWorkbench).toHaveBeenCalledOnce();
-  });
-
-  it('marks the Workbench item active (aria-current) when route.name is workbench', () => {
-    render(<Sidebar {...defaultProps} route={{ name: 'workbench' }} />);
-    const btn = screen.getByText('Workbench').closest('button');
-    expect(btn).toHaveAttribute('aria-current', 'page');
-  });
-
-  it('does not show a count pill when the Workbench is empty', async () => {
-    apiMock.mockResolvedValue({ entries: [] });
-    render(<Sidebar {...defaultProps} />);
-    await waitFor(() => expect(apiMock).toHaveBeenCalledWith('/api/v2/workbench'));
+    expect(screen.queryByText('Workbench', { selector: 'span' })).toBeNull();
     expect(screen.queryByTestId('workbench-badge-count')).toBeNull();
+    expect(apiMock).not.toHaveBeenCalledWith('/api/v2/workbench');
   });
 
-  it('shows entries.length as the badge count', async () => {
-    apiMock.mockResolvedValue({
-      entries: [{ id: 'e1' }, { id: 'e2' }, { id: 'e3' }],
-    });
-    render(<Sidebar {...defaultProps} />);
-    await waitFor(() =>
-      expect(screen.getByTestId('workbench-badge-count')).toHaveTextContent('3'),
-    );
+  it('clicking the Orbital brand row goes home', () => {
+    const onSelectHome = vi.fn();
+    render(<Sidebar {...defaultProps} onSelectHome={onSelectHome} />);
+    fireEvent.click(screen.getByTestId('sidebar-brand-home'));
+    expect(onSelectHome).toHaveBeenCalledOnce();
   });
 
-  it('refetches the badge count when orbital:workbench-changed fires', async () => {
-    apiMock.mockResolvedValueOnce({ entries: [{ id: 'e1' }] });
-    render(<Sidebar {...defaultProps} />);
-    await waitFor(() =>
-      expect(screen.getByTestId('workbench-badge-count')).toHaveTextContent('1'),
-    );
+  it('marks the brand row current on home only', () => {
+    const { rerender } = render(<Sidebar {...defaultProps} />);
+    expect(screen.getByTestId('sidebar-brand-home')).toHaveAttribute('aria-current', 'page');
+    rerender(<Sidebar {...defaultProps} route={{ name: 'calendar' }} />);
+    expect(screen.getByTestId('sidebar-brand-home')).not.toHaveAttribute('aria-current');
+  });
+});
 
-    apiMock.mockResolvedValueOnce({ entries: [{ id: 'e1' }, { id: 'e2' }] });
-    fireEvent(window, new CustomEvent('orbital:workbench-changed'));
-
-    await waitFor(() =>
-      expect(screen.getByTestId('workbench-badge-count')).toHaveTextContent('2'),
-    );
+describe('Sidebar — waiting count per project (spec 151 folded into 154)', () => {
+  it('shows nothing at zero', () => {
+    render(<Sidebar {...defaultProps} waitingCounts={{}} />);
+    expect(screen.queryByTestId('project-waiting-count-proj-1')).toBeNull();
   });
 
-  it('cleans up the orbital:workbench-changed listener on unmount', async () => {
-    apiMock.mockResolvedValue({ entries: [] });
-    const { unmount } = render(<Sidebar {...defaultProps} />);
-    await waitFor(() => expect(apiMock).toHaveBeenCalledTimes(1));
+  it('shows the number of 等你 cards with a labelled pill', () => {
+    render(<Sidebar {...defaultProps} waitingCounts={{ 'proj-1': 3 }} />);
+    const pill = screen.getByTestId('project-waiting-count-proj-1');
+    expect(pill).toHaveTextContent('3');
+    expect(pill).toHaveAttribute('aria-label', '3 waiting on you');
+  });
 
-    unmount();
-    fireEvent(window, new CustomEvent('orbital:workbench-changed'));
-    await new Promise((r) => setTimeout(r, 0));
-    expect(apiMock).toHaveBeenCalledTimes(1); // no refetch after unmount
+  it('caps at 99+', () => {
+    render(<Sidebar {...defaultProps} waitingCounts={{ 'proj-1': 120 }} />);
+    expect(screen.getByTestId('project-waiting-count-proj-1')).toHaveTextContent('99+');
   });
 });
 

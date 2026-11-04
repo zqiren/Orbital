@@ -680,7 +680,12 @@ def _assemble_app(app: FastAPI, data_dir: str | None) -> FastAPI:
     # exits. Shares the agent manager's dispatch seam for /migrate and
     # refreshes the calendar hub after every write.
     from agent_os.api.routes import workbench as workbench_routes
-    workbench_routes.configure(project_store, agent_manager, calendar_hub, ws_manager=ws_manager)
+    from agent_os.daemon_v2.checked_store import CheckedStore
+    # Spec 154 §5.1: which reply the user checked, per session, shared by
+    # every device (``{data_dir}/checked.json``; a v0.20.0 daemon ignores it).
+    workbench_routes.configure(project_store, agent_manager, calendar_hub, ws_manager=ws_manager,
+                               checked_store=CheckedStore.in_dir(store_dir),
+                               sub_agent_manager=sub_agent_manager)
     app.include_router(workbench_routes.router)
 
     # 7c5. Onboarding import-discovery routes (backlog #34): read-only scan of

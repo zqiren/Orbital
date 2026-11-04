@@ -64,6 +64,8 @@ import PinTargetSelect, { resolveSendTarget } from './PinTargetSelect';
 import { useConversationModels } from '../hooks/useConversationModels';
 import { resolveCard } from '../hooks/useCredentialCards';
 import { useSessions } from '../hooks/useSessions';
+import { effectiveChecked, markChecked } from '../hooks/useSeenReplies';
+import { seenKey } from '../utils/sessionUnread';
 import { StopGlyph } from './StopGlyph';
 import ContextStrip from './ContextStrip';
 import { useContextUsage } from '../hooks/useContextUsage';
@@ -933,6 +935,19 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   // not materialized yet (the PATCH 404s until the first message lands —
   // handleSend re-persists the pin after a successful pinned send).
   const { sessions: pinSessions, pinAgent } = useSessions(projectId);
+  // Spec 154 §5.1: viewing a session checks its reply, on every device. The
+  // project column's session list does the same on desktop; this covers the
+  // phone, which has no session list (markChecked dedupes the two).
+  useEffect(() => {
+    if (!sessionId) return;
+    const row = pinSessions.find((s) => s.session_id === sessionId);
+    if (!row?.last_reply_at) return;
+    const key = seenKey(row);
+    const checked = effectiveChecked(projectId, key, row.checked_reply_at);
+    if (!checked || Date.parse(row.last_reply_at) > Date.parse(checked)) {
+      void markChecked(projectId, key, row.last_reply_at);
+    }
+  }, [projectId, sessionId, pinSessions]);
   // Keyed by the viewed session; `sessionId: undefined` is the project with no
   // session minted yet (the choice is the project's sticky pin then).
   const [localPin, setLocalPin] = useState<{ sessionId: string | undefined; slug: string | null } | null>(null);

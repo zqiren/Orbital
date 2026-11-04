@@ -424,4 +424,85 @@ def test_index_version_is_bumped_for_the_reply_fields():
     # An index written under "1" (v0.15.0) has rows without the two fields;
     # the version mismatch empties it and the background build re-derives.
     # "3" (session import, 2026-10-21) added imported_from / imported.
-    assert si.INDEX_VERSION == "3"
+    # "4" (spec 154 §5.3): bookkeeping rows never set last_user_at; ask_ids.
+    assert si.INDEX_VERSION == "4"
+
+
+# ── Spec 154 §5.3: bookkeeping rows and ask_ids ──────────────────────────
+
+def _record_turn(i):
+    """The end-of-run memory record turn: a daemon ``user`` row asking for
+    the record, then the model's closing text, both tagged memory_record."""
+    return [
+        _row(i, role="user", content="[MEMORY] record what changed", source="daemon",
+             _kind="memory_record"),
+        _row(i + 1, role="assistant", content="Recorded.", source="management",
+             _kind="memory_record"),
+    ]
+
+
+def test_derive_record_turn_does_not_move_last_user_at(tmp_path):
+    # A worker reply then the record turn: the agent spoke last, so the
+    # session reads as unread (the §3 bug: the record row used to win).
+    e = _derive(tmp_path, [
+        _row(1, role="user", content="do it", target="codex"),
+        _row(2, role="system", content="[Sub-agent] codex completed. Summary: ok",
+             source="daemon", _meta={"event": "sub_agent_terminal", "kind": "completed",
+                                     "reply": "ok"}),
+        *_record_turn(3),
+    ])
+    assert e["last_user_at"] == _T.format(1)
+    assert e["last_reply_at"] == _T.format(2)
+
+
+def test_derive_tidy_and_ask_card_rows_do_not_move_last_user_at(tmp_path):
+    e = _derive(tmp_path, [
+        _row(1, role="user", content="go", source="user"),
+        _row(2, role="assistant", content="done", source="management"),
+        _row(3, role="user", content="tidy", source="daemon", _kind="memory_tidy"),
+        _row(4, role="user", content="x", source="daemon", _kind="ask_card"),
+    ])
+    assert e["last_user_at"] == _T.format(1)
+
+
+def test_derive_ask_ids_in_order_and_absent_when_none(tmp_path):
+    def card(i, ask_id):
+        return _row(i, role="system", content="q", source="daemon", _kind="ask_card",
+                    _meta={"event": "ask_opened", "ask_id": ask_id, "due": None})
+    e = _derive(tmp_path, [
+        _row(1, role="user", content="go", source="user"),
+        card(2, "a1b2c3"),
+        _row(3, role="assistant", content="asked", source="management"),
+        card(4, "d4e5f6"),
+        card(5, "a1b2c3"),  # a repeat never lists twice
+    ])
+    assert e["ask_ids"] == ["a1b2c3", "d4e5f6"]
+    plain = _derive(tmp_path / "other", [_row(1, role="user", content="go", source="user")])
+    assert "ask_ids" not in plain
+
+
+def test_live_branch_skips_bookkeeping_rows_and_lists_ask_ids(project, tmp_path):
+    ws, _sessions, ps = project
+    mgr = _make_manager(tmp_path, ps)
+    handle = MagicMock()
+    handle.session.is_stopped.return_value = False
+    handle.session._paused_for_approval = False
+    handle.task = None
+    handle.session.session_uuid = "p_live0001"
+    handle.session.origin = "chat"
+    handle.session.trigger_type = None
+    handle.session.name = "live"
+    handle.session.pinned = False
+    handle.session.pinned_target = None
+    handle.session._messages = [
+        _row(1, role="user", content="go", source="user"),
+        _row(2, role="system", content="q", source="daemon", _kind="ask_card",
+             _meta={"event": "ask_opened", "ask_id": "a1b2c3"}),
+        _row(3, role="assistant", content="answer", source="management"),
+        *_record_turn(4),
+    ]
+    mgr._handles[("proj", "p_live0001")] = handle
+    rows = [s for s in mgr.list_sessions("proj") if s["session_id"] == "p_live0001"]
+    assert rows and rows[0]["last_user_at"] == _T.format(1)
+    assert rows[0]["last_reply_at"] == _T.format(3)
+    assert rows[0]["ask_ids"] == ["a1b2c3"]

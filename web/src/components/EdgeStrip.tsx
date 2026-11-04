@@ -36,10 +36,18 @@
  * nothing. Running elsewhere is deliberately not surfaced here — that's what
  * the dot rows inside the flyout are for. Pinned, the real per-project dots
  * are on screen, so the aggregate dot hides.
+ *
+ * Spec 154 §5.9: the one thing at the top of the strip is the Workbench
+ * glyph — a 14px four-square grid with a small blue dot while anything waits
+ * on the user, tooltip `工作台 ⌘0`. Clicking it goes home and never toggles
+ * the list. A button cannot hold a button, so it is a sibling stacked above
+ * the rail; the rail keeps its toggle, hover-intent and aggregate dot. The
+ * strip also frames home (no current project), so `currentProjectId` is
+ * optional.
  */
 
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
-import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { ChevronLeft, ChevronRight, LayoutGrid } from 'lucide-react';
 import type { Project, AgentRunStatus } from '../types';
 import { useT } from '../i18n/useT';
 import { getProjectDotColor } from '../utils/projectStatus';
@@ -52,8 +60,15 @@ const CLOSE_DELAY_MS = 160;
 
 interface EdgeStripProps {
   projects: Project[];
-  /** Excluded from the aggregate dot — the strip never reports on itself. */
-  currentProjectId: string;
+  /** Excluded from the aggregate dot — the strip never reports on itself.
+   *  Absent on home (the Workbench), which has no current project. */
+  currentProjectId?: string;
+  /** Spec 154: anything is waiting on the user (the glyph's blue dot). */
+  waiting?: boolean;
+  /** Spec 154: the Workbench glyph was clicked. Absent = no glyph. */
+  onHome?: () => void;
+  /** The Workbench is on screen (`aria-current="page"` on the glyph). */
+  homeActive?: boolean;
   agentStatuses: Record<string, AgentRunStatus>;
   pendingApprovals: Record<string, number>;
   /** run-status `sub_agents_running` per project (spec 095). */
@@ -74,7 +89,7 @@ type HoverZone = 'strip' | 'flyout';
  *  so the two agree byte-for-byte on what "red"/"amber" mean. */
 function aggregateDot(
   projects: Project[],
-  currentProjectId: string,
+  currentProjectId: string | undefined,
   agentStatuses: Record<string, AgentRunStatus>,
   pendingApprovals: Record<string, number>,
   subAgentsRunning: Record<string, boolean>,
@@ -97,9 +112,20 @@ function aggregateDot(
   return { color, count };
 }
 
+/** The shortcut the glyph's tooltip names: ⌘0 on a Mac, Ctrl+0 elsewhere. */
+export function homeShortcutLabel(): string {
+  const nav = typeof navigator !== 'undefined' ? navigator : undefined;
+  const platform = (nav as { userAgentData?: { platform?: string } } | undefined)?.userAgentData?.platform
+    ?? nav?.platform ?? '';
+  return /mac|iphone|ipad/i.test(platform) ? '⌘0' : 'Ctrl+0';
+}
+
 export default function EdgeStrip({
   projects,
   currentProjectId,
+  waiting = false,
+  onHome,
+  homeActive = false,
   agentStatuses,
   pendingApprovals,
   subAgentsRunning = {},
@@ -280,7 +306,7 @@ export default function EdgeStrip({
             declarations never compete on one element. pt-5 centres the 12px
             chevron on the wordmark row's 20px logo (pt-4 + 10) so the two
             read as one header line when the list is visible. */}
-        <span className="flex flex-col items-center gap-2 pt-5 pb-3">
+        <span className={`flex flex-col items-center gap-2 pb-3 ${onHome ? 'pt-[48px]' : 'pt-5'}`}>
           <Chevron size={12} aria-hidden="true" className="shrink-0 text-secondary" />
           {dotColor && !pinned && (
             <span
@@ -291,6 +317,42 @@ export default function EdgeStrip({
           )}
         </span>
       </button>
+
+      {/* Spec 154: the Workbench glyph, a sibling above the rail (a button
+          cannot hold a button). Centred on the wordmark row's logo (26px
+          below the titlebar band) so the glyph and the brand row read as one
+          line when the list is visible. The band itself passes clicks to the
+          rail; only the glyph takes them. */}
+      {onHome && (
+        <div className="pointer-events-none absolute inset-x-0 top-0 z-[22] w-5 pt-titlebar">
+          <button
+            type="button"
+            data-testid="strip-workbench"
+            aria-label={t('workbench.title')}
+            aria-current={homeActive ? 'page' : undefined}
+            aria-keyshortcuts={homeShortcutLabel() === '⌘0' ? 'Meta+0' : 'Control+0'}
+            onClick={onHome}
+            className={`group pointer-events-auto relative mt-[15px] flex h-[22px] w-5 items-center justify-center rounded-[5px] focus:outline-none focus-visible:ring-1 focus-visible:ring-accent ${
+              homeActive ? 'text-accent' : 'text-secondary hover:text-primary'
+            }`}
+          >
+            <LayoutGrid size={14} strokeWidth={2} aria-hidden="true" />
+            {waiting && !homeActive && (
+              <span
+                data-testid="strip-workbench-dot"
+                className="absolute right-px top-0.5 h-1.5 w-1.5 rounded-full bg-accent shadow-[0_0_0_1.5px_var(--color-nav)]"
+              />
+            )}
+            <span
+              role="tooltip"
+              className="pointer-events-none absolute left-[26px] top-1/2 z-30 flex -translate-y-1/2 items-center gap-2 whitespace-nowrap rounded-[7px] bg-[#18181B] px-[9px] py-[5px] text-xs font-medium text-white opacity-0 shadow-[0_6px_18px_rgb(0_0_0/0.18)] transition-opacity duration-100 group-hover:opacity-100 group-focus-visible:opacity-100 dark:bg-[#F4F6F9] dark:text-[#18181B]"
+            >
+              {t('workbench.title')}
+              <kbd className="font-sans text-[11px] opacity-60">{homeShortcutLabel()}</kbd>
+            </span>
+          </button>
+        </div>
+      )}
 
       {/* Flyout: overlays while floated, never pushes (only the wrapper's
           width changes, and only when pinned). 248px at x=12 — the list's

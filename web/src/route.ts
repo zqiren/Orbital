@@ -15,7 +15,7 @@ export type Route =
   | { name: 'blocked' }
   | { name: 'settings' }
   | { name: 'calendar' }
-  | { name: 'workbench' }
+  // Spec 154: no `workbench` route — the Workbench IS home (`list`).
   | {
       name: 'project';
       projectId: string;

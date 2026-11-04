@@ -563,6 +563,8 @@ export default function BrowserView({
         {toolbar}
         <div
           ref={frameAreaRef}
+          // Spec 154: App's ⌘0 (go home) skips keys aimed at the agent's page.
+          data-browser-live="true"
           className="relative flex-1 min-h-0 overflow-hidden"
           onKeyDown={handleKeyDown}
           onKeyUp={handleKeyUp}

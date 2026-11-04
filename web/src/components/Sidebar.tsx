@@ -4,7 +4,7 @@
 
 import type { ReactNode } from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Calendar, ChevronUp, FolderInput, GripVertical, Inbox, X } from 'lucide-react';
+import { Calendar, ChevronUp, FolderInput, GripVertical, X } from 'lucide-react';
 import {
   DndContext,
   MouseSensor,
@@ -23,7 +23,6 @@ import {
 } from '@dnd-kit/sortable';
 import type { Project, AgentRunStatus } from '../types';
 import type { Route } from '../route';
-import { api } from '../config';
 import { useT } from '../i18n/useT';
 import { projectDisplayName } from '../utils/projectDisplayName';
 import BetaBadge from './BetaBadge';
@@ -42,7 +41,10 @@ interface SidebarProps {
   connectionState: ConnectionState;
   onSelectProject: (id: string) => void;
   onSelectCalendar: () => void;
-  onSelectWorkbench: () => void;
+  /** Spec 154: the Orbital brand row is the way home (the Workbench). */
+  onSelectHome: () => void;
+  /** Spec 151 folded into 154: each project's number of 等你 cards. */
+  waitingCounts?: Record<string, number>;
   onNewProject: () => void;
   /** "Import projects from your agents" (spec 138); absent = no entry. */
   onImportProjects?: () => void;
@@ -121,33 +123,6 @@ function SortableProjectRow({
   );
 }
 
-/** Nav-row count badge: total flagged entries across the (privacy-filtered)
- *  global Workbench. Fetched on mount and refetched whenever a
- *  `orbital:workbench-changed` event fires (dispatched by `useWorkbench.ts`
- *  after a successful exit/migrate) — event-driven, no polling. */
-function useWorkbenchCount(): number {
-  const [count, setCount] = useState(0);
-  useEffect(() => {
-    let cancelled = false;
-    function fetchCount() {
-      api<{ entries?: unknown[] }>('/api/v2/workbench')
-        .then((d) => {
-          if (!cancelled) setCount(d?.entries?.length ?? 0);
-        })
-        .catch(() => {
-          if (!cancelled) setCount(0);
-        });
-    }
-    fetchCount();
-    window.addEventListener('orbital:workbench-changed', fetchCount);
-    return () => {
-      cancelled = true;
-      window.removeEventListener('orbital:workbench-changed', fetchCount);
-    };
-  }, []);
-  return count;
-}
-
 /** Spec 117 D10: per-device dismissal of the upgrade notice, like the tour
  *  state. Every access is guarded — storage can be absent or throw (private
  *  window, cleared site data), and the notice must still render correctly. */
@@ -184,7 +159,8 @@ export default function Sidebar({
   connectionState,
   onSelectProject,
   onSelectCalendar,
-  onSelectWorkbench,
+  onSelectHome,
+  waitingCounts = {},
   onNewProject,
   onImportProjects,
   onSettings,
@@ -193,7 +169,6 @@ export default function Sidebar({
 }: SidebarProps) {
   const t = useT();
   const selectedProjectId = route.name === 'project' ? route.projectId : null;
-  const workbenchCount = useWorkbenchCount();
 
   // The New Project split button's menu: closes on Escape and on a press
   // anywhere outside it. composedPath(), not contains(): the item that was
@@ -294,6 +269,8 @@ export default function Sidebar({
       project.project_id, agentStatuses, pendingApprovals, subAgentsRunning,
     );
     const summary = statusSummaries[project.project_id];
+    const waiting = waitingCounts[project.project_id] ?? 0;
+    const waitingLabel = t(waiting === 1 ? 'sidebar.project.waiting.one' : 'sidebar.project.waiting.other', { n: waiting });
     return (
       <button
         key={project.project_id}
@@ -322,6 +299,19 @@ export default function Sidebar({
             </span>
           )}
         </div>
+        {/* Spec 151 (folded into 154): how many 等你 cards this project
+            has. The dot on the left keeps its meaning (running/approval/
+            error), so a project can be green and 3 at once. */}
+        {waiting > 0 && (
+          <span
+            data-testid={`project-waiting-count-${project.project_id}`}
+            title={waitingLabel}
+            aria-label={waitingLabel}
+            className="ml-auto shrink-0 font-mono text-2xs font-medium leading-none px-1.5 py-0.5 rounded-full text-secondary bg-nav-hover"
+          >
+            {waiting > 99 ? '99+' : waiting}
+          </span>
+        )}
       </button>
     );
   }
@@ -343,8 +333,19 @@ export default function Sidebar({
   // goes. Mobile has no rail and no insets (max-md:w-full).
   return (
     <aside className={`${narrow ? 'w-[248px] pr-1' : 'w-[260px] md:pl-3 md:pr-1'} shrink-0 bg-nav border-r border-border flex flex-col h-full max-md:w-full pt-titlebar`}>
-      {/* Wordmark */}
-      <div className="px-4 pt-4 pb-3 flex items-center gap-2">
+      {/* Wordmark — spec 154: the brand row IS the Workbench (home). The
+          separate Workbench row it replaced was hard to find once the list
+          was collapsed. */}
+      <button
+        type="button"
+        onClick={onSelectHome}
+        aria-label={t('workbench.title')}
+        aria-current={route.name === 'list' ? 'page' : undefined}
+        data-testid="sidebar-brand-home"
+        className={`mx-2 mt-2 mb-1 px-2 pt-2 pb-2 flex items-center gap-2 rounded-sm text-left transition-colors duration-150 max-md:min-h-[44px] ${
+          route.name === 'list' ? 'bg-nav-selected' : 'hover:bg-nav-hover/50'
+        }`}
+      >
         {/* Served straight from web/public (vite copies it to the dist root, so
             it resolves in the desktop bundle too) — no new asset, no import.
             Decorative: the text beside it already names the app, so alt=""
@@ -362,7 +363,7 @@ export default function Sidebar({
         <span className="text-lg font-semibold text-primary tracking-tight">
           {t('sidebar.wordmark')}
         </span>
-      </div>
+      </button>
 
       {/* The global "Blocked" row used to sit here. It was removed because it
           read as a status readout rather than a control: it was rendered
@@ -372,7 +373,8 @@ export default function Sidebar({
           project awaiting approval already shows an amber dot in the list
           below (see getProjectDotColor). BlockedBadge itself is kept for the
           dedicated 'blocked' route it was always headed for. */}
-      {/* Workspace zone — global surfaces (Calendar, Workbench), above Projects */}
+      {/* Workspace zone — global surfaces (Calendar), above Projects. The
+          Workbench is the brand row above (spec 154). */}
       <div className="flex items-center px-4 pt-2 pb-1">
         <span className="text-2xs uppercase tracking-[0.08em] text-secondary font-medium">
           {t('workspace.zone.label')}
@@ -391,28 +393,6 @@ export default function Sidebar({
             {t('workspace.calendar.nav')}
           </span>
           <BetaBadge />
-        </button>
-        <button
-          onClick={onSelectWorkbench}
-          aria-current={route.name === 'workbench' ? 'page' : undefined}
-          aria-label={t(workbenchCount === 1 ? 'workbench.badge.aria.one' : 'workbench.badge.aria.other', { n: workbenchCount })}
-          className={`w-full text-left px-3 py-2 rounded-sm flex items-center gap-2.5 transition-all duration-150 max-md:min-h-[44px] ${
-            route.name === 'workbench' ? 'bg-nav-selected' : 'hover:bg-nav-hover/50'
-          }`}
-        >
-          <Inbox size={14} className="shrink-0 text-secondary" aria-hidden="true" />
-          <span className="text-xs font-medium text-primary block truncate">
-            {t('workspace.workbench.nav')}
-          </span>
-          <BetaBadge />
-          {workbenchCount > 0 && (
-            <span
-              data-testid="workbench-badge-count"
-              className="ml-auto font-mono text-2xs font-medium leading-none px-1.5 py-0.5 rounded-full text-secondary bg-nav-hover"
-            >
-              {workbenchCount}
-            </span>
-          )}
         </button>
       </div>
 

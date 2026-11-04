@@ -141,8 +141,10 @@ function renderProjectDetail(
   );
 }
 
-describe('ProjectDetail — header badge while a worker runs (spec 102)', () => {
-  function renderBadge(agentStatus: 'idle' | 'error' | 'running', subAgentsRunning?: boolean) {
+describe('ProjectDetail — phone header (item 157)', () => {
+  beforeEach(() => setViewportWidth(390));
+
+  function renderPhone(agentStatus: 'idle' | 'error' | 'running', subAgentsRunning?: boolean) {
     return render(
       <ProjectDetail
         project={mockProject}
@@ -154,34 +156,33 @@ describe('ProjectDetail — header badge while a worker runs (spec 102)', () => 
     );
   }
 
-  // The column (desktop, narrow) shows no project state at all — the agents'
-  // rows do, and the project list's dot tells the active project apart. The
-  // phone header still reads the word, so that is where the rule shows.
-  beforeEach(() => setViewportWidth(390));
-
-  it('reads Active with the manager idle and a worker running', () => {
-    renderBadge('idle', true);
-    expect(screen.getByText('Active')).toBeInTheDocument();
+  it('the state badge left the header: no Active / Idle / Error word', () => {
+    for (const [status, worker] of [['idle', true], ['idle', false], ['error', true]] as const) {
+      const { unmount } = renderPhone(status, worker);
+      for (const word of ['Active', 'Idle', 'Error']) expect(screen.queryByText(word)).toBeNull();
+      unmount();
+    }
   });
 
-  it('reads Idle with the manager idle and no worker running', () => {
-    renderBadge('idle', false);
-    expect(screen.getByText('Idle')).toBeInTheDocument();
+  it('the spend pill left the header (spend lives in project settings)', () => {
+    renderPhone('idle');
+    expect(screen.queryByTestId('project-spend')).toBeNull();
   });
 
-  it('reads Idle when the prop is omitted (older callers)', () => {
-    renderBadge('idle');
-    expect(screen.getByText('Idle')).toBeInTheDocument();
-  });
-
-  it('keeps a manager error over a running worker', () => {
-    renderBadge('error', true);
-    expect(screen.getByText('Error')).toBeInTheDocument();
+  it('New session is a + beside the gear, and mints a session', () => {
+    mintMock.newSession.mockClear();
+    renderPhone('idle');
+    const plus = screen.getByTestId('phone-new-session');
+    expect(plus).toHaveAttribute('aria-label', 'New session');
+    const gear = screen.getByRole('button', { name: /project settings/i });
+    expect(plus.compareDocumentPosition(gear) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    fireEvent.click(plus);
+    expect(mintMock.newSession).toHaveBeenCalledWith('proj-42');
   });
 
   it('desktop: the column shows neither the word nor a dot', () => {
     setViewportWidth(1440);
-    renderBadge('idle', true);
+    renderPhone('idle', true);
     const column = screen.getByTestId('project-column');
     expect(within(column).queryByText('Active')).toBeNull();
     expect(within(column).queryByTestId('status-dot')).toBeNull();
@@ -570,66 +571,33 @@ describe('ProjectDetail — the status line', () => {
   });
 });
 
-describe('ProjectDetail — model header label', () => {
-  // P3-F coupled removal: the header spend segment (the old budget_spent_usd
-  // "$X.XX" suffix) is GONE. The GET /cost-backed spend corner ships in P3-G.
-  // The header now renders the model label alone.
-  it('Test 4: model label uses the global default (not agent_name) when project.model is empty', () => {
-    const project: Project = {
-      ...mockProject,
-      model: '',
-      agent_name: 'Research Bot',
-    };
+describe('ProjectDetail — no model · spend line (item 157)', () => {
+  // Spend lives in project settings (Budget); the model shows in the
+  // composer's pin menu. Only a budget that paused the queue still shows.
+  it('the column renders no model and no spend row', () => {
+    setViewportWidth(1000);
     render(
       <ProjectDetail
-        project={project}
+        project={{ ...mockProject, model: 'OpenCode Go · deepseek-v4.1-flash' }}
         agentStatus="idle"
         route={baseRoute}
         setRoute={vi.fn()}
         globalDefaultModel="deepseek-chat"
       />,
     );
-    expect(screen.getByText('deepseek-chat')).toBeInTheDocument();
-    expect(screen.queryByText(/Research Bot/)).not.toBeInTheDocument();
-    // No fabricated $0.00 cost suffix.
-    expect(screen.queryByText(/\$0\.00/)).not.toBeInTheDocument();
+    const column = screen.getByTestId('project-column');
+    expect(within(column).queryByTestId('project-state-row')).toBeNull();
+    expect(within(column).queryByTestId('project-credential-chip')).toBeNull();
+    expect(within(column).queryByTestId('project-spend')).toBeNull();
+    expect(within(column).queryByText(/deepseek/)).toBeNull();
+    expect(within(column).queryByText(/\$/)).toBeNull();
   });
 
-  it('Test 5: with no model anywhere, the header renders no model/cost label', () => {
-    const project: Project = {
-      ...mockProject,
-      model: '',
-      agent_name: 'Research Bot',
-    };
-    render(
-      <ProjectDetail
-        project={project}
-        agentStatus="idle"
-        route={baseRoute}
-        setRoute={vi.fn()}
-        globalDefaultModel=""
-      />,
-    );
-    expect(screen.queryByText(/Research Bot/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/\$/)).not.toBeInTheDocument();
-    // No "model · cost" separator in the header. (The status line's teaching
-    // copy below it has its own "·"; that is not a label.)
-    const dots = screen.queryAllByText(/·/).filter((el) => !el.closest('[data-testid="trigger-summary"]'));
-    expect(dots).toEqual([]);
-  });
-
-  it('prefers the project-pinned model over the global default', () => {
-    render(
-      <ProjectDetail
-        project={{ ...mockProject, model: 'gpt-4o' }}
-        agentStatus="idle"
-        route={baseRoute}
-        setRoute={vi.fn()}
-        globalDefaultModel="deepseek-chat"
-      />,
-    );
-    expect(screen.getByText('gpt-4o')).toBeInTheDocument();
-    expect(screen.queryByText(/\$/)).not.toBeInTheDocument();
+  it('a budget that paused the queue still shows in the column', () => {
+    setViewportWidth(1000);
+    queueMock.snapshot = { items: [], pause_reason: 'budget' } as unknown as typeof queueMock.snapshot;
+    renderProjectDetail();
+    expect(within(screen.getByTestId('project-column')).getByTestId('project-spend')).toBeInTheDocument();
   });
 });
 
@@ -750,17 +718,19 @@ describe('ProjectDetail — the project column (desktop, narrow)', () => {
     expect(within(column).queryByTestId('status-dot')).toBeNull();
     const name = within(column).getByRole('heading', { level: 1 });
     expect(name).toHaveAttribute('data-tour', 'project-header');
-    expect(within(column).getByTestId('project-credential-chip').textContent).toBe('claude-3-5-sonnet');
+    // Item 157: no "model · spend" row.
+    expect(within(column).queryByTestId('project-state-row')).toBeNull();
     expect(within(column).getByRole('button', { name: /project settings/i })).toBeInTheDocument();
     expect(within(column).getByTestId('trigger-summary')).toBeInTheDocument();
     expect(within(column).getByTestId('session-sidebar')).toBeInTheDocument();
     expect(within(column).getByTestId('session-new-button')).toBeInTheDocument();
-    // Order, top to bottom: name, state, status line, sessions.
+    // Order, top to bottom: name, status line, the sessions header, New
+    // session (the list's first row), the list.
     const order = [
       within(column).getByRole('heading', { level: 1 }),
-      within(column).getByTestId('project-state-row'),
       within(column).getByTestId('trigger-summary'),
-      within(column).getByTestId('session-sidebar'),
+      within(column).getByTestId('session-sidebar-header'),
+      within(column).getByTestId('session-new-button'),
     ];
     for (let i = 1; i < order.length; i++) {
       expect(order[i - 1].compareDocumentPosition(order[i]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -779,47 +749,6 @@ describe('ProjectDetail — the project column (desktop, narrow)', () => {
     renderProjectDetail();
     const column = screen.getByTestId('project-column');
     expect(column.querySelector('.font-mono')).toBeNull();
-  });
-
-  it('the meta line is ONE line: model, then the spend — the model gives way first', () => {
-    setViewportWidth(1000);
-    render(
-      <ProjectDetail
-        project={{ ...mockProject, model: 'OpenCode Go · deepseek-v4.1-flash' }}
-        agentStatus="idle"
-        route={baseRoute}
-        setRoute={vi.fn()}
-      />,
-    );
-    const meta = within(screen.getByTestId('project-column')).getByTestId('project-state-row');
-    expect(meta.className).toContain('whitespace-nowrap');
-    expect(meta.className).toContain('text-[11px]');
-    expect(meta.className).not.toMatch(/flex-col|flex-wrap/);
-    const model = within(meta).getByTestId('project-credential-chip');
-    expect(model.className).toMatch(/min-w-0.*truncate|truncate.*min-w-0/);
-    const spend = within(meta).getByTestId('project-spend');
-    expect(spend.className).toContain('shrink-0');
-    // The separator rides on the spend: with no spend (useCost mocked empty)
-    // the wrapper is empty and hidden — no dangling " · ".
-    expect(spend.className).toContain('empty:hidden');
-    expect(spend.className).toContain("before:content-['·']");
-    expect(spend.textContent).toBe('');
-  });
-
-  it('shows only the model of a "Provider · model" card, one line, the full card name as the tooltip', () => {
-    setViewportWidth(1000);
-    render(
-      <ProjectDetail
-        project={{ ...mockProject, model: 'OpenCode Go · deepseek-v4.1-flash' }}
-        agentStatus="idle"
-        route={baseRoute}
-        setRoute={vi.fn()}
-      />,
-    );
-    const chip = within(screen.getByTestId('project-column')).getByTestId('project-credential-chip');
-    expect(chip.textContent).toBe('deepseek-v4.1-flash');
-    expect(chip).toHaveAttribute('title', 'OpenCode Go · deepseek-v4.1-flash');
-    expect(chip.className).toContain('truncate');
   });
 
   it('keeps the tour anchors on the column (spec 138)', () => {

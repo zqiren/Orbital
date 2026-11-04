@@ -397,3 +397,56 @@ describe('EdgeStrip — accessibility', () => {
     );
   });
 });
+
+// ---------------------------------------------------------------------------
+// Spec 154 §5.9 — the Workbench glyph at the top of the strip
+// ---------------------------------------------------------------------------
+
+describe('EdgeStrip — Workbench glyph (spec 154)', () => {
+  it('renders no glyph when the owner passes no onHome', () => {
+    renderStrip();
+    expect(screen.queryByTestId('strip-workbench')).toBeNull();
+  });
+
+  it('is a sibling button above the rail (a button cannot hold a button)', () => {
+    renderStrip({ onHome: vi.fn() });
+    const glyph = screen.getByTestId('strip-workbench');
+    expect(glyph.tagName).toBe('BUTTON');
+    expect(getStrip().contains(glyph)).toBe(false);
+    expect(getWrapper().contains(glyph)).toBe(true);
+  });
+
+  it('click goes home and never toggles the list', () => {
+    const onHome = vi.fn();
+    const { onTogglePin } = renderStrip({ onHome });
+    fireEvent.click(screen.getByTestId('strip-workbench'));
+    expect(onHome).toHaveBeenCalledTimes(1);
+    expect(onTogglePin).not.toHaveBeenCalled();
+  });
+
+  it('shows the blue dot only while something waits on the user', () => {
+    const { unmount } = render(
+      <EdgeStrip projects={projects} agentStatuses={{}} pendingApprovals={{}} pinned={false}
+        onTogglePin={vi.fn()} onHome={vi.fn()} waiting={false}>{null}</EdgeStrip>,
+    );
+    expect(screen.queryByTestId('strip-workbench-dot')).toBeNull();
+    unmount();
+    renderStrip({ onHome: vi.fn(), waiting: true });
+    const dot = screen.getByTestId('strip-workbench-dot');
+    expect(dot.className).toContain('bg-accent');
+  });
+
+  it('marks itself current on home, with no current project', () => {
+    render(
+      <EdgeStrip projects={projects} agentStatuses={{}} pendingApprovals={{}} pinned={false}
+        onTogglePin={vi.fn()} onHome={vi.fn()} homeActive>{null}</EdgeStrip>,
+    );
+    expect(screen.getByTestId('strip-workbench')).toHaveAttribute('aria-current', 'page');
+  });
+
+  it('its tooltip names the Workbench and the shortcut', () => {
+    renderStrip({ onHome: vi.fn() });
+    const tip = screen.getByRole('tooltip');
+    expect(tip.textContent).toMatch(/^Workbench(⌘0|Ctrl\+0)$/);
+  });
+});

@@ -215,6 +215,12 @@ export interface Project {
    * read as null.
    */
   effective_pinned_target?: string | null;
+  /**
+   * Item 158: the pin menu's last model / thinking pick per worker in this
+   * project (`{slug: {model?, effort?}}`), used by every session there with
+   * no pick of its own. Absent = follow Settings.
+   */
+  sub_agent_params?: Record<string, { model?: string; effort?: string }>;
 }
 
 /** One TOFU network-access ask (Plan 2), as carried by
@@ -504,6 +510,16 @@ export interface SessionListEntry {
   session_id: string;
   status: AgentRunStatus;
   session_uuid: string | null;
+  /**
+   * The `last_reply_at` the user has checked in this session, from the
+   * daemon's checked store (spec 154 §5.1: shared by every device). null =
+   * nothing checked; absent on an older daemon (the client then falls back to
+   * its own optimistic marks).
+   */
+  checked_reply_at?: string | null;
+  /** Ids of the asks this session opened, oldest first (spec 154 §5.3);
+   * absent when it opened none. */
+  ask_ids?: string[];
   /**
    * Human-readable display label for the session. Auto-derived from the first
    * user message (truncated, word-boundary-aware) and user-editable via the
@@ -1430,4 +1446,42 @@ export interface Trigger {
    * and what every automation created before 079 carries.
    */
   agent?: string | null;
+}
+
+/** Spec 154 §5.2: an open ask on a Workbench row. */
+export interface WorkbenchFeedAsk {
+  id: string;
+  text: string;
+  due: string | null;
+  created: string | null;
+  overdue: boolean;
+}
+
+/** Why a finished session stopped (the left-off reader's causes). */
+export interface WorkbenchFeedStop {
+  cause: 'usage_limit' | 'model_unavailable' | 'network_auth' | 'interrupted' | 'no_reply' | string;
+  /** ISO time a usage limit lifts, only while it is in the future. */
+  resets_at: string | null;
+}
+
+/** Spec 154 §5.2: one row of `GET /api/v2/workbench/feed`. A row with no
+ * `session_id` is an open ask no session opened. */
+export interface WorkbenchFeedRow {
+  project_id: string;
+  session_id: string | null;
+  session_uuid?: string | null;
+  name: string | null;
+  /** The session's pinned worker; null = Orbital. */
+  agent: string | null;
+  status: AgentRunStatus;
+  worker_running: boolean;
+  trigger_type?: string | null;
+  last_user_at: string | null;
+  last_reply_at: string | null;
+  last_activity_at?: string | null;
+  checked_reply_at: string | null;
+  ask: WorkbenchFeedAsk | null;
+  /** First line of the last reply (finished rows only). */
+  result_line: string | null;
+  stop: WorkbenchFeedStop | null;
 }

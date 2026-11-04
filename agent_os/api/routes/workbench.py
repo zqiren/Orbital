@@ -27,9 +27,10 @@ import asyncio
 import json
 import logging
 import os
+import re
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query
@@ -47,20 +48,29 @@ _agent_manager = None
 _calendar_hub = None
 _ws_manager = None
 _now_fn = None
+_checked_store = None
+_sub_agent_manager = None
 
 
-def configure(project_store, agent_manager, calendar_hub, *, now_fn=None, ws_manager=None):
+def configure(project_store, agent_manager, calendar_hub, *, now_fn=None, ws_manager=None,
+              checked_store=None, sub_agent_manager=None):
     """Called by the app factory to inject dependencies.
 
     ``now_fn`` (tz-aware ``datetime``) is overridable for deterministic tests;
     it drives age/overdue math and the dates of appended events.
+    ``checked_store`` (spec 154 §5.1) holds which reply the user has checked
+    per session; ``sub_agent_manager`` answers which sessions have a worker
+    turn open (the feed's ``worker_running``).
     """
     global _project_store, _agent_manager, _calendar_hub, _now_fn, _ws_manager
+    global _checked_store, _sub_agent_manager
     _ws_manager = ws_manager
     _project_store = project_store
     _agent_manager = agent_manager
     _calendar_hub = calendar_hub
     _now_fn = now_fn or (lambda: datetime.now(timezone.utc))
+    _checked_store = checked_store
+    _sub_agent_manager = sub_agent_manager
 
 
 # --------------------------------------------------------------------------
@@ -381,3 +391,389 @@ async def migrate_project(project_id: str):
             _write_state(path, refreshed)
     session_id = await _spawn_seeded(project_id, _MIGRATION_MESSAGE)
     return {"session_id": session_id}
+
+
+
+# --------------------------------------------------------------------------
+# Spec 154 — the checked state, the feed and routing
+# --------------------------------------------------------------------------
+
+FEED_WINDOW_DAYS = 14
+# Statuses that read as "running" on the Workbench (spec 154 §5.1): a manager
+# waiting on a worker or a background job is active (spec 147), and a queued
+# first message is a task that started.
+_LIVE_STATUSES = frozenset({"running", "waiting", "queued"})
+
+
+def annotate_checked(project_id: str, rows: list[dict]) -> list[dict]:
+    """Add ``checked_reply_at`` to session-list rows from the daemon's
+    checked store, seeding the project once on its first read. Additive:
+    without a store every row reads ``None``."""
+    if _checked_store is None:
+        for row in rows:
+            row.setdefault("checked_reply_at", None)
+        return rows
+    try:
+        return _checked_store.annotate(project_id, rows)
+    except Exception:
+        logger.warning("checked store: annotate failed for %s", project_id, exc_info=True)
+        for row in rows:
+            row.setdefault("checked_reply_at", None)
+        return rows
+
+
+def _parse_ts(value) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _is_live(row: dict) -> bool:
+    return row.get("status") in _LIVE_STATUSES or bool(row.get("worker_running"))
+
+
+def is_unchecked(row: dict, now: datetime) -> bool:
+    """The agent spoke last, the row is resting, the reply is newer than the
+    one the user checked, and it landed inside the window (spec 154 §5.1)."""
+    if _is_live(row) or row.get("status") == "pending_approval":
+        return False
+    reply = _parse_ts(row.get("last_reply_at"))
+    if reply is None or reply < now - timedelta(days=FEED_WINDOW_DAYS):
+        return False
+    user = _parse_ts(row.get("last_user_at"))
+    if user is not None and user > reply:
+        return False
+    checked = _parse_ts(row.get("checked_reply_at"))
+    return checked is None or reply > checked
+
+
+def _feed_ask(project_id: str, a, tz: str, now: datetime) -> dict:
+    return {
+        "id": a.id, "text": a.text, "due": a.due, "created": a.opened,
+        "overdue": workbench_cards.is_overdue(a.due, tz, now),
+    }
+
+
+def _finished_facts(workspace: str, row: dict) -> tuple[str | None, dict | None]:
+    """``(result_line, stop)`` of a finished session from its JSONL (the
+    left-off reader, cached by path + mtime + size)."""
+    from agent_os.onboarding.history import resets_at_if_future
+    from agent_os.onboarding.left_off import read_orbital_session
+    uuid = row.get("session_uuid") or row.get("session_id")
+    if not workspace or not isinstance(uuid, str) or any(c in uuid for c in ("/", "\\", "..")):
+        return None, None
+    parsed = read_orbital_session(ProjectPaths(workspace).session_file(uuid))
+    if parsed is None:
+        return None, None
+    stop = parsed.entry.stop
+    stop_json = ({"cause": stop.cause, "resets_at": resets_at_if_future(stop, _now())}
+                 if stop is not None else None)
+    return parsed.reply_line, stop_json
+
+
+def feed_rows(project: dict, sessions: list[dict], now: datetime) -> list[dict]:
+    """The Workbench rows of one project (spec 154 §5.2). ``sessions`` are
+    list rows already carrying ``worker_running`` and ``checked_reply_at``.
+    Blocking (reads ASKS.md and finished sessions' tails): call off-loop."""
+    project_id = project.get("project_id", "")
+    workspace = project.get("workspace", "") or ""
+    tz = _project_tz(project)
+    open_asks = {}
+    if workspace:
+        try:
+            open_asks = {a.id: a for a in asks.read_asks(_orbital_dir(workspace)) if a.is_open}
+        except Exception:
+            logger.warning("feed: ASKS.md unreadable in %s", project_id, exc_info=True)
+    linked: set[str] = set()
+    out: list[dict] = []
+    for row in sessions:
+        ids = [i for i in (row.get("ask_ids") or []) if isinstance(i, str)]
+        linked.update(ids)
+        open_ids = [i for i in ids if i in open_asks]
+        ask = _feed_ask(project_id, open_asks[open_ids[-1]], tz, now) if open_ids else None
+        live = _is_live(row)
+        approval = row.get("status") == "pending_approval"
+        if not (live or approval or ask is not None or is_unchecked(row, now)):
+            continue
+        result_line = stop = None
+        if not live and not approval:
+            try:
+                result_line, stop = _finished_facts(workspace, row)
+            except Exception:
+                logger.warning("feed: could not read %s", row.get("session_id"), exc_info=True)
+        out.append({
+            "project_id": project_id,
+            "session_id": row.get("session_id"),
+            "session_uuid": row.get("session_uuid"),
+            "name": row.get("name"),
+            "agent": row.get("pinned_target") or None,
+            "status": row.get("status"),
+            "worker_running": bool(row.get("worker_running")),
+            "trigger_type": row.get("trigger_type"),
+            "last_user_at": row.get("last_user_at"),
+            "last_reply_at": row.get("last_reply_at"),
+            "last_activity_at": row.get("last_activity_at"),
+            "checked_reply_at": row.get("checked_reply_at"),
+            "ask": ask,
+            "result_line": result_line,
+            "stop": stop,
+        })
+    # Asks no session opened (shell, an external agent, pre-146): their own rows.
+    for ask_id, a in open_asks.items():
+        if ask_id in linked:
+            continue
+        out.append({
+            "project_id": project_id, "session_id": None, "session_uuid": None,
+            "name": None, "agent": None, "status": "idle", "worker_running": False,
+            "trigger_type": None, "last_user_at": None, "last_reply_at": None,
+            "last_activity_at": None, "checked_reply_at": None,
+            "ask": _feed_ask(project_id, a, tz, now), "result_line": None, "stop": None,
+        })
+    return out
+
+
+def _feed_projects() -> list[dict]:
+    if _project_store is None:
+        return []
+    return [p for p in _project_store.list_projects()
+            if not p.get("workbench_exclude_global")]
+
+
+async def _project_sessions(project_id: str) -> list[dict]:
+    """The session list + ``worker_running`` + ``checked_reply_at``, the
+    same calls the session-list route makes."""
+    if _agent_manager is None:
+        return []
+    sessions = await asyncio.to_thread(_agent_manager.list_sessions, project_id)
+    running = (_sub_agent_manager.running_session_ids(project_id)
+               if _sub_agent_manager is not None else set())
+    for entry in sessions:
+        entry["worker_running"] = entry.get("session_id") in running
+    return annotate_checked(project_id, sessions)
+
+
+@router.get("/feed")
+async def get_feed():
+    """What can be on the Workbench (spec 154 §5.2): running, waiting for
+    approval, an open ask, or a reply the user has not checked inside the
+    window. Excluded projects contribute nothing; Quick Tasks is included."""
+    now = _now()
+    rows: list[dict] = []
+    for project in _feed_projects():
+        pid = project.get("project_id", "")
+        try:
+            sessions = await _project_sessions(pid)
+            rows.extend(await asyncio.to_thread(feed_rows, project, sessions, now))
+        except Exception:
+            logger.warning("workbench feed: skipping project %s", pid, exc_info=True)
+    return {"rows": rows, "window_days": FEED_WINDOW_DAYS}
+
+
+class CheckedRequest(BaseModel):
+    project_id: str
+    session_id: str
+    reply_at: str
+
+
+@router.post("/checked")
+async def post_checked(req: CheckedRequest):
+    """The user checked this session's reply (✓ on a card, or viewing the
+    session). Keeps the later time; broadcasts ``workbench.changed`` so the
+    other device's cards, strip dot and counts update."""
+    project = _require_project(req.project_id)
+    if _checked_store is None:
+        raise HTTPException(status_code=503, detail="Checked state not available")
+    if _parse_ts(req.reply_at) is None:
+        raise HTTPException(status_code=400, detail="reply_at must be an ISO-8601 time")
+    if _checked_store.project(req.project_id) is None:
+        # Seed first: a write to an unseeded project must not turn its whole
+        # history into unchecked replies.
+        await _project_sessions(req.project_id)
+    changed = await asyncio.to_thread(
+        _checked_store.mark, req.project_id, req.session_id, req.reply_at)
+    if changed:
+        _announce_change(project)
+    stored = (_checked_store.project(req.project_id) or {}).get(req.session_id)
+    return {"status": "ok", "checked_reply_at": stored, "changed": changed}
+
+
+# ── Routing (spec 154 §5.4) ─────────────────────────────────────────────
+
+ROUTE_TIMEOUT_S = 20.0
+GOALS_CAP = 1200
+STATE_LINES = 20
+STATE_CAP = 1200
+RECENT_SESSIONS = 3
+
+ROUTE_INSTRUCTION = (
+    "You route a user's task to one of their projects. Below are the projects, "
+    "each with its id, name, goals, the head of its state file and its latest "
+    "sessions; the task comes last. Pick the one project this task belongs to "
+    "and reply with only a JSON object: {\"project\": \"<id>\"}, or "
+    "{\"project\": null} when no project clearly fits."
+)
+
+
+def _read_capped(path: str, cap: int, *, lines: int | None = None) -> str:
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            text = f.read(cap * 4 if lines is None else cap * 8)
+    except OSError:
+        return ""
+    if lines is not None:
+        text = "\n".join(text.splitlines()[:lines])
+    return text[:cap].strip()
+
+
+def route_candidates(projects: list[dict]) -> list[dict]:
+    """Every project with a workspace, except Quick Tasks and projects
+    excluded from the Workbench."""
+    return [p for p in projects
+            if p.get("workspace") and not p.get("is_scratch")
+            and not p.get("workbench_exclude_global")]
+
+
+def project_block(project: dict, session_names: list[str]) -> str:
+    """One project's capped routing context (decided inputs, §5.4)."""
+    pp = ProjectPaths(project.get("workspace", ""))
+    goals = _read_capped(pp.project_goals, GOALS_CAP)
+    state = _read_capped(pp.project_state, STATE_CAP, lines=STATE_LINES)
+    parts = [f"## Project id: {project.get('project_id', '')}",
+             f"Name: {project.get('name') or project.get('project_id', '')}"]
+    if goals:
+        parts.append(f"Goals:\n{goals}")
+    if state:
+        parts.append(f"State (head):\n{state}")
+    names = [n for n in session_names if n][:RECENT_SESSIONS]
+    if names:
+        parts.append("Latest sessions: " + " | ".join(names))
+    return "\n".join(parts)
+
+
+def build_route_messages(blocks: list[str], text: str) -> list[dict]:
+    """Project blocks first and the task last, so consecutive sends share a
+    cacheable prefix."""
+    return [
+        {"role": "system", "content": ROUTE_INSTRUCTION + "\n\n" + "\n\n".join(blocks)},
+        {"role": "user", "content": f"Task:\n{text}"},
+    ]
+
+
+_JSON_OBJ_RE = re.compile(r"\{[^{}]*\}", re.DOTALL)
+
+
+def parse_route_reply(reply: str | None, candidate_ids: set[str]) -> tuple[str | None, str]:
+    """The first JSON object in the reply (models wrap JSON in fences or a
+    sentence). ``(project_id, "")`` on a match, else ``(None, reason)``."""
+    if not isinstance(reply, str) or not reply.strip():
+        return None, "empty reply"
+    for match in _JSON_OBJ_RE.finditer(reply):
+        try:
+            obj = json.loads(match.group(0))
+        except ValueError:
+            continue
+        if not isinstance(obj, dict) or "project" not in obj:
+            continue
+        pid = obj.get("project")
+        if pid is None:
+            return None, "model chose no project"
+        if isinstance(pid, str) and pid in candidate_ids:
+            return pid, ""
+        return None, f"unknown project id {pid!r}"
+    return None, "no JSON object in the reply"
+
+
+def _scratch_project() -> dict | None:
+    if _project_store is None:
+        return None
+    find = getattr(_project_store, "find_scratch_project", None)
+    if callable(find):
+        return find()
+    return next((p for p in _project_store.list_projects() if p.get("is_scratch")), None)
+
+
+def _route_provider(scratch_pid: str):
+    """Quick Tasks' utility provider when its credential has a key, else
+    None (phase A: keyless routes to Quick Tasks)."""
+    am = _agent_manager
+    if am is None or not am.manager_ready(scratch_pid):
+        return None
+    config = am._build_agent_config_from_project(scratch_pid)
+    _provider, _fallbacks, utility, _info = am._build_llm_providers(config)
+    return utility
+
+
+async def _recent_session_names(project_id: str) -> list[str]:
+    if _agent_manager is None:
+        return []
+    try:
+        rows = await asyncio.to_thread(_agent_manager.list_sessions, project_id)
+    except Exception:
+        return []
+    rows = sorted(rows, key=lambda r: r.get("last_activity_at") or "", reverse=True)
+    return [r["name"] for r in rows if isinstance(r.get("name"), str) and r["name"]][:RECENT_SESSIONS]
+
+
+class RouteRequest(BaseModel):
+    text: str
+
+
+@router.post("/route")
+async def route_task(req: RouteRequest):
+    """Pick the project for a task typed on the Workbench (project chip on
+    自动). One model call; an unclear task, a keyless install, a timeout or
+    any error lands in Quick Tasks (``by: "fallback"``). Never fails."""
+    scratch = _scratch_project()
+    fallback_pid = scratch.get("project_id") if scratch else None
+
+    def fallback(reason: str) -> dict:
+        logger.info("workbench route: Quick Tasks (%s)", reason)
+        return {"project_id": fallback_pid, "by": "fallback", "reason": reason}
+
+    text = (req.text or "").strip()
+    if not text:
+        return fallback("empty task")
+    candidates = route_candidates(_project_store.list_projects() if _project_store else [])
+    if not candidates:
+        return fallback("no candidate projects")
+    if fallback_pid is None:
+        return fallback("no Quick Tasks project")
+    try:
+        provider = _route_provider(fallback_pid)
+    except Exception as e:
+        return fallback(f"no provider: {type(e).__name__}")
+    if provider is None:
+        return fallback("no API key")
+    try:
+        names = await asyncio.gather(*[_recent_session_names(p["project_id"]) for p in candidates])
+        blocks = await asyncio.to_thread(
+            lambda: [project_block(p, n) for p, n in zip(candidates, names)])
+        messages = build_route_messages(blocks, text)
+        started = time.monotonic()
+        response = await asyncio.wait_for(
+            provider.complete(messages, disable_reasoning=True), timeout=ROUTE_TIMEOUT_S)
+        elapsed = time.monotonic() - started
+    except asyncio.TimeoutError:
+        return fallback(f"timed out after {ROUTE_TIMEOUT_S:.0f}s")
+    except Exception as e:
+        return fallback(f"model call failed: {type(e).__name__}")
+    pid, reason = parse_route_reply(getattr(response, "text", None),
+                                    {p["project_id"] for p in candidates})
+    if pid is None:
+        return fallback(reason)
+    usage = getattr(response, "usage", None)
+    input_tokens = getattr(usage, "input_tokens", None)
+    output_tokens = getattr(usage, "output_tokens", None)
+    logger.info("workbench route: %s in %.1fs (input tokens %s, output %s)",
+                pid, elapsed, input_tokens, output_tokens)
+    body = {"project_id": pid, "by": "model"}
+    # Additive: the call's token use, when the provider reported it.
+    if isinstance(input_tokens, int):
+        body["input_tokens"] = input_tokens
+    if isinstance(output_tokens, int):
+        body["output_tokens"] = output_tokens
+    return body

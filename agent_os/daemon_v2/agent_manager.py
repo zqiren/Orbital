@@ -5481,7 +5481,9 @@ class AgentManager:
         """
         # Local import, as the disk path does: the index module is pulled in
         # only where it is used.
-        from agent_os.daemon_v2.session_index import is_reply_row
+        from agent_os.daemon_v2.session_index import (
+            ask_card_id, is_reply_row, is_user_row,
+        )
         # Session import (2026-10-21): the first list per project per daemon
         # lifetime also imports the folder's Codex automations.
         self._lazy_sync_imports(project_id)
@@ -5509,16 +5511,25 @@ class AgentManager:
             last_activity_at = msgs[-1].get("timestamp") if msgs else None
             # Spec 108: the same two fields derive_disk_entry emits, from the
             # in-memory rows; walk from the tail and stop once both are known.
+            # Spec 154 §5.3: bookkeeping ``user`` rows (the record turn's ask)
+            # are not the user's message.
             last_user_at = last_reply_at = None
             for rec in reversed(msgs):
                 if not isinstance(rec, dict):
                     continue
-                if last_user_at is None and rec.get("role") == "user":
+                if last_user_at is None and is_user_row(rec):
                     last_user_at = rec.get("timestamp")
                 elif last_reply_at is None and is_reply_row(rec):
                     last_reply_at = rec.get("timestamp")
                 if last_user_at is not None and last_reply_at is not None:
                     break
+            # Spec 154 §5.3: the asks this session opened, oldest first.
+            ask_ids: list[str] = []
+            for rec in msgs:
+                if isinstance(rec, dict):
+                    ask_id = ask_card_id(rec)
+                    if ask_id is not None and ask_id not in ask_ids:
+                        ask_ids.append(ask_id)
 
             sessions.append({
                 "session_id": sid,
@@ -5553,6 +5564,7 @@ class AgentManager:
                 # canonical source is the dedicated GET endpoint, but the list
                 # entry carries it too so the sidebar can render it inline.
                 "scope": self.get_session_scope(pid, sid),
+                **({"ask_ids": ask_ids} if ask_ids else {}),
             })
         # Merge in disk-only sessions not currently hydrated in memory, so the
         # sidebar shows every persisted session log. In-memory entries above

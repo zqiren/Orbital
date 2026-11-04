@@ -46,7 +46,15 @@ vi.mock('../hooks/useWebSocket', () => ({
   }),
 }));
 
+// Spec 154: checking a reply POSTs to the daemon through api().
+const apiMock = vi.fn(async (..._args: unknown[]) => ({ status: 'ok' }));
+vi.mock('../config', () => ({
+  api: (...args: unknown[]) => apiMock(...args),
+  isRelayMode: false,
+}));
+
 import { SessionSidebar } from './SessionSidebar';
+import { __resetCheckedMarks } from '../hooks/useSeenReplies';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -65,6 +73,8 @@ function makeSession(overrides: Partial<SessionListEntry> = {}): SessionListEntr
 
 function resetMocks() {
   mockSessions = [];
+  apiMock.mockClear();
+  __resetCheckedMarks();
   renameSessionMock.mockClear();
   pinSessionMock.mockClear();
   deleteSessionMock.mockClear();
@@ -206,11 +216,28 @@ describe('SessionSidebar — unified session list', () => {
 // + new session button
 // ---------------------------------------------------------------------------
 
-describe('SessionSidebar — new session button', () => {
-  it('renders the + new session button', () => {
+describe('SessionSidebar — new session row (item 157)', () => {
+  it('renders New session as the first row of the list, not at the bottom', () => {
+    resetMocks();
+    mockSessions = [makeSession({ session_id: 'a', session_uuid: 'ua', name: 'Chat' })];
+    render(<SessionSidebar projectId="proj-1" />);
+    const button = screen.getByTestId('session-new-button');
+    expect(button).toHaveTextContent('New session');
+    // The row carries a + glyph, so the copy has no leading "+".
+    expect(button.textContent).not.toMatch(/\+/);
+    const list = screen.getByTestId('session-list');
+    expect(list.firstElementChild).toBe(screen.getByTestId('session-new-row'));
+    expect(list.contains(button)).toBe(true);
+  });
+
+  it('sits on the white tint (--card / --elevated), sticky while the list scrolls', () => {
     resetMocks();
     render(<SessionSidebar projectId="proj-1" />);
-    expect(screen.getByTestId('session-new-button')).toBeInTheDocument();
+    const button = screen.getByTestId('session-new-button');
+    expect(button.className).toContain('bg-card');
+    expect(button.className).toContain('dark:bg-elevated');
+    expect(button.className).not.toMatch(/shadow/);
+    expect(screen.getByTestId('session-new-row').className).toContain('sticky');
   });
 
   it('calls onNewSession when clicked', async () => {
@@ -567,8 +594,10 @@ describe('SessionSidebar — filter and automation groups', () => {
     expect(group).toHaveTextContent('3 runs');
     expect(group).toHaveAttribute('aria-expanded', 'false');
     // The group leads the list: its latest run is the most recent activity.
+    // (After the New session row, which is always first — item 157.)
     const list = screen.getByTestId('session-list');
-    expect(list.firstElementChild).toBe(screen.getByTestId('session-automation-group'));
+    expect(list.firstElementChild).toBe(screen.getByTestId('session-new-row'));
+    expect(list.children[1]).toBe(screen.getByTestId('session-automation-group'));
     // Every session is still counted (no hidden bucket).
     expect(screen.getByTestId('session-active-count')).toHaveTextContent('6');
   });
@@ -617,6 +646,7 @@ describe('SessionSidebar — filter and automation groups', () => {
     mockSessions = mixed();
     render(<SessionSidebar projectId="p1" />);
 
+    await user.click(screen.getByTestId('session-filter-toggle'));
     await user.click(screen.getByTestId('session-filter-chats'));
     expect(ids()).toEqual(['session-list-item-chat-new', 'session-list-item-chat-old']);
     expect(screen.queryByTestId('session-automation-group')).toBeNull();
@@ -636,6 +666,7 @@ describe('SessionSidebar — filter and automation groups', () => {
       makeSession({ session_id: 'b', session_uuid: 'ub', name: 'Chat' }),
     ];
     render(<SessionSidebar projectId="p1" />);
+    await user.click(screen.getByTestId('session-filter-toggle'));
     await user.click(screen.getByTestId('session-filter-automations'));
     expect(ids()).toEqual(['session-list-item-a']);
   });
@@ -648,6 +679,7 @@ describe('SessionSidebar — filter and automation groups', () => {
       makeSession({ session_id: 'b', session_uuid: 'ub', name: 'Chat' }),
     ];
     render(<SessionSidebar projectId="p1" />);
+    await user.click(screen.getByTestId('session-filter-toggle'));
     await user.click(screen.getByTestId('session-filter-chats'));
     expect(ids()).toEqual(['session-list-item-b']);
   });
@@ -657,16 +689,25 @@ describe('SessionSidebar — filter and automation groups', () => {
     resetMocks();
     mockSessions = [makeSession({ session_id: 'a', session_uuid: 'ua', name: 'Chat' })];
     render(<SessionSidebar projectId="p1" />);
+    await user.click(screen.getByTestId('session-filter-toggle'));
     await user.click(screen.getByTestId('session-filter-automations'));
     expect(screen.getByTestId('session-empty')).toHaveTextContent('No automation runs yet');
   });
 
-  // The original segmented control (restored 2026-10-28): always rendered,
-  // boxed on a track, 16px sides in line with the "Sessions N" header.
-  it('the filter is always the boxed segmented control, even with no automation session', () => {
+  // Item 157 (2026-11-04, reverses the 2026-10-28 "always shown" call): the
+  // filter hides behind a bare chevron on the "Sessions · N" header.
+  it('the filter is hidden by default; the header chevron expands the boxed segmented control', async () => {
+    const user = userEvent.setup();
     resetMocks();
     mockSessions = [makeSession({ session_id: 'a', session_uuid: 'ua', name: 'Chat' })];
     render(<SessionSidebar projectId="p1" />);
+    expect(screen.queryByRole('tablist', { name: 'Filter sessions' })).toBeNull();
+    const toggle = screen.getByTestId('session-filter-toggle');
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(toggle).toHaveAttribute('title', 'Filter');
+
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
     const tablist = screen.getByRole('tablist', { name: 'Filter sessions' });
     for (const c of ['rounded-lg', 'border', 'bg-nav', 'p-0.5']) expect(tablist.className).toContain(c);
     expect(tablist.parentElement?.className).toContain('px-4');
@@ -674,17 +715,46 @@ describe('SessionSidebar — filter and automation groups', () => {
     const all = screen.getByTestId('session-filter-all');
     expect(all).toHaveAttribute('aria-selected', 'true');
     expect(all.className).toContain('bg-segment-on');
-    expect(screen.getByTestId('session-filter-chats')).toBeInTheDocument();
-    expect(screen.getByTestId('session-filter-automations')).toBeInTheDocument();
+
+    await user.click(toggle);
+    expect(screen.queryByRole('tablist', { name: 'Filter sessions' })).toBeNull();
   });
 
-  it('the header reads "Sessions 6": sentence case, the count without parentheses', () => {
+  it('the header reads "Sessions · 6": sentence case, the count without parentheses', () => {
     resetMocks();
     mockSessions = mixed();
     render(<SessionSidebar projectId="p1" />);
     const header = screen.getByTestId('session-sidebar-header');
-    expect(header.textContent).toBe('Sessions6');
+    expect(header.textContent).toBe('Sessions·6');
     expect(header.innerHTML).not.toMatch(/uppercase|font-mono/);
+  });
+
+  it('a filter left on while closed reads in the header, chevron in accent', async () => {
+    const user = userEvent.setup();
+    resetMocks();
+    mockSessions = mixed();
+    render(<SessionSidebar projectId="p1" />);
+    const toggle = screen.getByTestId('session-filter-toggle');
+    expect(toggle.className).not.toContain('text-accent');
+    await user.click(toggle);
+    await user.click(screen.getByTestId('session-filter-automations'));
+    // Open: the control shows the choice, the header keeps the plain count.
+    expect(screen.queryByTestId('session-header-filter')).toBeNull();
+    await user.click(toggle);
+    expect(screen.getByTestId('session-sidebar-header').textContent).toBe('Sessions·Automations·4');
+    expect(toggle.className).toContain('text-accent');
+  });
+
+  it('remembers the filter open/closed state across remounts', async () => {
+    const user = userEvent.setup();
+    resetMocks();
+    mockSessions = mixed();
+    const { unmount } = render(<SessionSidebar projectId="p1" />);
+    await user.click(screen.getByTestId('session-filter-toggle'));
+    unmount();
+    render(<SessionSidebar projectId="p1" />);
+    expect(screen.getByTestId('session-filter-toggle')).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('tablist', { name: 'Filter sessions' })).toBeInTheDocument();
   });
 
   it('remembers the chosen filter across remounts', async () => {
@@ -692,6 +762,7 @@ describe('SessionSidebar — filter and automation groups', () => {
     resetMocks();
     mockSessions = mixed();
     const { unmount } = render(<SessionSidebar projectId="p1" />);
+    await user.click(screen.getByTestId('session-filter-toggle'));
     await user.click(screen.getByTestId('session-filter-chats'));
     unmount();
 
@@ -716,14 +787,19 @@ describe('SessionSidebar — filter and automation groups', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Spec 108 — unread badge: derive from the two server timestamps, remember per
-// device, never on the row being viewed
+// Spec 108 — unread badge, its checked state moved into the daemon by spec
+// 154 §5.1: rows carry `checked_reply_at`; viewing a row POSTs
+// /api/v2/workbench/checked; a reply older than 14 days never badges. The
+// retired per-device localStorage map is neither read nor written.
 // ---------------------------------------------------------------------------
 
-describe('SessionSidebar — unread badge (spec 108)', () => {
+describe('SessionSidebar — unread badge (spec 108 on the daemon checked state)', () => {
   const SEEN_KEY = 'orbital:seenReplies:proj-1';
+  // Recent times (inside the 14-day window): an hour ago plus `secs`.
+  const BASE = Date.now() - 60 * 60 * 1000;
+  const at = (secs: number) => new Date(BASE + secs * 1000).toISOString();
 
-  function replied(id: string, replyAt: string, userAt = '2026-10-01T00:00:00Z') {
+  function replied(id: string, replyAt: string, userAt = at(0), checked: string | null = null) {
     return makeSession({
       session_id: id,
       session_uuid: id,
@@ -731,6 +807,7 @@ describe('SessionSidebar — unread badge (spec 108)', () => {
       last_activity_at: replyAt,
       last_user_at: userAt,
       last_reply_at: replyAt,
+      checked_reply_at: checked,
     });
   }
 
@@ -738,128 +815,164 @@ describe('SessionSidebar — unread badge (spec 108)', () => {
     return within(screen.getByTestId(`session-list-item-${id}`)).queryByTestId('session-unread-dot');
   }
 
-  it('first visit seeds: historic replies show no dot', () => {
+  function checkedPosts() {
+    return apiMock.mock.calls
+      .filter((c) => c[0] === '/api/v2/workbench/checked')
+      .map((c) => JSON.parse(((c[1] as { body: string }).body)));
+  }
+
+  it('rows the daemon already counts as checked (its upgrade seed) show no dot', () => {
     resetMocks();
-    localStorage.removeItem(SEEN_KEY);
-    mockSessions = [replied('a', '2026-10-01T00:00:10Z'), replied('b', '2026-10-01T00:00:20Z')];
+    mockSessions = [replied('a', at(10), at(0), at(10)), replied('b', at(20), at(0), at(20))];
     render(<SessionSidebar projectId="proj-1" selectedSessionId="a" />);
     expect(dotIn('a')).toBeNull();
     expect(dotIn('b')).toBeNull();
-    expect(JSON.parse(localStorage.getItem(SEEN_KEY) ?? '{}')).toEqual({
-      a: '2026-10-01T00:00:10Z',
-      b: '2026-10-01T00:00:20Z',
-    });
+    expect(checkedPosts()).toEqual([]);
+  });
+
+  it('the retired per-device seen map is neither read nor written', () => {
+    resetMocks();
+    // An old build's map says "b" was seen; the daemon says it was not.
+    localStorage.setItem(SEEN_KEY, JSON.stringify({ b: at(20) }));
+    mockSessions = [replied('a', at(10)), replied('b', at(20))];
+    render(<SessionSidebar projectId="proj-1" selectedSessionId="a" />);
+    expect(dotIn('b')).not.toBeNull();
+    expect(localStorage.getItem(SEEN_KEY)).toBe(JSON.stringify({ b: at(20) }));
   });
 
   it('a non-selected row with a new reply renders the dot; the selected one never does', () => {
     resetMocks();
-    localStorage.setItem(SEEN_KEY, '{}');
-    mockSessions = [replied('a', '2026-10-01T00:00:10Z'), replied('b', '2026-10-01T00:00:20Z')];
+    mockSessions = [replied('a', at(10)), replied('b', at(20))];
     render(<SessionSidebar projectId="proj-1" selectedSessionId="a" />);
     expect(dotIn('a')).toBeNull();
     expect(dotIn('b')).not.toBeNull();
-    // Viewing "a" marked its reply seen on render.
-    expect(JSON.parse(localStorage.getItem(SEEN_KEY) ?? '{}')).toEqual({ a: '2026-10-01T00:00:10Z' });
+    // Viewing "a" checked its reply in the daemon.
+    expect(checkedPosts()).toEqual([{ project_id: 'proj-1', session_id: 'a', reply_at: at(10) }]);
   });
 
-  it('selecting the badged row clears its dot and persists the marker', () => {
+  it('selecting the badged row clears its dot at once and checks it in the daemon', () => {
     resetMocks();
-    localStorage.setItem(SEEN_KEY, '{}');
-    mockSessions = [replied('a', '2026-10-01T00:00:10Z'), replied('b', '2026-10-01T00:00:20Z')];
+    mockSessions = [replied('a', at(10)), replied('b', at(20))];
     const { rerender } = render(<SessionSidebar projectId="proj-1" selectedSessionId="a" />);
     expect(dotIn('b')).not.toBeNull();
     rerender(<SessionSidebar projectId="proj-1" selectedSessionId="b" />);
     expect(dotIn('b')).toBeNull();
-    // Going back to "a": "b" stays read.
+    // Going back to "a": "b" stays read (the optimistic mark holds until the
+    // refetch carries the daemon's checked_reply_at).
     rerender(<SessionSidebar projectId="proj-1" selectedSessionId="a" />);
     expect(dotIn('b')).toBeNull();
-    expect(JSON.parse(localStorage.getItem(SEEN_KEY) ?? '{}')).toEqual({
-      a: '2026-10-01T00:00:10Z',
-      b: '2026-10-01T00:00:20Z',
-    });
+    expect(checkedPosts()).toEqual([
+      { project_id: 'proj-1', session_id: 'a', reply_at: at(10) },
+      { project_id: 'proj-1', session_id: 'b', reply_at: at(20) },
+    ]);
   });
 
-  it('a refetch that advances the SELECTED row\'s reply never shows a dot, and marks it', () => {
+  it('a reply checked on another device clears the dot here', () => {
     resetMocks();
-    localStorage.setItem(SEEN_KEY, JSON.stringify({ a: '2026-10-01T00:00:10Z' }));
-    mockSessions = [replied('a', '2026-10-01T00:00:10Z')];
+    mockSessions = [replied('a', at(10), at(0), at(10)), replied('b', at(20))];
     const { rerender } = render(<SessionSidebar projectId="proj-1" selectedSessionId="a" />);
-    mockSessions = [replied('a', '2026-10-01T00:00:40Z')];
+    expect(dotIn('b')).not.toBeNull();
+    // The workbench.changed refetch brings the other device's check.
+    mockSessions = [replied('a', at(10), at(0), at(10)), replied('b', at(20), at(0), at(20))];
+    rerender(<SessionSidebar projectId="proj-1" selectedSessionId="a" />);
+    expect(dotIn('b')).toBeNull();
+  });
+
+  it("a refetch that advances the SELECTED row's reply never shows a dot, and checks it", () => {
+    resetMocks();
+    mockSessions = [replied('a', at(10), at(0), at(10))];
+    const { rerender } = render(<SessionSidebar projectId="proj-1" selectedSessionId="a" />);
+    mockSessions = [replied('a', at(40), at(0), at(10))];
     rerender(<SessionSidebar projectId="proj-1" selectedSessionId="a" />);
     expect(dotIn('a')).toBeNull();
-    expect(JSON.parse(localStorage.getItem(SEEN_KEY) ?? '{}')).toEqual({ a: '2026-10-01T00:00:40Z' });
+    expect(checkedPosts()).toEqual([{ project_id: 'proj-1', session_id: 'a', reply_at: at(40) }]);
   });
 
-  it('a refetch that advances a NON-selected row\'s reply lights it', () => {
+  it("a refetch that advances a NON-selected row's reply lights it", () => {
     resetMocks();
-    localStorage.setItem(SEEN_KEY, JSON.stringify({ a: '2026-10-01T00:00:10Z', b: '2026-10-01T00:00:20Z' }));
-    mockSessions = [replied('a', '2026-10-01T00:00:10Z'), replied('b', '2026-10-01T00:00:20Z')];
+    mockSessions = [replied('a', at(10), at(0), at(10)), replied('b', at(20), at(0), at(20))];
     const { rerender } = render(<SessionSidebar projectId="proj-1" selectedSessionId="a" />);
     expect(dotIn('b')).toBeNull();
-    mockSessions = [replied('a', '2026-10-01T00:00:10Z'), replied('b', '2026-10-01T00:00:50Z')];
+    mockSessions = [replied('a', at(10), at(0), at(10)), replied('b', at(50), at(0), at(20))];
     rerender(<SessionSidebar projectId="proj-1" selectedSessionId="a" />);
     expect(dotIn('b')).not.toBeNull();
   });
 
-  it('the user\'s own newer message clears the dot without a marker', () => {
+  it("the user's own newer message clears the dot without a write", () => {
     resetMocks();
-    localStorage.setItem(SEEN_KEY, '{}');
-    mockSessions = [
-      replied('a', '2026-10-01T00:00:10Z'),
-      replied('b', '2026-10-01T00:00:20Z', '2026-10-01T00:00:30Z'),
-    ];
+    mockSessions = [replied('a', at(10), at(0), at(10)), replied('b', at(20), at(30))];
+    render(<SessionSidebar projectId="proj-1" selectedSessionId="a" />);
+    expect(dotIn('b')).toBeNull();
+    expect(checkedPosts()).toEqual([]);
+  });
+
+  it('a reply older than 14 days never badges (spec 154 window)', () => {
+    resetMocks();
+    const old = new Date(Date.now() - 15 * 24 * 60 * 60 * 1000).toISOString();
+    const older = new Date(Date.now() - 16 * 24 * 60 * 60 * 1000).toISOString();
+    mockSessions = [replied('a', at(10), at(0), at(10)), replied('b', old, older)];
     render(<SessionSidebar projectId="proj-1" selectedSessionId="a" />);
     expect(dotIn('b')).toBeNull();
   });
 
   it('a running row is never badged; it lights once it rests with a reply', () => {
     resetMocks();
-    localStorage.setItem(SEEN_KEY, '{}');
     mockSessions = [
-      replied('a', '2026-10-01T00:00:10Z'),
-      { ...replied('b', '2026-10-01T00:00:20Z'), status: 'running' },
+      replied('a', at(10), at(0), at(10)),
+      { ...replied('b', at(20)), status: 'running' },
     ];
     const { rerender } = render(<SessionSidebar projectId="proj-1" selectedSessionId="a" />);
     expect(dotIn('b')).toBeNull();
-    mockSessions = [replied('a', '2026-10-01T00:00:10Z'), replied('b', '2026-10-01T00:00:25Z')];
+    mockSessions = [replied('a', at(10), at(0), at(10)), replied('b', at(25))];
     rerender(<SessionSidebar projectId="proj-1" selectedSessionId="a" />);
     expect(dotIn('b')).not.toBeNull();
   });
 
   it('rows from an older daemon (no timestamps) never badge', () => {
     resetMocks();
-    localStorage.setItem(SEEN_KEY, '{}');
     mockSessions = [
-      makeSession({ session_id: 'a', session_uuid: 'a', last_activity_at: '2026-10-01T00:00:10Z' }),
-      makeSession({ session_id: 'b', session_uuid: 'b', last_activity_at: '2026-10-01T00:00:20Z' }),
+      makeSession({ session_id: 'a', session_uuid: 'a', last_activity_at: at(10) }),
+      makeSession({ session_id: 'b', session_uuid: 'b', last_activity_at: at(20) }),
     ];
     render(<SessionSidebar projectId="proj-1" selectedSessionId="a" />);
     expect(dotIn('b')).toBeNull();
   });
 
-  it('a badged resting run stays folded in its collapsed group; expanding shows its dot', async () => {
+  it('a collapsed automation group shows a dot while a hidden run waits (spec 150); expanding shows the run dots', async () => {
     // The badge does not change grouping or visibility: only active and
-    // selected runs escape a collapsed group. The dot rides on the run row.
+    // selected runs escape a collapsed group.
     const user = userEvent.setup();
     resetMocks();
-    localStorage.setItem(SEEN_KEY, '{}');
     const daily = (id: string, replyAt: string) => ({
       ...replied(id, replyAt),
       name: "[Triggered by schedule 'Daily' (9am)]\n\nrun",
       trigger_type: 'schedule' as const,
     });
     mockSessions = [
-      replied('chat', '2026-10-01T00:00:10Z'),
-      daily('run1', '2026-10-01T00:00:20Z'),
-      daily('run2', '2026-10-01T00:00:30Z'),
+      replied('chat', at(10), at(0), at(10)),
+      daily('run1', at(20)),
+      daily('run2', at(30)),
     ];
     render(<SessionSidebar projectId="proj-1" selectedSessionId="chat" />);
     expect(screen.queryByTestId('session-list-item-run1')).toBeNull();
     expect(screen.queryByTestId('session-list-item-run2')).toBeNull();
+    expect(screen.getByTestId('session-group-unread-dot')).toBeInTheDocument();
     await user.click(screen.getByTestId('session-automation-group-toggle'));
+    expect(screen.queryByTestId('session-group-unread-dot')).toBeNull();
     expect(dotIn('run1')).not.toBeNull();
     expect(dotIn('run2')).not.toBeNull();
     expect(dotIn('chat')).toBeNull();
+  });
+
+  it('a collapsed group with every run checked shows no group dot', () => {
+    resetMocks();
+    mockSessions = [
+      replied('chat', at(10), at(0), at(10)),
+      { ...replied('run1', at(20), at(0), at(20)), name: "[Triggered by schedule 'Daily' (9am)]", trigger_type: 'schedule' as const },
+      { ...replied('run2', at(30), at(0), at(30)), name: "[Triggered by schedule 'Daily' (9am)]", trigger_type: 'schedule' as const },
+    ];
+    render(<SessionSidebar projectId="proj-1" selectedSessionId="chat" />);
+    expect(screen.queryByTestId('session-group-unread-dot')).toBeNull();
   });
 });
 
@@ -966,6 +1079,22 @@ describe('SessionSidebar — imported rows and the 50-row cap', () => {
       const { LocaleProvider } = await import('../i18n/LocaleContext');
       render(<LocaleProvider><SessionSidebar projectId="p1" /></LocaleProvider>);
       expect(screen.getByTestId('session-show-older').textContent).toBe('显示更早的 2 条');
+    } finally {
+      window.localStorage.removeItem('orbital.locale');
+    }
+  });
+
+  it('zh header, New session row and filter tooltip (item 157)', async () => {
+    resetMocks();
+    mockSessions = manySessions(3);
+    window.localStorage.setItem('orbital.locale', 'zh');
+    window.localStorage.setItem('orbital:sessionSidebar.filter', 'chats');
+    try {
+      const { LocaleProvider } = await import('../i18n/LocaleContext');
+      render(<LocaleProvider><SessionSidebar projectId="p1" /></LocaleProvider>);
+      expect(screen.getByTestId('session-sidebar-header').textContent).toBe('会话·对话·3');
+      expect(screen.getByTestId('session-filter-toggle')).toHaveAttribute('title', '筛选');
+      expect(screen.getByTestId('session-new-button').textContent).toBe('新建会话');
     } finally {
       window.localStorage.removeItem('orbital.locale');
     }

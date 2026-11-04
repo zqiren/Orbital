@@ -1,0 +1,176 @@
+/* Orbital — An operating system for AI agents
+ * Copyright (C) 2026 Orbital Contributors
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * Spec 154 §5.7 — the Workbench surface, decided as "Float · Comfortable"
+ * (BACKLOG/specs/154-assets/prototype.html is the reference). Raised layers
+ * on a near-white page: no strokes, no grey fills except muted text. Kept in
+ * one file because the layered shadows and the hover reveal do not read as
+ * utility classes. Theme tokens come from index.css. */
+
+.wb-page {
+  --wb-page: #FAFBFC;
+  --wb-layer: var(--color-card);
+  --wb-float: 0 2px 2px rgb(0 0 0 / .02), 0 4px 14px rgb(0 0 0 / .04), 0 22px 50px rgb(0 0 0 / .07), inset 0 1px 0 rgb(255 255 255 / .8);
+  --wb-float-hover: 0 2px 2px rgb(0 0 0 / .02), 0 8px 20px rgb(0 0 0 / .05), 0 32px 64px rgb(0 0 0 / .09), inset 0 1px 0 rgb(255 255 255 / .8);
+  --wb-tint: rgb(83 154 248 / .09);
+  --wb-pop: 0 2px 4px rgb(0 0 0 / .04), 0 16px 40px rgb(0 0 0 / .14);
+  background: var(--wb-page);
+  color: var(--color-primary);
+}
+:root[data-theme="dark"] .wb-page {
+  --wb-page: var(--color-background);
+  --wb-layer: var(--color-elevated);
+  --wb-float: 0 2px 3px rgb(0 0 0 / .45), 0 16px 48px rgb(0 0 0 / .5), inset 0 1px 0 rgb(255 255 255 / .06);
+  --wb-float-hover: 0 3px 6px rgb(0 0 0 / .45), 0 26px 64px rgb(0 0 0 / .55), inset 0 1px 0 rgb(255 255 255 / .07);
+  --wb-tint: rgb(83 154 248 / .14);
+  --wb-pop: 0 2px 4px rgb(0 0 0 / .4), 0 16px 40px rgb(0 0 0 / .55);
+}
+
+/* Cards, summary and composer share one column: min(820px, 72%) on desktop. */
+.wb-col { width: min(820px, 72%); margin: 0 auto; padding: 40px 0 56px; }
+.wb-phone .wb-col { width: auto; padding: 4px 16px 32px; }
+
+.wb-layer {
+  background: var(--wb-layer);
+  border-radius: 14px;
+  box-shadow: var(--wb-float);
+  transition: transform .15s ease-out, box-shadow .15s ease-out, opacity .25s ease-out;
+}
+
+/* ── composer ── */
+.wb-composer { position: relative; }
+.wb-box { padding: 20px 18px 14px 22px; display: flex; flex-direction: column; gap: 10px; }
+.wb-input {
+  min-height: 42px; max-height: 240px; width: 100%; resize: none; border: 0; outline: 0; padding: 0;
+  background: transparent; font: inherit; font-size: 14px; line-height: 1.5; color: var(--color-primary);
+}
+.wb-input::placeholder { color: var(--color-muted); }
+.wb-foot { display: flex; align-items: center; gap: 4px; min-height: 28px; }
+.wb-chip {
+  display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 8px 0 7px; border-radius: 999px;
+  font-size: 12px; color: var(--color-secondary); white-space: nowrap; min-width: 0; max-width: 200px;
+}
+.wb-chip:hover, .wb-chip[aria-expanded="true"] { background: var(--wb-tint); color: var(--color-primary); }
+.wb-chip.is-set { background: var(--wb-tint); color: var(--color-primary); }
+.wb-chip .wb-nm { overflow: hidden; text-overflow: ellipsis; }
+.wb-chip .wb-cv { color: var(--color-muted); display: inline-flex; flex: none; }
+.wb-av { width: 16px; height: 16px; border-radius: 4px; flex: none; display: inline-flex; align-items: center; justify-content: center; overflow: hidden; }
+.wb-av img { width: 100%; height: 100%; object-fit: contain; display: block; }
+:root[data-theme="dark"] .wb-av:not(.is-orb) { background: #F4F6F9; padding: 1.5px; }
+.wb-send {
+  width: 30px; height: 30px; border-radius: 9px; background: var(--color-accent); color: #fff;
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+}
+.wb-send:disabled { opacity: .35; cursor: default; }
+
+.wb-pop {
+  position: absolute; z-index: 30; top: calc(100% + 6px); width: 260px; max-height: 360px; overflow-y: auto;
+  background: var(--wb-layer); border-radius: 12px; box-shadow: var(--wb-pop); padding: 5px;
+}
+.wb-opt { display: flex; align-items: center; gap: 10px; width: 100%; padding: 7px 8px; border-radius: 8px; min-height: 36px; text-align: left; }
+.wb-opt:hover, .wb-opt:focus-visible { background: var(--wb-tint); outline: none; }
+.wb-opt .wb-tx { flex: 1; min-width: 0; }
+.wb-opt .wb-n1 { font-size: 13px; font-weight: 500; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wb-opt .wb-n2 { font-size: 11px; color: var(--color-secondary); font-family: var(--font-mono, ui-monospace, monospace); display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wb-opt .wb-ck { color: var(--color-accent); display: inline-flex; width: 14px; flex: none; }
+.wb-opt .wb-gl { width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; color: var(--color-secondary); flex: none; }
+.wb-opt .wb-av { width: 22px; height: 22px; border-radius: 6px; padding: 3px; background: #fff; box-shadow: 0 0 0 .5px rgb(0 0 0 / .08); }
+.wb-opt .wb-av.is-orb { padding: 0; box-shadow: none; background: transparent; }
+.wb-sep { height: 6px; }
+
+/* ── summary + list ── */
+.wb-summary { margin-top: 30px; margin-bottom: -18px; padding: 0 4px; font-size: 12px; color: var(--color-muted); }
+.wb-phone .wb-summary { margin-top: 22px; margin-bottom: -12px; }
+.wb-cards { margin-top: 36px; display: flex; flex-direction: column; gap: 16px; }
+.wb-phone .wb-cards { margin-top: 26px; }
+
+/* ── card ── */
+.wb-card { position: relative; padding: 22px 24px 22px 22px; display: flex; flex-direction: column; }
+.wb-card:hover, .wb-card:focus-within { transform: translateY(-3px); box-shadow: var(--wb-float-hover); }
+.wb-phone .wb-card { padding: 16px 16px 16px 16px; }
+.wb-phone .wb-card:hover { transform: none; box-shadow: var(--wb-float); }
+.wb-card.is-fresh { animation: wb-fresh .5s ease-out; }
+@keyframes wb-fresh { from { opacity: 0; transform: translateY(-6px); } }
+.wb-card.is-leaving { opacity: 0; transform: translateY(-4px) scale(.98); }
+.wb-head { position: relative; display: flex; align-items: flex-start; gap: 10px; }
+.wb-tx { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.wb-title {
+  display: block; min-width: 0; width: fit-content; max-width: 100%; text-align: left; cursor: pointer;
+  font-size: 13.5px; line-height: 1.4; font-weight: 500; color: var(--color-primary);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  text-decoration: underline; text-decoration-color: transparent; text-underline-offset: 3px; text-decoration-thickness: 1px;
+  transition: text-decoration-color .15s;
+}
+.wb-title:hover { text-decoration-color: color-mix(in srgb, var(--color-secondary) 60%, transparent); }
+.wb-card.is-ask .wb-title { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.wb-meta { font-size: 12px; line-height: 1.4; color: var(--color-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wb-meta .wb-warn { color: var(--color-warning-text); }
+.wb-meta .wb-lg { display: inline-flex; width: 13px; height: 13px; vertical-align: -2px; margin-right: 4px; border-radius: 3px; overflow: hidden; }
+.wb-meta .wb-lg img { width: 100%; height: 100%; object-fit: contain; display: block; }
+:root[data-theme="dark"] .wb-meta .wb-lg:not(.is-orb) { width: 17px; height: 17px; padding: 2px; margin-left: -2px; vertical-align: -4px; border-radius: 4px; background: #F4F6F9; }
+.wb-rz { flex: none; min-width: 52px; display: flex; justify-content: flex-end; }
+.wb-card.is-waiting .wb-rz { min-width: 96px; }
+.wb-time { font-size: 11.5px; line-height: 19px; color: var(--color-muted); white-space: nowrap; transition: opacity .15s, transform .15s; }
+
+/* Dot: 8px, 10px gap. Amber = needs you; blue = finished, unchecked; green
+ * with a quiet breathing ring = running. */
+.wb-dot { position: relative; flex: none; width: 8px; height: 8px; border-radius: 50%; margin-top: 5.5px; }
+.wb-dot.is-need { background: var(--color-warning); }
+.wb-dot.is-new { background: var(--color-accent); }
+.wb-dot.is-run { background: var(--color-success); }
+.wb-dot.is-run::after {
+  content: ""; position: absolute; inset: -1px; border-radius: 50%; border: 1.5px solid var(--color-success);
+  animation: wb-ring 2.6s ease-out infinite;
+}
+@keyframes wb-ring { 0% { transform: scale(.9); opacity: .5; } 70%, 100% { transform: scale(2.1); opacity: 0; } }
+
+/* Hover actions: a bare ✓ and a bare → on the title line; the time fades. */
+.wb-acts {
+  position: absolute; right: -8px; top: 9.5px; transform: translateY(-50%); display: flex; gap: 2px;
+  opacity: 0; pointer-events: none; transition: opacity .15s;
+}
+.wb-ab {
+  position: relative; width: 28px; height: 28px; border-radius: 8px; display: inline-flex; align-items: center;
+  justify-content: center; color: var(--color-muted);
+}
+.wb-ab:hover { color: var(--color-primary); background: var(--wb-tint); }
+.wb-ab.is-ok:hover { color: var(--color-success); background: rgb(34 197 94 / .10); }
+.wb-card:hover .wb-acts, .wb-card:focus-within .wb-acts { opacity: 1; pointer-events: auto; }
+.wb-card:hover .wb-time, .wb-card:focus-within .wb-time { opacity: 0; transform: translateX(-10px); }
+
+/* Reply field: opens under the text on hover; stays while focused. */
+.wb-rwrap { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .18s ease-out; }
+.wb-rwrap > div { overflow: hidden; min-height: 0; }
+.wb-card:hover .wb-rwrap, .wb-card:focus-within .wb-rwrap { grid-template-rows: 1fr; }
+.wb-rbox { display: flex; align-items: center; gap: 4px; padding-top: 8px; }
+.wb-rbox input {
+  flex: 1; min-width: 0; height: 28px; border: 0; outline: 0; background: transparent; padding: 0;
+  font: inherit; font-size: 13px; color: var(--color-primary); transition: box-shadow .15s;
+}
+.wb-rbox input::placeholder { color: var(--color-muted); }
+.wb-rbox input:focus { box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--color-accent) 55%, transparent); }
+.wb-snd { width: 28px; height: 28px; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center; color: var(--color-muted); flex: none; }
+.wb-rbox:focus-within .wb-snd { color: var(--color-accent); }
+.wb-snd:hover { background: var(--wb-tint); }
+
+/* Phone: no hover. Waiting cards always show the reply row with send, ✓ and
+ * → on the right; running cards show → under the time. */
+.wb-phone .wb-rwrap { grid-template-rows: 1fr; margin-left: 18px; }
+.wb-phone .wb-acts { position: static; transform: none; opacity: 1; pointer-events: auto; margin-right: -7px; flex: none; }
+.wb-phone .wb-ab { color: color-mix(in srgb, var(--color-muted) 80%, transparent); }
+.wb-phone .wb-rz { min-width: 0 !important; flex-direction: column; align-items: flex-end; gap: 2px; }
+.wb-phone .wb-card .wb-time, .wb-phone .wb-card:hover .wb-time, .wb-phone .wb-card:focus-within .wb-time { opacity: 1; transform: none; }
+
+/* Phone header: Orbital mark (home) left, project list right. */
+.wb-phead { display: flex; align-items: center; gap: 8px; padding: 16px 12px 10px 16px; flex: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .wb-dot.is-run::after, .wb-card.is-fresh { animation: none !important; }
+  .wb-layer, .wb-rwrap { transition: none; }
+}
+
+/* The macOS titlebar band above home matches the page (index.css paints it
+ * per route; home is near-white, not the grey canvas). */
+:root[data-chrome="mac-inline"] main.wb-band { background-color: #FAFBFC; }
+:root[data-chrome="mac-inline"][data-theme="dark"] main.wb-band { background-color: var(--color-background); }

@@ -7,7 +7,7 @@
  * newer than the user's last message, the row is resting, and the reply is
  * newer than the one this device last showed.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { hasUnseenReply, seenKey } from './sessionUnread';
 import type { SessionListEntry } from '../types';
 
@@ -24,7 +24,21 @@ function entry(overrides: Partial<SessionListEntry> = {}): SessionListEntry {
   };
 }
 
+// Spec 154: the predicate has a 14-day window; pin "now" next to the rows.
+beforeAll(() => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date('2026-10-02T00:00:00Z'));
+});
+afterAll(() => vi.useRealTimers());
+
 describe('hasUnseenReply', () => {
+  it('a reply older than the 14-day window stops counting (spec 154)', () => {
+    vi.setSystemTime(new Date('2026-10-16T00:00:11Z'));
+    expect(hasUnseenReply(entry(), undefined)).toBe(false);
+    vi.setSystemTime(new Date('2026-10-02T00:00:00Z'));
+    expect(hasUnseenReply(entry(), undefined)).toBe(true);
+  });
+
   it('no reply → false', () => {
     expect(hasUnseenReply(entry({ last_reply_at: null }), undefined)).toBe(false);
   });

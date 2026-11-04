@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import threading
 
 from agent_os.onboarding.history import (
@@ -31,16 +32,56 @@ _orbital_lock = threading.Lock()
 _ORBITAL_CACHE_MAX = 2048
 
 
+# Daemon bookkeeping rows (spec 112 A6, 124, 146): the end-of-run record turn,
+# a tidy note, an ask card. None of them is a turn of the conversation, so
+# they never decide how the last turn ended or what it said (spec 154 §5.2).
+_BOOKKEEPING_KINDS = frozenset({"memory_record", "memory_tidy", "ask_card"})
+# Worker terminal kinds whose ``_meta.reply`` carries the worker's own words
+# (lifecycle_observer: completed / continued); every other kind carries none.
+_REPLY_TERMINAL_KINDS = frozenset({"completed", "continued"})
+_STATUS_RE = re.compile(r"\[STATUS:[^\]]*\]", re.IGNORECASE)
+_LINE_MARKERS_RE = re.compile(r"^\s*(?:#{1,6}\s+|>\s*|[-*+]\s+|\d+[.)]\s+)+")
+_INLINE_MARKERS_RE = re.compile(r"(\*\*|__|`+|~~)")
+_LINK_RE = re.compile(r"\[([^\]]+)\]\([^)]*\)")
+RESULT_LINE_MAX = 140
+
+
+def reply_line(text: str | None) -> str | None:
+    """The first non-empty line of a reply, as a card's muted line: markdown
+    markers stripped, ``[STATUS: …]`` removed, at most 140 characters."""
+    if not isinstance(text, str):
+        return None
+    for raw in _STATUS_RE.sub("", text).splitlines():
+        line = _LINE_MARKERS_RE.sub("", raw)
+        line = _LINK_RE.sub(r"\1", line)
+        line = _INLINE_MARKERS_RE.sub("", line)
+        line = " ".join(line.split())
+        if not line or set(line) <= set("-*_=|:"):
+            continue  # blank, or a rule / table separator
+        if len(line) > RESULT_LINE_MAX:
+            line = line[:RESULT_LINE_MAX - 1].rstrip() + "…"
+        return line
+    return None
+
+
 class OrbitalSession:
-    __slots__ = ("session_id", "agent", "entry", "own_rows", "skip")
+    __slots__ = ("session_id", "agent", "entry", "own_rows", "skip", "reply_text")
 
     def __init__(self, session_id: str, agent: str | None, entry: LeftOffEntry,
-                 own_rows: bool, skip: bool):
+                 own_rows: bool, skip: bool, reply_text: str | None = None):
         self.session_id = session_id
         self.agent = agent
         self.entry = entry
         self.own_rows = own_rows   # any conversation row written in Orbital (not imported)
         self.skip = skip           # memory / automation / fan-out child: never a card
+        # Spec 154 §5.2: the last reply's text (the agent's final answer, or a
+        # completed / continued worker's ``_meta.reply``); None after any
+        # other ending.
+        self.reply_text = reply_text
+
+    @property
+    def reply_line(self) -> str | None:
+        return reply_line(self.reply_text)
 
 
 def _row_imported(row: dict) -> bool:
@@ -76,6 +117,7 @@ def _read_orbital(path: str) -> OrbitalSession | None:
     skip = False
     own_rows = False
     any_row = False
+    reply_text: str | None = None
     try:
         for row in iter_json_lines(path):
             if session_id is None and isinstance(row.get("session_id"), str):
@@ -91,10 +133,13 @@ def _read_orbital(path: str) -> OrbitalSession | None:
                 elif event == "session_kind":
                     skip = True
                 continue
+            if row.get("_kind") in _BOOKKEEPING_KINDS:
+                continue
             imported = _row_imported(row)
             if role == "user":
                 if row.get("source") == "daemon":
                     continue
+                reply_text = None
                 any_row = True
                 own_rows = own_rows or not imported
                 target = row.get("target")
@@ -109,6 +154,7 @@ def _read_orbital(path: str) -> OrbitalSession | None:
                     turn.working()
                 elif isinstance(row.get("content"), str) and row["content"].strip():
                     turn.answered()
+                    reply_text = row["content"]
             elif role == "tool":
                 any_row = True
                 turn.working()
@@ -120,6 +166,9 @@ def _read_orbital(path: str) -> OrbitalSession | None:
                     own_rows = own_rows or not imported
                     probe.ended_at = ts or probe.ended_at
                     kind = meta.get("kind")
+                    worker_reply = meta.get("reply")
+                    reply_text = (worker_reply if kind in _REPLY_TERMINAL_KINDS
+                                  and isinstance(worker_reply, str) else None)
                     if kind == "error":
                         turn.error(content, ts)
                     elif kind == "stopped":
@@ -130,6 +179,7 @@ def _read_orbital(path: str) -> OrbitalSession | None:
                     if content.startswith("LLM error") or "API key was rejected" in content:
                         probe.ended_at = ts or probe.ended_at
                         turn.error(content, ts)
+                        reply_text = None
                     elif content.startswith("[cancelled by user]"):
                         probe.ended_at = ts or probe.ended_at
                         turn.interrupted("cancelled")
@@ -149,7 +199,7 @@ def _read_orbital(path: str) -> OrbitalSession | None:
         stop=probe.stop,
     )
     return OrbitalSession(entry.session_id, entry.agent, entry, own_rows,
-                          skip or probe.automation)
+                          skip or probe.automation, reply_text)
 
 
 def _orbital_entries(workspace: str) -> list[OrbitalSession]:
