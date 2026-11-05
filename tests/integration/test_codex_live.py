@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import os
 import shutil
+import subprocess
 
 import psutil
 import pytest
@@ -31,6 +32,23 @@ pytestmark = pytest.mark.live_daemon  # heavy: spawns real codex — opt-in
 CODEX = shutil.which("codex")
 requires_codex = pytest.mark.skipif(
     CODEX is None, reason="codex binary not on PATH")
+
+
+@pytest.fixture(autouse=True)
+def _user_can_read_codex_files(tmp_path):
+    """Give tmp_path a named grant for the current user, like a real folder.
+
+    On Windows, Python 3.13 creates pytest's tmp root owner-only (SYSTEM,
+    Administrators, OWNER RIGHTS; no named user). A file Codex's elevated
+    sandbox writes is owned by its sandbox account, so the user who runs the
+    test cannot read it back (Access denied). Real project folders reach the
+    user through a named or inherited grant and never hit this.
+    """
+    if os.name == "nt":
+        user = f"{os.environ['USERDOMAIN']}\\{os.environ['USERNAME']}"
+        subprocess.run(
+            ["icacls", str(tmp_path), "/grant", f"{user}:(OI)(CI)F", "/Q"],
+            check=True, capture_output=True)
 
 
 async def _events_until_turn_complete(transport, timeout=240.0):
