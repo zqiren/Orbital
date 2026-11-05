@@ -3,14 +3,21 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 /**
- * Spec 154 §5.7 — from the feed store to the two groups the Workbench draws.
+ * Spec 154 §5.7 — from the feed store to the list the Workbench draws.
  *
- * 等你 (waiting on you): newest first, nothing else (2026-11-05; overdue
- * asks and amber rows used to jump ahead). 进行中 (running): pending sends first, then newest
- * `last_user_at` first. A row is in exactly one group. A card the user just
- * answered (from its field or the reading pane: held) is in 进行中 at once,
- * before the daemon reports the turn, and comes back to 等你 as finished and
- * unchecked when the turn ends (2026-11-04; it used to stay in 等你).
+ * ONE list by recency (2026-11-05, owner): pending sends first (newest
+ * first), then every other card newest first by its time, whatever its
+ * state; the dot (need / new / run) says the state. A task just sent from
+ * the composer therefore never lands below the 等你 cards (spec 154's own
+ * rejected-alternatives table: a just-sent task must not sit below the fold).
+ *
+ * The two groups are still computed, for the summary line and the project
+ * counts: 等你 (waiting on you) and 进行中 (running), each newest first,
+ * pending sends at the top of 进行中. A row is in exactly one group. A card
+ * the user just answered (from its field or the reading pane: held) is in
+ * 进行中 at once, before the daemon reports the turn, and sorts by the moment
+ * it was answered; it comes back to 等你 as finished and unchecked when the
+ * turn ends (2026-11-04).
  *
  * Pure: the store, the optimistic checked marks and "now" are inputs, so the
  * strip dot, the project counts and the page agree by construction.
@@ -36,6 +43,8 @@ export interface FeedItem {
 export interface FeedGroups {
   waiting: FeedItem[];
   running: FeedItem[];
+  /** What the page draws: pending sends, then everything newest first. */
+  items: FeedItem[];
 }
 
 type Marks = ReadonlyMap<string, string>;
@@ -82,12 +91,16 @@ export function buildFeedGroups(feed: FeedState, marks: Marks, now: number = Dat
       ask: raw.ask && feed.closedAsks.has(`${raw.project_id}\u0000${raw.ask.id}`) ? null : raw.ask,
     };
     if (!row.session_id && !row.ask) continue; // a session-less ask, closed from its card
-    const held = feed.held.has(key);
+    const hold = feed.held.get(key);
+    const held = !!hold;
     const live = isRunning(row) || held;
     const wait = !held && isWaiting(row, now);
     if (!wait && !live) continue;
     const dot: CardDot = wait && needsAction(row) ? 'need' : live ? 'run' : 'new';
-    const item: FeedItem = { key, row, pending: null, dot, waiting: wait, time: cardTime(row, live) };
+    // A card just answered here is as recent as the answer, even before the
+    // daemon reports the new turn's last_user_at.
+    const time = hold ? laterOf(cardTime(row, live), new Date(hold.at).toISOString()) : cardTime(row, live);
+    const item: FeedItem = { key, row, pending: null, dot, waiting: wait, time };
     (wait ? waiting : running).push(item);
   }
   // Pending sends the feed does not carry yet.
@@ -106,7 +119,9 @@ export function buildFeedGroups(feed: FeedState, marks: Marks, now: number = Dat
   // under the composer. Overdue and amber still show on the card itself.
   waiting.sort((a, b) => newestFirst(a.time, b.time));
   running.sort((a, b) => newestFirst(a.time, b.time));
-  return { waiting, running: [...pendingItems, ...running] };
+  pendingItems.sort((a, b) => newestFirst(a.time, b.time));
+  const items = [...pendingItems, ...[...waiting, ...running].sort((a, b) => newestFirst(a.time, b.time))];
+  return { waiting, running: [...pendingItems, ...running], items };
 }
 
 /**

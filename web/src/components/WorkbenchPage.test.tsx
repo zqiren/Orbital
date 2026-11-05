@@ -124,17 +124,27 @@ beforeEach(() => {
 });
 
 describe('Workbench — list', () => {
-  it('two groups, 等你 before 进行中, with one summary line and no headers', async () => {
+  it('one list by recency, whatever the group, with one summary line and no headers', async () => {
     await renderPage();
     expect(screen.getByTestId('workbench-summary')).toHaveTextContent('5 waiting on you · 1 running');
     const order = cards().map((c) => c.getAttribute('data-dot'));
-    // 等你 newest first, whatever the dot (2026-11-05): the 5-minute-old ask,
-    // the 20-minute reply, the 2-hour stop, the overdue ask from Nov 1, the
-    // approval with no time; running last.
-    expect(order).toEqual(['need', 'new', 'need', 'need', 'need', 'run']);
-    expect(cards()[0]).toHaveTextContent('Sync the notes too?');
-    expect(cards()[3]).toHaveTextContent('Renew the domain');
-    expect(cards()[cards().length - 1]).toHaveTextContent('Weekly report');
+    // Newest first, whatever the dot (2026-11-05): the run started a minute
+    // ago, the 5-minute-old ask, the 20-minute reply, the 2-hour stop, the
+    // overdue ask from Nov 1; the approval (no time) last.
+    expect(order).toEqual(['run', 'need', 'new', 'need', 'need', 'need']);
+    expect(cards()[0]).toHaveTextContent('Weekly report');
+    expect(cards()[1]).toHaveTextContent('Sync the notes too?');
+    expect(cards()[4]).toHaveTextContent('Renew the domain');
+  });
+
+  it('a task just sent is the first card, above every 等你 card', async () => {
+    await renderPage(FEED, {
+      'POST /api/v2/workbench/route': () => new Promise(() => {}), // still routing
+    });
+    fireEvent.change(screen.getByTestId('wb-composer-input'), { target: { value: 'Brand new task' } });
+    fireEvent.click(screen.getByTestId('wb-composer-send'));
+    expect(cards()[0]).toHaveTextContent('Brand new task');
+    expect(cards()[0]).toHaveTextContent('Starting…');
   });
 
   it('desktop: one greeting line heads the composer, the cards follow straight under it (2026-11-05)', async () => {

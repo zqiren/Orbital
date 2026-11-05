@@ -6,8 +6,9 @@
  * The Workbench — the app's home page (spec 154). "The Workbench is the
  * inbox, the session is the desk": the user types a task once and Orbital
  * routes it to its project; the list then holds exactly two kinds of task,
- * 等你 / Waiting on you (asks first, then finished work not yet checked) and
- * 进行中 / Running, with no headers and one muted summary line.
+ * 等你 / Waiting on you and 进行中 / Running, with no headers and one muted
+ * summary line. They are ONE list by recency (2026-11-05): a task just sent
+ * is the first card, the dot tells the state (see feedModel).
  *
  * Every row comes from the App-level feed store (`useWorkbenchFeed`); the
  * page itself holds no copy. With nothing waiting or running the page is the
@@ -104,7 +105,7 @@ export default function WorkbenchPage({
   }, []);
 
   const groups = useMemo(() => buildFeedGroups(feed, marks), [feed, marks]);
-  const items = useMemo(() => [...groups.waiting, ...groups.running], [groups]);
+  const items = groups.items;
 
   // The reading pane: the selected card, by key. A card that leaves the list
   // (✓, checked elsewhere) closes it.
