@@ -55,7 +55,7 @@ import { useWorkbenchFeed, useWorkbenchFeedSync } from './hooks/useWorkbenchFeed
 import { useCheckedMarks } from './hooks/useSeenReplies';
 import { useHomeShortcut } from './hooks/useHomeShortcut';
 import { noteAgentStatus } from './hooks/useFileHistory';
-import { buildFeedGroups, waitingCounts } from './components/workbench/feedModel';
+import { buildFeedGroups, unreadCounts } from './components/workbench/feedModel';
 import { projectDisplayName } from './utils/projectDisplayName';
 import { useT } from './i18n/useT';
 import { api, isRelayMode } from './config';
@@ -347,7 +347,7 @@ export default function App() {
   const feed = useWorkbenchFeed();
   const checkedMarks = useCheckedMarks();
   const feedGroups = useMemo(() => buildFeedGroups(feed, checkedMarks), [feed, checkedMarks]);
-  const projectWaitingCounts = useMemo(() => waitingCounts(feedGroups), [feedGroups]);
+  const projectUnreadCounts = useMemo(() => unreadCounts(feedGroups), [feedGroups]);
   const anythingWaiting = feedGroups.waiting.length > 0;
 
   // Spec 154 §5.9: ⌘0 / Ctrl+0 goes home from anywhere (not while focus is
@@ -703,7 +703,7 @@ export default function App() {
     onSelectProject: handleSelectProject,
     onSelectHome: handleGoHome,
     waiting: anythingWaiting,
-    waitingCounts: projectWaitingCounts,
+    unreadCounts: projectUnreadCounts,
     onNewProject: handleNewProject,
     onImportProjects: () => setImportOpen(true),
     onReorderProjects: reorderProjects,
@@ -722,10 +722,10 @@ export default function App() {
           docks it on click (spec 078 D1-D3 + the pin amendment). Every other
           route, and mobile always, render exactly what rendered before this
           spec. */}
-      {/* Spec 154 §5.10: home (the Workbench) renders inside the same
-          edge-strip shell with the list collapsed, so the page's 72% width
-          reads as decided. First run keeps the full list. */}
-      {!isMobile && (route.name === 'project' || (onHome && !isFirstRun(projects))) ? (
+      {/* Home (the Workbench) docks the full project list, as every other
+          non-project route does (2026-11-05; it used to sit in the collapsed
+          edge strip). */}
+      {!isMobile && route.name === 'project' ? (
         <EdgeStrip
           projects={projects}
           currentProjectId={route.name === 'project' ? route.projectId : undefined}

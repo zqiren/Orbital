@@ -31,6 +31,9 @@ TODAY = "2026-07-24"
 CARD_KEYS = {
     "project_id", "id", "text", "section", "due", "created", "touched",
     "age_days", "overdue", "days_late",
+    # Item 160 (2026-11-05): the choices the agent offered, [] when none.
+    # Additive: a cached v0.13 SPA ignores the extra key.
+    "options", "detail",
 }
 
 SEEDED_ASKS = "\n".join([

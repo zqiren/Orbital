@@ -5,8 +5,8 @@
 /**
  * Spec 154 §5.7 — from the feed store to the two groups the Workbench draws.
  *
- * 等你 (waiting on you): overdue asks, then amber rows newest first, then the
- * rest newest first. 进行中 (running): pending sends first, then newest
+ * 等你 (waiting on you): newest first, nothing else (2026-11-05; overdue
+ * asks and amber rows used to jump ahead). 进行中 (running): pending sends first, then newest
  * `last_user_at` first. A row is in exactly one group. A card the user just
  * answered (from its field or the reading pane: held) is in 进行中 at once,
  * before the daemon reports the turn, and comes back to 等你 as finished and
@@ -17,7 +17,7 @@
  */
 
 import type { WorkbenchFeedRow } from '../../types';
-import { isRunning, isWaiting, laterOf, needsAction } from '../../utils/waitingOnYou';
+import { isRunning, isUnchecked, isWaiting, laterOf, needsAction } from '../../utils/waitingOnYou';
 import { sessionKeyOf, type FeedState, type PendingTask } from '../../hooks/useWorkbenchFeed';
 
 export type CardDot = 'need' | 'new' | 'run';
@@ -102,19 +102,25 @@ export function buildFeedGroups(feed: FeedState, marks: Marks, now: number = Dat
       time: new Date(p.created_at).toISOString(),
     }));
 
-  const overdue = (i: FeedItem) => (i.row?.ask?.overdue ? 0 : 1);
-  const amber = (i: FeedItem) => (i.dot === 'need' ? 0 : 1);
-  waiting.sort((a, b) => overdue(a) - overdue(b) || amber(a) - amber(b) || newestFirst(a.time, b.time));
+  // 等你 by recency alone (2026-11-05): the newest thing waiting sits right
+  // under the composer. Overdue and amber still show on the card itself.
+  waiting.sort((a, b) => newestFirst(a.time, b.time));
   running.sort((a, b) => newestFirst(a.time, b.time));
   return { waiting, running: [...pendingItems, ...running] };
 }
 
-/** Per project: how many 等你 cards it has (spec 151's count). */
-export function waitingCounts(groups: FeedGroups): Record<string, number> {
+/**
+ * Per project: how many sessions hold a reply the user has not checked, the
+ * same sessions the session list dots (2026-11-05; it used to count every
+ * 等你 card). An open ask or an approval alone is not unread: it waits on the
+ * Workbench, and the project's own dot already says so.
+ */
+export function unreadCounts(groups: FeedGroups, now: number = Date.now()): Record<string, number> {
   const out: Record<string, number> = {};
   for (const item of groups.waiting) {
-    const pid = item.row?.project_id;
-    if (pid) out[pid] = (out[pid] ?? 0) + 1;
+    const row = item.row;
+    if (!row?.session_id || !isUnchecked(row, now)) continue;
+    out[row.project_id] = (out[row.project_id] ?? 0) + 1;
   }
   return out;
 }

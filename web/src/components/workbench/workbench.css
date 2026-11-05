@@ -24,9 +24,23 @@
   --wb-tint: rgb(83 154 248 / .14);
 }
 
-/* Cards, summary and composer share one column: min(820px, 72%) on desktop. */
-.wb-col { width: min(820px, 72%); margin: 0 auto; padding: 40px 0 56px; }
+/* Cards, summary and composer share one column. Desktop home docks the
+ * 260px project list, so the column takes most of what is left, up to 860px. */
+.wb-col { width: min(860px, 84%); margin: 0 auto; padding: 0 0 56px; }
 .wb-phone .wb-col { width: auto; padding: 4px 16px 32px; }
+
+/* The golden section (2026-11-05): the composer's top edge at 38.2% of the
+ * scroller's height. The spacer stands above the greeting line, so it is
+ * 38.2% minus the line and its gap (--wb-lead + --wb-lead-gap); never under
+ * 40px. The line is one line tall by construction (nowrap + ellipsis). */
+.wb-page { --wb-lead: 30px; --wb-lead-gap: 22px; }
+.wb-golden { height: max(40px, calc(38.2% - var(--wb-lead) - var(--wb-lead-gap))); }
+.wb-greeting {
+  margin: 0 0 var(--wb-lead-gap); height: var(--wb-lead); line-height: var(--wb-lead);
+  text-align: center; font-size: 22px; font-weight: 500; letter-spacing: -.01em;
+  color: color-mix(in srgb, var(--color-primary) 78%, transparent);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 
 .wb-layer {
   background: var(--wb-layer);
@@ -74,6 +88,10 @@
 .wb-opt .wb-gl { width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; color: var(--color-secondary); flex: none; }
 .wb-opt .wb-av { width: 22px; height: 22px; border-radius: 6px; padding: 3px; background: #fff; box-shadow: 0 0 0 .5px rgb(0 0 0 / .08); }
 .wb-opt .wb-av.is-orb { padding: 0; box-shadow: none; background: transparent; }
+/* 自动 without an API key: visible, not selectable; the note says why. */
+.wb-opt.is-off .wb-n1, .wb-opt.is-off .wb-gl { color: var(--color-muted); }
+.wb-opt.is-off:hover { background: transparent; }
+.wb-opt .wb-note { flex: none; margin-left: 8px; font-size: 11.5px; color: var(--color-muted); white-space: nowrap; }
 .wb-sep { height: 6px; }
 
 /* ── summary + list ── */
@@ -153,6 +171,15 @@
 .wb-snd { width: 28px; height: 28px; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center; color: var(--color-muted); flex: none; }
 .wb-rbox:focus-within .wb-snd { color: var(--color-accent); }
 .wb-snd:hover { background: var(--wb-tint); }
+/* An ask's options (item 160): the chat's ask-card pills, one tap = answer. */
+.wb-askopts { display: flex; flex-wrap: wrap; gap: 6px; padding-top: 10px; }
+.wb-askopt {
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  padding: 3px 11px; border-radius: 999px; border: 1px solid var(--color-border);
+  font-size: 12.5px; color: var(--color-primary); background: transparent; transition: background .15s, border-color .15s;
+}
+.wb-askopt:hover { background: var(--wb-tint); border-color: color-mix(in srgb, var(--color-muted) 45%, transparent); }
+.wb-askopt:disabled { opacity: .5; }
 
 /* Phone: no hover. Waiting cards always show the reply row with send and ✓
  * on the right; the title opens the session. */

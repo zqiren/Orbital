@@ -44,7 +44,8 @@ interface SidebarProps {
   /** Anything waits on the user (spec 154): the row glyph's blue dot. */
   waiting?: boolean;
   /** Spec 151 folded into 154: each project's number of 等你 cards. */
-  waitingCounts?: Record<string, number>;
+  /** Per project: sessions with a reply the user has not checked. */
+  unreadCounts?: Record<string, number>;
   onNewProject: () => void;
   /** "Import projects from your agents" (spec 138); absent = no entry. */
   onImportProjects?: () => void;
@@ -160,7 +161,7 @@ export default function Sidebar({
   onSelectProject,
   onSelectHome,
   waiting: anythingWaiting = false,
-  waitingCounts = {},
+  unreadCounts = {},
   onNewProject,
   onImportProjects,
   onSettings,
@@ -269,8 +270,8 @@ export default function Sidebar({
       project.project_id, agentStatuses, pendingApprovals, subAgentsRunning,
     );
     const summary = statusSummaries[project.project_id];
-    const waiting = waitingCounts[project.project_id] ?? 0;
-    const waitingLabel = t(waiting === 1 ? 'sidebar.project.waiting.one' : 'sidebar.project.waiting.other', { n: waiting });
+    const unread = unreadCounts[project.project_id] ?? 0;
+    const unreadLabel = t(unread === 1 ? 'sidebar.project.unread.one' : 'sidebar.project.unread.other', { n: unread });
     return (
       <button
         key={project.project_id}
@@ -299,17 +300,18 @@ export default function Sidebar({
             </span>
           )}
         </div>
-        {/* Spec 151 (folded into 154): how many 等你 cards this project
-            has. The dot on the left keeps its meaning (running/approval/
-            error), so a project can be green and 3 at once. */}
-        {waiting > 0 && (
+        {/* How many of this project's sessions hold an unchecked reply
+            (2026-11-05; spec 151's count of 等你 cards before that). The dot
+            on the left keeps its meaning (running/approval/error), so a
+            project can be green and 3 at once. */}
+        {unread > 0 && (
           <span
-            data-testid={`project-waiting-count-${project.project_id}`}
-            title={waitingLabel}
-            aria-label={waitingLabel}
+            data-testid={`project-unread-count-${project.project_id}`}
+            title={unreadLabel}
+            aria-label={unreadLabel}
             className="ml-auto shrink-0 font-mono text-2xs font-medium leading-none px-1.5 py-0.5 rounded-full text-secondary bg-nav-hover"
           >
-            {waiting > 99 ? '99+' : waiting}
+            {unread > 99 ? '99+' : unread}
           </span>
         )}
       </button>

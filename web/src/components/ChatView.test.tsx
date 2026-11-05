@@ -2148,8 +2148,9 @@ describe('ChatView: pending-input queue (spec 006)', () => {
   });
 });
 
-describe('spec 146: the composer stays free until Reply', () => {
-  const ASK = { id: 'abc123', text: 'Keep the 9,800 creator?', due: null };
+describe('item 160: an open ask takes the composer, Claude Code style', () => {
+  const ASK = { id: 'abc123', text: 'Keep the 9,800 creator?', due: null, options: [] as string[], detail: '' };
+  const CHOICE = { id: 'def456', text: 'Which venue?', due: null, options: ['Rooftop', 'Hall'], detail: '' };
 
   let sent: unknown[] = [];
   function sendCall() {
@@ -2177,26 +2178,79 @@ describe('spec 146: the composer stays free until Reply', () => {
     await flushEffects();
   }
 
-  it('plain typing is a normal message and closes nothing', async () => {
+  it('the card takes the head of the composer, and typing under it answers the ask (item 160)', async () => {
     await withAsk();
-    expect(container.querySelector('[data-testid="ask-tray"]')).toBeTruthy();
-    await type('something else entirely');
-    const body = sendCall();
-    expect(body.content).toBe('something else entirely');
-    expect(body.answering).toBeUndefined();
-  });
-
-  it('Reply quotes the ask, and what is sent answers it', async () => {
-    await withAsk();
-    const reply = [...container.querySelectorAll('button')].find((b) => b.textContent === 'Reply')!;
-    await act(async () => { reply.click(); });
-    expect(container.querySelector('[data-testid="ask-reply-quote"]')?.textContent).toContain('Keep the 9,800 creator?');
-    expect(container.querySelector('[data-testid="ask-tray"]')).toBeNull();
+    expect(container.querySelector('[data-testid="ask-card-text"]')?.textContent).toContain('Keep the 9,800 creator?');
+    expect([...container.querySelectorAll('button')].find((b) => b.textContent === 'Reply')).toBeUndefined();
+    expect(container.querySelector('textarea')?.getAttribute('placeholder')).toBe('Your call…');
     await type('Keep them');
     const body = sendCall();
     expect(body.answering).toEqual({ id: 'abc123', words: 'Keep them' });
     expect(body.content).toContain('Keep them');
     expect(body.content).toContain('already closed');
+    // The answered ask leaves the composer at once, before the feed agrees.
+    expect(container.querySelector('[data-testid="ask-card"]')).toBeNull();
+  });
+
+  it('clicking an option answers the ask with it, in one gesture', async () => {
+    await withAsk([CHOICE]);
+    expect(container.querySelector('textarea')?.getAttribute('placeholder')).toBe('Or in your own words…');
+    const pill = [...container.querySelectorAll('[data-testid="ask-card-option"]')]
+      .find((b) => b.textContent === 'Hall') as HTMLButtonElement;
+    await act(async () => { pill.click(); });
+    await flushEffects();
+    const body = sendCall();
+    expect(body.answering).toEqual({ id: 'def456', words: 'Hall' });
+    expect(body.content).toContain('Which venue?');
+    expect(body.content).toContain('Hall');
+    expect(container.querySelector('[data-testid="ask-card"]')).toBeNull();
+  });
+
+  it('typing under an ask with options answers it in the user\'s own words', async () => {
+    await withAsk([CHOICE]);
+    await type('Neither, the park');
+    expect(sendCall().answering).toEqual({ id: 'def456', words: 'Neither, the park' });
+  });
+
+  it('one card at a time: the next open ask appears once this one is answered', async () => {
+    await withAsk([ASK, CHOICE]);
+    expect(container.querySelectorAll('[data-testid="ask-card"]')).toHaveLength(1);
+    expect(container.querySelector('[data-testid="ask-card-text"]')?.textContent).toContain('Keep the 9,800 creator?');
+    expect(container.querySelector('[data-testid="ask-card"]')?.textContent).not.toContain('1 / 2');
+    await type('Keep them');
+    expect(sendCall().answering?.id).toBe('abc123');
+    expect(container.querySelector('[data-testid="ask-card-text"]')?.textContent).toContain('Which venue?');
+  });
+
+  it('Later hides only the asks open then: an ask the agent opens afterwards takes the composer', async () => {
+    await withAsk([ASK]);
+    const later = [...container.querySelectorAll('button')].find((b) => b.textContent === 'Later')!;
+    await act(async () => { later.click(); });
+    expect(container.querySelector('[data-testid="ask-card"]')).toBeNull();
+    sessionAsksResponse = { asks: [ASK, CHOICE] };
+    await act(async () => { window.dispatchEvent(new Event('orbital:workbench-changed')); });
+    await flushEffects();
+    expect(container.querySelector('[data-testid="ask-card-text"]')?.textContent).toContain('Which venue?');
+  });
+
+  it('the composer becomes the card: no attach button or pin under an ask; Later brings them back', async () => {
+    await withAsk([CHOICE]);
+    const attach = () => container.querySelector('button[aria-label="Attach files"]');
+    expect(attach()).toBeNull();
+    const later = [...container.querySelectorAll('button')].find((b) => b.textContent === 'Later')!;
+    await act(async () => { later.click(); });
+    expect(attach()).not.toBeNull();
+  });
+
+  it('Later puts the plain composer back: typing is a normal message and closes nothing', async () => {
+    await withAsk();
+    const later = [...container.querySelectorAll('button')].find((b) => b.textContent === 'Later')!;
+    await act(async () => { later.click(); });
+    expect(container.querySelector('[data-testid="ask-card"]')).toBeNull();
+    await type('something else entirely');
+    const body = sendCall();
+    expect(body.content).toBe('something else entirely');
+    expect(body.answering).toBeUndefined();
   });
 });
 
