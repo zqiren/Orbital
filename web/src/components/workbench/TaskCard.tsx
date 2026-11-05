@@ -15,8 +15,8 @@
  * selects it: the Workbench opens that session's chat in the reading pane;
  * a second click closes it (2026-11-04).
  *
- * An ask card shows the agent's detail as markdown under the question
- * (clamped to six lines); its muted line then names the automation or the
+ * An ask card's question renders as inline markdown inside its quotes, and
+ * the agent's detail as markdown under it (clamped to six lines); its muted line then names the automation or the
  * session. A result line stays plain: the daemon already flattened it.
  *
  * An automation run (a session a schedule / file-watch trigger started)
@@ -37,6 +37,7 @@ import { getAgentIcon, MAIN_AGENT_HANDLE } from '../../utils/agentIcons';
 import { needsAction } from '../../utils/waitingOnYou';
 import { classifySessionName } from '../../lib/sessionLabel';
 import MarkdownContent from '../MarkdownContent';
+import InlineMarkdown from '../InlineMarkdown';
 import type { FeedItem } from './feedModel';
 
 const CAUSE_KEY: Record<string, StringKey> = {
@@ -103,7 +104,9 @@ export default function TaskCard({
   const taskTitle = pending?.text
     ?? (automation ? (runLine ? `${automation} · ${runLine}` : automation) : null)
     ?? row?.name ?? t('workbench.card.untitled');
-  const title = ask ? `“${ask.text}”` : taskTitle;
+  // An ask's question is the agent's own line, often with `**bold**` and
+  // `code` in it: inline markdown inside the quotes.
+  const title = ask ? <>“<InlineMarkdown text={ask.text} links={false} />”</> : taskTitle;
 
   // The muted line's tail: one of activity / result / stop / approval / due.
   let detail: { text: string; warn: boolean } | null = null;

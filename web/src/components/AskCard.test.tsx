@@ -92,3 +92,14 @@ describe('askAnswer', () => {
     expect(parseAskAnswer('hello')).toEqual({ question: null, rest: 'hello' });
   });
 });
+
+describe('AskCard — the question renders as inline markdown', () => {
+  it('bold and code are elements; no raw marks and no nested paragraph', () => {
+    setup({ id: 'cccccc', text: '看**这里** 和 `x`', due: null, options: [], detail: '' });
+    const q = screen.getByTestId('ask-card-text');
+    expect(q.querySelector('strong')).toHaveTextContent('这里');
+    expect(q.querySelector('code')).toHaveTextContent('x');
+    expect(q.querySelector('p')).toBeNull();
+    expect(q.textContent).toBe('看这里 和 x');
+  });
+});

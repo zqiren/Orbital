@@ -78,3 +78,22 @@ describe('TaskCard — an ask\'s detail renders as markdown', () => {
     expect(screen.queryByTestId('wb-card-askdetail')).toBeNull();
   });
 });
+
+describe('TaskCard — an ask\'s question renders as inline markdown', () => {
+  it('bold and code come through inside the title button, in quotes', () => {
+    renderCard(row({ ask: { id: 'abc125', text: '看**这里** 和 `x`', created: '2026-11-05T09:00:00Z', due: null, overdue: false, options: [], detail: '' } }));
+    const title = screen.getByTestId('wb-card-title');
+    expect(title.querySelector('strong')).toHaveTextContent('这里');
+    expect(title.querySelector('code')).toHaveTextContent('x');
+    expect(title.querySelector('p')).toBeNull();
+    expect(title.textContent).toBe('“看这里 和 x”');
+    expect(title.getAttribute('title') ?? '').not.toContain('**');
+  });
+
+  it('a link in the question is text inside the title button', () => {
+    renderCard(row({ ask: { id: 'abc126', text: '读 [这篇](https://example.com)', created: '2026-11-05T09:00:00Z', due: null, overdue: false, options: [], detail: '' } }));
+    const title = screen.getByTestId('wb-card-title');
+    expect(title.querySelector('a')).toBeNull();
+    expect(title.textContent).toBe('“读 这篇”');
+  });
+});

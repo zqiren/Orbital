@@ -5,6 +5,7 @@
 import type { SessionAsk } from '../hooks/useSessionAsks';
 import { useT } from '../i18n/useT';
 import MarkdownContent from './MarkdownContent';
+import InlineMarkdown from './InlineMarkdown';
 
 interface AskCardProps {
   ask: SessionAsk;
@@ -33,7 +34,7 @@ export default function AskCard({ ask, onOption, onDone, onNotNeeded, onLater }:
         <div className="flex items-start gap-2 flex-1 min-w-0">
           <span className="mt-[7px] w-1.5 h-1.5 rounded-full bg-warning shrink-0" aria-hidden="true" />
           <p className="m-0 flex-1 min-w-0 text-[13.5px] leading-snug font-medium text-primary break-words" data-testid="ask-card-text">
-            {ask.text}
+            <InlineMarkdown text={ask.text} />
           </p>
         </div>
         <div className="flex items-center gap-x-3.5 shrink-0 max-md:pl-3.5">

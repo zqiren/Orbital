@@ -46,7 +46,8 @@ const EXTERNAL_HREF_RE = /^(?:https?:)?\/\//i;
  * keeping the raw href as `title`: any other same-origin href hits the SPA
  * catch-all and reloads the whole app.
  */
-function renderAnchor(href: string | undefined, children: ReactNode) {
+// eslint-disable-next-line react-refresh/only-export-components -- shared with InlineMarkdown
+export function renderAnchor(href: string | undefined, children: ReactNode) {
   if (href && EXTERNAL_HREF_RE.test(href)) {
     return (
       <a href={href} target="_blank" rel="noopener noreferrer">
