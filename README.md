@@ -279,7 +279,7 @@ The **Workbench** is the home screen: one box for everything you want done, acro
 
 Under the box is one list of cards, newest first: tasks that are running, replies waiting for you to read, and questions an agent can't settle without you, each marked with the project it came from. A question shows the choices the agent offered, so one tap answers it. Its detail renders as markdown, and the reply field takes typed words or attached files. Tap a card's title to open its session, or the check mark once you've dealt with it.
 
-<p align="center"><img src="docs/screenshots/workbench.png" alt="Workbench: a box to send any task, with project and agent chips, above one list of cards: a running task, a finished reply, and two questions with one-tap options, each labelled with its project" width="100%"></p>
+<p align="center"><img src="docs/screenshots/workbench.png" alt="Workbench: a box to send any task, with project and agent chips, above one list of cards: a running task, finished replies from Codex and Claude Code, and a question with one-tap options, each labelled with its project and the agent that took it" width="100%"></p>
 <p align="center"><em>One place to send a task, and to see every status, reply and question across your projects</em></p>
 
 </details>
