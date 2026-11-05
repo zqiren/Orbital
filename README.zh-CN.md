@@ -91,18 +91,18 @@ Agent可以换。你的上下文资产一直在。
 
 > 每一步都带截图的完整教程见 **[Orbital 使用教程](https://orbital.top/guide/)**：配置 API key、新建项目、切换子 Agent、任务队列、自动任务和项目设置。
 
-1. **启动 Orbital** —— 设置向导引导你完成两步：
+1. **启动 Orbital** —— 设置向导依次引导你完成四步：先确认 Orbital 在本机找到的编码 agent，再把你和这些 agent 做过的项目导入进来（都可跳过），然后配置 API 密钥和关联账户。
 
-   **Step 1 — LLM Provider:** 中国大陆用户点「一键登录词元跳动」，授权后免费领取 Token，直接开始。也可以从预设卡片里选择服务商，点「获取 API 密钥」直达密钥控制台，粘贴即可——支持 DeepSeek、Moonshot (Kimi)、智谱、MiniMax、Anthropic、OpenAI 等十余家服务商。
+   **Step 3 — LLM Provider:** 中国大陆用户点「一键登录词元跳动」，授权后免费领取 Token，直接开始。也可以从预设卡片里选择服务商，点「获取 API 密钥」直达密钥控制台，粘贴即可——支持 DeepSeek、Moonshot (Kimi)、智谱、MiniMax、Anthropic、OpenAI 等十余家服务商。
 
    <p align="center">
-     <img src="docs/screenshots/zh/apikey-setup.png" alt="设置向导第一步——从预设卡片选择 LLM provider 并配置 API key" width="480">
+     <img src="docs/screenshots/zh/apikey-setup.png" alt="设置向导第三步——选择 LLM provider 并配置 API key" width="480">
    </p>
 
-   **Step 2 — 关联账户：** 连接 API 连接器（Google Calendar、Drive），并提前登录 agent 需要访问的站点（Google、GitHub 等），防止它在浏览时被验证码挡住。这一步可跳过，之后随时可在设置中完成。
+   **Step 4 — 关联账户：** 连接 API 连接器（Google Calendar、Drive），并提前登录 agent 需要访问的站点（Google、GitHub 等），防止它在浏览时被验证码挡住。这一步可跳过，之后随时可在设置中完成。
 
    <p align="center">
-     <img src="docs/screenshots/zh/connect-accounts.png" alt="设置向导第二步——关联账户：API 连接器与 Agent 浏览器登录" width="480">
+     <img src="docs/screenshots/zh/connect-accounts.png" alt="设置向导第四步——关联账户：API 连接器与 Agent 浏览器登录" width="480">
    </p>
 
 2. **创建项目** —— 起个名字，选择本地的一个文件夹，设定 autonomy 等级
@@ -131,8 +131,8 @@ Agent可以换。你的上下文资产一直在。
 <p align="center"><img src="docs/screenshots/zh/queue-paused.png" alt="暂停中的任务队列——正在运行为空、需要关注里有一条受阻任务并附上 agent 给出的原因、两条排队中任务、以及已完成任务及其总结" width="800"></p>
 <p align="center"><em>把任务排进队列然后走开——agent 逐项处理，每个完成项都会成为下一项的上下文；随时可暂停介入引导，再继续</em></p>
 
-<p align="center"><img src="docs/screenshots/zh/workbench.png" alt="工作台——跨所有项目汇总的待你决策事项，每条都标注来源项目、已等待时长，以及「已完成 / 删除」出口" width="800"></p>
-<p align="center"><em>工作台（beta）——只有你能拍板的事（花钱决策、必须用你账号发出的消息）由 agent 标记后跨项目汇总到一处，展开还能看到它这么判断的依据</em></p>
+<p align="center"><img src="docs/screenshots/zh/workbench.png" alt="工作台——一个能发任何任务的输入框，带项目和 agent 选择，下方是一份卡片列表：进行中的任务、已完成的回复、两条带一键选项的提问，每张卡都标明来源项目" width="800"></p>
+<p align="center"><em>工作台（beta）——所有项目共用的一个入口：一句话交代任务，Orbital 带着该项目的上下文送到对的项目、交给对的 agent，也可以自己指定；下面是按时间排序的一份卡片，进行中的任务、待你查看的回复、agent 需要你拍板的提问，每条都标明来源项目。提问直接给出选项，点一下就答；详情按 markdown 渲染，回复框里还能附上文件</em></p>
 
 <p align="center"><img src="docs/screenshots/zh/calendar.png" alt="日历周视图：项目的循环自动任务，每天的 issue 巡检、每周一的 backlog 梳理、每周二的发布说明草稿" width="800"></p>
 <p align="center"><em>日历（beta）——把已启用的定时 trigger 和带截止日期的承诺投影到周视图上，自动任务不再悄无声息地跑；管理 agent 自己也能读取它来安排工作</em></p>
