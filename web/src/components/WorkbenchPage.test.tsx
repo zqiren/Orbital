@@ -307,20 +307,22 @@ describe('Workbench — card actions', () => {
     expect(cardWith('Sync OSS').getAttribute('data-dot')).toBe('run');
   });
 
-  it('an ask with detail: the question is the title, the detail\'s first paragraph the muted line', async () => {
+  it('an ask with detail: the question is the title, the detail renders as markdown, the muted line names the session', async () => {
     const detailed = row({
       session_id: 'acct', session_uuid: 'acct', name: 'Q3 books',
       ask: { id: 'beef01', text: 'Which account first?', due: null, created: '2026-11-04', overdue: false, options: [],
-        detail: 'The **Chase** statement covers `Jul–Sep`; see [notes](notes.md).\n\nSecond paragraph.' },
+        detail: 'The **Chase** statement covers `Jul–Sep`.\n\nSecond paragraph.' },
       last_reply_at: iso(2),
     });
     await renderPage([detailed, ...FEED]);
     const card = cardWith('Which account first?');
     expect(within(card).getByTestId('wb-card-title')).toHaveTextContent('“Which account first?”');
+    const detail = within(card).getByTestId('wb-card-askdetail');
+    expect(detail.querySelector('strong')).toHaveTextContent('Chase');
+    expect(detail).toHaveTextContent('Second paragraph.');
     const meta = within(card).getByTestId('wb-card-meta');
-    expect(meta).toHaveTextContent('Marketing · The Chase statement covers Jul–Sep; see notes.');
-    expect(meta.textContent).not.toContain('Second paragraph');
-    expect(meta.textContent).not.toContain('**');
+    expect(meta).toHaveTextContent('Marketing · Q3 books');
+    expect(meta.textContent).not.toContain('Chase');
   });
 
   it('an ask with options offers them on its card; a tap answers with that option (item 160)', async () => {

@@ -122,6 +122,22 @@
 }
 .wb-title:hover { text-decoration-color: color-mix(in srgb, var(--color-secondary) 60%, transparent); }
 .wb-card.is-ask .wb-title { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+/* An ask's detail (markdown): muted, clamped to six lines; the chat's block
+ * margins and code surfaces are toned down to fit inside a card line. */
+.wb-askdetail {
+  font-size: 12.5px; line-height: 1.45; overflow: hidden; overflow-wrap: anywhere; margin: 1px 0 2px;
+  display: -webkit-box; -webkit-line-clamp: 6; -webkit-box-orient: vertical;
+}
+.wb-askdetail .markdown-content { font-size: inherit; line-height: inherit; color: color-mix(in srgb, var(--color-primary) 72%, transparent); }
+.wb-askdetail .markdown-content strong { color: var(--color-primary); }
+.wb-askdetail .markdown-content :is(p, ul, ol, pre, blockquote, table, h1, h2, h3, h4, h5, h6) { margin: 0 0 4px; }
+.wb-askdetail .markdown-content > :last-child { margin-bottom: 0; }
+.wb-askdetail .markdown-content :is(h1, h2, h3, h4, h5, h6) { font-size: 1em; line-height: inherit; }
+.wb-askdetail .markdown-content :is(ul, ol) { padding-left: 1.3em; }
+.wb-askdetail .markdown-content li { margin-bottom: 0; }
+.wb-askdetail .markdown-content code { font-size: .9em; padding: .05em .3em; background: color-mix(in srgb, var(--color-muted) 13%, transparent); color: inherit; }
+.wb-askdetail .markdown-content pre { padding: 4px 8px; border: 0; background: color-mix(in srgb, var(--color-muted) 10%, transparent); }
+.wb-askdetail .markdown-content pre code { background: none; font-size: .9em; line-height: inherit; }
 .wb-meta { font-size: 12px; line-height: 1.4; color: var(--color-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .wb-meta .wb-warn { color: var(--color-warning-text); }
 .wb-meta .wb-lg { display: inline-flex; width: 13px; height: 13px; vertical-align: -2px; margin-right: 4px; border-radius: 3px; overflow: hidden; }

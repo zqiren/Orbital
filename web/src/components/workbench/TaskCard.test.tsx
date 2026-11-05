@@ -60,3 +60,21 @@ describe('TaskCard — reply field IME guard', () => {
     expect(onReply.mock.calls[0][1]).toBe('好的');
   });
 });
+
+describe('TaskCard — an ask\'s detail renders as markdown', () => {
+  it('bold and a list come through as elements, under the question', () => {
+    renderCard(row({
+      ask: { id: 'abc123', text: '先看哪里？', created: '2026-11-05T09:00:00Z', due: null, overdue: false, options: ['A', 'B'],
+        detail: '先看 **这里**\n\n- a\n- b' },
+    }));
+    const detail = screen.getByTestId('wb-card-askdetail');
+    expect(detail.querySelector('strong')).toHaveTextContent('这里');
+    expect(detail.querySelectorAll('li')).toHaveLength(2);
+    expect(screen.getByTestId('wb-card-meta')).toHaveTextContent('Marketing · Hero copy');
+  });
+
+  it('no detail, no detail block', () => {
+    renderCard(row({ ask: { id: 'abc124', text: 'Keep it?', created: '2026-11-05T09:00:00Z', due: null, overdue: false, options: [], detail: '' } }));
+    expect(screen.queryByTestId('wb-card-askdetail')).toBeNull();
+  });
+});
