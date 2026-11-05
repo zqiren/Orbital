@@ -74,6 +74,9 @@
 .wb-opt .wb-gl { width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; color: var(--color-secondary); flex: none; }
 .wb-opt .wb-av { width: 22px; height: 22px; border-radius: 6px; padding: 3px; background: #fff; box-shadow: 0 0 0 .5px rgb(0 0 0 / .08); }
 .wb-opt .wb-av.is-orb { padding: 0; box-shadow: none; background: transparent; }
+.wb-opt-muted .wb-n1 { font-weight: 400; font-size: 12px; color: var(--color-secondary); }
+.wb-opt-muted { min-height: 32px; }
+.wb-pop-foot { position: sticky; bottom: -5px; margin-bottom: -5px; padding-bottom: 5px; background: var(--wb-layer); }
 .wb-sep { height: 6px; }
 
 /* ── summary + list ── */

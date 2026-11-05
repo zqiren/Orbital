@@ -222,6 +222,18 @@ class TestMemoryManagementInstructions:
         assert "call remember_about_user" in semi_stable
         assert "append to ~/orbital/user_preferences.md" not in semi_stable
 
+    def test_agent_routing_preference_is_a_global_preference(self, tmp_path):
+        """Brief 1105-route: "以后代码调查用 claude code，轻任务用 codex" is a
+        user-level preference (the Workbench's 自动 reads user memory), not a
+        project directive."""
+        builder = PromptBuilder(workspace=str(tmp_path))
+        ctx = _make_context(tmp_path, is_scratch=False,
+                            user_memory_path=str(tmp_path / "user_memory.md"))
+        _, semi_stable, _ = builder.build(ctx)
+        line = next(l for l in semi_stable.splitlines()
+                    if "call remember_about_user" in l)
+        assert "which agent" in line and "Claude Code" in line
+
     def test_global_preference_routes_to_settings_when_disabled(self, tmp_path):
         builder = PromptBuilder(workspace=str(tmp_path))
         ctx = _make_context(tmp_path, is_scratch=False, user_memory_path="")

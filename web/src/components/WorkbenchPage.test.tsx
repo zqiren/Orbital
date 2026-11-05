@@ -345,6 +345,20 @@ describe('Workbench — send', () => {
     expect(injected).not.toHaveProperty('target');
   });
 
+  it('the agent picker ends with a row that opens Global Settings at user memory', async () => {
+    await renderPage([]);
+    const seen: Array<unknown> = [];
+    const onOpen = (e: Event) => seen.push((e as CustomEvent).detail);
+    window.addEventListener('open-global-settings', onOpen);
+    fireEvent.click(screen.getByTestId('wb-chip-agent'));
+    const row = within(screen.getByTestId('wb-pop-agent')).getByTestId('wb-agent-prefs');
+    expect(row).toHaveTextContent('Tell Orbital who does what');
+    fireEvent.click(row);
+    window.removeEventListener('open-global-settings', onOpen);
+    expect(seen).toEqual([{ section: 'user-memory' }]);
+    expect(screen.queryByTestId('wb-pop-agent')).toBeNull();
+  });
+
   it('a failed mint puts the text back and shows the open error', async () => {
     await renderPage([], {
       'POST /api/v2/workbench/route': () => ({ project_id: 'proj-b', by: 'fallback' }),
