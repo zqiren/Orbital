@@ -779,6 +779,7 @@ import SubAgentStatusBar from './SubAgentStatusBar';
 import { useSubAgentStatus } from '../hooks/useSubAgentStatus';
 import FanoutCard, { isTerminal, type FanoutTaskState } from './FanoutCard';
 import SubAgentDrillIn from './SubAgentDrillIn';
+import InlineMarkdown from './InlineMarkdown';
 
 interface ChatViewProps {
   projectId: string;
@@ -4271,7 +4272,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
             } else if (item.type === 'ask_line') {
               rendered = (
                 <p key={`ask-${index}`} className="m-0 pl-9 text-[13px] text-muted break-words" data-testid="ask-line">
-                  {t('chat.ask.title')} · {item.text}
+                  {t('chat.ask.title')} · <InlineMarkdown text={item.text} />
                 </p>
               );
             } else if (item.type === 'daemon_row') {

@@ -680,6 +680,19 @@ body {
   border-radius: 4px;
 }
 
+/* InlineMarkdown (an ask's question): bold reads one step above the line's
+   own weight, code is a quiet neutral tint at the line's size (no border). */
+.inline-md strong { font-weight: 600; }
+.inline-md code {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  padding: 0.05em 0.3em;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--color-muted) 13%, transparent);
+  color: inherit;
+}
+.inline-md a { color: var(--color-link); text-decoration: underline; text-underline-offset: 2px; }
+
 .markdown-content pre {
   background: var(--color-sidebar);
   border: 1px solid var(--color-border);
