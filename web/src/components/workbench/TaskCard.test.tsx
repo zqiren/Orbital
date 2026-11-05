@@ -73,6 +73,12 @@ describe('TaskCard — an ask\'s detail renders as markdown', () => {
     expect(screen.getByTestId('wb-card-meta')).toHaveTextContent('Marketing · Hero copy');
   });
 
+  it('a non-ask title is plain text, with no clamp span', () => {
+    renderCard();
+    expect(screen.getByTestId('wb-card-title').textContent).toBe('Hero copy');
+    expect(screen.queryByTestId('wb-card-title-clamp')).toBeNull();
+  });
+
   it('no detail, no detail block', () => {
     renderCard(row({ ask: { id: 'abc124', text: 'Keep it?', created: '2026-11-05T09:00:00Z', due: null, overdue: false, options: [], detail: '' } }));
     expect(screen.queryByTestId('wb-card-askdetail')).toBeNull();
@@ -83,6 +89,8 @@ describe('TaskCard — an ask\'s question renders as inline markdown', () => {
   it('bold and code come through inside the title button, in quotes', () => {
     renderCard(row({ ask: { id: 'abc125', text: '看**这里** 和 `x`', created: '2026-11-05T09:00:00Z', due: null, overdue: false, options: [], detail: '' } }));
     const title = screen.getByTestId('wb-card-title');
+    // The clamp lives on the inner span (WebKit ignores it on a button).
+    expect(title.firstElementChild).toBe(screen.getByTestId('wb-card-title-clamp'));
     expect(title.querySelector('strong')).toHaveTextContent('这里');
     expect(title.querySelector('code')).toHaveTextContent('x');
     expect(title.querySelector('p')).toBeNull();

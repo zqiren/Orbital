@@ -129,7 +129,10 @@
   transition: text-decoration-color .15s;
 }
 .wb-title:hover { text-decoration-color: color-mix(in srgb, var(--color-secondary) 60%, transparent); }
-.wb-card.is-ask .wb-title { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+/* An ask's title clamps to two lines on an inner span: WebKit ignores
+ * line-clamp on the <button> itself. */
+.wb-card.is-ask .wb-title { white-space: normal; }
+.wb-card.is-ask .wb-tclamp { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; white-space: normal; }
 /* An ask's detail (markdown): muted, clamped to six lines; the chat's block
  * margins and code surfaces are toned down to fit inside a card line. */
 .wb-askdetail {

@@ -106,7 +106,11 @@ export default function TaskCard({
     ?? row?.name ?? t('workbench.card.untitled');
   // An ask's question is the agent's own line, often with `**bold**` and
   // `code` in it: inline markdown inside the quotes.
-  const title = ask ? <>“<InlineMarkdown text={ask.text} links={false} />”</> : taskTitle;
+  // The 2-line clamp sits on an inner span: WebKit ignores line-clamp on a
+  // <button> (the owner's WKWebView showed a 9-line title).
+  const title = ask
+    ? <span className="wb-tclamp" data-testid="wb-card-title-clamp">“<InlineMarkdown text={ask.text} links={false} />”</span>
+    : taskTitle;
 
   // The muted line's tail: one of activity / result / stop / approval / due.
   let detail: { text: string; warn: boolean } | null = null;
