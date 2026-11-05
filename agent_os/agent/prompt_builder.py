@@ -809,8 +809,9 @@ class PromptBuilder:
             # The daemon-side tool is the escape hatch; when the user-memory
             # toggle is off the tool doesn't exist, so route to Settings.
             + (
-                "- If it's a personal/global preference → call remember_about_user (which agent "
-                "to use for which kind of task is one: \"Claude Code for code, Codex for research\")\n"
+                "- If it's a personal/global preference → call remember_about_user (a personal habit "
+                "across projects, e.g. reply language, tone, or working hours; who does what in a "
+                "project goes under Preferences in project_goals.md instead)\n"
                 if context.user_memory_path else
                 "- If it's a personal/global preference → suggest adding it in "
                 "Global Settings → About You (user memory is disabled)\n"
