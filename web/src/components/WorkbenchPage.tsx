@@ -58,7 +58,7 @@ import { projectDisplayName } from '../utils/projectDisplayName';
 import { formatAskAnswer } from '../utils/askAnswer';
 import { buildFeedGroups, type FeedItem } from './workbench/feedModel';
 import { classifySessionName } from '../lib/sessionLabel';
-import { recoverDraft, sendWorkbenchTask, type SendChoice } from './workbench/sendTask';
+import { recoverDraft, sendWorkbenchTask, type SendChoice, type SendDeps } from './workbench/sendTask';
 import TaskCard from './workbench/TaskCard';
 import WorkbenchComposer, { rememberLastProject } from './workbench/WorkbenchComposer';
 import WorkbenchPane from './workbench/WorkbenchPane';
@@ -142,9 +142,9 @@ export default function WorkbenchPage({
   const keyless = projects.find((p) => p.is_scratch)?.manager_ready === false;
 
   const handleSend = useCallback(
-    async (choice: SendChoice) => {
+    async (choice: SendChoice, uploadAll: NonNullable<SendDeps['uploadAll']>) => {
       setOpenError(null);
-      const outcome = await sendWorkbenchTask(choice, { newSession, injectMessage });
+      const outcome = await sendWorkbenchTask(choice, { newSession, injectMessage, uploadAll });
       if (!outcome.ok) setOpenError(t('workbench.error.open'));
       // A routed send too: the next keyless default is where the last task went.
       else rememberLastProject(outcome.projectId);

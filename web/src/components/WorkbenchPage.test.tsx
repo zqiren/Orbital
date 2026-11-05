@@ -15,7 +15,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const apiMock = vi.hoisted(() => vi.fn());
-vi.mock('../config', () => ({ api: apiMock, isRelayMode: false }));
+vi.mock('../config', () => ({ api: apiMock, isRelayMode: false, BASE_URL: '' }));
 
 // The reading pane embeds the real ChatView and FilePreview; here they are
 // stubs (the daemon smoke drives the real ones). The ChatView stub opens a
@@ -46,6 +46,12 @@ vi.mock('./FilePreview', () => ({
     </div>
   ),
 }));
+
+const uploadMock = vi.hoisted(() => vi.fn());
+vi.mock('../lib/attachment-upload', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/attachment-upload')>();
+  return { ...actual, uploadFile: uploadMock };
+});
 
 import WorkbenchPage from './WorkbenchPage';
 import { __resetWorkbenchFeed, refreshFeed } from '../hooks/useWorkbenchFeed';
@@ -463,6 +469,95 @@ describe('Workbench — send', () => {
 
 // "0 s ago" must not sit on a card for half a minute: under a minute the
 // card's relative time refreshes at least every 10 s.
+describe('Workbench — attachments (stage in the composer, upload at send)', () => {
+  function stage(...names: string[]) {
+    const files = names.map((n) => new File(['hello'], n, { type: 'text/plain' }));
+    fireEvent.change(screen.getByTestId('wb-attach-input'), { target: { files } });
+  }
+
+  beforeEach(() => {
+    uploadMock.mockReset();
+    uploadMock.mockImplementation(async ({ file }: { file: File }) => ({ path: `uploads/${file.name}`, size: file.size }));
+  });
+
+  it('a picked file is a chip and nothing uploads before the send', async () => {
+    await renderPage([]);
+    expect(screen.getByTestId('wb-attach')).toHaveAccessibleName('Attach files');
+    stage('notes.txt');
+    expect(within(screen.getByTestId('wb-chip-strip')).getByText('notes.txt')).toBeInTheDocument();
+    await new Promise((r) => setTimeout(r, 5));
+    expect(uploadMock).not.toHaveBeenCalled();
+    // Attachment-only is sendable, as in the chat.
+    expect(screen.getByTestId('wb-composer-send')).toBeEnabled();
+  });
+
+  it('自动: the route sees the filenames, the files upload into the routed project, the inject carries them', async () => {
+    let routed: Record<string, unknown> | null = null;
+    let injected: Record<string, unknown> | null = null;
+    const order: string[] = [];
+    uploadMock.mockImplementation(async ({ file, projectId }: { file: File; projectId: string }) => {
+      order.push(`upload ${projectId}`);
+      return { path: `uploads/${file.name}`, size: file.size };
+    });
+    await renderPage([], {
+      'POST /api/v2/workbench/route': (init) => { order.push('route'); routed = JSON.parse(init!.body!); return { project_id: 'proj-b', by: 'model' }; },
+      'POST /api/v2/agents/proj-b/new-session': () => { order.push('mint'); return { session_id: 'new-9', pinned_target: null }; },
+      'POST /api/v2/agents/proj-b/inject': (init) => { order.push('inject'); injected = JSON.parse(init!.body!); return { status: 'started' }; },
+    });
+    stage('a.txt', 'b.txt');
+    fireEvent.change(screen.getByTestId('wb-composer-input'), { target: { value: 'Summarise these' } });
+    fireEvent.click(screen.getByTestId('wb-composer-send'));
+    expect(cardWith('Summarise these')).toHaveTextContent('Starting…');
+    await waitFor(() => expect(injected).not.toBeNull());
+    expect(routed).toEqual({ text: 'Summarise these\n\n<attached_files>\n- a.txt\n- b.txt\n</attached_files>' });
+    expect(order).toEqual(['route', 'upload proj-b', 'upload proj-b', 'mint', 'inject']);
+    // The daemon writes the <attached_files> prefix from the payload, as for the chat.
+    expect(injected).toMatchObject({
+      content: 'Summarise these',
+      session_id: 'new-9',
+      attachments: [
+        { path: 'uploads/a.txt', mime: 'text/plain', size: 5 },
+        { path: 'uploads/b.txt', mime: 'text/plain', size: 5 },
+      ],
+    });
+    await waitFor(() => expect(screen.queryByTestId('wb-chip-strip')).toBeNull());
+  });
+
+  it('a picked project still uploads at send, into that project', async () => {
+    let injected: Record<string, unknown> | null = null;
+    await renderPage([], {
+      'POST /api/v2/agents/proj-a/new-session': () => ({ session_id: 'new-3', pinned_target: null }),
+      'POST /api/v2/agents/proj-a/inject': (init) => { injected = JSON.parse(init!.body!); return { status: 'started' }; },
+    });
+    fireEvent.click(screen.getByTestId('wb-chip-project'));
+    fireEvent.click(within(screen.getByTestId('wb-pop-project')).getByText('Marketing'));
+    stage('only.txt');
+    fireEvent.click(screen.getByTestId('wb-composer-send'));
+    await waitFor(() => expect(injected).not.toBeNull());
+    expect(uploadMock.mock.calls[0][0].projectId).toBe('proj-a');
+    expect(apiMock.mock.calls.some((c) => c[0] === '/api/v2/workbench/route')).toBe(false);
+    // Attachment-only: empty text, the files carry the task.
+    expect(injected).toMatchObject({ content: '', attachments: [{ path: 'uploads/only.txt' }] });
+  });
+
+  it('a failed upload: no session, the text comes back and the chips stay (the failed one offers retry)', async () => {
+    uploadMock.mockRejectedValue(new Error('upload refused'));
+    await renderPage([], {
+      'POST /api/v2/workbench/route': () => ({ project_id: 'proj-b', by: 'model' }),
+    });
+    stage('a.txt');
+    fireEvent.change(screen.getByTestId('wb-composer-input'), { target: { value: 'keep me too' } });
+    fireEvent.click(screen.getByTestId('wb-composer-send'));
+    await waitFor(() => expect(screen.getByTestId('workbench-open-error')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('wb-composer-input')).toHaveValue('keep me too'));
+    expect(apiMock.mock.calls.some((c) => String(c[0]).endsWith('/new-session'))).toBe(false);
+    const strip = screen.getByTestId('wb-chip-strip');
+    expect(within(strip).getByText('a.txt')).toBeInTheDocument();
+    expect(within(strip).getByRole('button', { name: 'Retry upload' })).toBeInTheDocument();
+    expect(cards()).toHaveLength(0);
+  });
+});
+
 describe('Workbench — relative time ticks', () => {
   it('a card a few seconds old moves on without a feed refresh', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: false, toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
