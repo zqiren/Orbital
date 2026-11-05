@@ -362,7 +362,7 @@ def test_the_prompt_says_question_first_then_indented_context():
     )
     _, semi, _ = PromptBuilder().build(ctx)
     flat = " ".join(semi.split())
-    assert "question, in one sentence" in flat
+    assert "question: one sentence of at most about 20 words" in flat
     assert "indented by two spaces" in flat
     assert "options: A | B" in flat
 

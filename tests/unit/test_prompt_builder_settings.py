@@ -428,3 +428,14 @@ class TestWhoDoesWhat:
         rule = semi_stable.split("### Who does what", 1)[1].split("To interact", 1)[0]
         assert "remember_about_user only when they state it as a personal habit" in rule
 
+
+class TestAskQuestionCap:
+    def test_asks_caps_the_question_at_about_20_words(self, tmp_path):
+        builder = PromptBuilder(workspace=str(tmp_path))
+        _, semi_stable, _ = builder.build(_make_context(tmp_path))
+        flat = " ".join(semi_stable.split())
+        assert "one sentence of at most about 20 words" in flat
+        assert ("dates, prices, names, numbers and ①②③ points go on lines under it "
+                "indented by two spaces") in flat
+        assert "never in the question" in flat
+        assert "`options: A | B` (2-4 short options)" in flat
