@@ -357,3 +357,74 @@ class TestMemoryFormatHeaderPointer:
         ctx = _make_context(tmp_path)
         _, semi_stable, _ = builder.build(ctx)
         assert "date, status, or decision into INDEX.md" in semi_stable
+
+
+_CODEX = [{"handle": "codex", "display_name": "Codex", "type": "cli"}]
+
+
+class TestWhoDoesWhat:
+    """Owner 2026-11-05: the manager must decide WHO does substantive work
+    before doing it itself, from the user's own who-does-what sources."""
+
+    def test_rule_present_when_agents_enabled(self, tmp_path):
+        builder = PromptBuilder(workspace=str(tmp_path))
+        ctx = _make_context(tmp_path, enabled_agents=_CODEX)
+        _, semi_stable, _ = builder.build(ctx)
+        assert "### Who does what" in semi_stable
+        assert "Preferences in project_goals.md" in semi_stable
+        assert '"About the User"' in semi_stable
+        flat = " ".join(semi_stable.split())
+        assert 'Don\'t start the work yourself "to get it going" first.' in flat
+
+    def test_rule_absent_when_no_agents(self, tmp_path):
+        builder = PromptBuilder(workspace=str(tmp_path))
+        ctx = _make_context(tmp_path, enabled_agents=[])
+        full = "".join(builder.build(ctx))
+        assert "Who does what" not in full
+
+    def test_rule_is_static_never_cached_prefix_or_dynamic(self, tmp_path):
+        builder = PromptBuilder(workspace=str(tmp_path))
+        ctx = _make_context(tmp_path, enabled_agents=_CODEX)
+        cached, semi_stable, dynamic = builder.build(ctx)
+        assert "Who does what" not in cached
+        assert "Who does what" not in dynamic
+        assert semi_stable.count("### Who does what") == 1
+
+    def test_rule_sits_after_deployment_instructions_before_dispatch(self, tmp_path):
+        builder = PromptBuilder(workspace=str(tmp_path))
+        ctx = _make_context(tmp_path, enabled_agents=_CODEX,
+                            sub_agent_deployment_instructions="Codex writes code.")
+        _, semi_stable, _ = builder.build(ctx)
+        deploy = semi_stable.index("</sub_agent_deployment_instructions>")
+        rule = semi_stable.index("### Who does what")
+        dispatch = semi_stable.index("To interact with sub-agents")
+        assert deploy < rule < dispatch
+        # The verify-output text is kept as is.
+        assert "### Verifying Sub-Agent Output" in semi_stable
+
+    def test_rule_bytes_do_not_move_between_turns(self, tmp_path):
+        builder = PromptBuilder(workspace=str(tmp_path))
+        a = builder.build(_make_context(tmp_path, enabled_agents=_CODEX,
+                                        datetime_now="2026-11-05T10:00:00"))
+        b = builder.build(_make_context(tmp_path, enabled_agents=_CODEX,
+                                        datetime_now="2026-11-05T11:30:00"))
+        assert a[1] == b[1]
+
+    def test_recording_routes_to_settings_when_user_memory_off(self, tmp_path):
+        builder = PromptBuilder(workspace=str(tmp_path))
+        ctx = _make_context(tmp_path, enabled_agents=_CODEX, user_memory_path="")
+        _, semi_stable, _ = builder.build(ctx)
+        rule = semi_stable.split("### Who does what", 1)[1].split("To interact", 1)[0]
+        assert "remember_about_user" not in rule
+        assert "About You" in rule
+
+    def test_recording_uses_remember_tool_when_user_memory_on(self, tmp_path):
+        mem = tmp_path / "user_memory.md"
+        mem.write_text("likes tea")
+        builder = PromptBuilder(workspace=str(tmp_path))
+        ctx = _make_context(tmp_path, enabled_agents=_CODEX,
+                            user_memory_path=str(mem))
+        _, semi_stable, _ = builder.build(ctx)
+        rule = semi_stable.split("### Who does what", 1)[1].split("To interact", 1)[0]
+        assert "remember_about_user only when they state it as a personal habit" in rule
+

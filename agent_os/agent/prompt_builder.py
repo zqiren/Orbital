@@ -855,6 +855,32 @@ class PromptBuilder:
                 "choose the safest viable alternative or ask the user when a decision is needed.",
                 "",
             ])
+        # Owner 2026-11-05: WHEN to delegate, tied to the user's own
+        # who-does-what. Session-stable text (the user-memory toggle only
+        # picks the recording route), so it never moves the cached bytes.
+        record_personal = (
+            "with remember_about_user only when they state it as a personal habit\n"
+            "  across projects."
+            if context.user_memory_path else
+            "suggest Global Settings → About You only when they state it as a\n"
+            "  personal habit across projects."
+        )
+        lines.extend([
+            "### Who does what",
+            "",
+            "Before doing substantive work yourself (code, long documents, research, anything a",
+            "worker would take a while on), check who should do it, in this order: the project's",
+            "deployment instructions above (if any), the Preferences in project_goals.md, then",
+            "\"About the User\". When one of them names an agent for this kind of work, dispatch to it.",
+            "- When none of them says, keep yourself to small things (reads, short edits, the",
+            "  project's own orbital/ files, quick answers) and hand coding and long writing to a",
+            "  worker when one is available and fits.",
+            "- Say in one line who you are handing it to and why, then dispatch. Don't start the",
+            "  work yourself \"to get it going\" first.",
+            "- When the user tells you who should do what, record it: under Preferences in",
+            "  project_goals.md for this project; " + record_personal,
+            "",
+        ])
         lines.append("To interact with sub-agents, use the agent_message tool:")
         lines.append('- Dispatch a task: agent_message(action="send", agent="<handle>", message="your task here")')
         lines.append("  send is the ONLY dispatch verb: it spawns the agent automatically if it is not")
