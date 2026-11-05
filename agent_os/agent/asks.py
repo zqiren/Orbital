@@ -18,7 +18,7 @@ simply its last event.
 
 Grammar — one event per line, oldest first::
 
-    - open <id> <YYYY-MM-DD> [due:YYYY-MM-DD[THH:MM]] <text>
+    - open <id> <YYYY-MM-DD> [due:YYYY-MM-DD[THH:MM]] <text> [options: A | B | C]
     - done <id> <YYYY-MM-DD> by:<user|agent|editor> <note>
     - dropped <id> <YYYY-MM-DD> by:<user|agent|editor> <note>
     - reopen <id> <YYYY-MM-DD> by:<user|agent> <note>
@@ -30,6 +30,16 @@ Grammar — one event per line, oldest first::
   quoted, as its note. Those closes are undoable from the Workbench for
   ``RECENTLY_CLOSED_DAYS``.
 - open asks = asks whose last event is ``open`` or ``reopen``.
+- an open line may end with ``options: A | B`` (2–4 ``|``-separated choices,
+  item 160 follow-up): the user's composer offers them as one-tap answers.
+  Anything else after ``options:`` (one item, five, an empty one) is left in
+  the text, so a line without valid options parses exactly as it always did.
+- lines right under an open line, indented by 2+ spaces or a tab and not
+  themselves an event, are that ask's ``detail`` (markdown continuation, as
+  in any list; a blank line between indented lines keeps the paragraph
+  break). The open line stays the one-line question. ``options:`` may also
+  be the last indented line; the last ``options:`` wins. The detail lines
+  belong to the open event's span, so they move and survive with it.
 
 Append-only is enforced on the agent's write path (``process_write``, reached
 through ``memory_entries.process_on_write``): removed or altered lines are put
@@ -65,6 +75,7 @@ import secrets
 import shutil
 import sys
 import threading
+import textwrap
 import time
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, timezone
@@ -103,7 +114,10 @@ FORMAT_HEADER = (
     "you carry on. A TBD note in a file or in chat is not an ask — only "
     "ASKS.md reaches the user's Workbench. To open one, add a line "
     "`- open <text>` or `- open due:YYYY-MM-DD <text>` — Orbital stamps the "
-    "id and date. When the user answers or completes one, add "
+    "id and date. Write the open line as the question in one sentence; put "
+    "context on lines under it indented two spaces (markdown is fine), and "
+    "for a choice end with `options: A | B` (2-4 short options), on the open "
+    "line or as the last indented line. When the user answers or completes one, add "
     "`- done <id> session:<session_uuid> \"<the user's own words>\"`; when the "
     "user declines it, `- dropped <id> session:<session_uuid> \"<their words>\"`. "
     "Close only with the user's words; Orbital checks the quote against the "
@@ -124,6 +138,8 @@ _OPEN_HEAD_RE = re.compile(rf"^\s*\[?(?P<id>{_ID_RE})\]?\s+(?P<date>{_DATE_RE})(
 _CLOSE_ID_RE = re.compile(rf"^\s*\[?(?P<id>{_ID_RE})\]?(?=\s|$)")
 _LEADING_DATE_RE = re.compile(rf"^\s*(?P<date>{_DATE_RE})(?=\s|$)")
 _LEADING_BY_RE = re.compile(r"^\s*by:(?P<by>\S+)")
+_OPTIONS_KEY_RE = re.compile(r"(?<!\S)options:", re.IGNORECASE)
+MIN_OPTIONS, MAX_OPTIONS = 2, 4
 _DUE_TOKEN_RE = re.compile(rf"(?<!\S)\[?due:(?P<due>{_DUE_VALUE_RE})\]?(?!\S)")
 _ASK_ID_RE = re.compile(r"^[0-9a-f]{6}$")
 _ISO_DATE_RE = re.compile(rf"^{_DATE_RE}$")
@@ -149,6 +165,10 @@ class Event:
     due: str | None = None     # open only
     synthetic: bool = False    # id derived from text (an id-less open line)
     line: int = -1             # 0-based line index in the file, -1 if none
+    options: tuple[str, ...] = ()  # open only: the offered choices
+    detail: str = ""           # open only: the indented lines under it
+    opts_in_detail: bool = False  # options came from the last indented line
+    line_end: int = -1         # last line of the event's span (detail incl.)
 
 
 @dataclass(frozen=True)
@@ -162,6 +182,8 @@ class Ask:
     closed_by: str | None      # who closed it (done/dropped), else None
     note: str                  # note of the last close/reopen event
     seq: int                   # file position of the last event
+    options: tuple[str, ...] = ()  # choices offered with the ask, if any
+    detail: str = ""           # markdown context under the question, if any
 
     @property
     def is_open(self) -> bool:
@@ -195,6 +217,21 @@ def _valid_date(value: str | None) -> str | None:
 # Grammar
 # ---------------------------------------------------------------------------
 
+def _split_options(rest: str) -> tuple[str, tuple[str, ...]]:
+    """``(text_before, options)`` for an open line's tail. The last
+    ``options:`` keyword wins; it counts only with 2–4 non-empty items,
+    otherwise ``rest`` comes back whole and the options are empty."""
+    last = None
+    for last in _OPTIONS_KEY_RE.finditer(rest):
+        pass
+    if last is None:
+        return rest, ()
+    items = tuple(p.strip() for p in rest[last.end():].split("|"))
+    if not (MIN_OPTIONS <= len(items) <= MAX_OPTIONS) or not all(items):
+        return rest, ()
+    return rest[:last.start()], tuple(_one_line(i) for i in items)
+
+
 def parse_line(line: str, line_no: int = -1) -> Event | None:
     """Parse one event line, leniently. ``None`` for anything that isn't one."""
     m = _EVENT_LINE_RE.match(line)
@@ -209,12 +246,14 @@ def parse_line(line: str, line_no: int = -1) -> Event | None:
             ask_id = head.group("id").lower()
             event_date = _valid_date(head.group("date"))
             rest = rest[head.end():]
+        rest, options = _split_options(rest)
         due = None
         dm = _DUE_TOKEN_RE.search(rest)
         if dm:
             due = dm.group("due")
             rest = rest[:dm.start()] + " " + rest[dm.end():]
-        return Event("open", ask_id, event_date, None, _one_line(rest), due, line=line_no)
+        return Event("open", ask_id, event_date, None, _one_line(rest), due,
+                     line=line_no, options=options)
 
     idm = _CLOSE_ID_RE.match(rest)
     if not idm:
@@ -237,14 +276,76 @@ def parse_line(line: str, line_no: int = -1) -> Event | None:
     return Event(kind, ask_id, event_date, by, _one_line(rest), line=line_no)
 
 
-def render_event(e: Event) -> str:
-    """The canonical one-line form of ``e``."""
+_INDENTED_RE = re.compile(r"^(?:  |\t)")
+_OPTIONS_LINE_RE = re.compile(r"^options:", re.IGNORECASE)
+
+
+def _continuation(lines: list[str], i: int) -> tuple[list[str], int]:
+    """The indented non-event lines under the open line at ``i`` (blank
+    lines between them kept, trailing ones not), and the index of the last
+    one (``i`` when there are none)."""
+    out: list[str] = []
+    end = i
+    k = i + 1
+    blanks: list[str] = []
+    while k < len(lines):
+        ln = lines[k]
+        if not ln.strip():
+            blanks.append("")
+        elif _INDENTED_RE.match(ln) and parse_line(ln) is None:
+            out.extend(blanks)
+            blanks = []
+            out.append(ln)
+            end = k
+        else:
+            break
+        k += 1
+    return out, end
+
+
+def _split_detail(block: list[str]) -> tuple[str, tuple[str, ...]]:
+    """``(detail, options)`` from an open line's continuation block: the
+    block dedented, its last line taken as options when it is a valid
+    ``options:`` line."""
+    if not block:
+        return "", ()
+    lines = textwrap.dedent("\n".join(block)).split("\n")
+    options: tuple[str, ...] = ()
+    last = lines[-1].strip()
+    if _OPTIONS_LINE_RE.match(last):
+        before, opts = _split_options(last)
+        if opts and not before.strip():
+            options = opts
+            lines = lines[:-1]
+    while lines and not lines[-1].strip():
+        lines.pop()
+    return "\n".join(ln.rstrip() for ln in lines), options
+
+
+def render_head(e: Event) -> str:
+    """The event's own line (for an open: without its detail lines)."""
     if e.kind == "open":
         parts = ["- open", e.id or "", e.date or _today()]
         if e.due:
             parts.append(f"due:{e.due}")
         parts.append(_one_line(e.text))
+        if e.options and not e.opts_in_detail:
+            parts.append("options: " + " | ".join(_one_line(o) for o in e.options))
         return " ".join(p for p in parts if p)
+    return render_event(e)
+
+
+def render_event(e: Event) -> str:
+    """The canonical form of ``e``: one line, plus an open's detail as
+    lines indented two spaces (and its options last when they came from
+    there)."""
+    if e.kind == "open":
+        out = [render_head(e)]
+        if e.detail:
+            out.extend(f"  {ln}" if ln.strip() else "" for ln in e.detail.split("\n"))
+        if e.options and e.opts_in_detail:
+            out.append("  options: " + " | ".join(_one_line(o) for o in e.options))
+        return "\n".join(out)
     parts = [f"- {e.kind}", e.id or "", e.date or _today(), f"by:{e.by or 'user'}"]
     note = _one_line(e.text)
     if note:
@@ -266,12 +367,26 @@ def _synthetic_id(text: str, taken: set[str]) -> str:
 
 def parse_events(content: str | None) -> list[Event]:
     """Every event in ``content`` in file order; id-less opens get their
-    deterministic id (``synthetic=True``)."""
+    deterministic id (``synthetic=True``); an open carries the indented
+    lines under it as its detail."""
     raw: list[Event] = []
-    for i, line in enumerate((content or "").split("\n")):
-        e = parse_line(line, i)
-        if e is not None:
-            raw.append(e)
+    lines = (content or "").split("\n")
+    i = 0
+    while i < len(lines):
+        e = parse_line(lines[i], i)
+        if e is None:
+            i += 1
+            continue
+        if e.kind == "open":
+            block, end = _continuation(lines, i)
+            detail, opts = _split_detail(block)
+            e = replace(e, detail=detail, line_end=end,
+                        options=opts or e.options, opts_in_detail=bool(opts))
+            i = end + 1
+        else:
+            e = replace(e, line_end=i)
+            i += 1
+        raw.append(e)
     defined = {e.id for e in raw if e.kind == "open" and e.id}
     out: list[Event] = []
     for e in raw:
@@ -295,7 +410,8 @@ def fold(content: str | None) -> list[Ask]:
                 state[e.id] = {
                     "id": e.id, "text": e.text, "due": e.due, "opened": e.date,
                     "state": "open", "updated": e.date, "closed_by": None,
-                    "note": "", "seq": seq,
+                    "note": "", "seq": seq, "options": e.options,
+                    "detail": e.detail,
                 }
             else:  # a second open for a known id acts as a reopen
                 cur.update(state="open", updated=e.date or cur["updated"],
@@ -398,7 +514,8 @@ def normalize(content: str | None, today: str | None = None) -> str:
         lines.pop()
     for e in parse_events(text):
         if e.synthetic and 0 <= e.line < len(lines):
-            lines[e.line] = render_event(replace(e, date=e.date or today))
+            # The head line only: the detail lines under it stay as written.
+            lines[e.line] = render_head(replace(e, date=e.date or today))
     if lines and lines[0].lstrip().startswith("<!--format"):
         if lines[0] != FORMAT_HEADER and lines[0].rstrip().endswith("-->"):
             lines[0] = FORMAT_HEADER
@@ -619,9 +736,12 @@ def process_write(
         and not ln.lstrip().startswith("<!--format")
     ]
     candidates = [
-        ln for j, ln in enumerate(new_lines)
+        (j, ln) for j, ln in enumerate(new_lines)
         if j not in matched_new and ln not in prev_line_set
     ]
+    # Indented lines under a new open line are its detail, read from the new
+    # content directly (a blank line or a repeated line is not a candidate).
+    consumed: set[int] = set()
 
     base = normalize(prev_text, today)
     by_id = {a.id: a for a in fold(base)}
@@ -629,11 +749,18 @@ def process_write(
     warnings: list[str] = []
     opened: list[str] = []
     closed: list[str] = []
-    for raw in candidates:
+    for j, raw in candidates:
+        if j in consumed:
+            continue
         stripped = raw.strip()
         if not stripped or stripped.startswith("<!--"):
             continue
         ev = parse_line(raw)
+        if ev is not None and ev.kind == "open":
+            block, end = _continuation(new_lines, j)
+            consumed.update(range(j + 1, end + 1))
+            detail, opts = _split_detail(block)
+            ev = replace(ev, detail=detail, options=opts or ev.options, opts_in_detail=bool(opts))
         if ev is None:
             ev = _legacy_open(raw)
         if ev is None:
@@ -668,8 +795,10 @@ def process_write(
                 )
                 continue
             new_id = _mint_id(by_id)
-            e = Event("open", new_id, today, None, ev.text, ev.due)
-            by_id[new_id] = Ask(new_id, ev.text, ev.due, today, "open", today, None, "", len(by_id))
+            e = Event("open", new_id, today, None, ev.text, ev.due, options=ev.options,
+                      detail=ev.detail, opts_in_detail=ev.opts_in_detail)
+            by_id[new_id] = Ask(new_id, ev.text, ev.due, today, "open", today, None, "",
+                                len(by_id), options=ev.options, detail=ev.detail)
             appended.append(render_event(e))
             opened.append(new_id)
             continue

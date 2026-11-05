@@ -261,22 +261,22 @@ describe('Sidebar — the brand row is plain again (2026-11-04)', () => {
   });
 });
 
-describe('Sidebar — waiting count per project (spec 151 folded into 154)', () => {
+describe('Sidebar — unread count per project (2026-11-05; spec 151 folded into 154)', () => {
   it('shows nothing at zero', () => {
-    render(<Sidebar {...defaultProps} waitingCounts={{}} />);
-    expect(screen.queryByTestId('project-waiting-count-proj-1')).toBeNull();
+    render(<Sidebar {...defaultProps} unreadCounts={{}} />);
+    expect(screen.queryByTestId('project-unread-count-proj-1')).toBeNull();
   });
 
-  it('shows the number of 等你 cards with a labelled pill', () => {
-    render(<Sidebar {...defaultProps} waitingCounts={{ 'proj-1': 3 }} />);
-    const pill = screen.getByTestId('project-waiting-count-proj-1');
+  it('shows the number of unread sessions with a labelled pill', () => {
+    render(<Sidebar {...defaultProps} unreadCounts={{ 'proj-1': 3 }} />);
+    const pill = screen.getByTestId('project-unread-count-proj-1');
     expect(pill).toHaveTextContent('3');
-    expect(pill).toHaveAttribute('aria-label', '3 waiting on you');
+    expect(pill).toHaveAttribute('aria-label', '3 unread');
   });
 
   it('caps at 99+', () => {
-    render(<Sidebar {...defaultProps} waitingCounts={{ 'proj-1': 120 }} />);
-    expect(screen.getByTestId('project-waiting-count-proj-1')).toHaveTextContent('99+');
+    render(<Sidebar {...defaultProps} unreadCounts={{ 'proj-1': 120 }} />);
+    expect(screen.getByTestId('project-unread-count-proj-1')).toHaveTextContent('99+');
   });
 });
 

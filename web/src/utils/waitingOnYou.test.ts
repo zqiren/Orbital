@@ -56,7 +56,7 @@ describe('isUnchecked', () => {
 });
 
 describe('isWaiting / needsAction', () => {
-  const ask = { id: 'a1', text: 'q?', due: null, created: '2026-11-04', overdue: false };
+  const ask = { id: 'a1', text: 'q?', due: null, created: '2026-11-04', overdue: false, options: [], detail: '' };
   it('an ask, an approval or an unchecked reply waits', () => {
     expect(isWaiting(row({ ask, last_reply_at: null }), NOW)).toBe(true);
     expect(isWaiting(row({ status: 'pending_approval', last_reply_at: null }), NOW)).toBe(true);

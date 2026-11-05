@@ -42,6 +42,18 @@ const CAUSE_KEY: Record<string, StringKey> = {
   no_reply: 'leftOff.cause.noReply',
 };
 
+/** An ask detail's first paragraph as one plain line for the muted row:
+ *  the markdown marks dropped, links reduced to their text. */
+export function detailLine(detail: string): string {
+  const first = detail.split(/\n\s*\n/)[0] ?? '';
+  return first
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/(\*\*|__|`|~~)/g, '')
+    .replace(/^\s*(?:[-*+]|\d+\.)\s+/gm, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function clockTime(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
@@ -106,9 +118,9 @@ export default function TaskCard({
     detail = { text: t('workbench.card.starting'), warn: false };
   } else if (row) {
     if (ask) {
-      const name = automation ?? row.name;
-      const parts = name ? [name] : [];
-      detail = parts.length ? { text: parts.join(' · '), warn: false } : null;
+      // The ask's own context first (its first paragraph); else the task.
+      const name = (ask.detail ? detailLine(ask.detail) : '') || automation || row.name;
+      detail = name ? { text: name, warn: false } : null;
     } else if (approval) {
       detail = { text: t('workbench.card.approval'), warn: true };
     } else if (item.dot === 'run') {
@@ -149,16 +161,21 @@ export default function TaskCard({
     window.setTimeout(() => onConfirm(item), 220);
   }
 
-  async function sendReply() {
-    const words = reply.trim();
+  async function sendReply(option?: string) {
+    const words = (option ?? reply).trim();
     if (!words || sending) return;
     setSending(true);
     try {
-      if (await onReply(item, words)) setReply('');
+      // A tapped option leaves whatever was typed in the field alone.
+      if ((await onReply(item, words)) && option === undefined) setReply('');
     } finally {
       setSending(false);
     }
   }
+
+  // Item 160: the choices the agent offered, as the same pills the chat's ask
+  // card shows; a tap answers with that option.
+  const options = ask?.options ?? [];
 
   function onReplyKey(e: KeyboardEvent<HTMLInputElement>) {
     if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
@@ -190,6 +207,22 @@ export default function TaskCard({
   const replyRow = canReply ? (
     <div className="wb-rwrap">
       <div>
+        {options.length > 0 && (
+          <div className="wb-askopts">
+            {options.map((option) => (
+              <button
+                key={option}
+                type="button"
+                className="wb-askopt"
+                data-testid="wb-card-option"
+                onClick={() => void sendReply(option)}
+                disabled={sending}
+              >
+                {option}
+              </button>
+            ))}
+          </div>
+        )}
         <div className="wb-rbox">
           <input
             value={reply}

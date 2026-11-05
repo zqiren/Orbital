@@ -5,7 +5,7 @@
 import { memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   Send, Loader2, Plus, ChevronRight, ChevronDown, ArrowDown,
-  Clock, CornerDownLeft, FolderSearch, ListChecks, MessageSquareQuote, X, type LucideIcon,
+  Clock, CornerDownLeft, FolderSearch, ListChecks, MessageSquareQuote, type LucideIcon,
 } from 'lucide-react';
 import ExamplePrompt from './ExamplePrompt';
 import LeftOffCards from './LeftOffCards';
@@ -58,8 +58,8 @@ import {
   type SkillCatalogEntry,
 } from '../lib/skill-catalog';
 import ComposerDisabledPrompt from './ComposerDisabledPrompt';
-import AskTray from './AskTray';
-import { useSessionAsks } from '../hooks/useSessionAsks';
+import AskCard from './AskCard';
+import { useSessionAsks, type SessionAsk } from '../hooks/useSessionAsks';
 import { formatAskAnswer } from '../utils/askAnswer';
 import PinTargetSelect, { resolveSendTarget } from './PinTargetSelect';
 import { useConversationModels } from '../hooks/useConversationModels';
@@ -3391,16 +3391,39 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   // A staged annotation is sendable on its own: the quote block + the note
   // carry the whole question ("this one, not the ad") without typed text.
   // A picked skill is sendable on its own too ("run this skill").
-  // Spec 146: the asks this conversation opened, one at a time in the composer.
-  const { asks: sessionAsks, close: closeAsk } = useSessionAsks(projectId, sessionId, agentStatus);
-  const [askIndex, setAskIndex] = useState(0);
-  const [asksLaterSession, setAsksLaterSession] = useState<string | undefined>(undefined);
-  // The ask being replied to, quoted in the composer. Only pressing Reply (here
-  // or on a Workbench card) makes a message an answer; plain typing never does.
+  // Spec 146 / item 160: while this conversation has an open ask, the
+  // composer becomes the ask (Claude Code style): the question and its
+  // options head the composer, and what is typed under it answers the ask.
+  // One at a time, oldest first; 稍后 (Later) puts the plain composer back
+  // for this session so a plain message can go out. It sets aside the asks
+  // open at that moment only: one the agent opens afterwards takes the
+  // composer again, since the point is that a wait is never invisible.
+  const { asks: sessionAsks, close: closeAsk, dismiss: dismissAsk } = useSessionAsks(projectId, sessionId, agentStatus);
+  const [asksLater, setAsksLater] = useState<{ sessionId: string | undefined; ids: ReadonlySet<string> } | null>(null);
+  const laterIds = asksLater && asksLater.sessionId === sessionId ? asksLater.ids : null;
+  // An ask carried in from the Workbench (a session-less ask opened into a
+  // fresh session, spec 154): the same card, until answered or dismissed.
   const [askReply, setAskReply] = useState<{ id: string; text: string; sessionId?: string } | null>(null);
-  const replyingTo = askReply && askReply.sessionId === sessionId ? askReply : null;
-  const trayIndex = Math.min(askIndex, Math.max(0, sessionAsks.length - 1));
-  const trayVisible = sessionAsks.length > 0 && asksLaterSession !== sessionId && !replyingTo;
+  const carriedAsk = askReply && askReply.sessionId === sessionId ? askReply : null;
+  const cardAsk: SessionAsk | null = carriedAsk
+    ? { id: carriedAsk.id, text: carriedAsk.text, due: null, options: [], detail: '' }
+    : sessionAsks.find((a) => !laterIds?.has(a.id)) ?? null;
+  // The composer becomes the card while an ask shows: the question, its
+  // detail and options, then one bare text line (no pin, no attach).
+  const bareAsk = cardAsk !== null;
+
+  const askCardNode = cardAsk ? (
+    <AskCard
+      ask={cardAsk}
+      onOption={(option) => void sendComposer(option)}
+      onDone={(id) => { setAskReply(null); void closeAsk(id, 'fulfilled'); }}
+      onNotNeeded={(id) => { setAskReply(null); void closeAsk(id, 'irrelevant'); }}
+      onLater={() => {
+        if (carriedAsk) setAskReply(null);
+        else setAsksLater({ sessionId, ids: new Set(sessionAsks.map((a) => a.id)) });
+      }}
+    />
+  ) : null;
   useEffect(() => {
     if (!initialAskReply) return;
     setAskReply({ ...initialAskReply, sessionId });
@@ -3451,9 +3474,16 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     return { attachments: out, failed };
   }
 
-  async function handleSend() {
+  function handleSend() {
+    return sendComposer();
+  }
+
+  /** The composer's send. `answerText` is an ask option the user tapped: it
+   *  goes out as the message (and the answer) in place of the typed text,
+   *  which stays in the field. */
+  async function sendComposer(answerText?: string) {
     leftOffOpenedRef.current = null;
-    const text = inputText.trim();
+    const text = (answerText ?? inputText).trim();
     const doneAttachments = attachments.filter((a) => a.status === 'done');
     const pendingAnnotations = annotations;
     const skill = pickedSkill;
@@ -3473,10 +3503,14 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         : resolvedPin;
     const target = resolved.target;
     let content = resolved.content;
-    // Spec 146: a reply answers the quoted ask and closes it.
-    const answering = replyingTo && text ? { id: replyingTo.id, words: text } : undefined;
-    if (answering && replyingTo) content = formatAskAnswer(replyingTo.id, replyingTo.text, content);
-    if (answering) setAskReply(null);
+    // Spec 146 / item 160: a message typed under the ask card answers that
+    // ask; the inject route closes it in the user's words.
+    const answering = cardAsk && text ? { id: cardAsk.id, words: text } : undefined;
+    if (answering && cardAsk) {
+      content = formatAskAnswer(cardAsk.id, cardAsk.text, content);
+      setAskReply(null);
+      dismissAsk(cardAsk.id);
+    }
 
     // Generate nonce so we can deduplicate the WS echo of our own message
     // crypto.randomUUID() requires secure context (HTTPS/localhost) — use fallback for LAN HTTP
@@ -3516,11 +3550,13 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     const wireContent =
       buildAttachmentsBlock(attachmentsPayload) + skillParts.pointerBlock + content;
 
-    setInputText('');
-    if (skill) setPickedSkillState(null);
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto';
+    if (answerText === undefined) {
+      setInputText('');
+      if (textareaRef.current) {
+        textareaRef.current.style.height = 'auto';
+      }
     }
+    if (skill) setPickedSkillState(null);
     clearAttachments();
     if (pendingAnnotations.length > 0) {
       clearAnnotations();
@@ -4752,39 +4788,10 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
               ))}
             </div>
           )}
-          {trayVisible && (
-            <AskTray
-              asks={sessionAsks}
-              index={trayIndex}
-              onIndex={setAskIndex}
-              onDone={(id) => void closeAsk(id, 'fulfilled')}
-              onNotNeeded={(id) => void closeAsk(id, 'irrelevant')}
-              onLater={() => setAsksLaterSession(sessionId)}
-              onReply={(ask) => {
-                setAskReply({ id: ask.id, text: ask.text, sessionId });
-                textareaRef.current?.focus();
-              }}
-            />
-          )}
-          {replyingTo && (
-            <div
-              className="flex items-start gap-2 mb-2 px-2.5 py-1.5 rounded-md bg-sidebar text-xs text-secondary"
-              data-testid="ask-reply-quote"
-            >
-              <span className="flex-1 min-w-0 line-clamp-2 break-words">
-                {t('chat.ask.replying', { text: replyingTo.text })}
-              </span>
-              <button
-                type="button"
-                aria-label={t('chat.ask.cancelReply')}
-                onClick={() => setAskReply(null)}
-                className="shrink-0 text-muted hover:text-primary"
-              >
-                <X size={14} />
-              </button>
-            </div>
-          )}
-          <div className="flex items-center gap-2">
+          {bareAsk && askCardNode}
+          {/* Under an ask the bare text line aligns with the question and
+              pills above it (18px in). */}
+          <div className={bareAsk ? 'flex items-center gap-2 pl-[18px]' : 'flex items-center gap-2'}>
             {/* Spec 074 — the logo-only pin mark fused to the row's left edge
                 IS the sub-agent pin (Orbital's mark at rest, the worker's
                 while pinned). Renders nothing when no sub-agents are
@@ -4792,7 +4799,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                 keeps the optimistic localPin; handleSend re-persists after
                 the first successful pinned send materializes a brand-new
                 session. */}
-            <PinTargetSelect
+            {!bareAsk && <PinTargetSelect
               agents={agents}
               value={pinnedTarget}
               runningSlugs={runningSubAgents}
@@ -4820,7 +4827,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                 persistPin(sessionId, slug);
               }}
               disabled={pinDisabled}
-            />
+            />}
             <input
               type="file"
               multiple
@@ -4829,14 +4836,14 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
               onChange={handleFilePickerChange}
               data-testid="attachment-file-input"
             />
-            <button
+            {!bareAsk && <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
               aria-label={t('chat.attachFiles')}
               className="shrink-0 p-2 text-secondary hover:text-primary rounded max-md:min-h-[44px] max-md:min-w-[44px] max-md:flex max-md:items-center max-md:justify-center"
             >
               <Plus size={18} />
-            </button>
+            </button>}
             <div className="relative flex flex-1 min-w-0" data-testid="composer-input">
             {capsuleRow}
             <textarea
@@ -4850,7 +4857,9 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
               onPaste={handlePaste}
               // No placeholder under a capsule: the capsule already says what
               // the message is about, and the hint would sit behind it.
-              placeholder={replyingTo ? t('chat.ask.placeholder') : hasCapsule
+              placeholder={cardAsk
+                ? t(cardAsk.options.length > 0 ? 'chat.ask.placeholderOptions' : 'chat.ask.placeholder')
+                : hasCapsule
                 ? ''
                 : pinnedTarget
                   ? t('chat.composer.placeholderPinned', { agent: pinnedTarget })
@@ -4862,7 +4871,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
               className="flex-1 w-full resize-none text-[13px] max-md:text-base bg-transparent focus:outline-none leading-relaxed disabled:opacity-50"
             />
             </div>
-            {(agentStatus === 'running' || agentStatus === 'waiting') ? (
+            {!bareAsk && (agentStatus === 'running' || agentStatus === 'waiting') ? (
               <>
                 <button
                   type="button"

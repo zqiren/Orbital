@@ -9,6 +9,10 @@ export interface SessionAsk {
   id: string;
   text: string;
   due: string | null;
+  /** Choices the agent offered (2-4), tapped as the answer; [] when none. */
+  options: string[];
+  /** Markdown context under the question ("" when none). */
+  detail: string;
 }
 
 /** The open asks this conversation opened. Refetched on `workbench.changed`
@@ -44,5 +48,11 @@ export function useSessionAsks(projectId: string, sessionId: string | undefined,
     window.dispatchEvent(new Event('orbital:workbench-changed'));
   }, [projectId, refresh]);
 
-  return { asks, close };
+  /** The user just answered this ask from the composer: drop it on screen
+   *  now; the inject route closes it and the next feed agrees. */
+  const dismiss = useCallback((askId: string) => {
+    setAsks((prev) => prev.filter((a) => a.id !== askId));
+  }, []);
+
+  return { asks, close, dismiss };
 }

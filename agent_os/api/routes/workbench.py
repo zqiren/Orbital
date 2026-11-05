@@ -164,6 +164,10 @@ def _ask_row(project_id: str, a, tz: str, now: datetime) -> dict:
         # Project-tz days-past-due (null unless overdue) — server-authoritative
         # so the frontend never recomputes "N days late" in browser tz (§7.3).
         "days_late": workbench_cards.days_late(a.due, tz, now),
+        # Choices the agent offered with the ask ([] when none, item 160).
+        "options": list(a.options),
+        # The markdown context under the question ("" when none).
+        "detail": a.detail,
     }
 
 
@@ -314,7 +318,8 @@ async def session_asks(project_id: str, session_id: str = Query(...)):
         a.id: a for a in await asyncio.to_thread(asks.read_asks, _orbital_dir(workspace))
         if a.is_open
     }
-    return {"asks": [{"id": i, "text": open_asks[i].text, "due": open_asks[i].due}
+    return {"asks": [{"id": i, "text": open_asks[i].text, "due": open_asks[i].due,
+                      "options": list(open_asks[i].options), "detail": open_asks[i].detail}
                      for i in ids if i in open_asks]}
 
 
@@ -455,6 +460,8 @@ def _feed_ask(project_id: str, a, tz: str, now: datetime) -> dict:
     return {
         "id": a.id, "text": a.text, "due": a.due, "created": a.opened,
         "overdue": workbench_cards.is_overdue(a.due, tz, now),
+        "options": list(a.options),
+        "detail": a.detail,
     }
 
 

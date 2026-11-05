@@ -1600,6 +1600,10 @@ export interface WorkbenchFeedAsk {
   due: string | null;
   created: string | null;
   overdue: boolean;
+  /** Choices the agent offered with the ask (item 160); [] when none. */
+  options: string[];
+  /** Markdown context under the question ("" when none). */
+  detail: string;
 }
 
 /** Why a finished session stopped (the left-off reader's causes). */

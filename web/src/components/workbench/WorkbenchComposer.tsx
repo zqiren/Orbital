@@ -14,6 +14,11 @@
  *  - Agent chip: once picked, only the agent's logo and a chevron (name in
  *    the tooltip). Picker: 自动, then Orbital and the available workers, each
  *    with logo, name and model line.
+ *
+ * Keyless (no API key, 2026-11-05): routing needs Orbital's own model, so the
+ * project chip never shows 自动. It starts on the last project sent to from
+ * this browser (else Quick Tasks), and the picker's 自动 row stays visible
+ * but not selectable, with a note; a click on it opens the model settings.
  */
 
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
@@ -29,12 +34,32 @@ import {
 import { restoreComposer, useWorkbenchFeed } from '../../hooks/useWorkbenchFeed';
 import type { SendChoice } from './sendTask';
 
+const LAST_PROJECT_KEY = 'orbital.wbLastProject';
+
+/** The last project a Workbench task was sent to from this browser. */
+export function readLastProject(): string | null {
+  try {
+    return window.localStorage.getItem(LAST_PROJECT_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function rememberLastProject(projectId: string): void {
+  try {
+    window.localStorage.setItem(LAST_PROJECT_KEY, projectId);
+  } catch {
+    /* private mode: the default just falls back to Quick Tasks */
+  }
+}
+
 export interface WorkbenchComposerProps {
   projects: Project[];
+  /** No API key: no routing, so no 自动 project (see the header). */
+  keyless?: boolean;
   agents: Array<{ slug: string; name: string }>;
   /** Orbital's own model line (the default card's model). */
   managerModel?: string;
-  empty: boolean;
   /** Resolves when the send settled; false = the text came back. */
   onSend: (choice: SendChoice) => Promise<boolean>;
 }
@@ -52,12 +77,13 @@ function AgentMark({ slug, size = 16 }: { slug: string; size?: number }) {
 }
 
 export default function WorkbenchComposer({
-  projects, agents, managerModel, empty, onSend,
+  projects, keyless = false, agents, managerModel, onSend,
 }: WorkbenchComposerProps) {
   const t = useT();
   const feed = useWorkbenchFeed();
   const [text, setText] = useState('');
   const [projectId, setProjectId] = useState<string | null>(null);
+  const [lastProject, setLastProject] = useState<string | null>(readLastProject);
   const [agent, setAgent] = useState<string | null>(null);
   const [pop, setPop] = useState<Pop>('none');
   const [entries, setEntries] = useState<SubAgentModelEntry[] | null>(null);
@@ -109,7 +135,14 @@ export default function WorkbenchComposer({
     el.style.height = `${el.scrollHeight}px`;
   }, [text]);
 
-  const picked = projectId ? projects.find((p) => p.project_id === projectId) ?? null : null;
+  // Keyless: the chip stands on a real project from the start.
+  const keylessDefault = keyless
+    ? (projects.find((p) => p.project_id === lastProject)
+      ?? projects.find((p) => p.is_scratch)
+      ?? projects[0])?.project_id ?? null
+    : null;
+  const effectiveProjectId = projectId ?? keylessDefault;
+  const picked = effectiveProjectId ? projects.find((p) => p.project_id === effectiveProjectId) ?? null : null;
   const projectLabel = picked ? projectDisplayName(picked, t) : t('workbench.composer.auto');
   const agentLabel = agent
     ? (agent === MAIN_AGENT_HANDLE ? 'Orbital' : agents.find((a) => a.slug === agent)?.name ?? agent)
@@ -127,7 +160,11 @@ export default function WorkbenchComposer({
   async function send() {
     const body = text.trim();
     if (!body) return;
-    const choice: SendChoice = { text: body, projectId, agent };
+    const choice: SendChoice = { text: body, projectId: effectiveProjectId, agent };
+    if (effectiveProjectId) {
+      rememberLastProject(effectiveProjectId);
+      setLastProject(effectiveProjectId);
+    }
     setText('');
     setProjectId(null);
     setAgent(null);
@@ -158,7 +195,7 @@ export default function WorkbenchComposer({
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={onKey}
-          placeholder={empty ? t('workbench.composer.placeholderEmpty') : t('workbench.composer.placeholder')}
+          placeholder={t('workbench.composer.placeholder')}
           aria-label={t('workbench.composer.placeholder')}
           data-testid="wb-composer-input"
         />
@@ -215,25 +252,47 @@ export default function WorkbenchComposer({
 
       {pop === 'project' && (
         <div className="wb-pop" role="listbox" aria-label={t('workbench.composer.project')} style={{ left: 8 }} data-testid="wb-pop-project">
-          <button type="button" role="option" aria-selected={!projectId} className="wb-opt" onClick={() => { setProjectId(null); setPop('none'); }}>
-            <span className="wb-gl"><Sparkles size={13} strokeWidth={1.9} aria-hidden="true" /></span>
-            <span className="wb-tx"><span className="wb-n1">{t('workbench.composer.auto')}</span></span>
-            {ck(!projectId)}
-          </button>
+          {keyless ? (
+            // Routing needs a key: 自动 stays visible, not selectable; the
+            // click goes where the key is added.
+            <button
+              type="button"
+              role="option"
+              aria-selected={false}
+              aria-disabled="true"
+              className="wb-opt is-off"
+              data-testid="wb-opt-auto"
+              onClick={() => {
+                setPop('none');
+                window.dispatchEvent(new CustomEvent('open-global-settings', { detail: { section: 'llm' } }));
+              }}
+            >
+              <span className="wb-gl"><Sparkles size={13} strokeWidth={1.9} aria-hidden="true" /></span>
+              <span className="wb-tx"><span className="wb-n1">{t('workbench.composer.auto')}</span></span>
+              <span className="wb-note">{t('workbench.composer.needsKey')}</span>
+              {ck(false)}
+            </button>
+          ) : (
+            <button type="button" role="option" aria-selected={!projectId} className="wb-opt" data-testid="wb-opt-auto" onClick={() => { setProjectId(null); setPop('none'); }}>
+              <span className="wb-gl"><Sparkles size={13} strokeWidth={1.9} aria-hidden="true" /></span>
+              <span className="wb-tx"><span className="wb-n1">{t('workbench.composer.auto')}</span></span>
+              {ck(!projectId)}
+            </button>
+          )}
           <div className="wb-sep" />
           {projects.map((p) => (
             <button
               key={p.project_id}
               type="button"
               role="option"
-              aria-selected={projectId === p.project_id}
+              aria-selected={effectiveProjectId === p.project_id}
               className="wb-opt"
               title={projectDisplayName(p, t)}
               onClick={() => { setProjectId(p.project_id); setPop('none'); }}
             >
               <span className="wb-gl"><Folder size={13} strokeWidth={1.9} aria-hidden="true" /></span>
               <span className="wb-tx"><span className="wb-n1">{projectDisplayName(p, t)}</span></span>
-              {ck(projectId === p.project_id)}
+              {ck(effectiveProjectId === p.project_id)}
             </button>
           ))}
         </div>

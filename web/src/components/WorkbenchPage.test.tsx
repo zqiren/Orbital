@@ -74,11 +74,11 @@ function row(over: Partial<WorkbenchFeedRow>): WorkbenchFeedRow {
 
 const FEED: WorkbenchFeedRow[] = [
   row({ session_id: 'done', session_uuid: 'done', name: 'Hero copy', agent: 'codex', result_line: 'Changed 3 places' }),
-  row({ session_id: 'asked', session_uuid: 'asked', name: 'Sync OSS', ask: { id: 'a1b2c3', text: 'Sync the notes too?', due: null, created: '2026-11-04', overdue: false }, last_reply_at: iso(5) }),
+  row({ session_id: 'asked', session_uuid: 'asked', name: 'Sync OSS', ask: { id: 'a1b2c3', text: 'Sync the notes too?', due: null, created: '2026-11-04', overdue: false, options: [], detail: '' }, last_reply_at: iso(5) }),
   row({ session_id: 'limit', session_uuid: 'limit', name: 'Windows smoke', agent: 'codex', stop: { cause: 'usage_limit', resets_at: null }, last_user_at: iso(125), last_reply_at: iso(120) }),
   row({ project_id: 'proj-b', session_id: 'run', session_uuid: 'run', name: 'Weekly report', status: 'running', last_reply_at: null, last_user_at: iso(1) }),
   row({ project_id: 'proj-b', session_id: 'appr', session_uuid: 'appr', name: 'Deploy', status: 'pending_approval', last_reply_at: null }),
-  row({ session_id: null, session_uuid: null, name: null, last_user_at: null, last_reply_at: null, ask: { id: 'e5e5e5', text: 'Renew the domain', due: '2026-11-02', created: '2026-11-01', overdue: true } }),
+  row({ session_id: null, session_uuid: null, name: null, last_user_at: null, last_reply_at: null, ask: { id: 'e5e5e5', text: 'Renew the domain', due: '2026-11-02', created: '2026-11-01', overdue: true, options: [], detail: '' } }),
 ];
 
 let routes: Record<string, (init?: { method?: string; body?: string }) => unknown>;
@@ -128,10 +128,37 @@ describe('Workbench — list', () => {
     await renderPage();
     expect(screen.getByTestId('workbench-summary')).toHaveTextContent('5 waiting on you · 1 running');
     const order = cards().map((c) => c.getAttribute('data-dot'));
-    // Overdue ask first, then amber newest first, then blue; running last.
-    expect(order).toEqual(['need', 'need', 'need', 'need', 'new', 'run']);
-    expect(cards()[0]).toHaveTextContent('Renew the domain');
+    // 等你 newest first, whatever the dot (2026-11-05): the 5-minute-old ask,
+    // the 20-minute reply, the 2-hour stop, the overdue ask from Nov 1, the
+    // approval with no time; running last.
+    expect(order).toEqual(['need', 'new', 'need', 'need', 'need', 'run']);
+    expect(cards()[0]).toHaveTextContent('Sync the notes too?');
+    expect(cards()[3]).toHaveTextContent('Renew the domain');
     expect(cards()[cards().length - 1]).toHaveTextContent('Weekly report');
+  });
+
+  it('desktop: one greeting line heads the composer, the cards follow straight under it (2026-11-05)', async () => {
+    await renderPage();
+    const greeting = screen.getByTestId('workbench-greeting');
+    expect([
+      "Say it. I'll route it.", 'Drop it here, it finds its place.', 'One line. I take it from there.',
+    ]).toContain(greeting.textContent);
+    const kids = [...greeting.parentElement!.children].map((el) => el.getAttribute('data-testid') ?? el.className);
+    expect(kids[0]).toBe('workbench-greeting');
+    expect(kids.indexOf('workbench-cards')).toBe(kids.indexOf('workbench-summary') + 1);
+    expect(screen.queryByTestId('workbench-mark')).toBeNull();
+  });
+
+  it('the empty page shows the same greeting above the composer', async () => {
+    await renderPage([]);
+    expect(screen.getByTestId('workbench-greeting').textContent).toBeTruthy();
+    expect(screen.queryAllByTestId('wb-card')).toHaveLength(0);
+  });
+
+  it('phone: no greeting and no golden spacer; the composer sits under the header', async () => {
+    await renderPage(FEED, {}, true);
+    expect(screen.queryByTestId('workbench-greeting')).toBeNull();
+    expect(screen.getByTestId('workbench-scroller').querySelector('.wb-golden')).toBeNull();
   });
 
   it('a card reads logo · project · detail', async () => {
@@ -202,12 +229,12 @@ describe('Workbench — list', () => {
     expect(within(c).getByTestId('wb-card-meta')).toHaveTextContent('Usage limit');
   });
 
-  it('empty: the composer alone, its placeholder carries the sentence', async () => {
+  it('empty: the composer alone, with the same placeholder as always (the greeting says the rest)', async () => {
     await renderPage([]);
     expect(screen.queryByTestId('workbench-summary')).toBeNull();
     expect(cards()).toHaveLength(0);
     expect(screen.getByTestId('wb-composer-input')).toHaveAttribute(
-      'placeholder', 'Type a task. Orbital picks the project and the agent.',
+      'placeholder', 'What do you want done?',
     );
   });
 
@@ -268,6 +295,41 @@ describe('Workbench — card actions', () => {
     // 2026-11-04 (supersedes "keeps its place in 等你"): the card moves to
     // 进行中 at once.
     expect(cardWith('Sync OSS').getAttribute('data-dot')).toBe('run');
+  });
+
+  it('an ask with detail: the question is the title, the detail\'s first paragraph the muted line', async () => {
+    const detailed = row({
+      session_id: 'acct', session_uuid: 'acct', name: 'Q3 books',
+      ask: { id: 'beef01', text: 'Which account first?', due: null, created: '2026-11-04', overdue: false, options: [],
+        detail: 'The **Chase** statement covers `Jul–Sep`; see [notes](notes.md).\n\nSecond paragraph.' },
+      last_reply_at: iso(2),
+    });
+    await renderPage([detailed, ...FEED]);
+    const card = cardWith('Which account first?');
+    expect(within(card).getByTestId('wb-card-title')).toHaveTextContent('“Which account first?”');
+    const meta = within(card).getByTestId('wb-card-meta');
+    expect(meta).toHaveTextContent('Marketing · The Chase statement covers Jul–Sep; see notes.');
+    expect(meta.textContent).not.toContain('Second paragraph');
+    expect(meta.textContent).not.toContain('**');
+  });
+
+  it('an ask with options offers them on its card; a tap answers with that option (item 160)', async () => {
+    const choice = row({
+      session_id: 'venue', session_uuid: 'venue', name: 'Offsite',
+      ask: { id: 'c0ffee', text: 'Which venue?', due: null, created: '2026-11-04', overdue: false, options: ['Rooftop', 'Hall'], detail: '' },
+      last_reply_at: iso(2),
+    });
+    await renderPage([choice, ...FEED]);
+    const card = cardWith('Which venue?');
+    expect(within(card).getAllByTestId('wb-card-option').map((b) => b.textContent)).toEqual(['Rooftop', 'Hall']);
+    expect(within(cardWith('Sync the notes too?')).queryAllByTestId('wb-card-option')).toHaveLength(0);
+    fireEvent.click(within(card).getByRole('button', { name: 'Hall' }));
+    await waitFor(() => expect(apiMock.mock.calls.some((c) => c[0] === '/api/v2/agents/proj-a/inject')).toBe(true));
+    const body = JSON.parse(apiMock.mock.calls.find((c) => c[0] === '/api/v2/agents/proj-a/inject')![1].body);
+    expect(body).toMatchObject({
+      content: '[Answer to ask c0ffee, already closed: "Which venue?"]\nHall',
+      session_id: 'venue', ask_id: 'c0ffee', ask_answer: 'Hall',
+    });
   });
 
   it('a card answered from its field sits in 进行中 until the turn ends, then comes back to 等你 unchecked', async () => {
@@ -532,5 +594,91 @@ describe('Workbench — reading pane (2026-11-04)', () => {
     expect(within(sheet).queryByTestId('wb-pane-doc-maximize')).toBeNull();
     fireEvent.click(screen.getByTestId('wb-pane-scrim'));
     expect(pane()).toBeNull();
+  });
+});
+
+describe('Workbench — keyless (no API key: Quick Tasks is not manager_ready)', () => {
+  const LAST_KEY = 'orbital.wbLastProject';
+  const keyless: Project[] = [
+    { project_id: 'proj-q', name: 'Quick Tasks', workspace: '/ws/q', is_scratch: true, manager_ready: false } as Project,
+    { project_id: 'proj-a', name: 'Marketing', workspace: '/ws/a', manager_ready: false } as Project,
+    { project_id: 'proj-b', name: 'Ops', workspace: '/ws/b', manager_ready: false } as Project,
+  ];
+  const keyed: Project[] = keyless.map((p) => ({ ...p, manager_ready: true }));
+
+  async function renderWith(projects: Project[], extra: typeof routes = {}) {
+    setApi({ 'GET /api/v2/workbench/feed': () => ({ rows: [], window_days: 14 }), ...extra });
+    await act(async () => { await refreshFeed(); });
+    return render(<WorkbenchPage setRoute={vi.fn()} projects={projects} agents={AGENTS} phone={false} />);
+  }
+
+  it('the project chip starts on Quick Tasks, never 自动, and the greeting is hidden', async () => {
+    await renderWith(keyless);
+    expect(screen.getByTestId('wb-chip-project')).toHaveTextContent('Quick Tasks');
+    expect(screen.queryByTestId('workbench-greeting')).toBeNull();
+    // Its slot stays (empty), so the composer does not move.
+    const slot = screen.getByTestId('workbench-scroller').querySelector('.wb-greeting');
+    expect(slot).not.toBeNull();
+    expect(slot!.textContent).toBe('');
+    expect(screen.getByTestId('workbench-scroller').querySelector('.wb-golden')).not.toBeNull();
+  });
+
+  it('the chip starts on the last project sent to from this browser; a gone one falls back to Quick Tasks', async () => {
+    localStorage.setItem(LAST_KEY, 'proj-b');
+    const { unmount } = await renderWith(keyless);
+    expect(screen.getByTestId('wb-chip-project')).toHaveTextContent('Ops');
+    unmount();
+    localStorage.setItem(LAST_KEY, 'proj-gone');
+    await renderWith(keyless);
+    expect(screen.getByTestId('wb-chip-project')).toHaveTextContent('Quick Tasks');
+  });
+
+  it('自动 stays in the picker but is not selectable: muted, no check, a note; a click opens the model settings', async () => {
+    const opened: unknown[] = [];
+    const onOpen = (e: Event) => opened.push((e as CustomEvent).detail);
+    window.addEventListener('open-global-settings', onOpen);
+    try {
+      await renderWith(keyless);
+      fireEvent.click(screen.getByTestId('wb-chip-project'));
+      const auto = screen.getByTestId('wb-opt-auto');
+      expect(auto).toHaveAttribute('aria-disabled', 'true');
+      expect(auto).toHaveAttribute('aria-selected', 'false');
+      expect(auto.querySelector('.wb-ck svg')).toBeNull();
+      expect(auto).toHaveTextContent('Needs an API key');
+      fireEvent.click(auto);
+      expect(opened).toEqual([{ section: 'llm' }]);
+      expect(screen.getByTestId('wb-chip-project')).toHaveTextContent('Quick Tasks');
+    } finally {
+      window.removeEventListener('open-global-settings', onOpen);
+    }
+  });
+
+  it('a keyless send goes to the shown project without routing, and is remembered', async () => {
+    localStorage.setItem(LAST_KEY, 'proj-b');
+    let injected: Record<string, unknown> | null = null;
+    await renderWith(keyless, {
+      'POST /api/v2/agents/proj-a/new-session': () => ({ session_id: 'k-1', pinned_target: 'codex' }),
+      'POST /api/v2/agents/proj-a/inject': (init) => { injected = JSON.parse(init!.body!); return { status: 'started' }; },
+    });
+    fireEvent.click(screen.getByTestId('wb-chip-project'));
+    fireEvent.click(within(screen.getByTestId('wb-pop-project')).getByText('Marketing'));
+    fireEvent.change(screen.getByTestId('wb-composer-input'), { target: { value: 'tidy the brief' } });
+    fireEvent.click(screen.getByTestId('wb-composer-send'));
+    await waitFor(() => expect(injected).not.toBeNull());
+    expect(apiMock.mock.calls.some((c) => c[0] === '/api/v2/workbench/route')).toBe(false);
+    expect(localStorage.getItem(LAST_KEY)).toBe('proj-a');
+    expect(screen.getByTestId('wb-chip-project')).toHaveTextContent('Marketing');
+  });
+
+  it('keyed: nothing changes — 自动 chip, selectable 自动 row with no note, greeting shown', async () => {
+    localStorage.setItem(LAST_KEY, 'proj-b');
+    await renderWith(keyed);
+    expect(screen.getByTestId('wb-chip-project')).toHaveTextContent('Auto');
+    expect(screen.getByTestId('workbench-greeting')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('wb-chip-project'));
+    const auto = screen.getByTestId('wb-opt-auto');
+    expect(auto).not.toHaveAttribute('aria-disabled');
+    expect(auto).toHaveAttribute('aria-selected', 'true');
+    expect(auto).not.toHaveTextContent('Needs an API key');
   });
 });
