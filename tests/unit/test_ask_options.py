@@ -362,7 +362,7 @@ def test_the_prompt_says_question_first_then_indented_context():
     )
     _, semi, _ = PromptBuilder().build(ctx)
     flat = " ".join(semi.split())
-    assert "question, in one sentence" in flat
+    assert "question: one sentence of at most about 20 words" in flat
     assert "indented by two spaces" in flat
     assert "options: A | B" in flat
 
@@ -373,7 +373,9 @@ def test_the_file_header_teaches_the_detail_and_options_form():
     assert "\n" not in h and h.startswith("<!--format") and h.endswith("-->")
     assert "indented two spaces" in h
     assert "`options: A | B`" in h
-    assert "question in one sentence" in h
+    assert "question in one sentence of about 20 words" in h
+    assert "dates, prices, names, numbers and ①②③ points go on lines under it indented two spaces" in h
+    assert "never in the question" in h
     # The header is never mistaken for an event or an ask's detail.
     assert asks.parse_line(h) is None
     content = h + "\n- open a1b2c3 2026-11-05 Pick one\n  why\n  options: A | B\n"

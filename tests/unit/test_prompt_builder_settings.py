@@ -222,17 +222,26 @@ class TestMemoryManagementInstructions:
         assert "call remember_about_user" in semi_stable
         assert "append to ~/orbital/user_preferences.md" not in semi_stable
 
-    def test_agent_routing_preference_is_a_global_preference(self, tmp_path):
-        """Brief 1105-route: "以后代码调查用 claude code，轻任务用 codex" is a
-        user-level preference (the Workbench's 自动 reads user memory), not a
-        project directive."""
+    def test_agent_routing_goes_to_project_goals_not_global_memory(self, tmp_path):
+        """Owner 2026-11-05 (fix/1105-prompts): who does what in a project is
+        recorded under Preferences in project_goals.md; remember_about_user is
+        only for personal habits across projects. The memory section's example
+        of a global preference must not be agent routing, or it contradicts
+        the Who does what rule."""
         builder = PromptBuilder(workspace=str(tmp_path))
         ctx = _make_context(tmp_path, is_scratch=False,
+                            enabled_agents=[{"handle": "claude-code",
+                                             "display_name": "Claude Code"}],
                             user_memory_path=str(tmp_path / "user_memory.md"))
         _, semi_stable, _ = builder.build(ctx)
         line = next(l for l in semi_stable.splitlines()
                     if "call remember_about_user" in l)
-        assert "which agent" in line and "Claude Code" in line
+        assert "which agent" not in line and "Claude Code" not in line
+        assert "personal habit" in line
+        rule = semi_stable.split("### Who does what", 1)[1].split("To interact", 1)[0]
+        flat = " ".join(rule.split())
+        assert ("When the user tells you who should do what, record it: under "
+                "Preferences in project_goals.md for this project") in flat
 
     def test_global_preference_routes_to_settings_when_disabled(self, tmp_path):
         builder = PromptBuilder(workspace=str(tmp_path))
@@ -357,3 +366,85 @@ class TestMemoryFormatHeaderPointer:
         ctx = _make_context(tmp_path)
         _, semi_stable, _ = builder.build(ctx)
         assert "date, status, or decision into INDEX.md" in semi_stable
+
+
+_CODEX = [{"handle": "codex", "display_name": "Codex", "type": "cli"}]
+
+
+class TestWhoDoesWhat:
+    """Owner 2026-11-05: the manager must decide WHO does substantive work
+    before doing it itself, from the user's own who-does-what sources."""
+
+    def test_rule_present_when_agents_enabled(self, tmp_path):
+        builder = PromptBuilder(workspace=str(tmp_path))
+        ctx = _make_context(tmp_path, enabled_agents=_CODEX)
+        _, semi_stable, _ = builder.build(ctx)
+        assert "### Who does what" in semi_stable
+        assert "Preferences in project_goals.md" in semi_stable
+        assert '"About the User"' in semi_stable
+        flat = " ".join(semi_stable.split())
+        assert 'Don\'t start the work yourself "to get it going" first.' in flat
+
+    def test_rule_absent_when_no_agents(self, tmp_path):
+        builder = PromptBuilder(workspace=str(tmp_path))
+        ctx = _make_context(tmp_path, enabled_agents=[])
+        full = "".join(builder.build(ctx))
+        assert "Who does what" not in full
+
+    def test_rule_is_static_never_cached_prefix_or_dynamic(self, tmp_path):
+        builder = PromptBuilder(workspace=str(tmp_path))
+        ctx = _make_context(tmp_path, enabled_agents=_CODEX)
+        cached, semi_stable, dynamic = builder.build(ctx)
+        assert "Who does what" not in cached
+        assert "Who does what" not in dynamic
+        assert semi_stable.count("### Who does what") == 1
+
+    def test_rule_sits_after_deployment_instructions_before_dispatch(self, tmp_path):
+        builder = PromptBuilder(workspace=str(tmp_path))
+        ctx = _make_context(tmp_path, enabled_agents=_CODEX,
+                            sub_agent_deployment_instructions="Codex writes code.")
+        _, semi_stable, _ = builder.build(ctx)
+        deploy = semi_stable.index("</sub_agent_deployment_instructions>")
+        rule = semi_stable.index("### Who does what")
+        dispatch = semi_stable.index("To interact with sub-agents")
+        assert deploy < rule < dispatch
+        # The verify-output text is kept as is.
+        assert "### Verifying Sub-Agent Output" in semi_stable
+
+    def test_rule_bytes_do_not_move_between_turns(self, tmp_path):
+        builder = PromptBuilder(workspace=str(tmp_path))
+        a = builder.build(_make_context(tmp_path, enabled_agents=_CODEX,
+                                        datetime_now="2026-11-05T10:00:00"))
+        b = builder.build(_make_context(tmp_path, enabled_agents=_CODEX,
+                                        datetime_now="2026-11-05T11:30:00"))
+        assert a[1] == b[1]
+
+    def test_recording_routes_to_settings_when_user_memory_off(self, tmp_path):
+        builder = PromptBuilder(workspace=str(tmp_path))
+        ctx = _make_context(tmp_path, enabled_agents=_CODEX, user_memory_path="")
+        _, semi_stable, _ = builder.build(ctx)
+        rule = semi_stable.split("### Who does what", 1)[1].split("To interact", 1)[0]
+        assert "remember_about_user" not in rule
+        assert "About You" in rule
+
+    def test_recording_uses_remember_tool_when_user_memory_on(self, tmp_path):
+        mem = tmp_path / "user_memory.md"
+        mem.write_text("likes tea")
+        builder = PromptBuilder(workspace=str(tmp_path))
+        ctx = _make_context(tmp_path, enabled_agents=_CODEX,
+                            user_memory_path=str(mem))
+        _, semi_stable, _ = builder.build(ctx)
+        rule = semi_stable.split("### Who does what", 1)[1].split("To interact", 1)[0]
+        assert "remember_about_user only when they state it as a personal habit" in rule
+
+
+class TestAskQuestionCap:
+    def test_asks_caps_the_question_at_about_20_words(self, tmp_path):
+        builder = PromptBuilder(workspace=str(tmp_path))
+        _, semi_stable, _ = builder.build(_make_context(tmp_path))
+        flat = " ".join(semi_stable.split())
+        assert "one sentence of at most about 20 words" in flat
+        assert ("dates, prices, names, numbers and ①②③ points go on lines under it "
+                "indented by two spaces") in flat
+        assert "never in the question" in flat
+        assert "`options: A | B` (2-4 short options)" in flat

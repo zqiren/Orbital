@@ -156,6 +156,10 @@ class TestAsksStayOutOfThePrompt:
     def test_changing_asks_md_leaves_every_byte_identical(self, tmp_path):
         self._write(tmp_path, ASKS_V1)
         cm = _manager(tmp_path)
+        # The first call shows "Context usage: ~0%" (nothing measured yet);
+        # later calls show the measured figure. Warm it so the comparison is
+        # about ASKS.md, not about the prompt's size crossing a 5% step.
+        cm.prepare()
         first = cm.prepare()
         self._write(tmp_path, ASKS_V2)
         second = cm.prepare()

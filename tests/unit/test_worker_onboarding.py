@@ -35,7 +35,11 @@ def _no_env_key(monkeypatch):
 
 # ---------------------------------------------------------------------------
 # Frozen copy of PromptBuilder._onboarding_or_directive as it stood on main
-# (f266ddf) BEFORE the lift. Do not edit: it is the byte-identity reference.
+# (f266ddf) BEFORE the lift, with ONE deliberate contract change since
+# (fix/1105-prompts, owner 2026-11-05): onboarding ends with a proposed first
+# step and waits for the user's go instead of "begin working", and the step-2
+# summary proposes who does what. Edit only for a deliberate contract change:
+# it is the byte-identity reference.
 # ---------------------------------------------------------------------------
 
 def _frozen_onboarding_or_directive(self, context) -> str:
@@ -68,7 +72,9 @@ def _frozen_onboarding_or_directive(self, context) -> str:
             "  tool (Mission, Triggers, Scope, Rules, Preferences; under 1500 words), then\n"
             "  (2) write PROJECT_STATE.md (current focus, in-progress work, next steps) and\n"
             "     INDEX.md (navigation map) in orbital/ yourself with the `write` tool.\n"
-            "- After writing, announce readiness and begin working."
+            "- After writing, say in two or three lines what you would do first and which agent\n"
+            "  would do it, then stop and wait for the user's go. If the user's reply picks a\n"
+            "  different agent, record it under Preferences in project_goals.md."
         )
     if content is None:
         # Scratch (Quick Tasks) keeps no project memory, so the "this
@@ -108,7 +114,9 @@ def _frozen_onboarding_or_directive(self, context) -> str:
             "YOUR TASK:\n"
             + greeting +
             "2. If the user's instructions are clear and detailed enough, confirm your understanding\n"
-            "   and present a summary of how you'll operate. Ask if they want to adjust anything.\n"
+            "   and present a summary of how you'll operate. When sub-agents are available, the\n"
+            "   summary names which agent will handle which kind of work, as a proposal the user can\n"
+            "   change in one word. Ask if they want to adjust anything.\n"
             "3. If the instructions are vague or missing, ask clarifying questions about:\n"
             "   - What they want you to do (objective)\n"
             "   - How they want you to do it (preferences, constraints)\n"
@@ -129,7 +137,10 @@ def _frozen_onboarding_or_directive(self, context) -> str:
                 "is complete.\n"
                 "The only tool call you make during onboarding is the final `write` to create "
                 "project_goals.md.\n"
-                "After writing project_goals.md, announce that you're ready and begin working."
+                "After writing project_goals.md, say in two or three lines what you would do first and\n"
+                "which agent would do it, then stop and wait for the user's go. Do not start on the\n"
+                "project instructions as a task: they describe the project, not an order. If the user's\n"
+                "reply picks a different agent, record it under Preferences in project_goals.md."
             )
         return base + (
             "7. After writing project_goals.md, explore the workspace and build INDEX.md:\n"
@@ -140,17 +151,24 @@ def _frozen_onboarding_or_directive(self, context) -> str:
             "     decisions/status/lessons live in their own files, not here.\n"
             "   - If the workspace is empty, still create INDEX.md with a brief note\n"
             "     (\"No files yet — will populate as the project develops.\")\n"
-            "8. Once INDEX.md is written, announce that you're ready and begin working.\n\n"
+            "8. Once INDEX.md is written, say in two or three lines what you would do first and which\n"
+            "   agent would do it, then stop and wait for the user's go.\n\n"
             "DO NOT use any tools until goal-setting is complete. After writing project_goals.md,\n"
             "use read/list tools to explore the workspace, then write INDEX.md. After INDEX.md\n"
-            "is written, announce readiness and begin working."
+            "is written, propose your first step and wait for the user's go. Do not start on the\n"
+            "project instructions as a task: they describe the project, not an order. If the user's\n"
+            "reply picks a different agent, record it under Preferences in project_goals.md."
         )
     return (
         "## PROJECT DIRECTIVE\n\n"
         f"{content}\n\n"
         "This is your core operating guide. Follow these objectives, rules, and preferences\n"
         "in all your work. If the user asks you to change your approach, update project_goals.md\n"
-        "to reflect the change."
+        "to reflect the change.\n"
+        "If you wrote this file earlier in this conversation and the user has not said go since,\n"
+        "onboarding is still finishing: write orbital/INDEX.md if it is missing, then say in two\n"
+        "or three lines what you would do first and which agent would do it, and wait for the\n"
+        "user's go."
     )
 
 
@@ -221,6 +239,71 @@ def test_manager_flavours_are_the_section_text(tmp_path):
     ) == builder._onboarding_or_directive(_ctx(tmp_path))
     assert op.cold_start_instruction(ws, None) == \
         builder._onboarding_or_directive(_ctx(tmp_path, cold_start=True))
+
+
+class TestOnboardingEndsWithAProposal:
+    """Owner 2026-11-05: onboarding ends with a proposed first step and waits
+    for the user's go; the project instructions describe the project, they
+    are not an order to start on."""
+
+    def _variants(self, ws):
+        return {
+            "interview": op.interview_instruction(
+                ws, is_scratch=False, project_name="Demo",
+                project_instructions="Write a weekly report"),
+            "interview_scratch": op.interview_instruction(
+                ws, is_scratch=True, project_name="Demo",
+                project_instructions="Write a weekly report"),
+            "cold_start": op.cold_start_instruction(ws, None),
+            "worker_interview": op.worker_interview_instruction(
+                "codex", ws, project_name="Demo",
+                project_instructions="Write a weekly report"),
+            "worker_interview_scratch": op.worker_interview_instruction(
+                "codex", ws, project_name="Demo",
+                project_instructions="", is_scratch=True),
+            "worker_cold_start": op.worker_cold_start_instruction(
+                "codex", ws, "[WORKSPACE SKELETON] 1 file\nREADME.md 1B"),
+        }
+
+    def test_no_variant_says_begin_working(self, tmp_path):
+        for name, text in self._variants(str(tmp_path)).items():
+            assert "begin working" not in text, name
+            assert "announce readiness" not in text, name
+
+    def test_every_variant_waits_for_the_users_go(self, tmp_path):
+        for name, text in self._variants(str(tmp_path)).items():
+            flat = " ".join(text.split())
+            assert "what you would do first and which agent would do it" in flat, name
+            assert "wait for the user's go" in flat, name
+            assert ("If the user's reply picks a different agent, record it "
+                    "under Preferences in project_goals.md.") in flat, name
+
+    def test_interviews_say_instructions_are_not_an_order(self, tmp_path):
+        for name, text in self._variants(str(tmp_path)).items():
+            if "interview" not in name:
+                continue
+            flat = " ".join(text.split())
+            assert ("Do not start on the project instructions as a task: they "
+                    "describe the project, not an order.") in flat, name
+
+    def test_directive_finishes_onboarding_in_the_run_that_wrote_goals(self, tmp_path):
+        """The prompt is rebuilt every call and onboarding mode ends the moment
+        project_goals.md exists, so the wait-for-go must also ride the
+        directive (static text: same bytes every turn)."""
+        goals = tmp_path / "orbital" / "instructions" / "project_goals.md"
+        goals.parent.mkdir(parents=True)
+        goals.write_text("# Mission\nWrite the weekly report.\n", encoding="utf-8")
+        builder = PromptBuilder(str(tmp_path))
+        flat = " ".join(builder._onboarding_or_directive(_ctx(tmp_path)).split())
+        assert ("If you wrote this file earlier in this conversation and the user "
+                "has not said go since, onboarding is still finishing") in flat
+        assert "wait for the user's go" in flat
+
+    def test_summary_proposes_who_does_what(self, tmp_path):
+        text = op.interview_instruction(str(tmp_path), is_scratch=False)
+        flat = " ".join(text.split())
+        assert ("names which agent will handle which kind of work, as a "
+                "proposal the user can change in one word") in flat
 
 
 class TestWorkerFlavours:

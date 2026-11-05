@@ -604,7 +604,14 @@ class PromptBuilder:
             f"{content}\n\n"
             "This is your core operating guide. Follow these objectives, rules, and preferences\n"
             "in all your work. If the user asks you to change your approach, update project_goals.md\n"
-            "to reflect the change."
+            "to reflect the change.\n"
+            # The prompt is rebuilt every call and ONBOARDING MODE ends the
+            # moment project_goals.md exists, so the interview's closing steps
+            # (INDEX.md, propose, wait) would vanish mid-run without this.
+            "If you wrote this file earlier in this conversation and the user has not said go since,\n"
+            "onboarding is still finishing: write orbital/INDEX.md if it is missing, then say in two\n"
+            "or three lines what you would do first and which agent would do it, and wait for the\n"
+            "user's go."
         )
 
     # -- Semi-stable sections (placed before history for caching) --
@@ -715,8 +722,10 @@ class PromptBuilder:
             "  `- open <text>` (or `- open due:YYYY-MM-DD <text>`), written so someone who was not\n"
             "  here can act on it. Orbital stamps the id and date. If ASKS.md does not exist yet,\n"
             "  create it with that line.\n"
-            "- The open line is the question, in one sentence. Context goes on lines under it indented by\n"
-            "  two spaces (markdown is fine); for a choice, end with `options: A | B` (2-4 short options).\n"
+            "- The open line is the question: one sentence of at most about 20 words. Context, dates,\n"
+            "  prices, names, numbers and ①②③ points go on lines under it indented by two spaces\n"
+            "  (markdown is fine), never in the question; for a choice, end with `options: A | B`\n"
+            "  (2-4 short options).\n"
             "- When the user answers or completes an open ask in chat, append\n"
             "  `- done <id> \"<the user's own words>\"`; when they decline it,\n"
             "  `- dropped <id> \"<their words>\"`. Close only with the user's own words — if\n"
@@ -800,8 +809,9 @@ class PromptBuilder:
             # The daemon-side tool is the escape hatch; when the user-memory
             # toggle is off the tool doesn't exist, so route to Settings.
             + (
-                "- If it's a personal/global preference → call remember_about_user (which agent "
-                "to use for which kind of task is one: \"Claude Code for code, Codex for research\")\n"
+                "- If it's a personal/global preference → call remember_about_user (a personal habit "
+                "across projects, e.g. reply language, tone, or working hours; who does what in a "
+                "project goes under Preferences in project_goals.md instead)\n"
                 if context.user_memory_path else
                 "- If it's a personal/global preference → suggest adding it in "
                 "Global Settings → About You (user memory is disabled)\n"
@@ -855,6 +865,32 @@ class PromptBuilder:
                 "choose the safest viable alternative or ask the user when a decision is needed.",
                 "",
             ])
+        # Owner 2026-11-05: WHEN to delegate, tied to the user's own
+        # who-does-what. Session-stable text (the user-memory toggle only
+        # picks the recording route), so it never moves the cached bytes.
+        record_personal = (
+            "with remember_about_user only when they state it as a personal habit\n"
+            "  across projects."
+            if context.user_memory_path else
+            "suggest Global Settings → About You only when they state it as a\n"
+            "  personal habit across projects."
+        )
+        lines.extend([
+            "### Who does what",
+            "",
+            "Before doing substantive work yourself (code, long documents, research, anything a",
+            "worker would take a while on), check who should do it, in this order: the project's",
+            "deployment instructions above (if any), the Preferences in project_goals.md, then",
+            "\"About the User\". When one of them names an agent for this kind of work, dispatch to it.",
+            "- When none of them says, keep yourself to small things (reads, short edits, the",
+            "  project's own orbital/ files, quick answers) and hand coding and long writing to a",
+            "  worker when one is available and fits.",
+            "- Say in one line who you are handing it to and why, then dispatch. Don't start the",
+            "  work yourself \"to get it going\" first.",
+            "- When the user tells you who should do what, record it: under Preferences in",
+            "  project_goals.md for this project; " + record_personal,
+            "",
+        ])
         lines.append("To interact with sub-agents, use the agent_message tool:")
         lines.append('- Dispatch a task: agent_message(action="send", agent="<handle>", message="your task here")')
         lines.append("  send is the ONLY dispatch verb: it spawns the agent automatically if it is not")

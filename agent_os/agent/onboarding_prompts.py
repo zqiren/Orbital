@@ -72,7 +72,9 @@ def cold_start_instruction(workspace: str, skeleton_text: str | None = None) -> 
         "  tool (Mission, Triggers, Scope, Rules, Preferences; under 1500 words), then\n"
         "  (2) write PROJECT_STATE.md (current focus, in-progress work, next steps) and\n"
         "     INDEX.md (navigation map) in orbital/ yourself with the `write` tool.\n"
-        "- After writing, announce readiness and begin working."
+        "- After writing, say in two or three lines what you would do first and which agent\n"
+        "  would do it, then stop and wait for the user's go. If the user's reply picks a\n"
+        "  different agent, record it under Preferences in project_goals.md."
     )
     if skeleton_text:
         text += "\n\n" + _bounded_skeleton(skeleton_text)
@@ -124,7 +126,9 @@ def interview_instruction(workspace: str, *, is_scratch: bool,
         "YOUR TASK:\n"
         + greeting +
         "2. If the user's instructions are clear and detailed enough, confirm your understanding\n"
-        "   and present a summary of how you'll operate. Ask if they want to adjust anything.\n"
+        "   and present a summary of how you'll operate. When sub-agents are available, the\n"
+        "   summary names which agent will handle which kind of work, as a proposal the user can\n"
+        "   change in one word. Ask if they want to adjust anything.\n"
         "3. If the instructions are vague or missing, ask clarifying questions about:\n"
         "   - What they want you to do (objective)\n"
         "   - How they want you to do it (preferences, constraints)\n"
@@ -145,7 +149,10 @@ def interview_instruction(workspace: str, *, is_scratch: bool,
             "is complete.\n"
             "The only tool call you make during onboarding is the final `write` to create "
             "project_goals.md.\n"
-            "After writing project_goals.md, announce that you're ready and begin working."
+            "After writing project_goals.md, say in two or three lines what you would do first and\n"
+            "which agent would do it, then stop and wait for the user's go. Do not start on the\n"
+            "project instructions as a task: they describe the project, not an order. If the user's\n"
+            "reply picks a different agent, record it under Preferences in project_goals.md."
         )
     return base + (
         "7. After writing project_goals.md, explore the workspace and build INDEX.md:\n"
@@ -156,10 +163,13 @@ def interview_instruction(workspace: str, *, is_scratch: bool,
         "     decisions/status/lessons live in their own files, not here.\n"
         "   - If the workspace is empty, still create INDEX.md with a brief note\n"
         "     (\"No files yet — will populate as the project develops.\")\n"
-        "8. Once INDEX.md is written, announce that you're ready and begin working.\n\n"
+        "8. Once INDEX.md is written, say in two or three lines what you would do first and which\n"
+        "   agent would do it, then stop and wait for the user's go.\n\n"
         "DO NOT use any tools until goal-setting is complete. After writing project_goals.md,\n"
         "use read/list tools to explore the workspace, then write INDEX.md. After INDEX.md\n"
-        "is written, announce readiness and begin working."
+        "is written, propose your first step and wait for the user's go. Do not start on the\n"
+        "project instructions as a task: they describe the project, not an order. If the user's\n"
+        "reply picks a different agent, record it under Preferences in project_goals.md."
     )
 
 
