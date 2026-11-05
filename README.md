@@ -285,18 +285,6 @@ Under the box is one list of cards, newest first: tasks that are running, replie
 </details>
 
 <details>
-<summary><strong>Calendar</strong> (beta)</summary>
-
-Automations you set up months ago shouldn't fire invisibly. Every enabled schedule trigger projects its upcoming runs onto a week grid, so the rhythm of the project is something you can see rather than remember. Dated commitments the agent recorded in the project state land on the same grid and drop off once they're resolved, and connecting Google Calendar brings those events into the same view.
-
-The project agent can read this calendar too, so "what's already on the schedule" is context it plans around instead of something you have to restate.
-
-<p align="center"><img src="docs/screenshots/calendar.png" alt="Calendar week view showing a project's recurring automations: a daily issues check, a Monday backlog triage, and a Tuesday release-notes draft" width="100%"></p>
-<p align="center"><em>The week ahead, as your automations will actually run it</em></p>
-
-</details>
-
-<details>
 <summary><strong>Quick Tasks</strong></summary>
 
 The sidebar includes a **Quick Task** section for fire-and-forget interactions. Scratch projects skip the full project creation flow — useful for one-off tasks that don't need a dedicated workspace.

@@ -134,9 +134,6 @@ Agent可以换。你的上下文资产一直在。
 <p align="center"><img src="docs/screenshots/zh/workbench.png" alt="工作台——一个能发任何任务的输入框，带项目和 agent 选择，下方是一份卡片列表：进行中的任务、Codex 和 Claude Code 完成的回复、一条带一键选项的提问，每张卡都标明来源项目和接手的 agent" width="800"></p>
 <p align="center"><em>工作台（beta）——所有项目共用的一个入口：一句话交代任务，Orbital 带着该项目的上下文送到对的项目、交给对的 agent，也可以自己指定；下面是按时间排序的一份卡片，进行中的任务、待你查看的回复、agent 需要你拍板的提问，每条都标明来源项目。提问直接给出选项，点一下就答；详情按 markdown 渲染，回复框里还能附上文件</em></p>
 
-<p align="center"><img src="docs/screenshots/zh/calendar.png" alt="日历周视图：项目的循环自动任务，每天的 issue 巡检、每周一的 backlog 梳理、每周二的发布说明草稿" width="800"></p>
-<p align="center"><em>日历（beta）——把已启用的定时 trigger 和带截止日期的承诺投影到周视图上，自动任务不再悄无声息地跑；管理 agent 自己也能读取它来安排工作</em></p>
-
 <p align="center"><img src="docs/screenshots/zh/skills.png" alt="Skills 设置——agent 遵循的可复用操作模式" width="800"></p>
 <p align="center"><em>Skills——agent 从多步流程中沉淀出可复用的操作模式，下次遇到类似任务先查阅</em></p>
 
