@@ -92,6 +92,9 @@
 .wb-opt.is-off .wb-n1, .wb-opt.is-off .wb-gl { color: var(--color-muted); }
 .wb-opt.is-off:hover { background: transparent; }
 .wb-opt .wb-note { flex: none; margin-left: 8px; font-size: 11.5px; color: var(--color-muted); white-space: nowrap; }
+.wb-opt-muted .wb-n1 { font-weight: 400; font-size: 12px; color: var(--color-secondary); }
+.wb-opt-muted { min-height: 32px; }
+.wb-pop-foot { position: sticky; bottom: -5px; margin-bottom: -5px; padding-bottom: 5px; background: var(--wb-layer); }
 .wb-sep { height: 6px; }
 
 /* ── summary + list ── */

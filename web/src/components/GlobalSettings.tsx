@@ -268,6 +268,13 @@ export default function GlobalSettings({ onBack, onTakeTour, canTakeTour, scroll
                   data-testid="user-memory-textarea"
                   className="w-full text-sm bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150 resize-y disabled:opacity-50"
                 />
+                {/* Every manager reads this when it delegates; an empty
+                    memory shows what a who-does-what line looks like. */}
+                {!loading && !userMemory.trim() && (
+                  <p className="mt-1.5 text-xs text-secondary" data-testid="user-memory-routing-hint">
+                    {t('global.userMemory.routingHint')}
+                  </p>
+                )}
               </SettingsSection>
 
               <SettingsSection

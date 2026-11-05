@@ -13,7 +13,9 @@
  *    sidebar order (excluded projects are not on the Workbench at all).
  *  - Agent chip: once picked, only the agent's logo and a chevron (name in
  *    the tooltip). Picker: 自动, then Orbital and the available workers, each
- *    with logo, name and model line.
+ *    with logo, name and model line, then one muted row that opens Global
+ *    Settings at user memory, where the user tells Orbital which agent does
+ *    which kind of work (the project's manager reads it when it delegates).
  *
  * Keyless (no API key, 2026-11-05): routing needs Orbital's own model, so the
  * project chip never shows 自动. It starts on the last project sent to from
@@ -22,7 +24,7 @@
  */
 
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import { ArrowUp, Check, ChevronDown, Folder, Sparkles } from 'lucide-react';
+import { ArrowUp, Check, ChevronDown, Folder, Settings2, Sparkles } from 'lucide-react';
 import type { Project } from '../../types';
 import { useT } from '../../i18n/useT';
 import { api } from '../../config';
@@ -326,6 +328,24 @@ export default function WorkbenchComposer({
               </button>
             );
           })}
+          {/* Who does what lives in user memory (Global Settings), which the
+              project's manager reads. Pinned to the bottom, so a long worker
+              list never hides it. */}
+          <div className="wb-pop-foot">
+            <div className="wb-sep" />
+            <button
+              type="button"
+              className="wb-opt wb-opt-muted"
+              data-testid="wb-agent-prefs"
+              onClick={() => {
+                setPop('none');
+                window.dispatchEvent(new CustomEvent('open-global-settings', { detail: { section: 'user-memory' } }));
+              }}
+            >
+              <span className="wb-gl"><Settings2 size={13} strokeWidth={1.9} aria-hidden="true" /></span>
+              <span className="wb-tx"><span className="wb-n1">{t('workbench.composer.whoDoesWhat')}</span></span>
+            </button>
+          </div>
         </div>
       )}
     </div>

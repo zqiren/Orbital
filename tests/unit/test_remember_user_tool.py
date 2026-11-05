@@ -29,6 +29,12 @@ def _content(tmp_path) -> str:
     return path.read_text(encoding="utf-8") if path.exists() else ""
 
 
+def test_description_covers_agent_routing_preferences(tmp_path):
+    """Brief 1105-route: which agent the user wants for which kind of task is
+    a stable preference the Workbench's 自动 reads back from user memory."""
+    assert "which agent" in _tool(tmp_path).description
+
+
 class TestAppend:
     def test_append_creates_file_with_bullet_line(self, tmp_path):
         result = _tool(tmp_path).execute(fact="Works as a PM at Tencent")

@@ -542,6 +542,7 @@ export const STRINGS = {
   "global.userMemory.hint": { en: "Facts your agents noted when you told them about yourself, shared with every project. Edit or delete lines here — each line shows which project saved it.", zh: "当你向Agent介绍自己时，它们记下的事实，供所有项目空间共享。可在此编辑或删除，每行都标注了来源项目。" },
   "global.userMemory.label": { en: "User Memory", zh: "用户记忆" },
   "global.userMemory.placeholder": { en: "Nothing saved yet. When you tell an agent something about yourself, it will be noted here.", zh: "暂无记录。当你向Agent说起自己的情况时，会记录在这里。" },
+  "global.userMemory.routingHint": { en: "e.g. Claude Code for code investigation and edits, Codex for lighter tasks, research and images", zh: "例如：代码调查和改代码用 Claude Code，轻任务、调研和图片用 Codex" },
   "global.userMemory.toggle.hint": { en: "When off, agents can't save facts about you and stored facts aren't shared with any project.", zh: "关闭后，Agent不会记录关于你的事实，已存事实也不会注入任何项目空间。" },
   "global.userMemory.toggle.label": { en: "Enable user memory", zh: "启用用户记忆" },
   // --- spec 065: per-file version history (Files panel 历史 column). zh is the source copy. ---
@@ -1469,6 +1470,7 @@ export const STRINGS = {
   "workbench.composer.placeholder": { en: "What do you want done?", zh: "今天要做什么？" },
   "workbench.composer.project": { en: "Project", zh: "项目" },
   "workbench.composer.send": { en: "Send", zh: "发送" },
+  "workbench.composer.whoDoesWhat": { en: "Tell Orbital who does what", zh: "告诉 Orbital 谁做什么" },
   "workbench.filter.all": { en: "All projects", zh: "全部项目" },
   "workbench.pane.back": { en: "Back", zh: "返回" },
   "workbench.pane.close": { en: "Close", zh: "关闭" },

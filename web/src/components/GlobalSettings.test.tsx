@@ -143,6 +143,32 @@ describe('GlobalSettings — section deep link', () => {
   });
 });
 
+// Brief 1105-route: who does what lives in user memory (the managers read it);
+// an empty memory says, once, what such a line looks like.
+describe('GlobalSettings — user memory routing hint', () => {
+  it('shows the example under the textarea while the memory is empty', async () => {
+    await renderLoaded();
+    expect(screen.getByTestId('user-memory-routing-hint')).toHaveTextContent(
+      'e.g. Claude Code for code investigation and edits, Codex for lighter tasks, research and images',
+    );
+  });
+
+  it('hides it once there is text', async () => {
+    await renderLoaded();
+    fireEvent.change(screen.getByTestId('user-memory-textarea'), { target: { value: '- Codex for research' } });
+    expect(screen.queryByTestId('user-memory-routing-hint')).not.toBeInTheDocument();
+  });
+
+  it('is absent when the memory already has text on load', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => ({
+      json: async () => (String(url).endsWith('/settings')
+        ? { ...SETTINGS, user_memory_content: '- Works at Tencent' } : {}),
+    })));
+    await renderLoaded();
+    expect(screen.queryByTestId('user-memory-routing-hint')).not.toBeInTheDocument();
+  });
+});
+
 describe('requestedSettingsSection — the open-global-settings event', () => {
   it('reads detail.section', () => {
     const e = new CustomEvent('open-global-settings', { detail: { section: 'llm' } });
