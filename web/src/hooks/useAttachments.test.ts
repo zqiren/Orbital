@@ -148,3 +148,74 @@ describe('useAttachments', () => {
     expect(revoke).toHaveBeenCalledWith('blob:mock-url');
   });
 });
+
+describe('useAttachments — deferUpload (the Workbench stages, uploads at send)', () => {
+  const opts = { deferUpload: true };
+
+  it('stages added files as pending and uploads nothing', async () => {
+    const { result } = renderHook(() => useAttachments('', opts));
+    act(() => result.current.addAttachments([textFile('a.txt'), textFile('b.txt')]));
+    await new Promise((r) => setTimeout(r, 5));
+    expect(result.current.attachments.map((a) => a.status)).toEqual(['pending', 'pending']);
+    expect(uploadMock).not.toHaveBeenCalled();
+  });
+
+  it('uploadAll uploads the staged ones in order into the given project and returns the payload', async () => {
+    uploadMock
+      .mockResolvedValueOnce({ path: 'uploads/a.txt', size: 4 })
+      .mockResolvedValueOnce({ path: 'uploads/b.txt', size: 4 });
+    const { result } = renderHook(() => useAttachments('', opts));
+    act(() => result.current.addAttachments([textFile('a.txt'), textFile('b.txt')]));
+    let payload: unknown;
+    await act(async () => { payload = await result.current.uploadAll('proj-b'); });
+    expect(payload).toEqual([
+      { path: 'uploads/a.txt', mime: 'text/plain', size: 4 },
+      { path: 'uploads/b.txt', mime: 'text/plain', size: 4 },
+    ]);
+    expect(uploadMock.mock.calls.map((c) => c[0].projectId)).toEqual(['proj-b', 'proj-b']);
+    expect(result.current.attachments.map((a) => a.status)).toEqual(['done', 'done']);
+  });
+
+  it('uploadAll throws when one fails; the chips stay, the failed one in error', async () => {
+    uploadMock
+      .mockResolvedValueOnce({ path: 'uploads/a.txt', size: 4 })
+      .mockRejectedValueOnce(new Error('disk full'));
+    const { result } = renderHook(() => useAttachments('', opts));
+    act(() => result.current.addAttachments([textFile('a.txt'), textFile('b.txt')]));
+    await act(async () => {
+      await expect(result.current.uploadAll('proj-b')).rejects.toThrow('disk full');
+    });
+    expect(result.current.attachments.map((a) => a.status)).toEqual(['done', 'error']);
+    expect(result.current.attachments[1].errorMessage).toBe('disk full');
+  });
+
+  it('a retry goes back to staged, and the next uploadAll skips what that project already has', async () => {
+    uploadMock
+      .mockResolvedValueOnce({ path: 'uploads/a.txt', size: 4 })
+      .mockRejectedValueOnce(new Error('boom'))
+      .mockResolvedValueOnce({ path: 'uploads/b.txt', size: 4 });
+    const { result } = renderHook(() => useAttachments('', opts));
+    act(() => result.current.addAttachments([textFile('a.txt'), textFile('b.txt')]));
+    await act(async () => { await result.current.uploadAll('proj-b').catch(() => {}); });
+    act(() => result.current.retryAttachment(result.current.attachments[1].id));
+    expect(result.current.attachments[1].status).toBe('pending');
+    let payload: unknown;
+    await act(async () => { payload = await result.current.uploadAll('proj-b'); });
+    expect(uploadMock).toHaveBeenCalledTimes(3);
+    expect(payload).toEqual([
+      { path: 'uploads/a.txt', mime: 'text/plain', size: 4 },
+      { path: 'uploads/b.txt', mime: 'text/plain', size: 4 },
+    ]);
+  });
+
+  it('uploadAll with ids sends only those, and skips an over-size file', async () => {
+    const { result } = renderHook(() => useAttachments('', opts));
+    act(() => result.current.addAttachments([
+      textFile('a.txt'), textFile('b.txt'), hugeFile('big.pdf', MAX_ATTACHMENT_BYTES + 1),
+    ]));
+    const [, b, big] = result.current.attachments;
+    await act(async () => { await result.current.uploadAll('proj-a', [b.id, big.id]); });
+    expect(uploadMock).toHaveBeenCalledTimes(1);
+    expect(uploadMock.mock.calls[0][0].file.name).toBe('b.txt');
+  });
+});

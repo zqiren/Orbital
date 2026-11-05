@@ -15,6 +15,10 @@
  * selects it: the Workbench opens that session's chat in the reading pane;
  * a second click closes it (2026-11-04).
  *
+ * An ask card shows the agent's detail as markdown under the question
+ * (clamped to six lines); its muted line then names the automation or the
+ * session. A result line stays plain: the daemon already flattened it.
+ *
  * An automation run (a session a schedule / file-watch trigger started)
  * reads `<automation name> · <the run's first line>`; the first line is then
  * not repeated in the muted line.
@@ -32,6 +36,7 @@ import { formatRelativeTime } from '../../utils/relativeTime';
 import { getAgentIcon, MAIN_AGENT_HANDLE } from '../../utils/agentIcons';
 import { needsAction } from '../../utils/waitingOnYou';
 import { classifySessionName } from '../../lib/sessionLabel';
+import MarkdownContent from '../MarkdownContent';
 import type { FeedItem } from './feedModel';
 
 const CAUSE_KEY: Record<string, StringKey> = {
@@ -41,18 +46,6 @@ const CAUSE_KEY: Record<string, StringKey> = {
   interrupted: 'leftOff.cause.interrupted',
   no_reply: 'leftOff.cause.noReply',
 };
-
-/** An ask detail's first paragraph as one plain line for the muted row:
- *  the markdown marks dropped, links reduced to their text. */
-export function detailLine(detail: string): string {
-  const first = detail.split(/\n\s*\n/)[0] ?? '';
-  return first
-    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
-    .replace(/(\*\*|__|`|~~)/g, '')
-    .replace(/^\s*(?:[-*+]|\d+\.)\s+/gm, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
 
 function clockTime(iso: string): string {
   const d = new Date(iso);
@@ -118,8 +111,9 @@ export default function TaskCard({
     detail = { text: t('workbench.card.starting'), warn: false };
   } else if (row) {
     if (ask) {
-      // The ask's own context first (its first paragraph); else the task.
-      const name = (ask.detail ? detailLine(ask.detail) : '') || automation || row.name;
+      // The ask's context renders as markdown under the title (askDetail);
+      // the muted line names where it came from.
+      const name = automation || row.name;
       detail = name ? { text: name, warn: false } : null;
     } else if (approval) {
       detail = { text: t('workbench.card.approval'), warn: true };
@@ -178,7 +172,10 @@ export default function TaskCard({
   const options = ask?.options ?? [];
 
   function onReplyKey(e: KeyboardEvent<HTMLInputElement>) {
-    if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
+    // While an IME (e.g. Pinyin) is composing, Enter commits the candidate —
+    // it belongs to the input method, not to us. Don't submit mid-composition.
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+    if (e.key === 'Enter') {
       e.preventDefault();
       void sendReply();
     } else if (e.key === 'Escape') {
@@ -288,6 +285,13 @@ export default function TaskCard({
           >
             {title}
           </button>
+          {/* The agent's context as markdown, clamped; the session shows all
+              of it. */}
+          {ask?.detail && (
+            <div className="wb-askdetail" data-testid="wb-card-askdetail">
+              <MarkdownContent content={ask.detail} />
+            </div>
+          )}
           <span className="wb-meta" data-testid="wb-card-meta">
             <span className={`wb-lg${slug === MAIN_AGENT_HANDLE ? ' is-orb' : ''}`} title={agentLabel}>
               {icon.src ? <img src={icon.src} alt={agentLabel} /> : null}

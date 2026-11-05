@@ -90,3 +90,46 @@ describe('buildFeedGroups — 等你 is newest first, nothing else', () => {
     expect(groups.running.map((i) => i.pending ? 'pending' : i.row?.session_id)).toEqual(['pending', 'run-new', 'run-old']);
   });
 });
+
+describe('buildFeedGroups — items: one list by recency (2026-11-05)', () => {
+  const ask = { id: 'aaaaaa', text: 'Which?', created: '2026-11-05T07:00:00Z', due: null, overdue: false, options: [], detail: '' };
+
+  function pending(nonce: string, at: number) {
+    return { nonce, project_id: null, session_id: null, text: nonce, agent: null, created_at: at } as FeedState['pending'][number];
+  }
+
+  it('a pending send is first, newest pending first, even above a newer 等你 card', () => {
+    const f = feed([row({ session_id: 'fresh-reply', last_reply_at: '2026-11-05T09:59:00Z' })]);
+    f.pending = [pending('older', NOW - 60_000), pending('newer', NOW - 1000)];
+    const items = buildFeedGroups(f, new Map(), NOW).items;
+    expect(items.map((i) => i.pending?.nonce ?? i.row?.session_id)).toEqual(['newer', 'older', 'fresh-reply']);
+  });
+
+  it('a running card whose last_user_at is newer than a waiting card\'s last_reply_at comes before it', () => {
+    const f = feed([
+      row({ session_id: 'asked', ask, last_reply_at: '2026-11-05T08:00:00Z' }),
+      row({ session_id: 'run', status: 'running', last_user_at: '2026-11-05T09:00:00Z', last_reply_at: null }),
+    ]);
+    const groups = buildFeedGroups(f, new Map(), NOW);
+    expect(groups.items.map((i) => i.row?.session_id)).toEqual(['run', 'asked']);
+    // The groups themselves are unchanged.
+    expect(groups.waiting.map((i) => i.row?.session_id)).toEqual(['asked']);
+    expect(groups.running.map((i) => i.row?.session_id)).toEqual(['run']);
+  });
+
+  it('a newer reply comes before an older running card', () => {
+    const f = feed([
+      row({ session_id: 'run', status: 'running', last_user_at: '2026-11-05T08:00:00Z', last_reply_at: null }),
+      row({ session_id: 'reply', last_user_at: '2026-11-05T08:30:00Z', last_reply_at: '2026-11-05T09:30:00Z' }),
+    ]);
+    expect(buildFeedGroups(f, new Map(), NOW).items.map((i) => i.row?.session_id)).toEqual(['reply', 'run']);
+  });
+
+  it('a card just answered here sorts by the answer, before the daemon reports the turn', () => {
+    const old = row({ session_id: 'old', last_user_at: '2026-11-05T05:00:00Z', last_reply_at: '2026-11-05T06:00:00Z' });
+    const f = feed([old, row({ session_id: 'newer', last_reply_at: '2026-11-05T09:00:00Z' })]);
+    f.held = new Map([['p1\u0000old', { sawRunning: false, at: NOW - 1000, row: old }]]) as FeedState['held'];
+    const items = buildFeedGroups(f, new Map(), NOW).items;
+    expect(items.map((i) => [i.row?.session_id, i.dot])).toEqual([['old', 'run'], ['newer', 'new']]);
+  });
+});
