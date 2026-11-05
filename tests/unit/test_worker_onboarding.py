@@ -164,7 +164,11 @@ def _frozen_onboarding_or_directive(self, context) -> str:
         f"{content}\n\n"
         "This is your core operating guide. Follow these objectives, rules, and preferences\n"
         "in all your work. If the user asks you to change your approach, update project_goals.md\n"
-        "to reflect the change."
+        "to reflect the change.\n"
+        "If you wrote this file earlier in this conversation and the user has not said go since,\n"
+        "onboarding is still finishing: write orbital/INDEX.md if it is missing, then say in two\n"
+        "or three lines what you would do first and which agent would do it, and wait for the\n"
+        "user's go."
     )
 
 
@@ -281,6 +285,19 @@ class TestOnboardingEndsWithAProposal:
             flat = " ".join(text.split())
             assert ("Do not start on the project instructions as a task: they "
                     "describe the project, not an order.") in flat, name
+
+    def test_directive_finishes_onboarding_in_the_run_that_wrote_goals(self, tmp_path):
+        """The prompt is rebuilt every call and onboarding mode ends the moment
+        project_goals.md exists, so the wait-for-go must also ride the
+        directive (static text: same bytes every turn)."""
+        goals = tmp_path / "orbital" / "instructions" / "project_goals.md"
+        goals.parent.mkdir(parents=True)
+        goals.write_text("# Mission\nWrite the weekly report.\n", encoding="utf-8")
+        builder = PromptBuilder(str(tmp_path))
+        flat = " ".join(builder._onboarding_or_directive(_ctx(tmp_path)).split())
+        assert ("If you wrote this file earlier in this conversation and the user "
+                "has not said go since, onboarding is still finishing") in flat
+        assert "wait for the user's go" in flat
 
     def test_summary_proposes_who_does_what(self, tmp_path):
         text = op.interview_instruction(str(tmp_path), is_scratch=False)

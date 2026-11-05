@@ -604,7 +604,14 @@ class PromptBuilder:
             f"{content}\n\n"
             "This is your core operating guide. Follow these objectives, rules, and preferences\n"
             "in all your work. If the user asks you to change your approach, update project_goals.md\n"
-            "to reflect the change."
+            "to reflect the change.\n"
+            # The prompt is rebuilt every call and ONBOARDING MODE ends the
+            # moment project_goals.md exists, so the interview's closing steps
+            # (INDEX.md, propose, wait) would vanish mid-run without this.
+            "If you wrote this file earlier in this conversation and the user has not said go since,\n"
+            "onboarding is still finishing: write orbital/INDEX.md if it is missing, then say in two\n"
+            "or three lines what you would do first and which agent would do it, and wait for the\n"
+            "user's go."
         )
 
     # -- Semi-stable sections (placed before history for caching) --
