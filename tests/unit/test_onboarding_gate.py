@@ -373,3 +373,38 @@ async def test_the_record_turn_still_writes_memory_under_the_gate(tmp_path):
     assert session.onboarding_gate is True
     assert open(os.path.join(ws, "orbital", "PROJECT_STATE.md"), encoding="utf-8").read() == "focus: 周报"
     assert gate.REFUSAL not in _tool_rows(session).values()
+
+
+# ---------------------------------------------------------------------------
+# 3. durable across eviction: the daemon drops an idle handle seconds after a
+#    run and the next event hydrates a fresh Session from the JSONL
+# ---------------------------------------------------------------------------
+
+async def test_the_gate_survives_a_reload_from_disk(tmp_path):
+    ws, session, tools, llm, loop = _rig(tmp_path, [
+        _batch(_goals_write()),
+        _reply("第一步：我来写周报初稿。"),
+        _batch(("shell", {"command": "ls"})),
+        _reply("等你的回复"),
+    ])
+    await loop.run()
+    reloaded = Session.load(session._filepath)
+    assert reloaded.onboarding_gate is True
+    # a wake that is not the user's reply (e.g. a background job finishing)
+    reloaded.append_system("[Background job] finished")
+    await _loop(ws, reloaded, llm, tools).run()
+    assert tools.executed == ["write"]
+    assert gate.REFUSAL in _tool_rows(reloaded).values()
+
+
+async def test_a_lifted_gate_stays_lifted_after_a_reload(tmp_path):
+    ws, session, tools, llm, loop = _rig(tmp_path, [_batch(_goals_write()), _reply("第一步…")])
+    await loop.run()
+    persist_user_row(session, "开始")
+    assert Session.load(session._filepath).onboarding_gate is False
+
+
+def test_a_session_without_the_field_loads_ungated(tmp_path):
+    session = Session.new("sess-old", str(tmp_path))
+    persist_user_row(session, "hi")
+    assert Session.load(session._filepath).onboarding_gate is False

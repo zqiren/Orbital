@@ -1862,7 +1862,7 @@ class AgentLoop:
                         _exec_result = result
                         self._note_written_path(tc, tool_content)
                         if _arms_gate and self._goals_written(tool_content):
-                            self._session.onboarding_gate = True
+                            self._session.set_onboarding_gate(True)
                             logger.info("onboarding gate up: project_goals.md created "
                                         "(session=%s)",
                                         getattr(self._session, "session_uuid", "?"))

@@ -15,8 +15,10 @@ is the go.
 
 The flag is daemon state, not prompt state: ``Session.onboarding_gate``, set
 by the loop's tool-dispatch path (``AgentLoop.run``) and cleared by
-``Session.append`` on a real user row. The prompt is rebuilt every call and
-never mentions it, so the cache prefix is untouched. A project whose goals
+``Session.append`` on a real user row. It is kept on the session_start meta
+(the daemon evicts an idle handle seconds after a run, and the next wake
+hydrates the session from disk). The prompt is rebuilt every call and never
+mentions it, so the cache prefix is untouched. A project whose goals
 file already exists never arms it (an overwrite is not a creation), and
 unattended runs (automation sessions, queue runs) are exempt.
 
