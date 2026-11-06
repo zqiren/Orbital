@@ -4,8 +4,10 @@
 
 /**
  * Spec 065 — an agent's mark at 13 px, the 154 rule: logo, not name. The name
- * is only the tooltip and the accessible label. No tile in light mode, a small
- * light tile in dark mode; Orbital's own mark already carries one.
+ * is only the tooltip and the accessible label. Orbital's own mark is an app
+ * icon (a white tile, glyph inset ~16%); every other mark gets the same 13 px
+ * tile and inset in both themes, so all marks read as one size and black marks
+ * stay visible on dark (the tile disappears on a white surface).
  */
 import { useState } from 'react';
 import { getAgentIcon } from '../../utils/agentIcons';
@@ -38,7 +40,7 @@ export function AgentLogo({ slug, title }: { slug: string; title?: string }) {
       title={name}
       data-agent={slug}
       className={`inline-flex h-[13px] w-[13px] shrink-0 overflow-hidden rounded-[3px] ${
-        orbital ? '' : 'dark:-m-px dark:h-[15px] dark:w-[15px] dark:bg-logo-tile dark:p-[1.5px]'
+        orbital ? '' : 'bg-logo-tile p-[2px]'
       }`}
     >
       <img
