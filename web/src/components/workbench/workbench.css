@@ -66,9 +66,14 @@
 .wb-chip.is-set { background: var(--wb-tint); color: var(--color-primary); }
 .wb-chip .wb-nm { overflow: hidden; text-overflow: ellipsis; }
 .wb-chip .wb-cv { color: var(--color-muted); display: inline-flex; flex: none; }
+/* Agent marks, here and on the card's meta line: one square box per place,
+ * every agent the same size. Orbital's PNG is an app icon (a white tile, its
+ * glyph inset ~16%), so every other mark gets the same tile and inset, in both
+ * themes: on white the tile disappears; on a tint or a dark surface it keeps
+ * black marks (Codex, Cursor, Kimi, Pi) visible and matches Orbital's. */
 .wb-av { width: 16px; height: 16px; border-radius: 4px; flex: none; display: inline-flex; align-items: center; justify-content: center; overflow: hidden; }
 .wb-av img { width: 100%; height: 100%; object-fit: contain; display: block; }
-:root[data-theme="dark"] .wb-av:not(.is-orb) { background: #F4F6F9; padding: 1.5px; }
+.wb-av:not(.is-orb) { background: var(--color-logo-tile); padding: 2.5px; }
 /* Attach (2026-11-05): the chat composer's Plus, first in the chip row. */
 .wb-plus {
   flex: none; width: 28px; height: 28px; margin-left: -6px; border-radius: 8px; display: inline-flex;
@@ -151,9 +156,15 @@
 .wb-askdetail .markdown-content pre code { background: none; font-size: .9em; line-height: inherit; }
 .wb-meta { font-size: 12px; line-height: 1.4; color: var(--color-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .wb-meta .wb-warn { color: var(--color-warning-text); }
-.wb-meta .wb-lg { display: inline-flex; width: 13px; height: 13px; vertical-align: -2px; margin-right: 4px; border-radius: 3px; overflow: hidden; }
+/* The meta line clips (overflow: hidden, for the ellipsis), so the mark stays
+ * inside its line box: top-aligned, then pushed down by half the leftover
+ * height, so it is centred and never grows or overflows the line. */
+.wb-meta .wb-lg {
+  display: inline-flex; box-sizing: border-box; width: 13px; height: 13px; vertical-align: top;
+  margin: calc((1.4em - 13px) / 2) 4px 0 0; border-radius: 3px; overflow: hidden;
+}
 .wb-meta .wb-lg img { width: 100%; height: 100%; object-fit: contain; display: block; }
-:root[data-theme="dark"] .wb-meta .wb-lg:not(.is-orb) { width: 17px; height: 17px; padding: 2px; margin-left: -2px; vertical-align: -4px; border-radius: 4px; background: #F4F6F9; }
+.wb-meta .wb-lg:not(.is-orb) { padding: 2px; background: var(--color-logo-tile); }
 .wb-rz { flex: none; min-width: 52px; display: flex; justify-content: flex-end; }
 .wb-time { font-size: 11.5px; line-height: 19px; color: var(--color-muted); white-space: nowrap; transition: opacity .15s, transform .15s; }
 
