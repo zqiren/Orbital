@@ -109,7 +109,7 @@ def _mgr(current_fingerprint="fp-current"):
         return f"Stopped {handle}"
 
     async def fake_start(project_id, handle, depth=0, *, session_id=None,
-                         announce=True, fresh=False, pinned=False):
+                         announce=True, fresh=False, pinned=False, initiator="management_agent"):
         calls["start"].append({"handle": handle, "fresh": fresh})
         mgr._adapters.setdefault(make_session_key(project_id, session_id), {})[handle] = (
             _FakeAdapter("fp-current"))

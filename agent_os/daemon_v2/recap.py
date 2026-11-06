@@ -55,6 +55,13 @@ _LEGACY_COMPLETED_RE = re.compile(
     r"\[Sub-agent\] \S+ completed\. Summary: ([\s\S]*)\. Transcript: "
 )
 
+# Rows that are bookkeeping, not conversation: the memory record / tidy turns
+# (spec 112 A6), the ask card (spec 146), and the daemon's worker-result turn
+# (spec 161: the instruction to the worker that dispatched; the child's reply
+# is already in the block as its own completion row).
+BOOKKEEPING_KINDS = frozenset(
+    {"memory_record", "memory_tidy", "ask_card", "worker_result"})
+
 _HEADER = (
     "Conversation so far (earlier messages in this chat, provided as "
     "context; prior replies are labeled \"assistant\"):\n\n"
@@ -112,7 +119,7 @@ def _visible_line(row: dict, handle: str, *, fresh: bool) -> str | None:
     # model's edits and its "nothing to record", a pinned worker's reminder
     # and its reply) is bookkeeping, not conversation. The reply before it
     # is what the chat said.
-    if row.get("_kind") in ("memory_record", "memory_tidy", "ask_card"):
+    if row.get("_kind") in BOOKKEEPING_KINDS:
         return None
     role = row.get("role")
     content = row.get("content")
@@ -184,7 +191,7 @@ def _dispatch_marker_paths(messages: list[dict]) -> dict[str, list[str]]:
     are bookkeeping (spec 112 A6) and never a source."""
     paths: dict[str, list[str]] = {}
     for row in messages:
-        if row.get("_kind") in ("memory_record", "memory_tidy", "ask_card"):
+        if row.get("_kind") in BOOKKEEPING_KINDS:
             continue
         meta = row.get("_meta")
         if (

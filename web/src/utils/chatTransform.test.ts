@@ -2964,3 +2964,66 @@ describe('transformChatHistory — a reply that is only mark_task_complete\'s su
     expect(items.some((i) => i.type === 'agent_message' && (i as { content: string }).content)).toBe(false);
   });
 });
+
+describe('transformChatHistory — spec 161 worker result delivery (_kind: worker_result)', () => {
+  // A pinned worker dispatched another worker; the child's result came back
+  // to it as a daemon turn. The row carrying that instruction (and its own
+  // dispatch marker) is model-facing; the parent's follow-up reply is not.
+  const DELIVERY = 'Your dispatched worker codex finished. Its reply is in the conversation above (labelled assistant). The user already sees it; do not repeat it. Verify or continue, then reply only with what is new.';
+
+  function rows(): ChatMessage[] {
+    return [
+      { ...user('have codex write hello.txt', TS), target: 'claude-code' },
+      {
+        role: 'system', source: 'daemon', timestamp: TS2,
+        content: '[Sub-agent] codex completed. Summary: Wrote hello.txt. Transcript: /c.jsonl.',
+        _meta: { event: 'sub_agent_terminal', kind: 'completed', handle: 'codex',
+          display_content: '[Sub-agent] codex completed. Summary: Wrote hello.txt. Transcript: /c.jsonl.',
+          reply: 'Wrote hello.txt with PONG.' },
+      },
+      { ...user(DELIVERY, TS3), target: 'claude-code', source: 'daemon', _kind: 'worker_result' },
+      {
+        role: 'system', source: 'daemon', timestamp: TS3,
+        content: `[Sub-agent] Message sent to claude-code: "${DELIVERY.slice(0, 100)}". Transcript: /cc.jsonl`,
+        _meta: { dispatch_id: 'd2', handle: 'claude-code', transcript_path: '/cc.jsonl', suppress_wake: true },
+      },
+      {
+        role: 'assistant', source: 'sub_agent', timestamp: TS4,
+        content: 'Verified: hello.txt says PONG.',
+        sub_agent_handle: 'claude-code',
+      } as ChatMessage,
+    ];
+  }
+
+  it('hides the delivery row and its marker, and keeps the follow-up bubble', () => {
+    const items = transformChatHistory(rows());
+    const users = items.filter((i) => i.type === 'user_message');
+    expect(users).toHaveLength(1);
+    expect(items.some((i) => i.type === 'sub_agent_activity' && i.action === 'sent'
+      && (i.preview ?? '').startsWith('"Your dispatched worker'))).toBe(false);
+    const bubbles = items.filter((i) => i.type === 'agent_message');
+    expect(bubbles.map((b) => (b.type === 'agent_message' ? b.content : ''))).toContain(
+      'Verified: hello.txt says PONG.');
+    const last = items[items.length - 1];
+    expect(last.type).toBe('agent_message');
+    if (last.type === 'agent_message') expect(last.source).toBe('claude-code');
+  });
+
+  it('never routes the delivery through the memory capsule logic', () => {
+    const items = transformChatHistory(rows());
+    expect(items.some((i) => i.type === 'agent_run' && i.memory_record)).toBe(false);
+  });
+
+  it('leaves an ordinary dispatch marker to another worker alone', () => {
+    const items = transformChatHistory([
+      { ...user(DELIVERY, TS), target: 'claude-code', source: 'daemon', _kind: 'worker_result' },
+      {
+        role: 'system', source: 'daemon', timestamp: TS2,
+        content: '[Sub-agent] Message sent to pi: "go". Transcript: /p.jsonl',
+        _meta: { dispatch_id: 'd3', handle: 'pi', transcript_path: '/p.jsonl' },
+      },
+    ]);
+    expect(items.some((i) => i.type === 'sub_agent_activity' && i.action === 'sent'
+      && i.handle === 'pi')).toBe(true);
+  });
+});

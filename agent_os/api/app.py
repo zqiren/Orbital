@@ -856,6 +856,13 @@ def _assemble_app(app: FastAPI, data_dir: str | None) -> FastAPI:
         finally:
             heartbeat_task.cancel()
 
+    # 8b. Spec 161: the dispatch MCP endpoint (/mcp) for the worker at the top
+    # of a session, and the hook that hands a dispatched worker's result back
+    # to the worker that dispatched it. Before the SPA catch-all below.
+    from agent_os.daemon_v2.dispatch_tools import attach_dispatch_server
+    lifecycle_observer.worker_terminal_hook = agent_manager._deliver_worker_result
+    attach_dispatch_server(app, sub_agent_manager)
+
     # 9. SPA static file serving (must be LAST — catch-all for non-API paths)
     spa_dir = os.environ.get(
         "AGENT_OS_SPA_DIR",

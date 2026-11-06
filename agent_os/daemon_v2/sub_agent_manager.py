@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import os
+import secrets
 import time
 from collections import deque
 from dataclasses import dataclass
@@ -28,6 +29,11 @@ from agent_os.agent.project_paths import ProjectPaths
 from agent_os.agents.setup_engine import StaleOkView
 from agent_os.agents.setup_types import handshake_failed
 from agent_os.daemon_v2.job_launcher import ensure_launcher, worker_instructions
+from agent_os.daemon_v2.dispatch_tools import (
+    TOKEN_ENV as DISPATCH_TOKEN_ENV,
+    TOP_INITIATORS,
+    DispatchContext,
+)
 from agent_os.daemon_v2.sub_agent_visibility import resolve_visible_sub_agent_slugs
 from agent_os.daemon_v2.models import (
     SessionKey,
@@ -165,6 +171,13 @@ class SubAgentManager:
         # "Approve all" is Orbital's existing temporary (10 minute) bypass,
         # never a request for a provider-persistent allow grant.
         self._permission_bypass_until: dict[tuple[str, str, str], float] = {}
+        # Spec 161: bearer token -> the top-of-session worker it was minted
+        # for. In memory only; a token dies with its adapter (stop, rebuild,
+        # eviction). ``_dispatch_url`` is set by ``attach_dispatch_server``
+        # when the daemon's /mcp endpoint exists; None means no worker gets
+        # the dispatch tool.
+        self._dispatch_tokens: dict[str, DispatchContext] = {}
+        self._dispatch_url: str | None = None
 
         # ProcessManager observes the genuine streaming turn boundary.  Keep
         # this duck-typed so focused tests and older embedders can supply a
@@ -265,7 +278,8 @@ class SubAgentManager:
     async def start(self, project_id: str, handle: str, depth: int = 0,
                     *, session_id: str | None = None,
                     announce: bool = True, fresh: bool = False,
-                    pinned: bool = False) -> str:
+                    pinned: bool = False,
+                    initiator: str = "management_agent") -> str:
         """Create adapter from config, call adapter.start(), register with process_manager.
 
         ``session_id`` selects which chat session this sub-agent attaches to.
@@ -286,6 +300,10 @@ class SubAgentManager:
         statement + narrow Layer-1 write contract + retraction titles)
         instead of the standard Layer-1 ban. Registry path only; the legacy
         adapter path renders no prompt.
+
+        ``initiator`` (spec 161) is the dispatch's own: a ``user_pinned`` or
+        ``queue_item`` spawn is the top of its session and gets the dispatch
+        tool (registry path only).
         """
         session_id = self._resolve_session_id(session_id)
         sk = make_session_key(project_id, session_id)
@@ -305,7 +323,7 @@ class SubAgentManager:
         if self._registry is not None and self._setup_engine is not None:
             return await self._start_from_registry(
                 project_id, handle, session_id=session_id, announce=announce,
-                fresh=fresh, pinned=pinned,
+                fresh=fresh, pinned=pinned, initiator=initiator,
             )
 
         # Legacy path: use adapter_configs
@@ -559,13 +577,18 @@ class SubAgentManager:
         )
 
     def _resolve_transport(self, manifest, config_dict, autonomy=None, system_prompt: str | None = None,
-                           resume_record: dict | None = None):
+                           resume_record: dict | None = None,
+                           dispatch_mcp: dict | None = None):
         """Resolve the appropriate transport for a manifest.
 
         system_prompt, when provided, is forwarded to transports that
         support it (SDK, Pipe, Pi RPC). PTYTransport does not currently support
         --append-system-prompt-file injection; the caller is responsible
         for the degraded first-turn injection path.
+
+        ``dispatch_mcp`` (spec 161, ``{"url", "token"}``) reaches the two
+        transports that can mount the daemon's HTTP MCP server: the SDK (as
+        an ``mcp_servers`` entry) and the codex app-server (as ``-c`` argv).
         """
         transport_hint = getattr(manifest.runtime, 'transport', 'auto')
         mode = manifest.runtime.mode
@@ -603,6 +626,7 @@ class SubAgentManager:
                         # Spec 149: the thinking level travels the same way.
                         effort=self._argv_value(
                             (config_dict or {}).get("args"), "--effort"),
+                        dispatch_mcp=dispatch_mcp,
                     )
             except ImportError:
                 pass
@@ -646,6 +670,7 @@ class SubAgentManager:
             return CodexTransport(
                 autonomy=autonomy,
                 resume_record=resume_record,
+                dispatch_url=(dispatch_mcp or {}).get("url"),
             )
         elif transport_type == "pi-rpc":
             from agent_os.agent.transports.pi_rpc_transport import PiRPCTransport
@@ -943,6 +968,18 @@ class SubAgentManager:
                             if started is not None else None),
         }
 
+    def dispatch_context(self, token: str | None) -> DispatchContext | None:
+        """The top-of-session worker a dispatch token was minted for (spec
+        161), or None for an unknown / revoked token."""
+        if not token:
+            return None
+        return self._dispatch_tokens.get(token)
+
+    def _revoke_dispatch_token(self, adapter) -> None:
+        token = getattr(adapter, "_dispatch_token", None) if adapter is not None else None
+        if isinstance(token, str):
+            self._dispatch_tokens.pop(token, None)
+
     def has_live_adapter(self, handle: str) -> bool:
         """Spec 116 D8: is an adapter for ``handle`` registered in ANY session
         whose transport is not known-dead? An idle SDK worker still holds its
@@ -1040,7 +1077,8 @@ class SubAgentManager:
                                    *, session_id: str | None = None,
                                    announce: bool = True,
                                    fresh: bool = False,
-                                   pinned: bool = False) -> str:
+                                   pinned: bool = False,
+                                   initiator: str = "management_agent") -> str:
         """Start a sub-agent using the manifest registry and setup engine.
 
         ``fresh=True`` (BACKLOG 005 §4d) forces a reset: skip resume and mint a
@@ -1148,6 +1186,7 @@ class SubAgentManager:
         # Re-render fresh per dispatch (per spec: "Do NOT cache the rendered string").
         # MEMORY.md is created LAZILY just before injection, never at project init.
         system_prompt: str | None = None
+        peer_slugs: tuple[str, ...] = ()
         if workspace:
             try:
                 from agent_os.agent.sub_agent_prompt import (
@@ -1170,6 +1209,7 @@ class SubAgentManager:
                 )
                 if not enabled_sub_agents:
                     enabled_sub_agents = [handle]
+                peer_slugs = tuple(enabled_sub_agents)
 
                 # Lazily create THIS sub-agent's MEMORY.md (not peers — see
                 # regression test 5: peer memory files are not created at
@@ -1252,13 +1292,34 @@ class SubAgentManager:
         # the catch is the general guard for a ValueError out of transport
         # construction (e.g. a malformed pipe config), so a bad manifest
         # surfaces as a dispatch error string instead of an unhandled raise.
+        # Spec 161 §5.2: the top of the session (the user's pin, an
+        # automation assigned to this worker) gets the dispatch tool; a
+        # worker the manager or another worker dispatched gets nothing.
+        dispatch_token: str | None = None
+        if initiator in TOP_INITIATORS and self._dispatch_url:
+            dispatch_token = secrets.token_urlsafe(32)
+            self._dispatch_tokens[dispatch_token] = DispatchContext(
+                project_id, session_id, handle, agents=peer_slugs)
         try:
             transport = self._resolve_transport(
                 manifest, config_dict, autonomy=autonomy, system_prompt=system_prompt,
                 resume_record=resume_record,
+                dispatch_mcp=({"url": self._dispatch_url, "token": dispatch_token}
+                              if dispatch_token else None),
             )
         except ValueError as e:
+            self._dispatch_tokens.pop(dispatch_token, None)
             return f"Error: unsupported transport in manifest: {e}"
+        if dispatch_token is not None:
+            if getattr(transport, "dispatch_mcp", None) is not None:
+                pass  # claude-code: the token rides the SDK's MCP header
+            elif getattr(transport, "_dispatch_url", None):
+                # codex reads it from the app-server's env by name.
+                config.env = {**(config.env or {}), DISPATCH_TOKEN_ENV: dispatch_token}
+            else:
+                # Transports without an HTTP MCP route (pipe, PTY, ACP, pi).
+                self._dispatch_tokens.pop(dispatch_token, None)
+                dispatch_token = None
 
         # Honesty downgrade: a record existed and its source was live, but
         # the resolved transport cannot resume (e.g. pipe fallback when the
@@ -1289,6 +1350,7 @@ class SubAgentManager:
                     "composition rendering failed for project=%s handle=%s",
                     project_id, handle,
                 )
+                self._dispatch_tokens.pop(dispatch_token, None)
                 return f"Error: composition rendering failed: {e}"
             config.args = list(config.args or []) + [
                 getattr(manifest.runtime, "config_flag", None) or "--config",
@@ -1316,6 +1378,7 @@ class SubAgentManager:
         # first dispatch of this process instead (spec 134 Part B).
         adapter._orbital_jobs_hint = (
             jobs_hint if transport_kind == "codex-appserver" else None)
+        adapter._dispatch_token = dispatch_token
 
         lock = self._get_lock(project_id, session_id=session_id)
         async with lock:
@@ -1328,6 +1391,7 @@ class SubAgentManager:
                     pass
                 from agent_os.agents.composition import unlink_rendered
                 unlink_rendered(rendered_config)
+                self._revoke_dispatch_token(adapter)
                 self._note_start_failure(project_id, handle, "spawn", exc=e,
                                          binary=config_dict.get("command"),
                                          started=started)
@@ -1576,6 +1640,8 @@ class SubAgentManager:
                 # Spec 074: a user_pinned dispatch spawns in pinned mode (the
                 # prompt carries the direct-chat + Layer-1 write contract).
                 pinned=(initiator == "user_pinned"),
+                # Spec 161: the top of the session gets the dispatch tool.
+                initiator=initiator,
             )
             if start_result.startswith("Error"):
                 # A spawn that never started is the dispatch's failure; no
@@ -2725,6 +2791,7 @@ class SubAgentManager:
                 adapters.pop(handle, None)
                 if not adapters:
                     self._adapters.pop(sk, None)
+                self._revoke_dispatch_token(adapter)
                 # The per-spawn composition dies with the spawn that read it.
                 # Only once the process is CONFIRMED dead: an unkillable slot
                 # keeps its file, and the spawn-time gc_stale sweeps it later.
@@ -3053,7 +3120,7 @@ class SubAgentManager:
             else:
                 dead.append(handle)
         for handle in dead:
-            adapters.pop(handle, None)
+            self._revoke_dispatch_token(adapters.pop(handle, None))
             logger.debug("cleaned stale adapter %s for %s", handle, sk)
         if not adapters:
             self._adapters.pop(sk, None)
