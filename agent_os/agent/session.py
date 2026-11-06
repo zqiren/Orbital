@@ -345,6 +345,12 @@ class Session:
         self.trigger_type: str | None = None
         self._first_user_seen: bool = False
 
+        # The onboarding gate (``agent_os.agent.onboarding_gate``): True from
+        # the moment a run in this session creates project_goals.md until the
+        # user's next message. Daemon state, never in the prompt and never
+        # persisted: the loop sets it, ``append`` clears it on a real user row.
+        self.onboarding_gate: bool = False
+
         # Rows loaded from disk with base64 images still inline (logs written
         # before the blob store, spec 066 phase 1b): ``id(row) -> row``.
         # Whole-file rewrites write these back exactly as they were — existing
@@ -610,6 +616,14 @@ class Session:
                 meta_fields["trigger_type"] = trigger_type
         if meta_fields:
             self._apply_meta_fields(**meta_fields)
+
+        # The user's reply lifts the onboarding gate. Only a real user row:
+        # system rows, daemon rows (the [MEMORY] record, worker records) and an
+        # automation's trigger header do not count as the user's go.
+        if (self.onboarding_gate and message.get("role") == "user"
+                and message.get("source") == "user"
+                and trigger_type_of(message.get("content")) is None):
+            self.onboarding_gate = False
 
         # Track tool_call IDs from assistant messages
         if message.get("role") == "assistant" and "tool_calls" in message:

@@ -145,6 +145,7 @@ _EMPTY_RESPONSE_NUDGE_LIMIT = 2
 # produces carries ``_kind: MEMORY_RECORD_KIND`` so it never replaces it.
 # ---------------------------------------------------------------------------
 from agent_os.agent import asks as asks_mod  # noqa: E402
+from agent_os.agent import onboarding_gate  # noqa: E402
 from agent_os.agent.context import MEMORY_RECORD_KIND, ask_card_row  # noqa: E402 — re-exported
 from agent_os.agent.project_paths import ProjectPaths  # noqa: E402
 MEMORY_RECORD_MAX_LLM_CALLS = 3
@@ -1096,6 +1097,7 @@ class AgentLoop:
         self._loop_exit_path = None
         self.last_run_stats = self._fresh_run_stats()
         self._run_tool_calls = 0
+        self._gate_refusals = 0
         rows_at_run_start = None  # set before the while; guarded in finally
         iteration = 0  # bound here so the except-backstop can always report it
         # Spec 112: a run is one snapshot segment. The Layer-1 rendering and
@@ -1652,6 +1654,7 @@ class AgentLoop:
                             _signal_tc = _tc
 
                 exit_outer = False
+                gate_ended = False
                 intercepted_tc_id = None
                 # Spec 134 Part B: a call asking to end the turn AFTER its
                 # batch (``yield_after_batch``, background jobs) lets its
@@ -1718,6 +1721,28 @@ class AgentLoop:
                         if refusal:
                             self._session.append_tool_result(tc["id"], refusal)
                             continue
+
+                    # The onboarding gate (onboarding_gate.py): after this
+                    # session's run created project_goals.md, tools that act
+                    # on the world wait for the user's go. Before the
+                    # interceptor so a refused call never asks for approval.
+                    # The second refusal in a run ends it.
+                    if (getattr(self._session, "onboarding_gate", False)
+                            and not onboarding_gate.allowed(self._workspace() or "", tc)):
+                        self._gate_refusals += 1
+                        self._session.append_tool_result(tc["id"], onboarding_gate.REFUSAL)
+                        if self._gate_refusals >= onboarding_gate.MAX_REFUSALS_PER_RUN:
+                            for rest in tool_calls:
+                                if rest["id"] in _signal_tc_ids or not rest["id"]:
+                                    continue
+                                if rest["id"] in self._session.pending_tool_calls:
+                                    self._session.append_tool_result(
+                                        rest["id"], onboarding_gate.REFUSAL)
+                            self._note_exit("onboarding_gate", iteration)
+                            gate_ended = True
+                            exit_outer = True
+                            break
+                        continue
 
                     # Interceptor check (fail-closed)
                     if self._interceptor is not None:
@@ -1806,6 +1831,8 @@ class AgentLoop:
                     # Execute tool (async-aware)
                     self._run_tool_calls += 1
                     self.last_run_stats["tool_calls"] += 1
+                    _arms_gate = (self._onboarding_gate_eligible()
+                                  and onboarding_gate.creates_goals(self._workspace() or "", tc))
                     try:
                         if self._tool_registry.is_async(tc["name"]):
                             result: ToolResult = await self._tool_registry.execute_async(
@@ -1834,6 +1861,11 @@ class AgentLoop:
                         # Store result for observation-aware hash
                         _exec_result = result
                         self._note_written_path(tc, tool_content)
+                        if _arms_gate and self._goals_written(tool_content):
+                            self._session.onboarding_gate = True
+                            logger.info("onboarding gate up: project_goals.md created "
+                                        "(session=%s)",
+                                        getattr(self._session, "session_uuid", "?"))
 
                         # yield_turn: a dispatch tool that delivered a task to a
                         # sub-agent ends the management turn immediately so the
@@ -1990,6 +2022,13 @@ class AgentLoop:
 
                 # Check if we need to exit the outer loop
                 if exit_outer:
+                    # The onboarding gate ended the run: a normal end for the
+                    # record turn (memory files only, its own executor).
+                    if gate_ended and self._memory_record_wanted():
+                        await self._memory_record_turn(
+                            active_provider, iteration, trigger="run_end",
+                            rows_at_run_start=rows_at_run_start,
+                        )
                     break
 
                 # Honor the deferred queue signal now that every sibling in
@@ -2325,6 +2364,23 @@ class AgentLoop:
                     pass
             if shown not in self._run_changed_files:
                 self._run_changed_files.append(shown)
+
+    def _onboarding_gate_eligible(self) -> bool:
+        """Whether a goals creation in this run arms the onboarding gate:
+        only attended chat runs. An automation session, a queue run and the
+        Memory session have nobody to give the go."""
+        if self._queue_state == "running":
+            return False
+        if getattr(self._session, "trigger_type", None) is not None:
+            return False
+        if getattr(self._session, "origin", None) == "memory":
+            return False
+        return bool(self._workspace())
+
+    def _goals_written(self, tool_content) -> bool:
+        if isinstance(tool_content, str) and tool_content.startswith("Error"):
+            return False
+        return os.path.exists(ProjectPaths(self._workspace() or "").project_goals)
 
     def _memory_record_wanted(self) -> bool:
         """Deterministic trigger gate (spec 112 A6). Skips only what cannot
