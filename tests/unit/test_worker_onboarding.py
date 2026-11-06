@@ -123,6 +123,8 @@ def _frozen_onboarding_or_directive(self, context) -> str:
             "   - What you should NOT do (boundaries)\n"
             "4. Keep it to at most 5 exchanges. Do not over-ask. If the user gives short answers,\n"
             "   work with what you have.\n"
+            "   Do not promise to start the work as soon as they answer: say that after their answer\n"
+            "   you will come back with a suggested first step for them to approve.\n"
             "5. Once confirmed (user says ok/yes/looks good/any affirmative, OR you've hit 5 exchanges),\n"
             f"   write project_goals.md to {context.workspace}/orbital/instructions/project_goals.md using the structure:\n"
             "   Mission, Triggers, Scope, Rules, Preferences.\n"
