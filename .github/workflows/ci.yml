@@ -2,7 +2,7 @@ name: CI
 
 # Builds and tests Orbital on every push to main, every PR, and on demand.
 # PyInstaller cannot cross-compile, so the macOS .dmg is built on an Apple
-# Silicon runner (macos-14) and the Windows installer on windows-latest.
+# Silicon runner (macos-15) and the Windows installer on windows-latest.
 #
 # NOTE: this is the project's first CI. The build steps mirror the manual
 # release runbook in CLAUDE.md (scripts/build-macos.sh, scripts/build-desktop.sh).
@@ -58,7 +58,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-14, windows-latest]
+        os: [macos-15, windows-latest]
     runs-on: ${{ matrix.os }}
     env:
       # ApiKeyStore.get_api_key() returns this env var BEFORE ever calling
@@ -91,7 +91,7 @@ jobs:
     needs: [frontend]
     # Skip the heavy build jobs on PRs; build on push to main, tags, and manual runs.
     if: github.event_name != 'pull_request'
-    runs-on: macos-14  # Apple Silicon → arm64 build (matches release runbook)
+    runs-on: macos-15  # Apple Silicon → arm64 build (matches release runbook)
     env:
       # Developer ID signing + notarization secrets. SAFE on a public repo:
       # this job never runs on pull_request (gated above), and GitHub never
