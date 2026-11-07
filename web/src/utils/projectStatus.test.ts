@@ -6,9 +6,11 @@ import { describe, it, expect, vi } from 'vitest';
 import type { AgentRunStatus } from '../types';
 import {
   SUB_AGENTS_RUNNING_EVENTS,
+  aggregateProjectStatus,
   createSubAgentsRunningSync,
   displayRunStatus,
   getProjectDotColor,
+  sessionStatusOf,
 } from './projectStatus';
 
 describe('getProjectDotColor — precedence (spec 095)', () => {
@@ -175,5 +177,48 @@ describe('spec 147: background jobs refresh the running flag', () => {
     await vi.waitFor(() => expect(apply).toHaveBeenLastCalledWith('p', false));
     expect(fetchFlag).toHaveBeenCalledTimes(2);
     expect(handlers.has('fanout.task_update')).toBe(true);
+  });
+});
+
+describe('spec 155: per-session status and the project aggregate', () => {
+  const dotOf = (status: AgentRunStatus) => getProjectDotColor('p', { p: status }, {}, {});
+
+  it('stays green while either of two sessions runs, grey once both end', () => {
+    // A finished (its idle is the newest event) while B still runs.
+    expect(aggregateProjectStatus('idle', { A: 'idle', B: 'running' })).toBe('running');
+    expect(dotOf(aggregateProjectStatus('idle', { A: 'idle', B: 'running' }))).toBe('bg-success-text');
+    expect(aggregateProjectStatus('idle', { A: 'idle', B: 'idle' })).toBe('idle');
+    expect(dotOf(aggregateProjectStatus('idle', { A: 'idle', B: 'idle' }))).toBe('bg-idle');
+  });
+
+  it('ranks running over waiting over an approval, then the newest event decides', () => {
+    expect(aggregateProjectStatus('idle', { A: 'pending_approval', B: 'waiting' })).toBe('waiting');
+    expect(aggregateProjectStatus('idle', { A: 'pending_approval' })).toBe('pending_approval');
+    expect(aggregateProjectStatus('error', { A: 'error', B: 'idle' })).toBe('error');
+    expect(aggregateProjectStatus('idle', { A: 'error', B: 'idle' })).toBe('idle');
+  });
+
+  it('with one session (or none known) it is the old one-status rule', () => {
+    expect(aggregateProjectStatus('running', undefined)).toBe('running');
+    expect(aggregateProjectStatus(undefined, undefined)).toBe('idle');
+    expect(aggregateProjectStatus('running', { A: 'idle' })).toBe('idle');
+  });
+
+  it('a view reads its own session, not the project', () => {
+    const sessions = { p: { A: 'running' as AgentRunStatus, B: 'idle' as AgentRunStatus } };
+    const project = { p: 'running' as AgentRunStatus };
+    expect(sessionStatusOf('p', 'A', sessions, project)).toBe('running');
+    expect(sessionStatusOf('p', 'B', sessions, project)).toBe('idle');
+    expect(sessionStatusOf('p', 'C', sessions, project)).toBe('idle');
+    expect(sessionStatusOf('p', undefined, sessions, project)).toBe('running');
+  });
+});
+
+describe('spec 155: a hydrated approval lights the dot', () => {
+  it('pending_approval shows the approval colour with no live approval event', () => {
+    expect(getProjectDotColor('p', { p: 'pending_approval' }, {}, {})).toBe('bg-warning-text');
+    expect(getProjectDotColor('p', {
+      p: aggregateProjectStatus('idle', { A: 'pending_approval', B: 'idle' }),
+    }, {}, {})).toBe('bg-warning-text');
   });
 });

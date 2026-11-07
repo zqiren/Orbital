@@ -480,6 +480,9 @@ class AgentLoop:
         self._run_memory_written: bool = False
         self._memory_record_done: bool = False
         self._memory_record_active: bool = False
+        # Spec 155: True while this loop's record turn holds the project's
+        # record lock (released in that turn's ``finally``).
+        self._record_lock_held: bool = False
         self._open_asks_seen: dict | None = None
 
         # Spec 124 §3.7 — the Memory session's loop. ``tool_guard(tc)`` is a
@@ -2479,6 +2482,66 @@ class AgentLoop:
         path = args.get("path") if isinstance(args, dict) else None
         return classify_written_path(self._workspace() or "", path) == "memory"
 
+    def _record_turn_write_refused(self, tc: dict) -> bool:
+        """Spec 155 §5.1.4: a record-turn ``write`` on a memory file that
+        exists is refused, so every record-turn write is an exact-match edit
+        against the live file and can never revert a writer outside the
+        record lock (a worker, the Memory session, a mid-run edit). ``write``
+        stays for a missing file (the row's ``_MISSING_FILE_NOTE``)."""
+        if tc.get("name") != "write":
+            return False
+        args = tc.get("arguments") or {}
+        path = args.get("path") if isinstance(args, dict) else None
+        workspace = self._workspace() or ""
+        if not isinstance(path, str) or not path.strip() or not workspace:
+            return False
+        raw = path.strip()
+        full = os.path.normpath(raw if os.path.isabs(raw) else os.path.join(workspace, raw))
+        return os.path.exists(full)
+
+    def _note_record_row_seen(self, workspace: str) -> None:
+        """Spec 155 §5.1.3: the row showed PROJECT_STATE as it is now, so the
+        writer has seen every id in it. Without this, an entry another session
+        added after this run started would be put back by conservation when
+        this turn deliberately overwrites its line."""
+        from agent_os.agent import memory_entries as _mem
+        from agent_os.agent import state_blocks as _blocks
+        seen = _mem.seen_state_ids()
+        if seen is None or not workspace:
+            return
+        try:
+            text = read_text_lenient(os.path.join(workspace, "orbital", "PROJECT_STATE.md"))
+            if text is not None:
+                seen.update(b.id for b in _blocks.parse(text)[1] if b.id)
+        except Exception:  # noqa: BLE001 — a parse bug must not break the turn
+            logger.warning("record-row seen-set update failed", exc_info=True)
+
+    async def _acquire_record_lock(self, lock: "asyncio.Lock") -> bool:
+        """Wait for the project's record lock as the in-flight task, so spec
+        142's ``yield_memory_record`` (a user message to this session) and
+        Stop cancel the wait exactly as they cancel a record call. True once
+        the lock is held — including a cancel that lands after the acquire
+        completed, which the caller must still release; False when the wait
+        was cancelled by a yield (Stop re-raises)."""
+        waiter = asyncio.create_task(
+            lock.acquire(), name=f"memory-record-lock-{self._session.session_uuid}")
+        self._inflight_stream = waiter
+        try:
+            await waiter
+            return True
+        except asyncio.CancelledError:
+            if waiter.done() and not waiter.cancelled() and waiter.exception() is None:
+                # Acquired in the same tick the cancel landed: we hold it.
+                self._record_lock_held = True
+            current = asyncio.current_task()
+            if (self._session.is_stopped() or not waiter.cancelled()
+                    or (current is not None and current.cancelling())):
+                raise
+            return False
+        finally:
+            if self._inflight_stream is waiter:
+                self._inflight_stream = None
+
     async def _stream_quiet(self, provider, context, tool_schemas) -> LLMResponse:
         """``_stream_response_internal`` without the per-chunk stream
         notification: the record turn's text is never shown live."""
@@ -2509,7 +2572,29 @@ class AgentLoop:
         llm_calls = 0
         tool_calls = 0
         outcome = "nothing"
+        lock = None
+        lock_wait_ms = 0
+        self._record_lock_held = False
         try:
+            # Spec 155 §5.1.2: take the project's record lock BEFORE the row
+            # is built, so a second session's row is the file as the first
+            # session's record turn left it. No timer: the holder is bounded
+            # by its call and tool caps; a user message here or Stop ends the
+            # wait (the run then ends unrecorded, as spec 142 already does).
+            if workspace:
+                from agent_os.agent import memory_editor as _memory_editor
+                lock = _memory_editor.record_lock(workspace)
+                started = time.monotonic()
+                acquired = await self._acquire_record_lock(lock)
+                lock_wait_ms = int((time.monotonic() - started) * 1000)
+                if not acquired:
+                    outcome = "yielded" if self._session.list_queued() else "cancelled"
+                    return
+                self._record_lock_held = True
+                if self._session.list_queued():
+                    # A message arrived while the wait was ending.
+                    outcome = "yielded"
+                    return
             # The record turn's own rows are its conversation: in the window
             # now, dropped from every later call (context.py).
             self._context_manager.include_memory_record_rows = True
@@ -2518,6 +2603,7 @@ class AgentLoop:
                 self._sub_agent_results_this_run(rows_at_run_start),
                 trigger=trigger,
             )
+            self._note_record_row_seen(workspace)
             self._session.row_kind = MEMORY_RECORD_KIND
             self._session.append({
                 "role": "system",
@@ -2580,6 +2666,13 @@ class AgentLoop:
                         )
                         continue
                     tool_calls += 1
+                    if self._record_turn_write_refused(tc):
+                        self._session.append_tool_result(
+                            tc["id"],
+                            "Error: the memory record turn edits the files with "
+                            "the exact text shown above. Use edit.",
+                        )
+                        continue
                     if not self._record_turn_tool_allowed(tc):
                         self._session.append_tool_result(
                             tc["id"],
@@ -2622,6 +2715,11 @@ class AgentLoop:
             logger.warning("memory record turn failed", exc_info=True)
             outcome = "error"
         finally:
+            # Release whenever the acquire completed, including a cancel that
+            # landed after it (spec 155 §5.1.2 invariant).
+            if lock is not None and self._record_lock_held:
+                self._record_lock_held = False
+                lock.release()
             self._session.row_kind = None
             self._memory_record_active = False
             self._note_ask_changes()
@@ -2633,6 +2731,7 @@ class AgentLoop:
                 "memory_record", iteration=iteration, trigger=trigger,
                 llm_calls=llm_calls, tool_calls=tool_calls, outcome=outcome,
                 changed_files=len(self._run_changed_files),
+                lock_wait_ms=lock_wait_ms,
             )
 
     async def _run_refresh(self, trigger_name: str, iteration: int) -> None:

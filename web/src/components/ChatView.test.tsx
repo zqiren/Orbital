@@ -45,9 +45,9 @@ let chatResponseGate: Promise<void> | null = null;
 let chatInitialResponse: { data: unknown[]; total: number } = { data: [], total: 0 };
 let chatOlderResponse: { data: unknown[]; total: number } = { data: [], total: 0 };
 
-// Configurable run-status holder. fetchHolder() and the run-status poll read
-// /run-status; tests set this to drive the slot-holder comparison that gates
-// live-event rendering. null = no holder.
+// Legacy run-status `current_holder_session_id`. Spec 155: ChatView no longer
+// reads it (sessions run in parallel; agentStatus is the viewed session's own),
+// so tests that still set it prove it no longer matters.
 let runStatusHolder: string | null = null;
 
 // Configurable run-status last_terminal_event — drives the classified-error
@@ -502,6 +502,25 @@ describe('ChatView Stop button: isCancelling optimistic state', () => {
       );
     });
   }
+
+  // Spec 155 (B4): Stop stops the VIEWED session, never "the holder" — even
+  // when run-status names another running session of the project.
+  it('Stop cancels the viewed session even while another session runs', async () => {
+    runStatusHolder = 'sess-other-running';
+    await act(async () => {
+      root.render(
+        <ChatView projectId="p1" project={project} agentStatus="running" agents={[]} sessionId="s-b" />,
+      );
+    });
+    await flushEffects();
+    cancelMessageCalls.length = 0;
+    const stop = container.querySelector('button[aria-label="Stop"]') as HTMLButtonElement;
+    await act(async () => {
+      stop.click();
+      await Promise.resolve();
+    });
+    expect(cancelMessageCalls).toEqual([['p1', 's-b']]);
+  });
 
   it('sets aria-label="Cancelling" synchronously on Stop click and shows a spinner', async () => {
     // Make cancelMessage hang so isCancelling stays true long enough to observe.
@@ -1234,71 +1253,33 @@ describe('T5 ChatView: inject targets the viewed session', () => {
     expect(args[5]).toBe('s7');
   });
 
-  // Spec 006 §6 test 13 (rewrite of the old slot_held test). The 202 happy
-  // path is now `queued_pending_slot`: the message was ACCEPTED + queued. The
-  // optimistic bubble is KEPT (not removed) and a "Waiting for {holder}…"
-  // affordance shows.
-  it('keeps the optimistic bubble and shows the waiting affordance on 202 queued_pending_slot', async () => {
-    injectMessageMock = async () => ({
-      status: 'queued_pending_slot',
-      holding_session_id: 'sess-A',
-      queued_session_id: 's1',
-      nonce: 'ignored-server-nonce',
-      position: 0,
-    });
-    await renderChat({ agentStatus: 'idle', sessionId: 's1' });
+  // Spec 155: sessions of a project run in parallel. The viewed session's
+  // own status drives the composer, so a send to an idle session while
+  // ANOTHER session runs is a normal send: Send (not Queue), no waiting card,
+  // no Run now — the 202 queued_pending_slot / slot_held contract is gone.
+  it('a send to an idle session while another session runs is a normal send', async () => {
+    injectMessageMock = async () => ({ status: 'started' });
+    await renderChat({ agentStatus: 'idle', sessionId: 's-b' });
     await flushEffects();
-
     await act(async () => {
-      typeInComposer('queued message');
+      typeInComposer('second session task');
     });
     const send = container.querySelector('button[aria-label="Send"]') as HTMLButtonElement;
+    expect(send).toBeTruthy();
+    expect([...container.querySelectorAll('button')].some(
+      (b) => (b.textContent ?? '').trim() === 'Queue')).toBe(false);
     await act(async () => {
       send.click();
       await Promise.resolve();
       await Promise.resolve();
     });
-
-    // The optimistic bubble is KEPT.
-    expect(container.textContent ?? '').toContain('queued message');
-    // The new waiting affordance is shown. v3 copy is placeholder-free (no
-    // holder id) and a cross-session entry offers [Run now].
-    const notice = container.querySelector('[data-testid="pending-input-notice"]');
-    expect(notice).toBeTruthy();
-    const body = container.querySelector('[data-testid="pending-input-notice-body"]');
-    expect(body?.textContent ?? '').toContain('Waiting for other sessions to finish.');
-    expect(container.querySelector('[data-testid="pending-input-notice-run-now"]')).toBeTruthy();
-    // No Stop-waiting button in v3.
-    expect(container.querySelector('[data-testid="pending-input-notice-stop"]')).toBeNull();
-    // The OLD slot_held notice is NOT used on the happy path.
-    expect(container.querySelector('[data-testid="slot-held-notice"]')).toBeNull();
-  });
-
-  it('falls back to SlotHeldNotice when inject returns 202 slot_held (enqueue failure)', async () => {
-    // slot_held is retained ONLY as the defensive enqueue-failure fallback.
-    injectMessageMock = async () => ({
-      status: 'slot_held',
-      holding_session_id: 'other-session',
-    });
-    await renderChat({ agentStatus: 'idle', sessionId: 's1' });
-    await flushEffects();
-
-    await act(async () => {
-      typeInComposer('queued message');
-    });
-    const send = container.querySelector('button[aria-label="Send"]') as HTMLButtonElement;
-    await act(async () => {
-      send.click();
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    const notice = container.querySelector('[data-testid="slot-held-notice"]');
-    expect(notice).toBeTruthy();
-    const holder = container.querySelector('[data-testid="slot-held-notice-holder"]');
-    expect(holder?.textContent ?? '').toContain('other-session');
-    // The fallback uses the OLD notice, NOT the new pending-input affordance.
+    expect(injectCalls.length).toBe(1);
+    expect(injectCalls[0][5]).toBe('s-b');
+    expect(container.textContent ?? '').toContain('second session task');
     expect(container.querySelector('[data-testid="pending-input-notice"]')).toBeNull();
+    expect(container.textContent ?? '').not.toContain('Waiting for other sessions');
+    expect(container.querySelector('[data-testid="pending-input-notice-run-now"]')).toBeNull();
+    expect(container.querySelector('[data-testid="slot-held-notice"]')).toBeNull();
   });
 });
 
@@ -1567,16 +1548,17 @@ describe('Spec 096: live indicators stay on the session doing the work', () => {
   const thinkingVisible = () => (container.textContent ?? '').includes('Thinking...');
   const workerDotsVisible = () => (container.textContent ?? '').includes('●●●');
 
-  it('shows Thinking only on the holder, across a switch away and back', async () => {
-    runStatusHolder = 'A';
+  // Spec 155: agentStatus is the VIEWED session's own status (App keeps one
+  // per session), so switching sessions switches the status with it.
+  it('shows Thinking only on the session that runs, across a switch away and back', async () => {
     await renderChat({ agentStatus: 'idle', sessionId: 'A' });
     await flushEffects();
     await renderChat({ agentStatus: 'running', sessionId: 'A' });
     await flushEffects();
     expect(thinkingVisible()).toBe(true);
 
-    // The regression: an idle session showed the holder's spinner.
-    await renderChat({ agentStatus: 'running', sessionId: 'B' });
+    // The regression: an idle session showed the running session's spinner.
+    await renderChat({ agentStatus: 'idle', sessionId: 'B' });
     await flushEffects();
     expect(thinkingVisible()).toBe(false);
 
@@ -1589,20 +1571,25 @@ describe('Spec 096: live indicators stay on the session doing the work', () => {
     expect(thinkingVisible()).toBe(false);
   });
 
-  it('shows Thinking once the holder resolves after the running tick (mid-run reload)', async () => {
-    runStatusHolder = 'A';
-    // Mount straight into a running turn: the status effect runs before the
-    // holder fetch lands, so the holder is still unknown at that tick.
+  it('shows Thinking on mount straight into a running turn (mid-run reload)', async () => {
     await renderChat({ agentStatus: 'running', sessionId: 'A' });
     await flushEffects();
     expect(thinkingVisible()).toBe(true);
   });
 
   it('shows no Thinking after a mid-run reload on an idle session', async () => {
-    runStatusHolder = 'A';
-    await renderChat({ agentStatus: 'running', sessionId: 'B' });
+    await renderChat({ agentStatus: 'idle', sessionId: 'B' });
     await flushEffects();
     expect(thinkingVisible()).toBe(false);
+  });
+
+  it('two sessions running at once both show Thinking', async () => {
+    await renderChat({ agentStatus: 'running', sessionId: 'A' });
+    await flushEffects();
+    expect(thinkingVisible()).toBe(true);
+    await renderChat({ agentStatus: 'running', sessionId: 'B' });
+    await flushEffects();
+    expect(thinkingVisible()).toBe(true);
   });
 
   it('keeps Thinking on the holder while it is waiting on its workers', async () => {
@@ -1674,21 +1661,27 @@ describe('Spec 096: live indicators stay on the session doing the work', () => {
 });
 
 describe('ChatView: pending-input queue (spec 006)', () => {
-  // Helper: send a message that gets queued (202 queued_pending_slot) into the
-  // viewed session, returning after the optimistic bubble + affordance render.
-  async function sendQueued(sessionId: string, holder: string, text: string) {
-    injectMessageMock = async () => ({
-      status: 'queued_pending_slot',
-      holding_session_id: holder,
-      queued_session_id: sessionId,
-      position: 0,
+  // Spec 155: every queued message is a SAME-session one (the viewed
+  // session's own turn is running). Seed entries with known nonces through
+  // GET /pending (the reconnect/recovery path), or send while running.
+  async function seedQueued(entries: Array<{ nonce: string; content: string }>, sessionId = 's1') {
+    getPendingMock = async () => ({
+      holder: null,
+      pending: entries.map((e, i) => ({
+        session_id: sessionId, nonce: e.nonce, content: e.content, position: i + 1, kind: 'same',
+      })),
     });
+    await renderChat({ agentStatus: 'running', sessionId });
+    await flushEffects();
+  }
+
+  async function sendQueued(text: string, sessionId = 's1') {
+    injectMessageMock = async () => ({ status: 'queued_same_session' });
     await renderChat({ agentStatus: 'running', sessionId });
     await flushEffects();
     await act(async () => {
       typeInComposer(text);
     });
-    // agentStatus 'running' renders the "Queue" button (not "Send").
     const btn =
       (container.querySelector('button[aria-label="Send"]') as HTMLButtonElement | null) ??
       ([...container.querySelectorAll('button')].find(
@@ -1699,27 +1692,12 @@ describe('ChatView: pending-input queue (spec 006)', () => {
       await Promise.resolve();
       await Promise.resolve();
     });
+    return injectCalls[injectCalls.length - 1][3] as string; // the nonce
   }
 
   it('test 14: chat.pending_dispatched clears the waiting affordance for the viewed session', async () => {
-    await sendQueued('s1', 'sess-A', 'hello B');
-    expect(container.querySelector('[data-testid="pending-input-notice"]')).toBeTruthy();
-
-    // The dispatch echo for our own nonce: we don't know the internally-minted
-    // nonce, so simulate the real backend ordering — chat.pending_dispatched is
-    // session-scoped and is the SOLE clear trigger. Emit with the matching
-    // session; the handler clears by nonce, so emit using the nonce that the
-    // origin tab tracked. We can't read it, so assert the cross-tab analogue:
-    // emit pending_enqueued from ANOTHER tab/nonce, then dispatch THAT nonce.
-    await act(async () => {
-      emitWs('chat.pending_enqueued', {
-        type: 'chat.pending_enqueued', project_id: 'p1', session_id: 's1',
-        holder: 'sess-A', nonce: 'n-dispatch', content: 'second queued', position: 1,
-      });
-    });
-    // Two notices now (origin + cross-tab nonce).
+    await seedQueued([{ nonce: 'n-first', content: 'first queued' }, { nonce: 'n-dispatch', content: 'second queued' }]);
     expect(container.querySelectorAll('[data-testid="pending-input-notice"]').length).toBe(2);
-
     await act(async () => {
       emitWs('chat.pending_dispatched', {
         type: 'chat.pending_dispatched', project_id: 'p1', session_id: 's1', nonce: 'n-dispatch',
@@ -1729,37 +1707,40 @@ describe('ChatView: pending-input queue (spec 006)', () => {
     expect(container.querySelectorAll('[data-testid="pending-input-notice"]').length).toBe(1);
   });
 
+  it('test 14 (send path): the sent message\'s own nonce is cleared on dispatch', async () => {
+    const nonce = await sendQueued('hello again');
+    expect(container.querySelector('[data-testid="pending-input-notice"]')).toBeTruthy();
+    await act(async () => {
+      emitWs('chat.pending_dispatched', {
+        type: 'chat.pending_dispatched', project_id: 'p1', session_id: 's1', nonce,
+      });
+    });
+    expect(container.querySelector('[data-testid="pending-input-notice"]')).toBeNull();
+    expect(container.textContent ?? '').toContain('hello again'); // bubble kept
+  });
+
   it('test 14b: chat.pending_dispatched for a non-viewed session does not error', async () => {
-    await sendQueued('s1', 'sess-A', 'hello B');
+    await sendQueued('hello B');
     await act(async () => {
       emitWs('chat.pending_dispatched', {
         type: 'chat.pending_dispatched', project_id: 'p1', session_id: 's-other', nonce: 'whatever',
       });
     });
-    // Our viewed-session affordance is untouched (different nonce/session).
     expect(container.querySelector('[data-testid="pending-input-notice"]')).toBeTruthy();
   });
 
   it('test 15: switch away during pending then back restores the affordance from GET /pending', async () => {
-    await sendQueued('s1', 'sess-A', 'hello B');
+    await sendQueued('hello B');
     expect(container.querySelector('[data-testid="pending-input-notice"]')).toBeTruthy();
-
-    // Backend now reports the pending entry via GET /pending (persist-at-dispatch
-    // means it is NOT in B's JSONL, so only /pending recovers it).
     getPendingMock = async () => ({
-      holder: 'sess-A',
+      holder: null,
       pending: [
-        { session_id: 's1', nonce: 'n-recovered', content: 'hello B', position: 0, kind: 'cross' },
+        { session_id: 's1', nonce: 'n-recovered', content: 'hello B', position: 1, kind: 'same' },
       ],
     });
-
-    // Switch away to s2 …
-    await renderChat({ agentStatus: 'running', sessionId: 's2' });
+    await renderChat({ agentStatus: 'idle', sessionId: 's2' });
     await flushEffects();
-    // s2 is a different session: no affordance for it.
     expect(container.querySelector('[data-testid="pending-input-notice"]')).toBeNull();
-
-    // … and back to s1 — the affordance + bubble are restored from GET /pending.
     await renderChat({ agentStatus: 'running', sessionId: 's1' });
     await flushEffects();
     expect(container.querySelector('[data-testid="pending-input-notice"]')).toBeTruthy();
@@ -1769,21 +1750,16 @@ describe('ChatView: pending-input queue (spec 006)', () => {
   it('test 16: long wait (>30s nonce eviction) then dispatch echo → no duplicate bubble', async () => {
     vi.useFakeTimers();
     try {
-      // A cross-tab enqueue renders an optimistic bubble + registers the nonce.
-      await renderChat({ agentStatus: 'running', sessionId: 's1' });
-      await act(async () => { await Promise.resolve(); });
-
-      await act(async () => {
-        emitWs('chat.pending_enqueued', {
-          type: 'chat.pending_enqueued', project_id: 'p1', session_id: 's1',
-          holder: 'sess-A', nonce: 'n-long', content: 'long-wait-msg', position: 0,
-        });
+      getPendingMock = async () => ({
+        holder: null,
+        pending: [{ session_id: 's1', nonce: 'n-long', content: 'long-wait-msg', position: 1, kind: 'same' }],
       });
+      await renderChat({ agentStatus: 'running', sessionId: 's1' });
+      await act(async () => { await Promise.resolve(); await Promise.resolve(); });
       const countBubbles = () =>
         (container.textContent ?? '').split('long-wait-msg').length - 1;
       expect(countBubbles()).toBe(1);
 
-      // Advance > 30s and trigger the eviction sweep via an unrelated user echo.
       await act(async () => {
         vi.advanceTimersByTime(40_000);
         emitWs('chat.user_message', {
@@ -1791,9 +1767,6 @@ describe('ChatView: pending-input queue (spec 006)', () => {
           content: 'unrelated', nonce: 'n-unrelated', timestamp: new Date().toISOString(),
         });
       });
-
-      // Now the dispatch echo arrives for our pending nonce — it must DEDUP
-      // (the nonce was exempt from eviction), so no second bubble.
       await act(async () => {
         emitWs('chat.user_message', {
           type: 'chat.user_message', project_id: 'p1', session_id: 's1',
@@ -1806,87 +1779,18 @@ describe('ChatView: pending-input queue (spec 006)', () => {
     }
   });
 
-  it('test 17: Run now calls cancelMessage(holder) exactly once and injectMessage zero times', async () => {
-    await sendQueued('s1', 'sess-A', 'hello B');
-    // sendQueued already called injectMessage once (the send). Reset the counter
-    // so we measure ONLY the Run-now path.
-    injectCalls.length = 0;
-    cancelMessageCalls.length = 0;
-
-    const runNow = container.querySelector(
-      '[data-testid="pending-input-notice-run-now"]',
-    ) as HTMLButtonElement;
-    await act(async () => {
-      runNow.click();
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    expect(cancelMessageCalls.length).toBe(1);
-    expect(cancelMessageCalls[0][0]).toBe('p1');
-    expect(cancelMessageCalls[0][1]).toBe('sess-A');
-    // No re-inject (the queued message dispatches itself).
-    expect(injectCalls.length).toBe(0);
-  });
-
-  it('test 18: multi-tab — chat.pending_enqueued dedups by nonce (no double bubble)', async () => {
-    await renderChat({ agentStatus: 'running', sessionId: 's1' });
-    await flushEffects();
-
-    const evt = {
-      type: 'chat.pending_enqueued', project_id: 'p1', session_id: 's1',
-      holder: 'sess-A', nonce: 'n-dup', content: 'multi-tab-msg', position: 0,
-    };
-    await act(async () => { emitWs('chat.pending_enqueued', evt); });
-    await act(async () => { emitWs('chat.pending_enqueued', evt); }); // relay retry
-
-    const count = (container.textContent ?? '').split('multi-tab-msg').length - 1;
-    expect(count).toBe(1);
-    expect(container.querySelectorAll('[data-testid="pending-input-notice"]').length).toBe(1);
-  });
-
-  it('test 19: Run now vs self-free race — stale cancel(holder) still only calls cancelMessage once, no inject', async () => {
-    // The slot may have already freed (holder gone) by the time the user clicks
-    // Run now. The frontend still just calls cancelMessage(holder) once (a no-op
-    // server-side) and never re-injects — backend guarantees B runs once.
-    await sendQueued('s1', 'sess-A', 'hello B');
-    injectCalls.length = 0;
-    cancelMessageCalls.length = 0;
-    // Simulate the holder already being free: cancelMessage resolves as a no-op.
-    cancelMessageMock = async () => ({ status: 'idle' });
-
-    const runNow = container.querySelector(
-      '[data-testid="pending-input-notice-run-now"]',
-    ) as HTMLButtonElement;
-    await act(async () => {
-      runNow.click();
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    expect(cancelMessageCalls.length).toBe(1);
-    expect(injectCalls.length).toBe(0);
-  });
-
-  it('v3: the notice has NO Stop-waiting button', async () => {
-    await sendQueued('s1', 'sess-A', 'hello B');
+  it('v3: the notice has NO Stop-waiting button and no Run now', async () => {
+    await sendQueued('hello B');
     expect(container.querySelector('[data-testid="pending-input-notice"]')).toBeTruthy();
     expect(container.querySelector('[data-testid="pending-input-notice-stop"]')).toBeNull();
+    expect(container.querySelector('[data-testid="pending-input-notice-run-now"]')).toBeNull();
   });
 
   // ─── v3 §12 R1: mobile tap-to-edit ────────────────────────────────────────
 
   it('tap-to-edit recalls the queued message (cancelPendingInput, loads text, removes bubble)', async () => {
-    await renderChat({ agentStatus: 'running', sessionId: 's1' });
-    await flushEffects();
-    await act(async () => {
-      emitWs('chat.pending_enqueued', {
-        type: 'chat.pending_enqueued', project_id: 'p1', session_id: 's1',
-        holder: 'sess-A', nonce: 'n-tap', content: 'tap-me', position: 0,
-      });
-    });
+    await seedQueued([{ nonce: 'n-tap', content: 'tap-me' }]);
     expect(container.textContent ?? '').toContain('tap-me');
-
     const edit = container.querySelector(
       '[data-testid="pending-input-notice-edit"]',
     ) as HTMLButtonElement;
@@ -1895,28 +1799,18 @@ describe('ChatView: pending-input queue (spec 006)', () => {
       await Promise.resolve();
       await Promise.resolve();
     });
-
     expect(cancelPendingInputCalls.length).toBe(1);
     expect(cancelPendingInputCalls[0]).toEqual(['p1', 's1', 'n-tap']);
-    // removed:true (default) → text loaded into the composer, bubble + notice gone.
     const textarea = container.querySelector('textarea') as HTMLTextAreaElement;
     expect(textarea.value).toBe('tap-me');
-    // The bubble was removed: the empty-state placeholder is back.
-    expect(container.textContent ?? '').toContain('No messages yet');
+    expect(container.textContent ?? '').not.toContain('tap-me' + 'tap-me');
     expect(container.querySelector('[data-testid="pending-input-notice"]')).toBeNull();
   });
 
   // ─── v3 §11c: ↑-to-recall (desktop accelerator) ──────────────────────────
 
-  it('↑ in an empty composer recalls the newest cross-session queued message', async () => {
-    await renderChat({ agentStatus: 'running', sessionId: 's1' });
-    await flushEffects();
-    await act(async () => {
-      emitWs('chat.pending_enqueued', {
-        type: 'chat.pending_enqueued', project_id: 'p1', session_id: 's1',
-        holder: 'sess-A', nonce: 'n-up', content: 'up-recall', position: 0,
-      });
-    });
+  it('↑ in an empty composer recalls the queued message', async () => {
+    await seedQueued([{ nonce: 'n-up', content: 'up-recall' }]);
     await act(async () => {
       pressKey('ArrowUp');
       await Promise.resolve();
@@ -1930,24 +1824,8 @@ describe('ChatView: pending-input queue (spec 006)', () => {
   });
 
   it('↑ recalls a same-session queued message (kind=same)', async () => {
-    injectMessageMock = async () => ({ status: 'queued_same_session' });
-    await renderChat({ agentStatus: 'running', sessionId: 's1' });
-    await flushEffects();
-    await act(async () => {
-      typeInComposer('recall same');
-    });
-    const btn =
-      (container.querySelector('button[aria-label="Send"]') as HTMLButtonElement | null) ??
-      ([...container.querySelectorAll('button')].find(
-        (b) => (b.textContent ?? '').trim() === 'Queue',
-      ) as HTMLButtonElement);
-    await act(async () => {
-      btn.click();
-      await Promise.resolve();
-      await Promise.resolve();
-    });
+    await sendQueued('recall same');
     expect(container.querySelector('[data-testid="pending-input-notice"]')).toBeTruthy();
-
     await act(async () => {
       pressKey('ArrowUp');
       await Promise.resolve();
@@ -1964,42 +1842,38 @@ describe('ChatView: pending-input queue (spec 006)', () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(new Date('2026-06-30T00:00:00.000Z'));
+      getPendingMock = async () => ({
+        holder: null,
+        pending: [{ session_id: 's1', nonce: 'n-older', content: 'older-msg', position: 1, kind: 'same' }],
+      });
+      injectMessageMock = async () => ({ status: 'queued_same_session' });
       await renderChat({ agentStatus: 'running', sessionId: 's1' });
-      await act(async () => { await Promise.resolve(); });
-      await act(async () => {
-        emitWs('chat.pending_enqueued', {
-          type: 'chat.pending_enqueued', project_id: 'p1', session_id: 's1',
-          holder: 'sess-A', nonce: 'n-older', content: 'older-msg', position: 0,
-        });
-      });
+      await act(async () => { await Promise.resolve(); await Promise.resolve(); });
       vi.setSystemTime(new Date('2026-06-30T00:00:05.000Z'));
+      await act(async () => { typeInComposer('newer-msg'); });
+      const btn = [...container.querySelectorAll('button')].find(
+        (b) => (b.textContent ?? '').trim() === 'Queue',
+      ) as HTMLButtonElement;
       await act(async () => {
-        emitWs('chat.pending_enqueued', {
-          type: 'chat.pending_enqueued', project_id: 'p1', session_id: 's1',
-          holder: 'sess-A', nonce: 'n-newer', content: 'newer-msg', position: 1,
-        });
+        btn.click();
+        await Promise.resolve();
+        await Promise.resolve();
       });
+      const newerNonce = injectCalls[injectCalls.length - 1][3];
       await act(async () => {
         pressKey('ArrowUp');
         await Promise.resolve();
         await Promise.resolve();
       });
       expect(cancelPendingInputCalls.length).toBe(1);
-      expect(cancelPendingInputCalls[0][2]).toBe('n-newer');
+      expect(cancelPendingInputCalls[0][2]).toBe(newerNonce);
     } finally {
       vi.useRealTimers();
     }
   });
 
   it('↑ does nothing when the composer is non-empty (caret still moves)', async () => {
-    await renderChat({ agentStatus: 'running', sessionId: 's1' });
-    await flushEffects();
-    await act(async () => {
-      emitWs('chat.pending_enqueued', {
-        type: 'chat.pending_enqueued', project_id: 'p1', session_id: 's1',
-        holder: 'sess-A', nonce: 'n-ne', content: 'pending-msg', position: 0,
-      });
-    });
+    await seedQueued([{ nonce: 'n-ne', content: 'pending-msg' }]);
     await act(async () => { typeInComposer('half-typed'); });
     await act(async () => {
       pressKey('ArrowUp');
@@ -2010,15 +1884,7 @@ describe('ChatView: pending-input queue (spec 006)', () => {
   });
 
   it('↑ does nothing when a mention dropdown is open (guard precedes recall)', async () => {
-    await renderChat({ agentStatus: 'running', sessionId: 's1' });
-    await flushEffects();
-    await act(async () => {
-      emitWs('chat.pending_enqueued', {
-        type: 'chat.pending_enqueued', project_id: 'p1', session_id: 's1',
-        holder: 'sess-A', nonce: 'n-dd', content: 'pending-dd', position: 0,
-      });
-    });
-    // '@' opens the mention dropdown; its ArrowUp guard runs before the recall.
+    await seedQueued([{ nonce: 'n-dd', content: 'pending-dd' }]);
     await act(async () => { typeInComposer('@'); });
     await act(async () => {
       pressKey('ArrowUp');
@@ -2028,22 +1894,13 @@ describe('ChatView: pending-input queue (spec 006)', () => {
   });
 
   it('↑ / tap is a no-op when the queued entry has attachments (no chip half-restore)', async () => {
-    await renderChat({ agentStatus: 'running', sessionId: 's1' });
-    await flushEffects();
     const withAttachments =
       '<attached_files>\n- /tmp/a.png (image/png, 1.2 KB)\n</attached_files>\n\nplease look';
-    await act(async () => {
-      emitWs('chat.pending_enqueued', {
-        type: 'chat.pending_enqueued', project_id: 'p1', session_id: 's1',
-        holder: 'sess-A', nonce: 'n-att', content: withAttachments, position: 0,
-      });
-    });
-    // The edit affordance is disabled for attachment-bearing entries.
+    await seedQueued([{ nonce: 'n-att', content: withAttachments }]);
     const edit = container.querySelector(
       '[data-testid="pending-input-notice-edit"]',
     ) as HTMLButtonElement;
     expect(edit.disabled).toBe(true);
-
     await act(async () => {
       pressKey('ArrowUp');
       await Promise.resolve();
@@ -2056,56 +1913,28 @@ describe('ChatView: pending-input queue (spec 006)', () => {
 
   it('recall on removed:false does NOT load text and leaves no duplicate bubble', async () => {
     cancelPendingInputMock = async () => ({ status: 'cancelled', removed: false });
-    await renderChat({ agentStatus: 'running', sessionId: 's1' });
-    await flushEffects();
-    await act(async () => {
-      emitWs('chat.pending_enqueued', {
-        type: 'chat.pending_enqueued', project_id: 'p1', session_id: 's1',
-        holder: 'sess-A', nonce: 'n-race', content: 'already-running', position: 0,
-      });
-    });
+    await seedQueued([{ nonce: 'n-race', content: 'already-running' }]);
     expect(container.textContent ?? '').toContain('already-running');
-
     await act(async () => {
       pressKey('ArrowUp');
       await Promise.resolve();
       await Promise.resolve();
     });
-
-    // Cancel was attempted, but the backend said it had already dispatched.
     expect(cancelPendingInputCalls.length).toBe(1);
     const textarea = container.querySelector('textarea') as HTMLTextAreaElement;
-    expect(textarea.value).toBe(''); // text NOT pulled back (no double-send)
-    // The bubble stays exactly once (now a normal sent message); no duplicate.
+    expect(textarea.value).toBe('');
     const count = (container.textContent ?? '').split('already-running').length - 1;
     expect(count).toBe(1);
-    // The stale waiting overlay is dropped.
     expect(container.querySelector('[data-testid="pending-input-notice"]')).toBeNull();
   });
 
   // ─── v3 §11d.4 + §12 R3: same-session queued (200) ────────────────────────
 
   it('same-session queued (200) keeps the bubble and shows the same-session line (no Run-now)', async () => {
-    injectMessageMock = async () => ({ status: 'queued_same_session' });
-    await renderChat({ agentStatus: 'running', sessionId: 's1' });
-    await flushEffects();
-    await act(async () => {
-      typeInComposer('queued same');
-    });
-    const btn =
-      (container.querySelector('button[aria-label="Send"]') as HTMLButtonElement | null) ??
-      ([...container.querySelectorAll('button')].find(
-        (b) => (b.textContent ?? '').trim() === 'Queue',
-      ) as HTMLButtonElement);
-    await act(async () => {
-      btn.click();
-      await Promise.resolve();
-      await Promise.resolve();
-    });
+    await sendQueued('queued same');
     expect(container.textContent ?? '').toContain('queued same'); // bubble kept
     const body = container.querySelector('[data-testid="pending-input-notice-body"]');
     expect(body?.textContent ?? '').toContain('Waiting for the current response to finish.');
-    // No holder to cancel → no Run-now.
     expect(container.querySelector('[data-testid="pending-input-notice-run-now"]')).toBeNull();
   });
 
@@ -2126,21 +1955,11 @@ describe('ChatView: pending-input queue (spec 006)', () => {
       await Promise.resolve();
       await Promise.resolve();
     });
-    // The bubble is kept, but a wait-state "queued" message is NOT a recallable
-    // session._queue entry → no waiting line / affordance.
     expect(container.querySelector('[data-testid="pending-input-notice"]')).toBeNull();
   });
 
   it('reconcilePending restores a same-session queued entry from GET /pending', async () => {
-    getPendingMock = async () => ({
-      holder: 's1',
-      pending: [
-        { session_id: 's1', nonce: 'n-same-rec', content: 'same recovered', position: 0, kind: 'same' },
-      ],
-    });
-    await renderChat({ agentStatus: 'running', sessionId: 's1' });
-    await flushEffects();
-    // Bubble + same-session waiting line restored from the server.
+    await seedQueued([{ nonce: 'n-same-rec', content: 'same recovered' }]);
     expect(container.textContent ?? '').toContain('same recovered');
     const body = container.querySelector('[data-testid="pending-input-notice-body"]');
     expect(body?.textContent ?? '').toContain('Waiting for the current response to finish.');

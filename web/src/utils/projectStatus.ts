@@ -33,6 +33,10 @@ export function getProjectDotColor(
 
   const status = agentStatuses[projectId] ?? 'idle';
   switch (status) {
+    // A session paused on an approval (spec 155 aggregate: approval if any),
+    // also when the page loaded after the approval.request event went out.
+    case 'pending_approval':
+      return 'bg-warning-text';
     case 'running':
     case 'waiting':
       return 'bg-success-text';
@@ -41,6 +45,46 @@ export function getProjectDotColor(
     default:
       return subAgentsRunning[projectId] ? 'bg-success-text' : 'bg-idle';
   }
+}
+
+/** Per-session manager statuses of every project: project → session → status. */
+export type SessionStatusMap = Record<string, Record<string, AgentRunStatus>>;
+
+/**
+ * Spec 155: sessions of a project run in parallel, so the project's status
+ * is an aggregate of its sessions' — running if any session is running, else
+ * waiting, else pending_approval; otherwise the most recent session event
+ * (`last`, the status of the newest agent.status for the project) decides:
+ * error red, idle grey. With one session this is the old one-status rule.
+ */
+export function aggregateProjectStatus(
+  last: AgentRunStatus | undefined,
+  sessions: Record<string, AgentRunStatus> | undefined,
+): AgentRunStatus {
+  const values = Object.values(sessions ?? {});
+  for (const live of ['running', 'waiting', 'pending_approval'] as const) {
+    if (values.includes(live)) return live;
+  }
+  if (last === 'running' || last === 'waiting' || last === 'pending_approval') {
+    // The newest event said live, but every session we know of has settled
+    // since (a stale project-level value): the sessions win.
+    return values.length > 0 ? 'idle' : last;
+  }
+  return last ?? 'idle';
+}
+
+/**
+ * The status of ONE session (what ChatView, its Stop button and the
+ * Workbench pane show). Without a session id: the project aggregate.
+ */
+export function sessionStatusOf(
+  projectId: string,
+  sessionId: string | undefined,
+  sessionStatuses: SessionStatusMap,
+  projectStatuses: Record<string, AgentRunStatus>,
+): AgentRunStatus {
+  if (sessionId === undefined) return projectStatuses[projectId] ?? 'idle';
+  return sessionStatuses[projectId]?.[sessionId] ?? 'idle';
 }
 
 /**

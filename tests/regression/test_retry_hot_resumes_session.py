@@ -8,9 +8,10 @@ Contract being exercised:
   Item is BLOCKED with one closed attempt on session "sess_A". Caller invokes
   retry_blocked_item(item_id, "use postgres", mode="answer"). The dispatcher
   must:
-    - Switch the active session back to "sess_A" (via switch_session with
-      start_loop=False, so _cold_resume_injected and related ContextManager
-      flags are reset).
+    - Inject into "sess_A" BY ID in queue mode (spec 155 §5.5 / B9: the old
+      ``switch_session`` re-keyed the project's first handle — possibly a chat
+      session running beside the queue — and is gone; inject_message hydrates
+      or hot-resumes the attempt's own session).
     - Append a NEW attempt (attempt_number=2) sharing session_id="sess_A"
       because retries CONTINUE the JSONL, they don't open a new one.
     - Inject the new input RAW (no header) because mode=="answer".
@@ -71,6 +72,7 @@ class _RetryAgentManager:
         # Bookkeeping
         self.injected_messages: list[str] = []
         self.switch_calls: list[tuple[str, bool]] = []
+        self.inject_targets: list[tuple[str | None, str]] = []
         self.new_session_calls = 0
 
     # ---- API expected by QueueDispatcher ----
@@ -105,6 +107,11 @@ class _RetryAgentManager:
                              session_id=None, queue_state="chat"):
         # Capture the injected text RAW for assertions.
         self.injected_messages.append(content)
+        self.inject_targets.append((session_id, queue_state))
+        if session_id is not None:
+            # The real inject_message targets the named session's own handle.
+            self._sessions.setdefault(session_id, _FakeSession(session_id))
+            self._current_sid = session_id
         self._sessions[self._current_sid].append(
             {"role": "user", "content": content},
         )
@@ -220,11 +227,9 @@ async def test_retry_answer_mode_hot_resumes_prior_session(tmp_path):
     assert result["session_id"] == "sess_A"
     assert result["mode"] == "answer"
 
-    # switch_session was called with the parked session id and start_loop=False
-    assert ("sess_A", False) in mgr.switch_calls, (
-        f"expected switch_session('sess_A', start_loop=False); "
-        f"got {mgr.switch_calls!r}"
-    )
+    # Injected into the parked session by id, in queue mode; no session swap.
+    assert mgr.inject_targets == [("sess_A", "running")], mgr.inject_targets
+    assert mgr.switch_calls == []
 
     # Active session is now "sess_A" (the parked one), not a fresh one.
     assert mgr._current_sid == "sess_A"

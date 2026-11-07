@@ -88,9 +88,12 @@ class FakeSAM:
         return self._active.get(session_id, [])
 
 
-def cands(holder, running=(), active=None):
+def cands(live, running=(), active=None):
+    """``live``: the live manager session(s) of the project — one id, a list
+    (spec 155: several run at once), or None."""
+    live_ids = [] if live is None else ([live] if isinstance(live, str) else list(live))
     fake = SimpleNamespace(
-        current_holder_session_id=lambda pid: holder,
+        live_session_ids=lambda pid: live_ids,
         _sub_agent_manager=FakeSAM(running, active or {}),
     )
     return AgentManager.history_candidates(fake, "p1")
@@ -117,6 +120,11 @@ class TestCandidates:
 
     def test_nobody(self):
         assert cands(None) == []
+
+    def test_two_live_manager_sessions_are_both_candidates(self):
+        """Spec 155: two manager sessions run at once; either may have
+        written the file."""
+        assert cands(["S", "T"]) == [("S", ["orbital"]), ("T", ["orbital"])]
 
 
 def test_session_ids_threaded_to_tools():

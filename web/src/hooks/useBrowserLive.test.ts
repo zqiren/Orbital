@@ -109,6 +109,21 @@ describe('useBrowserLive connection lifecycle', () => {
     expect(result.current.status).toBe('connecting');
   });
 
+  it('spec 155: names the viewed session, and reconnects when it changes', () => {
+    const { rerender } = renderHook(({ sid }) => useBrowserLive('p1', true, sid), {
+      initialProps: { sid: 'sess-a' },
+    });
+    expect(FakeWebSocket.instances[0].url).toBe(
+      'ws://localhost:8000/api/v2/agents/p1/browser/live?session_id=sess-a',
+    );
+    act(() => {
+      rerender({ sid: 'sess-b' });
+    });
+    expect(FakeWebSocket.instances[FakeWebSocket.instances.length - 1].url).toBe(
+      'ws://localhost:8000/api/v2/agents/p1/browser/live?session_id=sess-b',
+    );
+  });
+
   it('closes the socket when it becomes inactive', () => {
     const { result, rerender } = renderHook(({ active }) => useBrowserLive('p1', active), {
       initialProps: { active: true },

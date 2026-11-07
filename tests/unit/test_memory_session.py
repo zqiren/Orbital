@@ -680,20 +680,26 @@ def _handle(session, *, running):
                          context_manager=MagicMock(), interceptor=MagicMock(), task=task)
 
 
-def test_a_running_memory_session_does_not_hold_the_slot(tmp_path):
+def test_a_running_memory_session_is_never_a_live_session(tmp_path):
+    """Spec 155: sessions run in parallel; the Memory session is still never
+    reported as a project's live session (hidden, never shows running)."""
     from agent_os.daemon_v2.agent_manager import make_session_key
     mgr = _manager(tmp_path)
     mem = Session.new("demo_mem00001", str(tmp_path), origin="memory")
     mgr._handles[make_session_key("p1", mem.session_uuid)] = _handle(mem, running=True)
     assert mgr.current_holder_session_id("p1") is None
+    assert mgr.live_session_ids("p1") == []
     assert mgr._start_rejection("p1", "demo_other0001") is None
     chat = Session.new("demo_chat00001", str(tmp_path))
     mgr._handles[make_session_key("p1", chat.session_uuid)] = _handle(chat, running=True)
-    assert mgr.current_holder_session_id("p1") == chat.session_uuid
-    # the (idle) memory session may start while the chat holds the slot
+    assert mgr.live_session_ids("p1") == [chat.session_uuid]
+    # the (idle) memory session may start while the chat runs, and so may a
+    # third session: nothing holds a project-wide slot any more
     mgr._handles[make_session_key("p1", mem.session_uuid)].task.done = MagicMock(return_value=True)
     assert mgr._start_rejection("p1", mem.session_uuid, session=mem) is None
-    assert mgr._start_rejection("p1", "demo_third00001") is not None
+    assert mgr._start_rejection("p1", "demo_third00001") is None
+    # only the running session itself is refused a second start
+    assert mgr._start_rejection("p1", chat.session_uuid) is not None
     # hidden from the sidebar's list, visible to the daemon's own lookup
     assert mem.session_uuid not in {s["session_uuid"] for s in mgr.list_sessions("p1")}
     listed = {s["session_uuid"]: s for s in mgr.list_sessions("p1", include_memory=True)}
@@ -741,14 +747,21 @@ async def test_start_agent_gives_a_memory_session_its_traits_and_skips_the_slot(
 
 
 @pytest.mark.asyncio
-async def test_start_agent_still_refuses_a_second_chat_session(tmp_path):
+async def test_start_agent_admits_a_second_chat_session(tmp_path):
+    """Spec 155: a second chat session of the project starts while the first
+    runs (it used to raise "Slot held"). Cut off just past the entry guard."""
     from agent_os.daemon_v2.agent_manager import make_session_key
     from agent_os.daemon_v2.models import AgentConfig
     mgr = _manager(tmp_path)
     chat = Session.new("demo_chat00001", str(tmp_path))
     mgr._handles[make_session_key("p1", chat.session_uuid)] = _handle(chat, running=True)
     other = Session.new("demo_chat00002", str(tmp_path))
-    with pytest.raises(ValueError, match="Slot held"):
+
+    class _PastTheGuard(Exception):
+        pass
+
+    mgr._build_llm_providers = MagicMock(side_effect=_PastTheGuard())
+    with pytest.raises(_PastTheGuard):
         await mgr.start_agent("p1", AgentConfig(workspace=str(tmp_path), model="m", api_key="k"), session=other)
 
 

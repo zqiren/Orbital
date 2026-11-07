@@ -209,6 +209,10 @@ class ProjectHandle:
     interceptor: object
     task: asyncio.Task | None
     trigger_source: str | None = None
+    # Spec 155: the automation that started this run (its name), so a
+    # trigger is held only while its OWN previous run is live — other
+    # sessions of the project run beside it.
+    trigger_name: str | None = None
     config_snapshot: dict = field(default_factory=dict)
     started_at: str = ""
     # Wall-clock of the last USER interaction (or system-initiated session
@@ -223,25 +227,6 @@ class ProjectHandle:
     # the done-callback cannot find the row there — the wake has to be
     # decided at defer time. Consumed by ``_on_loop_done``.
     wake_after_turn: bool = False
-
-
-@dataclass
-class PendingInject:
-    """A user message queued to deliver to a chat session once the project's
-    single active-loop slot frees (Path A, spec 006-pending-input-queue).
-
-    The message is held in memory ONLY. It is NOT written to the target
-    session's JSONL at enqueue time — ``loop.run`` remains the sole writer and
-    persists it exactly once when dispatch actually starts the turn
-    (persist-at-dispatch). ``id`` is a stable per-entry token used for
-    tombstoning so a cancel beats an in-flight dispatch.
-    """
-    id: str                          # stable, for tombstoning
-    session_id: str                  # target chat session B
-    content: str
-    nonce: str | None
-    attachments: list[dict] | None
-    enqueued_at: float
 
 
 class AgentManager:
@@ -326,26 +311,6 @@ class AgentManager:
         # Idle-eviction sweep task (started via ``start_eviction``, cancelled
         # in ``shutdown``). None until started.
         self._eviction_task: asyncio.Task | None = None
-        # ── Pending-input queue (spec 006, Path A) ─────────────────────────
-        # Project-scoped FIFO of messages addressed to a chat session while a
-        # DIFFERENT session holds the project's single active-loop slot. The
-        # message text lives here in memory ONLY (persist-at-dispatch); it is
-        # written to the target session's JSONL exactly once by ``loop.run``
-        # when ``_maybe_dispatch_pending`` actually starts the turn.
-        self._pending_inject: dict[str, list[PendingInject]] = {}
-        # In-flight batch objects (mid ``_fire``), per project. Mirrors the
-        # ``_pending_inject`` shape so cancel/cleanup can resolve an in-flight
-        # entry by (session_id, nonce) — the id-only ``_pending_dispatching``
-        # set can't be matched that way. Cleared per-entry in ``_fire``'s
-        # finally.
-        self._pending_inflight: dict[str, list[PendingInject]] = {}
-        # Spec 134 Part B §3.5 (B5): sessions owed a wake that was refused
-        # because another session held the slot, per project, in arrival
-        # order (dict as an ordered set). Drained one at a time where the
-        # FIFO above drains, after it. In memory: nothing it covers (jobs,
-        # sub-agents) survives a restart.
-        self._owed_wakes: dict[str, dict[str, None]] = {}
-        self._owed_inflight: set[str] = set()
         # Spec 134 Part B: the daemon's JobRegistry (wired in _assemble_app).
         self._job_registry = None
         # ── Cross-project read scope (Spec 12 §2a/§2c) ─────────────────────
@@ -387,12 +352,6 @@ class AgentManager:
         self._session_index_lock = threading.Lock()
         self._session_index_autostart = False
 
-        # Ids currently being delivered inside ``_fire``.
-        self._pending_dispatching: set[str] = set()
-        # Ids cancelled mid-flight — ``_fire`` skips them; a lost slot-race
-        # re-enqueue can't resurrect them.
-        self._pending_tombstoned: set[str] = set()
-
     @staticmethod
     def _resolve_session_id(session_id: str | None) -> str | None:
         """Internal-class None-policy (seam 3 / D1): PASSTHROUGH.
@@ -409,11 +368,14 @@ class AgentManager:
         return resolve_session_id(session_id, on_none=lambda: None)
 
     def _sid_read(self, project_id: str, session_id: str | None) -> str | None:
-        """Read/affect None-policy (seam 3 / D1): None → the active-loop-slot
-        holder; if no holder, None (→ handle-miss → idle/no-op). NEVER mints.
+        """Read/affect None-policy (seam 3 / D1): None → a running session of
+        the project (``current_holder_session_id``, the legacy default for
+        callers that name no session); if none, None (→ handle-miss →
+        idle/no-op). NEVER mints.
 
-        Used by run-status, stop/cancel, approve/deny, pending-approval,
-        autonomy, etc. — "act on the running session when none is named."
+        Used by stop/cancel, approve/deny, pending-approval, autonomy, etc. —
+        "act on the running session when none is named." The web client
+        always names its session (spec 155).
         """
         return resolve_session_id(
             session_id,
@@ -421,9 +383,9 @@ class AgentManager:
         )
 
     def _sid_inject(self, project_id: str, session_id: str | None) -> str | None:
-        """Inject (start-work) None-policy (seam 3 / D1): None → the holder if
-        the queue is draining, else the project's persistent chat session
-        (lazy-mint via the single funnel). This is the ONLY path that may mint.
+        """Inject (start-work) None-policy (seam 3 / D1): None → the project's
+        persistent chat session (lazy-mint via the single funnel). This is the
+        ONLY path that may mint.
         """
         return resolve_session_id(
             session_id,
@@ -431,20 +393,11 @@ class AgentManager:
         )
 
     def _resolve_inject_none(self, project_id: str) -> str:
-        """Resolve inject(None): holder if the queue is actively draining,
-        else the persistent chat-origin session (single mint funnel)."""
-        from agent_os.queue.models import QueueRunState
-        dispatcher = self._dispatchers.get(project_id)
-        draining = False
-        if dispatcher is not None:
-            try:
-                draining = dispatcher._store.load().state == QueueRunState.RUNNING
-            except Exception:
-                draining = False
-        if draining:
-            holder = self.current_holder_session_id(project_id)
-            if holder is not None:
-                return holder
+        """Resolve inject(None): the persistent chat-origin session, always
+        (single mint funnel). Spec 155 B14: sessions run in parallel, so "the
+        running session" is no longer a safe guess for session-less input —
+        it could be a queue attempt or another chat. The queue names its
+        attempt session explicitly."""
         return self._ensure_chat_session(project_id)
 
     # ── Cross-project read scope (Spec 12 §2a/§2c) ─────────────────────────
@@ -745,14 +698,6 @@ class AgentManager:
         No state is persisted — the session JSONLs on disk are the only source
         of truth, and the daemon never auto-resumes anything on next start."""
         logger.info("AgentManager shutdown: stopping %d agent(s)", len(self._handles))
-
-        # Neutralize the pending-input queue first so the per-session teardown
-        # below (each stop_agent calls _release_slot) can't dispatch anything
-        # into a daemon that is shutting down (spec 006 §3g).
-        self._pending_inject.clear()
-        for pid in list(self._pending_inflight.keys()):
-            for p in self._pending_inflight.get(pid, []):
-                self._pending_tombstoned.add(p.id)
 
         # Stop the idle-eviction sweep so it doesn't race the teardown below.
         if self._eviction_task is not None and not self._eviction_task.done():
@@ -1138,21 +1083,13 @@ class AgentManager:
             # Stale handle: clean up
             del self._handles[sk]
 
-        # Cross-session slot guard: a project has at most one active-loop slot.
-        # Enforced HERE (not just at the inject route) so EVERY caller is
-        # covered — HTTP /agents/start, the queue dispatcher's inject_message,
-        # triggers, and internal auto-starts. session_id is already resolved
-        # (None → DEFAULT_SESSION_ID above), so a None-session caller is checked
-        # too. See REPORT-subagent-leak-and-slot-gap.md Q4.
-        # Spec 124 §3.7: the Memory session (origin "memory") is the one
-        # loop allowed beside the slot — single-flight per project through
-        # memory_editor.claim, never through the holder.
+        # Spec 155: sessions of one project run in parallel — there is no
+        # cross-session slot any more. The only guard is "already running for
+        # this session" above. Spec 124 §3.7: the Memory session (origin
+        # "memory") is single-flight per project through memory_editor.claim.
         is_memory = _is_memory_session(session)
         if is_memory:
             self._register_memory_session(project_id, session_id)
-        holder = None if is_memory else self.current_holder_session_id(project_id)
-        if holder is not None and holder != session_id:
-            raise ValueError(f"Slot held by session {holder}")
 
         # 5. Session + 5b. write-ahead of the caller's initial message (#59).
         #
@@ -1646,6 +1583,7 @@ class AgentManager:
             interceptor=interceptor,
             task=None,
             trigger_source=trigger_source,
+            trigger_name=trigger_name if trigger_source else None,
             config_snapshot={
                 "workspace": config.workspace,
                 "model": config.model,
@@ -1843,6 +1781,8 @@ class AgentManager:
                     autonomy_preset=config.autonomy.value if hasattr(config.autonomy, 'value') else str(config.autonomy),
                     user_credential_store=self._user_credential_store,
                     vision_enabled=vision_enabled,
+                    # Spec 155 §5.4: this session's own pages.
+                    session_id=session_id,
                 ))
         except ImportError:
             logger.warning("BrowserTool not available (playwright not installed)")
@@ -2529,8 +2469,6 @@ class AgentManager:
                 )
                 return "delivered"
             except Exception as exc:
-                if self._maybe_owe_wake(project_id, session_id, exc, meta):
-                    return "persisted"
                 logger.warning(
                     "inject_system_message(%s/%s): wake failed; event is "
                     "persisted on disk", project_id, session_id,
@@ -2556,14 +2494,8 @@ class AgentManager:
                 # Pinned dispatch (spec 074): append only, never start a
                 # management turn.
                 return "suppressed"
-            # ``_start_loop`` does not check the slot itself: a wake for an
-            # idle session while another holds it is owed (spec 134 §3.5).
-            holder = self.current_holder_session_id(project_id)
-            if holder is not None and holder != session_id:
-                self._maybe_owe_wake(
-                    project_id, session_id,
-                    ValueError(f"Slot held by session {holder}"), meta)
-                return "persisted"
+            # Spec 155: a wake starts its own session's loop now, whatever
+            # the project's other sessions are doing.
             try:
                 await self._start_loop(project_id, session_id=session_id)
             except Exception as exc:
@@ -2979,23 +2911,15 @@ class AgentManager:
         """Return the ``ValueError`` ``start_agent`` would raise for this
         session right now, or None if the start would be admitted.
 
-        A READ-ONLY mirror of ``start_agent``'s two entry guards (it must not
-        reap the stale handle that ``start_agent`` deletes). It exists so the
-        write-ahead path can tell a *rejection* from a *failure* before it
-        commits the user's row: "slot held" is answered by the inject route
-        with a 202 + pending-inject enqueue that appends the message itself
-        later, so a write here would double-render it. ``start_agent`` still
-        enforces both guards for every other caller — this only moves the
-        decision earlier for the one path that writes first.
+        A READ-ONLY mirror of ``start_agent``'s entry guard (it must not reap
+        the stale handle that ``start_agent`` deletes), so the write-ahead
+        path refuses a start that cannot happen before it commits the user's
+        row. Spec 155: the only rejection left is "already running for this
+        session"; other sessions of the project never block a start.
         """
         handle = self._handles.get(make_session_key(project_id, session_id))
         if handle is not None and handle.task is not None and not handle.task.done():
             return ValueError("Agent already running for this project")
-        if _is_memory_session(session):
-            return None          # spec 124 §3.7: runs beside the slot
-        holder = self.current_holder_session_id(project_id)
-        if holder is not None and holder != session_id:
-            return ValueError(f"Slot held by session {holder}")
         return None
 
     async def _start_with_persisted_message(
@@ -3029,10 +2953,8 @@ class AgentManager:
         Start failures are re-raised after being surfaced — the HTTP route's
         ``ProviderConfigError``/``ValueError`` → 400/404 mapping is unchanged.
         """
-        # Pre-flight the rejections BEFORE writing anything. A slot conflict is
-        # not a failure: the inject route turns it into a 202 and enqueues the
-        # message as a pending inject (spec 006), which appends it for real
-        # when the slot frees. Persisting here as well would render it twice.
+        # Pre-flight the rejection BEFORE writing anything (a start that
+        # cannot happen must not leave a user row with no turn behind it).
         rejection = self._start_rejection(project_id, session_id, session)
         if rejection is not None:
             raise rejection
@@ -3399,12 +3321,25 @@ class AgentManager:
         return "delivered"
 
     def is_running(self, project_id: str, *,
-                   session_id: str | None = None) -> bool:
+                   session_id: str | None = None,
+                   trigger_name: str | None = None) -> bool:
         """Return True if an agent loop is actively running for this session.
 
-        ``session_id`` selects the chat session; defaults to the
-        single-loop default session.
+        ``session_id`` selects the chat session; omitted, any running session
+        of the project counts (the legacy default).
+
+        ``trigger_name`` (spec 155, the trigger manager's busy gate): True iff
+        a live session of the project was started by that automation. Sessions
+        run in parallel, so another session running never holds a trigger;
+        only its own previous run still going does (no stacked runs).
         """
+        if trigger_name is not None and session_id is None:
+            return any(
+                handle.trigger_source and handle.trigger_name == trigger_name
+                and self._session_live_status(pid, sid, handle) is not None
+                for (pid, sid), handle in list(self._handles.items())
+                if pid == project_id
+            )
         session_id = self._sid_read(project_id, session_id)
         handle = self._handles.get(make_session_key(project_id, session_id))
         if handle is None:
@@ -3613,74 +3548,70 @@ class AgentManager:
             model=str(getattr(provider, "model", "") or getattr(config, "model", "") or ""),
         )
 
+    def _session_live_status(self, project_id: str, session_id: str,
+                             handle: "ProjectHandle | None" = None) -> str | None:
+        """The live status of one session — ``running``, ``pending_approval``
+        or ``waiting`` — or None when it is at rest (or the Memory session,
+        which is never shown). The per-session form of what used to be the
+        project's slot predicate."""
+        if handle is None:
+            handle = self._handles.get(make_session_key(project_id, session_id))
+        if handle is None or _is_memory_session(handle.session):
+            return None
+        if handle.task is not None and not handle.task.done():
+            if getattr(handle.session, "_paused_for_approval", False):
+                return "pending_approval"
+            return "running"
+        if getattr(handle.session, "_paused_for_approval", False):
+            return "pending_approval"
+        poll_task = self._idle_poll_tasks.get(make_session_key(project_id, session_id))
+        if poll_task is not None and not poll_task.done():
+            return "waiting"
+        return None
+
+    def live_session_ids(self, project_id: str) -> list[str]:
+        """Every session of the project that is running, paused on an
+        approval, or waiting on its workers (spec 155: several at once)."""
+        return [
+            sid for (pid, sid), handle in list(self._handles.items())
+            if pid == project_id
+            and self._session_live_status(pid, sid, handle) is not None
+        ]
+
+    def session_is_live(self, project_id: str, session_id: str | None) -> bool:
+        """True while ``session_id`` is running, paused on an approval, or
+        waiting on its workers — the queue's own serial check (spec 155 §5.5)."""
+        if not session_id:
+            return False
+        return self._session_live_status(project_id, session_id) is not None
+
     def current_holder_session_id(self, project_id: str) -> str | None:
-        """Return the F1 ``session_id`` that currently holds the project's
-        active-loop slot, or None if no session in the project is running.
+        """A running session of the project, or None — the LEGACY default for
+        callers that name no session (spec 155 §5.2).
 
-        Per ACTIVE-session-and-queue-model.md §3, a project has exactly one
-        active-loop slot. This accessor surfaces "who holds it right now" so
-        the inject route can reject (with 202) when a different session tries
-        to start a turn while another session is still mid-turn.
-
-        A session holds the slot when ANY of these is true:
-
-        1. ``handle.task`` is alive and not done — the main loop is
-           streaming, running tools, or between iterations.
-        2. ``session._paused_for_approval`` is True — the loop has exited
-           at an approval boundary but the session is logically still
-           "in" the turn. A new turn from another session would clash
-           with the pending approval decision.
-        3. ``_idle_poll_tasks[(project_id, session_id)]`` is alive — the
-           main loop has exited but sub-agents spawned during the turn are
-           still working (the ``waiting`` state). A concurrent turn from
-           another session would interleave workspace writes with the
-           still-running sub-agents.
-
-        Condition 1 covers ``running``. Condition 2 covers
-        ``pending_approval``. Condition 3 covers ``waiting``. Together
-        they enforce the single-loop-per-project safety claim of §3
-        even past the bare ``task.done()`` boundary.
-
-        After PR #22's multi-session foundation ``self._handles`` is keyed
-        by ``SessionKey == (project_id, session_id)``. We scan all keys
-        for this ``project_id``; single-loop discipline means at most one
-        handle satisfies any of the conditions at a time.
+        Before spec 155 a project had one active-loop slot and this was its
+        holder. Sessions now run in parallel, so this returns the first live
+        session found (running, paused on an approval, or waiting on its
+        workers; the Memory session is skipped). Nothing enforces anything
+        with it any more: callers that care about one session must name it.
         """
-        for (pid, sid), handle in self._handles.items():
-            if pid != project_id:
-                continue
-            # Spec 124 §3.7: the Memory session runs beside the slot, never
-            # in it — a tidy pass must not block the user's next message.
-            if _is_memory_session(handle.session):
-                continue
-            # Condition 1: main loop active.
-            if handle.task is not None and not handle.task.done():
-                return sid
-            # Condition 2: paused for approval (loop exited at approval gate).
-            if handle.session._paused_for_approval:
-                return sid
-            # Condition 3: sub-agents still working (waiting state).
-            poll_task = self._idle_poll_tasks.get(make_session_key(pid, sid))
-            if poll_task is not None and not poll_task.done():
-                return sid
+        for sid in self.live_session_ids(project_id):
+            return sid
         return None
 
     def history_candidates(self, project_id: str) -> list[tuple[str, list[str]]]:
         """Spec 065 §5.4: the sessions that could have written a workspace
         file of ``project_id`` right now, each with its writer agents.
 
-        A session is a candidate when it holds the project's slot
-        (``current_holder_session_id``) or has a worker turn / background job
-        in flight (``running_session_ids``). Its writers are the handles
+        A session is a candidate when it is live (``live_session_ids``: spec
+        155 runs several at once) or has a worker turn / background job in
+        flight (``running_session_ids``). Its writers are the handles
         ``list_active`` reports ``running`` / ``background-running``; with
         none, the writer is Orbital itself (the manager's shell or a job).
         Manager and worker in one session are one candidate. Call on the
         event loop (``running_session_ids`` evicts dead adapters).
         """
-        sids: set[str] = set()
-        holder = self.current_holder_session_id(project_id)
-        if holder:
-            sids.add(holder)
+        sids: set[str] = set(self.live_session_ids(project_id))
         sam = self._sub_agent_manager
         if sam is not None:
             try:
@@ -3701,110 +3632,6 @@ class AgentManager:
             out.append((sid, agents or ["orbital"]))
         return out
 
-    # ── Pending-input queue (spec 006, Path A) ──────────────────────────
-    #
-    # When the user sends to chat session B while a different session A holds
-    # the project's single active-loop slot, the inject route enqueues B's
-    # message here and auto-dispatches it when the slot frees. The single-slot
-    # invariant is preserved — B runs *next*, not concurrently.
-
-    def enqueue_pending_inject(self, project_id: str, session_id: str,
-                               content: str, *, nonce: str | None = None,
-                               attachments: list[dict] | None = None) -> dict:
-        """Append a message to the project's pending-input FIFO.
-
-        Persist-at-dispatch: the message is NOT written to the session JSONL
-        here. Returns ``{"id", "nonce", "position"}`` where ``position`` is the
-        1-based index of this entry in the project queue.
-        """
-        entry = PendingInject(
-            id=uuid4().hex,
-            session_id=session_id,
-            content=content,
-            nonce=nonce,
-            attachments=attachments,
-            enqueued_at=time.time(),
-        )
-        queue = self._pending_inject.setdefault(project_id, [])
-        queue.append(entry)
-        logger.info(
-            "enqueue_pending_inject(%s): session=%s nonce=%s position=%d",
-            project_id, session_id, nonce, len(queue),
-        )
-        return {"id": entry.id, "nonce": nonce, "position": len(queue)}
-
-    # ── Owed wakes (spec 134 Part B §3.5, B5) ───────────────────────────
-
-    @staticmethod
-    def _is_slot_held_error(exc: BaseException) -> bool:
-        return isinstance(exc, ValueError) and str(exc).startswith("Slot held by session")
-
-    def _maybe_owe_wake(self, project_id: str, session_id: str,
-                        exc: BaseException, meta: dict | None) -> bool:
-        """Record an owed wake when *exc* is the slot guard refusing a
-        wake-eligible event. True when recorded."""
-        if not self._is_slot_held_error(exc):
-            return False
-        if not meta or meta.get("event") not in _WAKE_EVENTS or meta.get("suppress_wake"):
-            return False
-        owed = getattr(self, "_owed_wakes", None)
-        if owed is None:
-            owed = self._owed_wakes = {}
-        owed.setdefault(project_id, {}).setdefault(session_id, None)
-        logger.info("owed wake recorded for %s/%s (%s)", project_id, session_id, exc)
-        return True
-
-    def _maybe_deliver_owed_wake(self, project_id: str) -> None:
-        owed = getattr(self, "_owed_wakes", {}).get(project_id)
-        inflight = getattr(self, "_owed_inflight", None)
-        if inflight is None:
-            inflight = self._owed_inflight = set()
-        if not owed or project_id in inflight:
-            return
-        session_id = next(iter(owed))
-        del owed[session_id]
-        if not owed:
-            self._owed_wakes.pop(project_id, None)
-        inflight.add(project_id)
-        asyncio.ensure_future(self._deliver_owed_wake(project_id, session_id))
-
-    async def _deliver_owed_wake(self, project_id: str, session_id: str) -> None:
-        """Start the owed session's turn if its wake row is still unread."""
-        try:
-            sk = make_session_key(project_id, session_id)
-            handle = self._handles.get(sk)
-            if handle is not None:
-                if handle.task is not None and not handle.task.done():
-                    return              # running: it reads the row itself
-                if not self._terminal_unread(handle.session):
-                    return
-                await self._start_loop(project_id, session_id=session_id)
-                return
-            loaded = await self._hydrate_session(project_id, session_id)
-            if self._handles.get(sk) is not None:
-                handle = self._handles[sk]
-                if (handle.task is None or handle.task.done()) and \
-                        self._terminal_unread(handle.session):
-                    await self._start_loop(project_id, session_id=session_id)
-                return
-            if loaded is None or not self._terminal_unread(loaded):
-                return
-            config = await self._abuild_agent_config_from_project(project_id)
-            await self.start_agent(project_id, config, initial_message=None,
-                                   session_id=loaded.session_uuid, session=loaded)
-        except Exception as exc:
-            if self._is_slot_held_error(exc):
-                # Lost the race for the slot: back to the head of the line.
-                owed = self._owed_wakes.setdefault(project_id, {})
-                self._owed_wakes[project_id] = {session_id: None, **owed}
-            else:
-                logger.warning("owed wake for %s/%s failed", project_id, session_id,
-                               exc_info=True)
-                self._note_wake_failed(project_id, session_id, exc)
-        finally:
-            self._owed_inflight.discard(project_id)
-            self._maybe_dispatch_pending(project_id)
-
     async def deliver_job_message_to_worker(self, project_id: str, session_id: str,
                                             handle: str, content: str) -> str:
         """Spec 134 Part B (d): a Codex/Pi worker's background job ended or
@@ -3822,42 +3649,22 @@ class AgentManager:
             project_id, handle, content, session_id=session_id,
             initiator="user_pinned" if pinned else "management_agent")
 
-    def has_pending_inject(self, project_id: str) -> bool:
-        """True if interactive pending input is queued for this project.
-
-        Drives the dispatcher's fairness defer-check: the autonomous queue
-        holds back its next item while a user's pending input is waiting for
-        the slot (spec 006 §3e).
-        """
-        return bool(self._pending_inject.get(project_id))
-
     def list_pending(self, project_id: str) -> list[dict]:
         """Return queued messages for GET /pending recovery (§12 R3/R4).
 
-        Two kinds of "queued message" (a sent message whose turn hasn't
-        started) are unified here:
-
-        - ``kind:"cross"`` — the slot is held by another session, so the
-          message sits in the project-scoped ``_pending_inject`` registry.
-        - ``kind:"same"`` — this session's own turn is mid-flight, so the
-          message sits in that session's ``_queue`` (drained by
-          ``_on_loop_done``); read non-destructively via ``list_queued``.
+        A queued message is a sent message whose turn hasn't started: this
+        session's own turn is mid-flight, so the message sits in that
+        session's ``_queue`` (drained by ``_on_loop_done``); read
+        non-destructively via ``list_queued``. ``kind`` stays ``"same"`` for
+        older clients (spec 155 removed the cross-session ``"cross"`` kind:
+        no session waits for another any more).
 
         Full ``content`` is returned (not a truncated preview) so the FE can
         rebuild the optimistic bubble AND recall the raw text on reconnect
         without a second round-trip.
         """
         out: list[dict] = []
-        for idx, p in enumerate(self._pending_inject.get(project_id, []), start=1):
-            out.append({
-                "session_id": p.session_id,
-                "nonce": p.nonce,
-                "content": p.content or "",
-                "position": idx,
-                "kind": "cross",
-            })
-        # Same-session queued messages live in each live handle's session queue.
-        for (pid, sid), handle in self._handles.items():
+        for (pid, sid), handle in list(self._handles.items()):
             if pid != project_id or handle.session is None:
                 continue
             list_queued = getattr(handle.session, "list_queued", None)
@@ -3879,52 +3686,17 @@ class AgentManager:
 
     def cancel_pending_inject(self, project_id: str, session_id: str,
                               nonce: str | None = None) -> dict:
-        """Cancel a queued message for a session (optionally a single nonce).
+        """Cancel (recall) a queued message of a session's own queue.
 
-        Removes a STILL-QUEUED entry from EITHER the cross-session registry
-        (``_pending_inject``) OR the target session's same-session queue
-        (``session._queue`` via ``remove_queued_message``) — one endpoint
-        dequeues both kinds. In-flight entries (mid ``_fire``) are tombstoned
-        so the dispatch skips them — a cancel beats an in-flight dispatch
-        (B7) — but a tombstone is NOT counted as a removal because that turn
-        is already being dispatched.
-
-        Returns ``{"status": "cancelled", "removed": bool}`` where ``removed``
-        is ``True`` IFF an actually-still-queued entry was dequeued. This makes
-        the FE recall server-authoritative: it loads the text into the composer
-        and clears the bubble ONLY when ``removed`` is ``True``, killing the
-        recall-vs-dispatch double-send race (§12 R2). Broadcasts
-        ``chat.pending_cancelled``.
+        Removes the STILL-QUEUED entry from ``session._queue`` by nonce
+        (``remove_queued_message``). Returns ``{"status": "cancelled",
+        "removed": bool}`` where ``removed`` is ``True`` IFF a still-queued
+        entry was dequeued. This makes the FE recall server-authoritative: it
+        loads the text into the composer and clears the bubble ONLY when
+        ``removed`` is ``True``, killing the recall-vs-dispatch double-send
+        race (§12 R2). Broadcasts ``chat.pending_cancelled``.
         """
-        def _matches(p: PendingInject) -> bool:
-            return p.session_id == session_id and (
-                nonce is None or p.nonce == nonce
-            )
-
         removed_any = False
-
-        # Cross-session queued entries: drop them outright.
-        queue = self._pending_inject.get(project_id, [])
-        removed = [p for p in queue if _matches(p)]
-        if removed:
-            removed_any = True
-            kept = [p for p in queue if not _matches(p)]
-            if kept:
-                self._pending_inject[project_id] = kept
-            else:
-                self._pending_inject.pop(project_id, None)
-            for p in removed:
-                self._pending_dispatching.discard(p.id)
-                self._pending_tombstoned.discard(p.id)
-        # In-flight entries: tombstone so ``_fire`` skips the inject. A
-        # tombstone does NOT count as a removal — the turn is already
-        # dispatching, so a recall must no-op (removed stays False here).
-        for p in self._pending_inflight.get(project_id, []):
-            if _matches(p):
-                self._pending_tombstoned.add(p.id)
-        # Same-session queued message (this session's own ``_queue``): remove
-        # by nonce via the live handle. Only attempted when a nonce is given
-        # (the queue is nonce-keyed). A successful removal counts as a removal.
         if nonce is not None:
             handle = self._handles.get(make_session_key(project_id, session_id))
             if handle is not None and handle.session is not None:
@@ -3938,137 +3710,6 @@ class AgentManager:
             "nonce": nonce,
         }, session_id=session_id)
         return {"status": "cancelled", "removed": removed_any}
-
-    def _purge_pending_for_session(self, project_id: str, session_id: str,
-                                   session_uuid: str | None = None) -> None:
-        """Drop all pending injects targeting a session (delete_session, B6)."""
-        sids = {session_id}
-        if session_uuid:
-            sids.add(session_uuid)
-        queue = self._pending_inject.get(project_id, [])
-        removed = [p for p in queue if p.session_id in sids]
-        if removed:
-            kept = [p for p in queue if p.session_id not in sids]
-            if kept:
-                self._pending_inject[project_id] = kept
-            else:
-                self._pending_inject.pop(project_id, None)
-            for p in removed:
-                self._pending_dispatching.discard(p.id)
-                self._pending_tombstoned.discard(p.id)
-        for p in self._pending_inflight.get(project_id, []):
-            if p.session_id in sids:
-                self._pending_tombstoned.add(p.id)
-
-    def purge_pending(self, project_id: str) -> None:
-        """Drop all pending injects for a project (delete_project / teardown).
-
-        Tombstones any in-flight ids so a ``_fire`` already scheduled via
-        ``ensure_future`` is neutralized (its captured batch would otherwise
-        still inject after the registry is cleared, B6).
-        """
-        for p in self._pending_inject.pop(project_id, []):
-            self._pending_dispatching.discard(p.id)
-            self._pending_tombstoned.discard(p.id)
-        for p in self._pending_inflight.get(project_id, []):
-            self._pending_tombstoned.add(p.id)
-
-    def _release_slot(self, project_id: str) -> None:
-        """Single chokepoint: call at EVERY slot-free transition. Idempotent.
-
-        Pop-based, so overlapping calls are safe; the atomic slot guard at
-        ``start_agent`` is the ultimate race backstop (a loser re-enqueues).
-        """
-        self._maybe_dispatch_pending(project_id)
-
-    def _maybe_dispatch_pending(self, project_id: str) -> None:
-        """If the slot is free and a pending inject exists, dispatch its FIFO
-        head session's batch (spec 006 §3c). With no user message waiting,
-        deliver the oldest owed wake instead (spec 134 §3.5)."""
-        if self.current_holder_session_id(project_id) is not None:
-            return                          # still held; a later free retries
-        if self._pending_inflight.get(project_id):
-            return                          # a batch is already mid-dispatch
-        pend = self._pending_inject.get(project_id)
-        if not pend:
-            self._maybe_deliver_owed_wake(project_id)
-            return
-        item = next(
-            (p for p in pend if p.id not in self._pending_tombstoned), None,
-        )
-        if item is None:
-            self._maybe_deliver_owed_wake(project_id)
-            return
-        sid = item.session_id
-        # In-order, this session's not-yet-tombstoned entries form one batch.
-        batch = [
-            p for p in pend
-            if p.session_id == sid and p.id not in self._pending_tombstoned
-        ]
-        remaining = [p for p in pend if p not in batch]
-        if remaining:
-            self._pending_inject[project_id] = remaining
-        else:
-            self._pending_inject.pop(project_id, None)
-        inflight = self._pending_inflight.setdefault(project_id, [])
-        for p in batch:
-            self._pending_dispatching.add(p.id)
-            inflight.append(p)
-
-        async def _fire():
-            try:
-                for idx, p in enumerate(batch):
-                    if p.id in self._pending_tombstoned:
-                        # Cancelled mid-flight (recall / Stop won the race): skip
-                        # the inject. No broadcast needed here — cancel_pending_inject
-                        # already emitted chat.pending_cancelled when it tombstoned
-                        # this entry, so the FE has already dropped the bubble
-                        # (diff-review Finding 2 is handled by the cancel path).
-                        continue            # cancelled mid-flight
-                    try:
-                        await self.inject_message(
-                            project_id, p.content, nonce=p.nonce,
-                            session_id=sid,
-                        )
-                        # 1st inject → start_agent (Case 2/3) starts B's loop;
-                        # subsequent injects hit Case 1 (same-session queue)
-                        # since B's task is now alive → in-order delivery.
-                    except ValueError:
-                        # Lost the slot race (atomic guard). Re-enqueue the
-                        # not-yet-delivered, not-tombstoned remainder at HEAD.
-                        # Entries injected before this point were already
-                        # dispatched (and broadcast) above.
-                        remainder = [
-                            q for q in batch[idx:]
-                            if q.id not in self._pending_tombstoned
-                        ]
-                        self._pending_inject.setdefault(project_id, [])[:0] = (
-                            remainder
-                        )
-                        return
-                    # Delivered: clear THIS entry's FE "Waiting…" line. One
-                    # broadcast per delivered nonce — the old code only cleared
-                    # batch[0], so entries 2..N never got their line cleared
-                    # (D1 secondary gap). Skip None/empty nonces (no FE bubble).
-                    if p.nonce:
-                        self._broadcast(project_id, {
-                            "type": "chat.pending_dispatched",
-                            "project_id": project_id,
-                            "session_id": sid,
-                            "nonce": p.nonce,
-                        }, session_id=sid)
-            finally:
-                for p in batch:
-                    self._pending_dispatching.discard(p.id)
-                    self._pending_tombstoned.discard(p.id)
-                inflight_now = self._pending_inflight.get(project_id)
-                if inflight_now is not None:
-                    kept = [q for q in inflight_now if q not in batch]
-                    if kept:
-                        self._pending_inflight[project_id] = kept
-                    else:
-                        self._pending_inflight.pop(project_id, None)
-        asyncio.ensure_future(_fire())
 
     def _clear_same_session_pending(self, project_id: str, session_id: str) -> None:
         """Clear FE same-session "Waiting…" lines for any leftover queued
@@ -4222,21 +3863,21 @@ class AgentManager:
         is not a distinct runtime state, just "not running right now". The
         historical fact that it was stopped lives in last_terminal_event.
 
-        ``session_id`` selects the chat session. When omitted (``None``), the
-        call is holder-aware (seam 3 / Phase 1 / decision D1): it resolves to
-        the project's active-loop-slot holder and reports THAT session's
-        status, returning ``idle`` only when no session holds the slot. This
-        replaces the old "default session" resolution, which returned ``idle``
-        during a turn running under a non-default session (e.g. a uuid) and
-        caused the REST poll to revert the WS-driven ``running``. An explicit
-        ``session_id`` still targets exactly that session (unchanged).
+        ``session_id`` selects the chat session. When omitted (``None``) the
+        PROJECT aggregate is returned (spec 155 §5.2): ``running`` if any
+        session is running, else ``waiting``, else ``pending_approval``, else
+        ``idle``. An explicit ``session_id`` targets exactly that session.
         """
         if session_id is None:
-            session_id = self.current_holder_session_id(project_id)
-            if session_id is None:
-                return "idle"
-        else:
-            session_id = self._resolve_session_id(session_id)
+            live = {
+                self.get_run_status(project_id, session_id=sid)
+                for sid in self.live_session_ids(project_id)
+            }
+            for status in ("running", "waiting", "pending_approval"):
+                if status in live:
+                    return status
+            return "idle"
+        session_id = self._resolve_session_id(session_id)
         handle = self._handles.get(make_session_key(project_id, session_id))
         if handle is None:
             return "idle"
@@ -5087,9 +4728,6 @@ class AgentManager:
                 }, session_id=session_id)
                 # Notify all clients that blocked count dropped.
                 self._broadcast_blocked_count()
-                # "Run now": the holder's slot is now free — dispatch any
-                # pending input queued behind it (spec 006 §3d).
-                self._release_slot(project_id)
                 return {"status": "cancelled"}
 
             # Waiting state: main loop exited but sub-agents are still working
@@ -5113,9 +4751,6 @@ class AgentManager:
                     "project_id": project_id,
                     "status": "idle",
                 }, session_id=session_id)
-                # "Run now": slot freed from the waiting state — dispatch any
-                # pending input queued behind it (spec 006 §3d).
-                self._release_slot(project_id)
                 return {"status": "cancelled"}
 
             # Truly idle — nothing to cancel.
@@ -5213,16 +4848,20 @@ class AgentManager:
         # Cancel idle-poll + stop sub-agents (shared with cancel_message).
         await self._stop_sub_agents(project_id, session_id=session_id)
 
-        # Close browser pages for this project (not on idle eviction — the
-        # live view keeps showing them; see ``keep_browser``).
+        # Close THIS session's browser pages (spec 155 §5.4: pages are per
+        # session, so another running session keeps its tab). Not on idle
+        # eviction — the live view keeps showing them; see ``keep_browser``.
         if self._browser_manager is not None and not keep_browser:
             try:
-                await self._browser_manager.close_project_pages(project_id)
+                await self._browser_manager.close_session_pages(project_id, session_id)
             except Exception:
                 pass
 
-        # Stop platform sandbox processes
-        if self._platform_provider is not None:
+        # Stop the project's platform sandbox process (and its network proxy)
+        # only when no other session of the project is still live: those are
+        # per project, and a parallel session may be mid-command (spec 155).
+        if self._platform_provider is not None and not any(
+                sid != session_id for sid in self.live_session_ids(project_id)):
             await self._platform_provider.stop_process(project_id)
 
         # terminate() interrupts any in-flight LLM stream and sets the stop
@@ -5249,14 +4888,23 @@ class AgentManager:
 
         self._handles.pop(sk, None)
 
-        # The slot is now free — dispatch any pending input queued behind this
-        # session (spec 006 §3d). Idempotent + holder-gated, so a stop during
-        # daemon shutdown / project deletion (where pending is purged first) is
-        # a no-op.
-        self._release_slot(project_id)
-
         # Allow system sleep again if no agents remain.
         self._allow_sleep_if_idle()
+
+    async def stop_all_sessions(self, project_id: str) -> list[str]:
+        """Stop every live session of the project (running, paused on an
+        approval, or waiting on its workers) — project deletion (spec 155
+        B12: several sessions can run at once, so stopping "the holder" left
+        the others writing into a workspace being removed). Returns the ids
+        stopped."""
+        stopped: list[str] = []
+        for sid in self.live_session_ids(project_id):
+            try:
+                await self.stop_agent(project_id, session_id=sid)
+                stopped.append(sid)
+            except KeyError:
+                continue
+        return stopped
 
     def _resolve_session_uuid_on_disk(self, project_id: str,
                                       identifier: str) -> tuple[str, str] | None:
@@ -5333,10 +4981,6 @@ class AgentManager:
                         "Cannot delete a session while a sub-agent is working "
                         "in it. Stop it first."
                     )
-
-        # Drop any pending injects targeting this session BEFORE teardown so a
-        # deleted session can't be resurrected by a slot-free dispatch (B6).
-        self._purge_pending_for_session(project_id, session_id, session_uuid)
 
         # Locate any live handle for this session. Both the F1 chat id and the
         # F2 uuid can address it, so match on either the handle's session_id
@@ -5610,16 +5254,6 @@ class AgentManager:
         # carry live status; disk-only entries are idle and get hydrated from
         # JSONL only when the user acts on them.
         seen_uuids = {s["session_uuid"] for s in sessions if s.get("session_uuid")}
-        # Spec 081: a session whose first message is queued behind the project
-        # slot has neither a handle nor a file (persist-at-dispatch, spec 006
-        # §3a). Merge the pending registry in BEFORE the disk scan so its ids
-        # join ``seen_uuids`` and a file that appears in between cannot list
-        # the same session twice.
-        pending_entries = self._pending_session_entries(project_id, seen_uuids)
-        sessions.extend(pending_entries)
-        seen_uuids |= {
-            s["session_uuid"] for s in pending_entries if s.get("session_uuid")
-        }
         disk_entries = self._disk_session_entries(project_id, seen_uuids)
         sessions.extend(disk_entries)
         seen_uuids |= {
@@ -5776,104 +5410,6 @@ class AgentManager:
         except Exception:
             logger.warning("session import: lazy automation sync failed for %s",
                            project_id, exc_info=True)
-
-    def _materialized_session_ids(self, project_id: str) -> set[str]:
-        """Stems of the project's on-disk session logs — a cheap ``listdir``.
-
-        Used only to stop a queued entry from shadowing a session that already
-        has a file (an idle session the user wrote to while another held the
-        slot). The disk scan itself — with its boundary checks, meta-only skip
-        rule and mtime cache — is untouched; a session's file only ever exists
-        together with its first real message, because ``Session.new`` defers
-        the ``session_start`` meta until the first physical write.
-        """
-        project = self._project_store.get_project(project_id) if self._project_store else None
-        workspace = (project or {}).get("workspace", "") if project else ""
-        if not workspace:
-            return set()
-        try:
-            fnames = os.listdir(ProjectPaths(workspace).sessions_dir)
-        except OSError:
-            return set()
-        return {f[:-len(".jsonl")] for f in fnames if f.endswith(".jsonl")}
-
-    def _pending_session_entries(self, project_id: str, seen_ids: set) -> list[dict]:
-        """Sessions whose only trace is a queued first message (spec 081).
-
-        ``list_sessions`` otherwise knows two kinds of session: a live handle
-        and a JSONL on disk. A session minted by "+ new session" whose first
-        message was enqueued while a different session held the project's
-        single slot has neither — the row is written only at dispatch (spec
-        006 §3a, exactly-once) — so it stayed invisible in the sidebar for as
-        long as the holder ran. Each such session gets one entry with status
-        ``queued``.
-
-        Snapshot the registries with ``list(...)``: the list route runs this
-        off the event loop (``agents_v2.py``), so the live lists can mutate
-        under us; a stale snapshot is corrected by the next refresh (§8).
-
-        In-flight entries (already popped by ``_maybe_dispatch_pending`` but
-        not yet persisted by its ``_fire``) still count as queued — a refresh
-        in that window must not drop the row. Tombstoned entries do not: the
-        cancel that tombstoned them has already dropped the bubble.
-
-        Same-session queued messages (``kind:"same"``, spec 006) are not here:
-        they live in a live handle's own queue, and that session is listed by
-        the handle pass.
-        """
-        snapshot = (
-            list(self._pending_inflight.get(project_id, []))
-            + list(self._pending_inject.get(project_id, []))
-        )
-        first_by_session: dict[str, PendingInject] = {}
-        for p in snapshot:
-            if p.id in self._pending_tombstoned:
-                continue
-            if p.session_id in seen_ids:
-                continue  # a live handle already carries this row
-            if make_session_key(project_id, p.session_id) in self._handles:
-                continue
-            # FIFO: the oldest surviving message names the row and dates it.
-            first_by_session.setdefault(p.session_id, p)
-        if not first_by_session:
-            return []
-        materialized = self._materialized_session_ids(project_id)
-        # Local import, as in ``_disk_session_entries``: the name helper is
-        # private to the session module and pulled in only where it is used.
-        from agent_os.agent.session import _derive_name, trigger_type_of
-        entries: list[dict] = []
-        for sid, p in first_by_session.items():
-            if sid in materialized:
-                # The disk entry — with its stored name and history — is the
-                # row, exactly as it will be after dispatch.
-                continue
-            enqueued_at = datetime.fromtimestamp(
-                p.enqueued_at, tz=timezone.utc,
-            ).isoformat()
-            entries.append({
-                "session_id": sid,
-                "status": "queued",
-                # Uuid-only identity (seam 3): a session that has never been
-                # written has no separate F1/F2 pair.
-                "session_uuid": sid,
-                "origin": "chat",
-                "trigger_type": trigger_type_of(p.content),
-                # D3: the same helper that will name the session at dispatch,
-                # so the label does not change when the row materializes.
-                "name": _derive_name(p.content),
-                "pinned": False,
-                "pinned_target": None,
-                "last_terminal_event": None,
-                # D4: the enqueue time is this session's newest activity, so
-                # the sidebar sorts the queued row to the top.
-                "last_activity_at": enqueued_at,
-                # Spec 108: the queued message is the user's last word and
-                # nothing has answered it yet.
-                "last_user_at": enqueued_at,
-                "last_reply_at": None,
-                "scope": self.get_session_scope(project_id, sid),
-            })
-        return entries
 
     def _session_log_files(
         self, workspace: str, project_id: str = "",
@@ -6201,14 +5737,10 @@ class AgentManager:
         return handle.session if handle else None
 
     # ── Queue helpers (Phase 1) ─────────────────────────────────────────
-    # F7 note: the queue is per-project, not per-session. The single-active-
-    # loop slot model (Track E foundation + #23) guarantees at most one
-    # handle keyed under each project_id; queue helpers scan ``self._handles``
-    # for that project's handle without needing to know which session_id
-    # currently holds the slot. The dispatcher may swap the active session
-    # via ``switch_session`` (e.g. from default → ``chat_<uuid>`` on pause,
-    # or back to a parked attempt's session on resume), and these helpers
-    # transparently track the new key.
+    # F7 note: the queue is per-project, not per-session. Sessions of a
+    # project run in parallel (spec 155), so "the project's handle" is only a
+    # fallback for callers that name no session; the dispatcher names its
+    # attempt session on every call.
 
     def _find_project_handle(self, project_id: str):
         """Return the (single) ProjectHandle for ``project_id`` regardless of
@@ -6227,11 +5759,8 @@ class AgentManager:
 
         Distinct from ``get_session(project_id)`` which defaults to a strict
         default-session lookup (and returns None when isolation tests use
-        non-default session ids). The queue dispatcher uses this because
-        after ``switch_session`` to ``chat_<uuid>`` (queue stop) or to a
-        parked attempt's id (queue resume), the dispatcher needs to find
-        whatever session currently holds the project's single slot — not
-        the default sentinel which may not exist.
+        non-default session ids). With parallel sessions (spec 155) this is
+        the first handle of the project — a legacy fallback only.
         """
         handle = self._find_project_handle(project_id)
         return handle.session if handle is not None else None
@@ -6361,107 +5890,6 @@ class AgentManager:
 
     def get_sub_agent_manager(self):
         return self._sub_agent_manager
-
-    async def switch_session(
-        self,
-        project_id: str,
-        session_id: str,
-        *,
-        start_loop: bool = False,
-    ):
-        """Swap the active session for a project to the given session_id.
-
-        Used by the queue dispatcher for stop (switch to chat) and resume
-        (switch back to a parked attempt). Unlike new_session(), this does
-        NOT run the pre-flush routine, stop sub-agents, or mint a new id —
-        the caller owns those decisions.
-
-        If the JSONL for session_id exists, it is loaded; otherwise a fresh
-        session with that id is created. Loop, ContextManager and handle
-        references are all kept consistent.
-
-        F7 note: ``self._handles`` is keyed by ``(project_id, session_id)``
-        (SessionKey tuple) after the multi-session foundation (#22). We scan
-        for any handle under ``project_id`` (single-slot discipline: at most
-        one) and re-key it to the new ``session_id`` after the swap so
-        downstream lookups (which use ``make_session_key``) find it.
-        """
-        old_sk = next(
-            (sk for sk in self._handles.keys() if sk[0] == project_id),
-            None,
-        )
-        if old_sk is None:
-            return None
-        handle = self._handles[old_sk]
-
-        # Stop the loop if running, but skip pre-flush. The caller decides
-        # whether to preserve the session (stop) or rotate (new_session).
-        if handle.task is not None and not handle.task.done():
-            await handle.loop.terminate()
-            try:
-                await asyncio.wait_for(asyncio.shield(handle.task), timeout=10.0)
-            except (asyncio.TimeoutError, Exception):
-                logger.warning(
-                    "switch_session(%s): loop did not stop gracefully",
-                    project_id,
-                )
-
-        workspace = handle.config_snapshot.get("workspace", "")
-        paths = ProjectPaths(workspace)
-        session_path = paths.session_file(session_id)
-
-        snap = handle.config_snapshot
-        if os.path.exists(session_path):
-            new_session = Session.load(session_path)
-            new_session.session_id = session_id
-        else:
-            new_session = Session.new(
-                session_id, workspace,
-                provider=snap.get("provider", "unknown"),
-                model=snap.get("model", "unknown"),
-                sdk=snap.get("sdk", "unknown"),
-                fallback_models=snap.get("fallback_models", []),
-            )
-            if snap.get("card_id") or snap.get("card_name"):
-                new_session._apply_meta_fields(
-                    card_id=snap.get("card_id", ""),
-                    card_name=snap.get("card_name", ""),
-                )
-
-        new_session.on_append = self._on_message(project_id, session_id)
-        new_session.on_stream = self._on_stream(project_id, session_id)
-
-        cm = handle.context_manager
-        if hasattr(cm, "_session"):
-            cm._session = new_session
-        if hasattr(cm, "_recovery_injected"):
-            cm._recovery_injected = False
-        if hasattr(cm, "_window_factor"):
-            cm._window_factor = 1.0
-        if hasattr(cm, "_last_usage_pct"):
-            cm._last_usage_pct = 0.0
-        if hasattr(cm, "_last_used_tokens"):
-            # Reset with the pct: should_compact() reads this, so a stale
-            # carry-over would compact the swapped-in session on its first turn.
-            cm._last_used_tokens = 0.0
-
-        handle.session = new_session
-        handle.task = None
-        if hasattr(handle.loop, "_session"):
-            handle.loop._session = new_session
-
-        # Re-key the handle under the new session_id (F7: tuple-keyed
-        # handles must move with the session swap so downstream
-        # ``make_session_key(project_id, session_id)`` lookups land here).
-        new_sk = make_session_key(project_id, session_id)
-        if new_sk != old_sk:
-            del self._handles[old_sk]
-            self._handles[new_sk] = handle
-
-        if start_loop:
-            await self._start_loop(project_id, session_id=session_id)
-
-        return new_session
 
     async def start_all_dispatchers(self) -> None:
         """Create one queue dispatcher per project at daemon startup.
@@ -6603,9 +6031,6 @@ class AgentManager:
 
     async def shutdown_dispatcher(self, project_id: str) -> None:
         """Tear down a single project's dispatcher (project-deletion path)."""
-        # Drop any pending injects for this project (B6). Tombstones in-flight
-        # ids so a scheduled _fire can't dispatch into a deleted project.
-        self.purge_pending(project_id)
         dispatcher = self._dispatchers.pop(project_id, None)
         if dispatcher is not None:
             try:
@@ -6883,18 +6308,12 @@ class AgentManager:
                 # Turn ended terminally without draining its same-session queue
                 # → clear any leftover "Waiting…" lines (Finding 1).
                 self._clear_same_session_pending(project_id, session_id)
-                # Slot freed (cancelled holder — incl. "Run now" on a running
-                # holder) → dispatch pending input (spec 006 §3d).
-                self._release_slot(project_id)
                 return
             if exc:
                 self._record_loop_error(project_id, session_id, exc)
                 # Errored turn left its same-session queue undrained → clear any
                 # leftover "Waiting…" lines (Finding 1).
                 self._clear_same_session_pending(project_id, session_id)
-                # Slot freed by an errored loop (v1 missed this) → dispatch
-                # pending input (spec 006 §3d).
-                self._release_slot(project_id)
                 return
 
             handle = self._handles.get(sk)
@@ -6913,8 +6332,6 @@ class AgentManager:
                     "project_id": project_id,
                     "status": "idle",
                 }, session_id=session_id)
-                # Slot freed (stopped holder) → dispatch pending (spec 006 §3d).
-                self._release_slot(project_id)
                 return
 
             # Surface a terminal LLM failure the loop handled INTERNALLY
@@ -7049,15 +6466,6 @@ class AgentManager:
                 poll_task = asyncio.ensure_future(
                     self._check_sub_agents_done(project_id, session_id=session_id)
                 )
-                # When the poll task finishes (sub-agents done, a new loop
-                # started, or the session went away) the slot is free. Use a
-                # done-callback rather than a synchronous call inside
-                # _check_sub_agents_done: condition 3 would otherwise see this
-                # very poll task as still-running and report the slot as held —
-                # a no-op (spec 006 §3d, B2).
-                poll_task.add_done_callback(
-                    lambda _t, _pid=project_id: self._release_slot(_pid)
-                )
                 self._idle_poll_tasks[make_session_key(project_id, session_id)] = poll_task
             else:
                 # Piece 3 Part B: NO turn-boundary reap. Alive-but-idle
@@ -7072,9 +6480,6 @@ class AgentManager:
                     "status": "idle",
                     "source": "management",
                 }, session_id=session_id)
-                # Loop finished idle (no approval, no queued, no busy sub-
-                # agents) → slot free → dispatch pending input (spec 006 §3d).
-                self._release_slot(project_id)
 
             # Allow system sleep again if no agents remain.
             self._allow_sleep_if_idle()

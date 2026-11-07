@@ -14,9 +14,8 @@ const sessionsCache = new Map<string, SessionListEntry[]>();
 
 // WS events that can change the session list's shape or a row's status.
 // `agent.status` covers every runtime transition of a session that has a
-// handle; the three `chat.pending_*` events cover a session that has none —
-// the spec-081 `queued` row appears, flips and disappears on those alone.
-// The `sub_agent.*` lifecycle events (shared with the project dot's sync,
+// handle; the two `chat.pending_*` events cover a running session's queued
+// message dispatching or being recalled. The `sub_agent.*` lifecycle events (shared with the project dot's sync,
 // SUB_AGENTS_RUNNING_EVENTS) cover a pinned worker run: it runs zero
 // management turns, so no agent.status ever fires for it — neither when its
 // first message creates the session (spec 106) nor when its `worker_running`
@@ -24,7 +23,6 @@ const sessionsCache = new Map<string, SessionListEntry[]>();
 // one fires per worker text chunk.
 const SESSION_LIST_EVENTS: ReadonlyArray<WebSocketEvent['type']> = [
   ...SUB_AGENTS_RUNNING_EVENTS,
-  'chat.pending_enqueued',
   'chat.pending_dispatched',
   'chat.pending_cancelled',
   // Spec 154: a reply checked on another device (or an ask closed) changes
@@ -144,14 +142,12 @@ export function useSessions(projectId: string | null) {
   // stopped, error, pending_approval — all the events that can change the
   // session list shape or a session's status field.
   //
-  // The three chat.pending_* events (spec 081) are the other way the list can
-  // change shape: a session whose first message is queued behind the project
-  // slot is listed as `queued` from the moment it is enqueued, flips when the
-  // message dispatches, and disappears when it is cancelled. None of those
-  // three emits an agent.status, so without these triggers the row would only
-  // appear on the next unrelated refresh.
+  // The two chat.pending_* events change a row's last-user fields when a
+  // queued message dispatches or is recalled without an agent.status.
+  // (Spec 155 removed the spec-081 `queued` row: sessions no longer wait for
+  // each other.)
   //
-  // The sub_agent.* lifecycle events (spec 106 / 102) are the fourth case: a
+  // The sub_agent.* lifecycle events (spec 106 / 102) are the other case: a
   // pinned worker send persists the session and runs the worker with no
   // management turn at all, so the only events it ever emits are the
   // worker's own. A session whose FIRST message is a pinned send would

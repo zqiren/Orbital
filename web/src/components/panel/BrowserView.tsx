@@ -33,6 +33,8 @@ function clamp(v: number, lo: number, hi: number) {
 
 export interface BrowserViewProps {
   projectId: string;
+  /** Spec 155: the viewed session — the live view mirrors its own page. */
+  sessionId?: string;
   /** Stream only while true (view visible + panel expanded). */
   active: boolean;
   /** Fallback when no live page: the session's last screenshot (workspace-relative path) + title. */
@@ -110,6 +112,7 @@ function isBrowserAnnotation(a: Annotation): a is Extract<Annotation, { kind: 'b
 
 export default function BrowserView({
   projectId,
+  sessionId,
   active,
   fallback,
   annotating,
@@ -119,7 +122,7 @@ export default function BrowserView({
   const t = useT();
   const {
     status, frame, title, url, loading, canGoBack, canGoForward, cursor, send, nav,
-  } = useBrowserLive(projectId, active);
+  } = useBrowserLive(projectId, active, sessionId);
   // A page exists but nothing has been opened in it (about:blank): say so
   // rather than streaming a white rectangle labelled Live.
   const blankPage = status === 'open' && url === 'about:blank';

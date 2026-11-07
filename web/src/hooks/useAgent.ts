@@ -26,47 +26,27 @@ export interface InjectResult extends ActionResult {
   /** tool_call_id of the approval that was dismissed (present when
    *  approval_dismissed is true). */
   dismissed_tool_call_id?: string;
-  /**
-   * Slot-enforcement Phase 1 (Track J): present when the backend returned
-   * 202 with `status: "slot_held"` because the requested session_id does
-   * not currently hold the project's active-loop slot. The frontend should
-   * render SlotHeldNotice and offer cancel-and-resend.
-   *
-   * Pending-input queue (spec 006): also present on the new happy-path 202
-   * `status: "queued_pending_slot"` — the holder (A) of the slot, shown in
-   * the "Waiting for {holder}…" affordance.
-   */
-  holding_session_id?: string;
-  /** Human-readable description that accompanies `status: "slot_held"`. */
-  message?: string;
-  /**
-   * Pending-input queue (spec 006) 202 `queued_pending_slot` fields: the
-   * message was accepted and queued (NOT rejected) and will auto-dispatch
-   * when the slot frees. The optimistic bubble is KEPT and a waiting
-   * affordance is shown (see ChatView `pendingInputs`).
-   */
-  queued_session_id?: string;
+  /** The request's nonce, echoed back for queued same-session messages. */
   nonce?: string;
-  position?: number;
 }
 
 /**
  * GET /agents/{id}/pending — mobile/relay reconnect recovery (spec 006 §3f,
  * §11d). v3: entries carry the FULL `content` (not a preview) so recall can
- * rebuild the composer text, and a `kind` discriminating cross-session
- * (`_pending_inject`, slot held by another session) from same-session
- * (`session._queue`, this session's turn mid-flight) queued messages.
+ * rebuild the composer text. Every entry is a message queued in a running
+ * session's own queue (`kind: 'same'`); spec 155 removed the cross-session
+ * kind.
  */
 export interface PendingEntry {
   session_id: string;
   nonce: string | null;
   content: string;
   position: number;
-  kind: 'cross' | 'same';
+  kind: 'same';
 }
 
 export interface PendingListResult {
-  /** The session currently holding the slot, or null if free. */
+  /** Legacy field: a running session of the project, or null. Unused. */
   holder: string | null;
   pending: PendingEntry[];
 }

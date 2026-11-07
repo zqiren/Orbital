@@ -958,42 +958,6 @@ class TestAgentManager:
         assert user_echoes[0]["content"] == "hello there"
 
     @pytest.mark.asyncio
-    async def test_fire_broadcasts_pending_dispatched_per_delivered_nonce(self):
-        """D1 secondary gap: a cross-session pending batch with N nonces must
-        clear the FE 'Waiting…' line for EVERY delivered entry — one
-        chat.pending_dispatched per nonce — not just batch[0]."""
-        from agent_os.daemon_v2.agent_manager import PendingInject
-
-        mgr, ws, _, _, _ = self._make_manager()
-
-        sid = "sess_b0001"
-        now = time.time()
-        entries = [
-            PendingInject(id="e1", session_id=sid, content="m1", nonce="n1",
-                          attachments=None, enqueued_at=now),
-            PendingInject(id="e2", session_id=sid, content="m2", nonce="n2",
-                          attachments=None, enqueued_at=now),
-            PendingInject(id="e3", session_id=sid, content="m3", nonce="n3",
-                          attachments=None, enqueued_at=now),
-        ]
-        mgr._pending_inject["proj_1"] = list(entries)
-
-        with patch.object(mgr, "inject_message",
-                          new_callable=AsyncMock) as inj:
-            mgr._maybe_dispatch_pending("proj_1")
-            # Let the scheduled _fire task run to completion.
-            for _ in range(5):
-                await asyncio.sleep(0)
-
-        assert inj.await_count == 3
-        dispatched = [
-            c[0][1] for c in ws.broadcast.call_args_list
-            if c[0][1].get("type") == "chat.pending_dispatched"
-        ]
-        nonces = sorted(d["nonce"] for d in dispatched)
-        assert nonces == ["n1", "n2", "n3"]
-
-    @pytest.mark.asyncio
     async def test_stop_agent_stops_session(self):
         mgr, ws, sub_mgr, _, _ = self._make_manager()
 

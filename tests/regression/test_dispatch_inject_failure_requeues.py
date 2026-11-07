@@ -18,10 +18,11 @@ Two fixes, mirroring the existing reclaim_on_startup poison-pill convention:
       the cap, or marks BLOCKED once interruptions hit the cap. Attempt records
       are preserved.
 
-  (2) Before minting a session + injecting, _dispatch_one checks whether
-      another session already holds the management loop slot
-      (current_holder_session_id). If so it backs off (no attempt minted) and
-      lets the main loop re-poll — never burning an attempt against a busy slot.
+  (2) Before minting a session + injecting, _dispatch_one checks whether the
+      queue's OWN previous attempt session is still live (spec 155: sessions of
+      a project run in parallel, so a chat session never holds the queue back;
+      the queue stays serial over its own items). If so it backs off (no
+      attempt minted) and lets the main loop re-poll.
 """
 
 from __future__ import annotations
@@ -52,13 +53,13 @@ class _FakeLoop:
 class _InjectFailingAgentManager:
     """Mock manager whose inject_message raises a fixed number of times.
 
-    Also models the management-loop slot via ``holder`` so the busy-slot guard
-    can be exercised: current_holder_session_id returns ``holder``.
+    ``live`` models which sessions are still live (``session_is_live``), so
+    the queue's own serial check can be exercised.
     """
 
-    def __init__(self, *, fail_times: int, holder: Optional[str] = None):
+    def __init__(self, *, fail_times: int, live: Optional[set] = None):
         self._fail_remaining = fail_times
-        self.holder = holder
+        self.live = set(live or ())
         self._loop = _FakeLoop()
         self._session_counter = 0
         self._session = _FakeSession("sess_0")
@@ -69,8 +70,8 @@ class _InjectFailingAgentManager:
     def is_onboarding_complete(self, project_id):
         return True
 
-    def current_holder_session_id(self, project_id):
-        return self.holder
+    def session_is_live(self, project_id, session_id):
+        return session_id in self.live
 
     def get_session(self, project_id):
         return self._session
@@ -124,9 +125,10 @@ async def test_inject_failure_requeues_item_not_running(tmp_path):
     """One inject failure → item back to QUEUED, interrupted_count==1, NOT
     RUNNING. The attempt record is preserved (closed INTERRUPTED).
 
-    After the failure the slot is held busy so the re-queued state is
-    observable (otherwise the dispatcher would immediately re-dispatch the
-    re-queued item, which is itself correct behaviour but races the assert)."""
+    After the failure the failed attempt's session is kept live so the
+    re-queued state is observable (otherwise the dispatcher would immediately
+    re-dispatch the re-queued item, which is itself correct behaviour but races
+    the assert)."""
     store = QueueStore(tmp_path / "queue.json")
     item = store.add_item("research the landscape")
 
@@ -138,16 +140,16 @@ async def test_inject_failure_requeues_item_not_running(tmp_path):
         max_runtime_seconds=60,
     )
 
-    # Wrap inject_message so that immediately after it raises, a holder is
-    # planted — pinning the re-queued item in QUEUED so the test can observe it
-    # before the dispatcher's next poll would re-dispatch.
+    # Wrap inject_message so that immediately after it raises, the attempt's
+    # session reads live — pinning the re-queued item in QUEUED so the test
+    # can observe it before the dispatcher's next poll would re-dispatch.
     orig_inject = mgr.inject_message
 
     async def _inject_then_hold(*args, **kwargs):
         try:
             return await orig_inject(*args, **kwargs)
         finally:
-            mgr.holder = "now-busy"
+            mgr.live.add(kwargs.get("session_id"))
 
     mgr.inject_message = _inject_then_hold
 
@@ -214,37 +216,38 @@ async def test_repeated_inject_failures_block_item(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_busy_slot_does_not_burn_attempt(tmp_path):
-    """When another session holds the management loop slot, the dispatcher
-    must NOT mint a session or an attempt — it backs off and waits. Once the
-    slot frees, dispatch proceeds normally."""
+async def test_a_live_previous_attempt_does_not_burn_an_attempt(tmp_path):
+    """Spec 155: a chat session running beside the queue never holds it
+    back, but the queue's own previous attempt still live (e.g. its workers
+    still running) does: no session or attempt is minted until it rests."""
     store = QueueStore(tmp_path / "queue.json")
-    store.add_item("waits for the slot")
+    store.add_item("waits for the previous item")
 
-    # Another session ("onboarding-research") holds the slot.
-    mgr = _InjectFailingAgentManager(fail_times=0, holder="onboarding-research")
+    # A chat session runs ("onboarding-research") and the queue's previous
+    # attempt ("sess_prev") is still live.
+    mgr = _InjectFailingAgentManager(fail_times=0, live={"onboarding-research", "sess_prev"})
     dispatcher = QueueDispatcher(
         project_id="proj_busy",
         store=store,
         agent_manager=mgr,
         max_runtime_seconds=60,
     )
+    dispatcher._attempt_session_id = "sess_prev"
     await dispatcher.start()
     dispatcher.notify_new_item()
 
-    # Give the dispatcher several poll cycles. While the slot is held, no
-    # session is minted, no attempt is created, item stays QUEUED.
     await asyncio.sleep(0.5)
     held = store.load().items[0]
     assert held.state == ItemState.QUEUED, (
-        f"item should stay QUEUED while slot is busy; got {held.state}"
+        f"item should stay QUEUED while the previous attempt is live; got {held.state}"
     )
-    assert held.attempts == [], "no attempt should be minted against a busy slot"
-    assert mgr.new_session_calls == 0, "no session should be minted while busy"
-    assert mgr.inject_attempts == 0, "inject must not be attempted while busy"
+    assert held.attempts == [], "no attempt should be minted"
+    assert mgr.new_session_calls == 0
+    assert mgr.inject_attempts == 0
 
-    # Free the slot — dispatch should now proceed and complete.
-    mgr.holder = None
+    # The previous attempt rests — the chat session keeps running, and the
+    # item dispatches anyway.
+    mgr.live.discard("sess_prev")
     dispatcher.notify_new_item()
 
     ok = await _wait(
@@ -252,7 +255,7 @@ async def test_busy_slot_does_not_burn_attempt(tmp_path):
         timeout=8.0,
     )
     assert ok, (
-        "once the slot frees the item should dispatch and complete; "
+        "once the previous attempt rests the item should dispatch and complete; "
         f"state={store.load().items[0].state}"
     )
     assert mgr.new_session_calls == 1

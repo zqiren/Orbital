@@ -364,9 +364,16 @@ class BrowserTool(Tool):
         screenshot_namespace: str = "default",
         user_credential_store=None,
         vision_enabled: bool = False,
+        session_id: str | None = None,
     ):
         self._bm = browser_manager
         self._project_id = project_id
+        # Spec 155 §5.4: the BrowserManager key for this tool's pages. A
+        # manager session's tool gets its own (``page_scope``), so two
+        # sessions of one project never drive the same tab; a worker scope
+        # ("worker:…") or a session-less tool keeps the bare key.
+        from agent_os.daemon_v2.browser_manager import page_scope
+        self._scope = page_scope(project_id, session_id)
         self._workspace = workspace
         self._autonomy_preset = autonomy_preset
         # Namespace key for ``output/screenshots/<ns>/`` and the screenshot
@@ -614,7 +621,7 @@ class BrowserTool(Tool):
         if error:
             return ToolResult(content=error)
 
-        page = await self._bm.get_page(self._project_id)
+        page = await self._bm.get_page(self._scope)
         await page.goto(url, wait_until="domcontentloaded", timeout=30000)
         await self._wait_for_stable(page, timeout_ms=10000)
 
@@ -624,7 +631,7 @@ class BrowserTool(Tool):
             await page.goto("about:blank")
             return ToolResult(content=error)
 
-        self._bm.clear_ref_map(self._project_id, id(page))
+        self._bm.clear_ref_map(self._scope, id(page))
         title = await page.title()
         screenshot_path = await self._capture(page)
         signals = await self._collect_page_signals(page, url)
@@ -647,10 +654,10 @@ class BrowserTool(Tool):
         )
 
     async def _action_go_back(self, args: dict) -> ToolResult:
-        page = await self._bm.get_page(self._project_id)
+        page = await self._bm.get_page(self._scope)
         await page.go_back()
         await self._wait_for_stable(page, timeout_ms=10000)
-        self._bm.clear_ref_map(self._project_id, id(page))
+        self._bm.clear_ref_map(self._scope, id(page))
         url = page.url
         title = await page.title()
         screenshot_path = await self._capture(page)
@@ -660,10 +667,10 @@ class BrowserTool(Tool):
         )
 
     async def _action_go_forward(self, args: dict) -> ToolResult:
-        page = await self._bm.get_page(self._project_id)
+        page = await self._bm.get_page(self._scope)
         await page.go_forward()
         await self._wait_for_stable(page, timeout_ms=10000)
-        self._bm.clear_ref_map(self._project_id, id(page))
+        self._bm.clear_ref_map(self._scope, id(page))
         url = page.url
         title = await page.title()
         screenshot_path = await self._capture(page)
@@ -673,10 +680,10 @@ class BrowserTool(Tool):
         )
 
     async def _action_reload(self, args: dict) -> ToolResult:
-        page = await self._bm.get_page(self._project_id)
+        page = await self._bm.get_page(self._scope)
         await page.reload()
         await self._wait_for_stable(page, timeout_ms=10000)
-        self._bm.clear_ref_map(self._project_id, id(page))
+        self._bm.clear_ref_map(self._scope, id(page))
         url = page.url
         title = await page.title()
         screenshot_path = await self._capture(page)
@@ -690,8 +697,8 @@ class BrowserTool(Tool):
     # ------------------------------------------------------------------
 
     async def _action_click(self, args: dict) -> ToolResult:
-        page = await self._bm.get_page(self._project_id)
-        ref_map = self._bm.get_ref_map(self._project_id, id(page))
+        page = await self._bm.get_page(self._scope)
+        ref_map = self._bm.get_ref_map(self._scope, id(page))
         if not ref_map:
             return ToolResult(content="No snapshot taken yet. Run snapshot first to see the page.")
         locator = await resolve_ref(ref_map, args.get("ref", ""), page)
@@ -707,8 +714,8 @@ class BrowserTool(Tool):
         )
 
     async def _action_type(self, args: dict) -> ToolResult:
-        page = await self._bm.get_page(self._project_id)
-        ref_map = self._bm.get_ref_map(self._project_id, id(page))
+        page = await self._bm.get_page(self._scope)
+        ref_map = self._bm.get_ref_map(self._scope, id(page))
         if not ref_map:
             return ToolResult(content="No snapshot taken yet. Run snapshot first to see the page.")
         locator = await resolve_ref(ref_map, args.get("ref", ""), page)
@@ -725,8 +732,8 @@ class BrowserTool(Tool):
         )
 
     async def _action_fill(self, args: dict) -> ToolResult:
-        page = await self._bm.get_page(self._project_id)
-        ref_map = self._bm.get_ref_map(self._project_id, id(page))
+        page = await self._bm.get_page(self._scope)
+        ref_map = self._bm.get_ref_map(self._scope, id(page))
         if not ref_map:
             return ToolResult(content="No snapshot taken yet. Run snapshot first.")
         # Loud shape validation (F1): a missing/empty/malformed `fields` arg
@@ -781,7 +788,7 @@ class BrowserTool(Tool):
         )
 
     async def _action_press(self, args: dict) -> ToolResult:
-        page = await self._bm.get_page(self._project_id)
+        page = await self._bm.get_page(self._scope)
         key = args.get("key", "")
         await page.keyboard.press(key)
         await self._wait_for_stable(page)
@@ -792,8 +799,8 @@ class BrowserTool(Tool):
         )
 
     async def _action_hover(self, args: dict) -> ToolResult:
-        page = await self._bm.get_page(self._project_id)
-        ref_map = self._bm.get_ref_map(self._project_id, id(page))
+        page = await self._bm.get_page(self._scope)
+        ref_map = self._bm.get_ref_map(self._scope, id(page))
         if not ref_map:
             return ToolResult(content="No snapshot taken yet. Run snapshot first to see the page.")
         locator = await resolve_ref(ref_map, args.get("ref", ""), page)
@@ -805,8 +812,8 @@ class BrowserTool(Tool):
         )
 
     async def _action_select(self, args: dict) -> ToolResult:
-        page = await self._bm.get_page(self._project_id)
-        ref_map = self._bm.get_ref_map(self._project_id, id(page))
+        page = await self._bm.get_page(self._scope)
+        ref_map = self._bm.get_ref_map(self._scope, id(page))
         if not ref_map:
             return ToolResult(content="No snapshot taken yet. Run snapshot first to see the page.")
         locator = await resolve_ref(ref_map, args.get("ref", ""), page)
@@ -820,10 +827,10 @@ class BrowserTool(Tool):
         )
 
     async def _action_scroll(self, args: dict) -> ToolResult:
-        page = await self._bm.get_page(self._project_id)
+        page = await self._bm.get_page(self._scope)
         ref = args.get("ref")
         if ref:
-            ref_map = self._bm.get_ref_map(self._project_id, id(page))
+            ref_map = self._bm.get_ref_map(self._scope, id(page))
             if not ref_map:
                 return ToolResult(content="No snapshot taken yet. Run snapshot first to see the page.")
             locator = await resolve_ref(ref_map, ref, page)
@@ -849,8 +856,8 @@ class BrowserTool(Tool):
         )
 
     async def _action_drag(self, args: dict) -> ToolResult:
-        page = await self._bm.get_page(self._project_id)
-        ref_map = self._bm.get_ref_map(self._project_id, id(page))
+        page = await self._bm.get_page(self._scope)
+        ref_map = self._bm.get_ref_map(self._scope, id(page))
         if not ref_map:
             return ToolResult(content="No snapshot taken yet. Run snapshot first to see the page.")
         start_locator = await resolve_ref(ref_map, args.get("start_ref", ""), page)
@@ -879,7 +886,7 @@ class BrowserTool(Tool):
         return resolved
 
     async def _action_upload_file(self, args: dict) -> ToolResult:
-        page = await self._bm.get_page(self._project_id)
+        page = await self._bm.get_page(self._scope)
         file_path = args.get("file_path", "")
 
         # 1. Path validation (workspace confinement)
@@ -893,7 +900,7 @@ class BrowserTool(Tool):
             return ToolResult(content=f"Error: file not found: {file_path}")
 
         # 2. Check for pending FileChooser (from a prior click on upload button)
-        chooser = self._bm.consume_file_chooser(self._project_id)
+        chooser = self._bm.consume_file_chooser(self._scope)
         if chooser:
             await chooser.set_files(resolved)
             await self._wait_for_stable(page)
@@ -911,7 +918,7 @@ class BrowserTool(Tool):
                 content="Error: no pending file chooser and no ref provided. "
                         "Click the upload button first, then call upload_file."
             )
-        ref_map = self._bm.get_ref_map(self._project_id, id(page))
+        ref_map = self._bm.get_ref_map(self._scope, id(page))
         if not ref_map:
             return ToolResult(content="No snapshot taken yet. Run snapshot first.")
         locator = await resolve_ref(ref_map, ref, page)
@@ -929,11 +936,11 @@ class BrowserTool(Tool):
     # ------------------------------------------------------------------
 
     async def _action_snapshot(self, args: dict) -> ToolResult:
-        page = await self._bm.get_page(self._project_id)
+        page = await self._bm.get_page(self._scope)
         interactive_only = args.get("interactive_only", False)
         ax_tree = await _get_ax_tree(page)
         text, ref_map, stats = serialize_snapshot(ax_tree, interactive_only=interactive_only)
-        self._bm.store_ref_map(self._project_id, id(page), ref_map)
+        self._bm.store_ref_map(self._scope, id(page), ref_map)
         url = page.url
         wrapped = wrap_untrusted_content(text, url) if text else "(empty page)"
         signals = await self._collect_page_signals(page)
@@ -944,7 +951,7 @@ class BrowserTool(Tool):
         )
 
     async def _action_screenshot(self, args: dict) -> ToolResult:
-        page = await self._bm.get_page(self._project_id)
+        page = await self._bm.get_page(self._scope)
         annotate = args.get("annotate", False)
         if annotate:
             screenshot_path = await self._annotate_screenshot(page)
@@ -978,7 +985,7 @@ class BrowserTool(Tool):
         )
 
     async def _action_extract(self, args: dict) -> ToolResult:
-        page = await self._bm.get_page(self._project_id)
+        page = await self._bm.get_page(self._scope)
         text = await page.inner_text("body")
         if len(text) > _EXTRACT_MAX_CHARS:
             text = text[:_EXTRACT_MAX_CHARS] + "\n[TRUNCATED at 10,000 characters]"
@@ -990,12 +997,12 @@ class BrowserTool(Tool):
         )
 
     async def _action_search_page(self, args: dict) -> ToolResult:
-        page = await self._bm.get_page(self._project_id)
+        page = await self._bm.get_page(self._scope)
         query = args.get("text", "").lower()
         if not query:
             return ToolResult(content="No search query provided.")
 
-        ref_map = self._bm.get_ref_map(self._project_id, id(page))
+        ref_map = self._bm.get_ref_map(self._scope, id(page))
         matches = []
         if ref_map:
             for ref_id, entry in ref_map.items():
@@ -1025,7 +1032,7 @@ class BrowserTool(Tool):
         if not query:
             return ToolResult(content="Error: query is required for search action.")
 
-        original_page = await self._bm.get_page(self._project_id)
+        original_page = await self._bm.get_page(self._scope)
 
         # Detect the browser locale to pick the primary engine.
         # navigator.language reflects the locale the context was launched with.
@@ -1140,7 +1147,7 @@ class BrowserTool(Tool):
         if error:
             return ToolResult(content=f"Error: URL blocked: {error}")
 
-        original_page = await self._bm.get_page(self._project_id)
+        original_page = await self._bm.get_page(self._scope)
 
         # Spec 078: when the agent's current page is blank (fresh session, or
         # nothing opened yet), read the URL IN that page so the workspace
@@ -1190,7 +1197,7 @@ class BrowserTool(Tool):
             return ToolResult(content=f"Error fetching {url}: {str(e)}")
 
     async def _action_evaluate(self, args: dict) -> ToolResult:
-        page = await self._bm.get_page(self._project_id)
+        page = await self._bm.get_page(self._scope)
         javascript = args.get("javascript", "")
         result = await page.evaluate(javascript)
         await self._wait_for_stable(page)
@@ -1206,7 +1213,7 @@ class BrowserTool(Tool):
     # ------------------------------------------------------------------
 
     async def _action_wait(self, args: dict) -> ToolResult:
-        page = await self._bm.get_page(self._project_id)
+        page = await self._bm.get_page(self._scope)
 
         if "seconds" in args:
             await asyncio.sleep(args["seconds"])
@@ -1244,7 +1251,7 @@ class BrowserTool(Tool):
     # ------------------------------------------------------------------
 
     async def _action_pdf(self, args: dict) -> ToolResult:
-        page = await self._bm.get_page(self._project_id)
+        page = await self._bm.get_page(self._scope)
         file_path = args.get("file_path")
         if not file_path:
             from agent_os.agent.project_paths import ProjectPaths
@@ -1265,7 +1272,7 @@ class BrowserTool(Tool):
 
     async def _action_tab_new(self, args: dict) -> ToolResult:
         url = args.get("url")
-        page = await self._bm.new_tab(self._project_id, url)
+        page = await self._bm.new_tab(self._scope, url)
         tab_id = str(id(page))
         page_url = page.url
         title = await page.title()
@@ -1276,7 +1283,7 @@ class BrowserTool(Tool):
 
     async def _action_tab_switch(self, args: dict) -> ToolResult:
         tab_id = args.get("tab_id", "")
-        pages = await self._bm.get_all_pages(self._project_id)
+        pages = await self._bm.get_all_pages(self._scope)
         for page in pages:
             if str(id(page)) == tab_id:
                 await page.bring_to_front()
@@ -1289,7 +1296,7 @@ class BrowserTool(Tool):
 
     async def _action_tab_close(self, args: dict) -> ToolResult:
         tab_id = args.get("tab_id")
-        pages = await self._bm.get_all_pages(self._project_id)
+        pages = await self._bm.get_all_pages(self._scope)
         if tab_id:
             for page in pages:
                 if str(id(page)) == tab_id:
@@ -1316,7 +1323,7 @@ class BrowserTool(Tool):
 
     async def _annotate_screenshot(self, page) -> str | None:
         """Inject element overlays, screenshot, remove overlays."""
-        ref_map = self._bm.get_ref_map(self._project_id, id(page))
+        ref_map = self._bm.get_ref_map(self._scope, id(page))
         if not ref_map:
             return None
 
@@ -1431,7 +1438,7 @@ class BrowserTool(Tool):
         try:
             getter = getattr(self._bm, "get_ref_map", None)
             if callable(getter):
-                rm = getter(self._project_id, 0)
+                rm = getter(self._scope, 0)
                 if isinstance(rm, dict) and ref in rm:
                     del rm[ref]
         except Exception:

@@ -97,6 +97,12 @@ class QueueDispatcher:
         # state belongs to the next resume(). A bare boolean flag would
         # race with resume() resetting it before the handler resumed.
         self._stop_generation = 0
+        # Spec 155 §5.5: the session of the attempt this dispatcher started
+        # last. Sessions of a project run in parallel now, so the queue's
+        # serial order is its own: the next item waits while this session is
+        # still live (e.g. its workers are still running), and pause stops
+        # this session, never a chat the user is having beside it.
+        self._attempt_session_id: Optional[str] = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -232,13 +238,18 @@ class QueueDispatcher:
             QueueRunState.PAUSED, paused_until=paused_until, reason="user",
         )
 
-        # Terminate any sub-agents under a budget so they don't keep churning
+        # The attempt this pause parks: the head RUNNING item's latest
+        # attempt (spec 155 B8 — never "whichever session is running": a chat
+        # session beside the queue keeps going).
+        attempt_sid = self._current_attempt_session_id()
+
+        # Terminate the attempt's sub-agents so they don't keep churning
         # against the user while the dispatcher is paused.
         sub_mgr = self._agent_manager.get_sub_agent_manager()
-        if sub_mgr is not None:
+        if sub_mgr is not None and attempt_sid is not None:
             try:
                 await asyncio.wait_for(
-                    sub_mgr.stop_all(self._project_id),
+                    sub_mgr.stop_all(self._project_id, session_id=attempt_sid),
                     timeout=self.SUB_AGENT_STOP_TIMEOUT_SEC,
                 )
             except asyncio.TimeoutError:
@@ -261,8 +272,10 @@ class QueueDispatcher:
         # in place — no rotation, no swap — so chat messages sent during
         # pause land in the parked attempt's session, and resume picks up
         # exactly where pause left off.
-        holder_sid = self._agent_manager.current_holder_session_id(self._project_id)
-        loop_obj = self._agent_manager.get_loop(self._project_id, session_id=holder_sid)
+        loop_obj = (
+            self._agent_manager.get_loop(self._project_id, session_id=attempt_sid)
+            if attempt_sid is not None else None
+        )
         if loop_obj is not None:
             try:
                 await loop_obj.terminate()
@@ -278,6 +291,32 @@ class QueueDispatcher:
             self._project_id,
         )
         return {"status": "paused", "paused_until": paused_until}
+
+    def _current_attempt_session_id(self) -> Optional[str]:
+        """The session of the queue's in-flight attempt: the head RUNNING
+        item's latest attempt, else the attempt this dispatcher started last
+        while it is still live. None when the queue runs nothing."""
+        head = self._store.head()
+        if head is not None and head.state == ItemState.RUNNING and head.attempts:
+            return head.attempts[-1].session_id
+        sid = self._attempt_session_id
+        if sid and self._attempt_session_live(sid):
+            return sid
+        return None
+
+    def _attempt_session_live(self, session_id: Optional[str]) -> bool:
+        """The queue's own serial check (spec 155 §5.5). getattr-guarded:
+        lightweight test doubles that model a single ready session omit it,
+        and for those "not live" is the correct semantic."""
+        if not session_id:
+            return False
+        live = getattr(self._agent_manager, "session_is_live", None)
+        if live is None:
+            return False
+        try:
+            return bool(live(self._project_id, session_id))
+        except Exception:
+            return False
 
     async def resume(self) -> dict:
         """Re-activate queue draining. If a parked attempt exists, start a
@@ -305,9 +344,10 @@ class QueueDispatcher:
                 "dispatcher(%s): resuming item %s on parked session %s",
                 self._project_id, parked_item.id, session_id,
             )
-            # No switch_session needed — pause did not swap, the parked
-            # session is still active. Set the loop's queue_state so the
-            # approval branch picks it up before _start_loop fires.
+            # Pause did not swap anything: the parked session is the item's
+            # own. Set the loop's queue_state so the approval branch picks it
+            # up before _start_loop fires.
+            self._attempt_session_id = session_id
             loop_obj = self._agent_manager.get_loop(self._project_id, session_id=session_id)
             if loop_obj is not None:
                 try:
@@ -315,9 +355,8 @@ class QueueDispatcher:
                 except Exception:
                     pass
             # Spawn a handler task: it starts the loop and waits for exit.
-            # Pass session_id so _start_loop locates the handle correctly
-            # under the F7 tuple-keyed handles map (switch_session above
-            # re-keyed it to the parked session_id).
+            # Pass session_id so _start_loop locates the attempt's handle
+            # under the F7 tuple-keyed handles map.
             asyncio.create_task(self._resume_attempt(parked_item, session_id))
         else:
             # No parked attempt — kick the main loop in case items are queued.
@@ -335,8 +374,7 @@ class QueueDispatcher:
         first-time dispatch.
 
         ``session_id`` is the parked attempt's session_id; required so
-        ``_start_loop`` locates the handle under its current F7 tuple key
-        (``switch_session`` re-keyed it during the caller's swap).
+        ``_start_loop`` locates the handle under its F7 tuple key.
 
         Spec 079: an item assigned to a worker resumes by re-dispatching to that
         worker, not by starting a management turn — ``stop()`` killed the worker
@@ -383,11 +421,13 @@ class QueueDispatcher:
         mode="edit":   wrap with `[QUEUE ITEM | id=... | attempt=N+1]` header.
 
         Hot-resume semantics: pulls the most recent attempt's session_id and
-        calls AgentManager.switch_session to reload that JSONL as the active
-        session. switch_session also resets `_recovery_injected` and
-        related ContextManager flags so memory files re-read fresh on the
-        next loop run. A new AttemptRecord is appended sharing the prior
-        session_id (we are continuing it, not opening a new one).
+        injects into THAT session by id (spec 155 §5.5 / B9): a live idle
+        handle hot-resumes, a disk-only session is hydrated by
+        ``inject_message`` itself. No other session's handle is touched (the
+        old ``switch_session`` re-keyed the project's first handle — possibly
+        a chat the user was having — and stopped it if it was running). A new
+        AttemptRecord is appended sharing the prior session_id (we are
+        continuing it, not opening a new one).
         """
         if mode not in ("answer", "edit"):
             raise ValueError(f"mode must be 'answer' or 'edit', got {mode!r}")
@@ -408,21 +448,6 @@ class QueueDispatcher:
 
         # 2. Pull session_id from the most recent attempt
         prior_session_id = item.attempts[-1].session_id
-
-        # 3 + 4. Swap the active session back to the parked attempt's JSONL.
-        # switch_session resets _recovery_injected /
-        # _window_factor / _last_usage_pct on the ContextManager for us.
-        try:
-            await self._agent_manager.switch_session(
-                self._project_id, prior_session_id, start_loop=False,
-            )
-        except Exception:
-            logger.exception(
-                "dispatcher(%s): switch to prior session %s failed for retry "
-                "of item %s",
-                self._project_id, prior_session_id, item_id,
-            )
-            raise
 
         # 5. Mint a new attempt record. attempt_number is len+1; the new
         # attempt reuses prior_session_id because retries continue the
@@ -474,14 +499,13 @@ class QueueDispatcher:
                 "mode": mode,
             }
 
+        self._attempt_session_id = prior_session_id
         try:
-            # F7: pass session_id so inject_message locates the handle re-
-            # keyed by switch_session above (not the default-session handle
-            # which doesn't exist) — otherwise it would auto-start a NEW
-            # agent and violate single-slot discipline.
+            # Inject into the attempt's own session by id: hot-resumes a live
+            # idle handle, hydrates a disk-only one in queue mode.
             await self._agent_manager.inject_message(
                 self._project_id, injected,
-                session_id=prior_session_id,
+                session_id=prior_session_id, queue_state="running",
             )
         except Exception:
             logger.exception(
@@ -769,48 +793,17 @@ class QueueDispatcher:
             await self._wait_idle()
             return
 
-        # Busy-slot guard: a project has exactly one active-loop slot. If
-        # another session already holds it (e.g. a long-running onboarding /
-        # research turn the user kicked off, or a still-draining attempt),
-        # minting a fresh session and injecting would race that turn and
-        # inject_message would reject — burning an attempt and (pre-fix)
-        # wedging the head item as a zombie RUNNING. Back off WITHOUT minting
-        # a session/attempt; the main loop re-polls every IDLE_WAIT_TIMEOUT_SEC
-        # and will dispatch once the slot is free. (Reuses the existing
-        # current_holder_session_id accessor — no new machinery.)
-        #
-        # getattr-guarded: the real AgentManager always defines this accessor;
-        # only lightweight test doubles that model a single ready session omit
-        # it. For those, "no holder" (slot free) is the correct semantic, so we
-        # default to a lambda returning None rather than crashing the dispatch.
-        _holder_fn = getattr(
-            self._agent_manager, "current_holder_session_id", lambda _pid: None,
-        )
-        holder = _holder_fn(self._project_id)
-        if holder is not None:
+        # The queue stays serial over its OWN items (spec 155 §5.5, spec 070
+        # D10). Chat sessions of the project run beside it; only the attempt
+        # this dispatcher started last holds the next item back while its
+        # session is still live (running, on an approval, or waiting on its
+        # workers). Back off WITHOUT minting a session/attempt; the main loop
+        # re-polls every IDLE_WAIT_TIMEOUT_SEC.
+        if self._attempt_session_live(self._attempt_session_id):
             logger.info(
-                "dispatcher(%s): loop slot held by session %s; deferring "
-                "dispatch of item %s (no attempt minted)",
-                self._project_id, holder, item.id,
-            )
-            await self._wait_idle()
-            return
-
-        # Interactive pending-input wins the slot over the autonomous queue
-        # (spec 006 §3e). If a user message is queued behind the (now-free)
-        # slot, defer this item WITHOUT minting a session/attempt so the
-        # pending inject dispatches first. This bounds autonomous-queue
-        # starvation of interactive input to the current in-flight item and
-        # avoids burning an attempt (no spurious interrupted_count bump, B8).
-        # getattr-guarded for lightweight test doubles, like the holder accessor.
-        _pending_fn = getattr(
-            self._agent_manager, "has_pending_inject", lambda _pid: False,
-        )
-        if _pending_fn(self._project_id):
-            logger.info(
-                "dispatcher(%s): interactive pending input present; deferring "
-                "dispatch of item %s (no attempt minted)",
-                self._project_id, item.id,
+                "dispatcher(%s): previous attempt session %s still live; "
+                "deferring dispatch of item %s (no attempt minted)",
+                self._project_id, self._attempt_session_id, item.id,
             )
             await self._wait_idle()
             return
@@ -839,6 +832,7 @@ class QueueDispatcher:
 
         self._store.set_item_state(item.id, ItemState.RUNNING)
         self._store.append_attempt(item.id, AttemptRecord(session_id=session_id))
+        self._attempt_session_id = session_id
 
         logger.info(
             "dispatcher(%s): dispatching item %s attempt=%d (session=%s)",

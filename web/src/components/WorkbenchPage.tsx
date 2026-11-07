@@ -76,9 +76,13 @@ export interface WorkbenchPageProps {
   phone?: boolean;
   /** Orbital's own model line in the agent picker. */
   managerModel?: string;
-  /** Per project: the manager's run status and its tick (the pane's chat). */
+  /** Per project: the manager's run status and its tick. */
   agentStatuses?: Record<string, AgentRunStatus>;
   statusTicks?: Record<string, number>;
+  /** Spec 155: per project, per session — the pane's chat shows its own
+   *  session's status (sessions run in parallel). */
+  sessionStatuses?: Record<string, Record<string, AgentRunStatus>>;
+  sessionTicks?: Record<string, Record<string, number>>;
 }
 
 function newNonce(): string {
@@ -90,7 +94,7 @@ function newNonce(): string {
 
 export default function WorkbenchPage({
   setRoute, projects, agents, phone = false, managerModel,
-  agentStatuses = {}, statusTicks = {},
+  agentStatuses = {}, statusTicks = {}, sessionStatuses, sessionTicks,
 }: WorkbenchPageProps) {
   const t = useT();
   const [greeting] = useState(() => Math.floor(Math.random() * GREETINGS.length));
@@ -306,8 +310,12 @@ export default function WorkbenchPage({
           sessionId={paneRow.session_id!}
           title={paneTitle}
           dot={selected.dot}
-          agentStatus={agentStatuses[paneRow.project_id] ?? 'idle'}
-          statusTick={statusTicks[paneRow.project_id]}
+          agentStatus={sessionStatuses
+            ? sessionStatuses[paneRow.project_id]?.[paneRow.session_id!] ?? 'idle'
+            : agentStatuses[paneRow.project_id] ?? 'idle'}
+          statusTick={sessionTicks
+            ? sessionTicks[paneRow.project_id]?.[paneRow.session_id!]
+            : statusTicks[paneRow.project_id]}
           agents={agents}
           phone={phone}
           onClose={() => setSelectedKey(null)}

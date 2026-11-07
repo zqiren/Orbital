@@ -172,16 +172,11 @@ async def test_current_holder_returns_session_when_waiting():
 
 
 @pytest.mark.asyncio
-async def test_cross_session_inject_during_waiting_returns_202():
-    """End-to-end: HTTP inject to a different session while session A is in
-    ``waiting`` is ENQUEUED (Path A, spec 006) → 202 ``queued_pending_slot``
-    with sess-A as the holding session.
-
-    Rewritten from the old ``slot_held`` reject contract (spec 006 §5): a
-    waiting holder still holds the slot, so B's message is queued for delivery
-    when the slot frees rather than rejected."""
+async def test_cross_session_inject_during_waiting_runs_now():
+    """Spec 155: HTTP inject to a different session while session A is in
+    ``waiting`` (its workers still running) starts B now — 200, no queue."""
     mgr, project_store = _make_agent_manager()
-    project_id = "proj_waiting_inject_202"
+    project_id = "proj_waiting_inject_parallel"
     project_store.get_project.return_value = {
         "project_id": project_id, "workspace": "/tmp/ws", "name": "p",
     }
@@ -189,6 +184,16 @@ async def test_cross_session_inject_during_waiting_returns_202():
         mgr, project_id, "sess-A",
     )
     await done_task  # ensure waiting state is settled
+    started: list = []
+
+    async def _start_with_persisted_message(pid, config, content, nonce, *, session_id,
+                                            queue_state="chat", session=None):
+        started.append(session_id)
+        return "started"
+
+    mgr._start_with_persisted_message = _start_with_persisted_message  # type: ignore[assignment]
+    mgr._abuild_agent_config_from_project = AsyncMock(return_value=MagicMock())
+    mgr._hydrate_session = AsyncMock(return_value=None)
 
     client, saved = _build_test_client(mgr, project_store)
     try:
@@ -196,17 +201,10 @@ async def test_cross_session_inject_during_waiting_returns_202():
             f"/api/v2/agents/{project_id}/inject",
             json={"content": "hi from B", "session_id": "sess-B"},
         )
-        assert resp.status_code == 202, (
-            f"Expected 202 queued_pending_slot during waiting, got "
-            f"{resp.status_code}: {resp.text}"
-        )
-        body = resp.json()
-        assert body["status"] == "queued_pending_slot"
-        assert body["holding_session_id"] == "sess-A"
-        assert body["queued_session_id"] == "sess-B"
-        assert body["position"] == 1
-        # Enqueued in the registry; nothing dispatched while A still waits.
-        assert len(mgr._pending_inject[project_id]) == 1
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {"status": "started"}
+        assert started == ["sess-B"]
+        assert mgr.get_run_status(project_id, session_id="sess-A") == "waiting"
     finally:
         client.close()
         _restore(saved)

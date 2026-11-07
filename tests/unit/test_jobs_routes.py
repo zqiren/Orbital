@@ -40,6 +40,7 @@ def env(monkeypatch, tmp_path):
     manager = MagicMock()
     manager._job_registry = registry
     manager.is_running = MagicMock(return_value=False)
+    manager.stop_all_sessions = AsyncMock(return_value=[])
     manager.shutdown_dispatcher = AsyncMock()
     manager.delete_session = AsyncMock(return_value={"status": "deleted", "session_id": SID})
     monkeypatch.setattr(agents_v2, "_agent_manager", manager)

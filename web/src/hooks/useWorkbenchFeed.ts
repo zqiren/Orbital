@@ -249,7 +249,6 @@ export const FEED_EVENTS: ReadonlyArray<WebSocketEvent['type']> = [
   'sub_agent.failed',
   'sub_agent.stopped',
   'sub_agent.turn_interrupted',
-  'chat.pending_enqueued',
   'chat.pending_dispatched',
   'chat.pending_cancelled',
   'fanout.started',

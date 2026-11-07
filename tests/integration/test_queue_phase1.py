@@ -53,15 +53,11 @@ def _make_mock_manager(session_id: str = "sess_phase1"):
     mgr = MagicMock()
     mgr.get_session = MagicMock(return_value=_FakeSession(session_id))
     mgr.get_loop = MagicMock(return_value=_TextOnlyLoop())
-    # Busy-slot guard: the dispatcher checks current_holder_session_id before
-    # minting a session. A bare MagicMock would auto-fabricate a TRUTHY return
-    # here, which the guard reads as "another session holds the slot" → the
-    # dispatcher defers forever and never records an attempt. Model a free slot.
-    mgr.current_holder_session_id = MagicMock(return_value=None)
-    # Pending-input defer-check (spec 006 §3e): same MagicMock hazard — a bare
-    # mock auto-fabricates a TRUTHY return, which the dispatcher reads as
-    # "interactive input is waiting" → defers forever. Model an empty queue.
-    mgr.has_pending_inject = MagicMock(return_value=False)
+    # The queue's own serial check (spec 155): the dispatcher asks whether its
+    # previous attempt session is still live before minting the next one. A
+    # bare MagicMock would auto-fabricate a TRUTHY return here → the
+    # dispatcher defers forever. Model a previous attempt at rest.
+    mgr.session_is_live = MagicMock(return_value=False)
     mgr.inject_message = AsyncMock(return_value="delivered")
     # Corrective-turn path awaits inject_system_message; mock it as async.
     mgr.inject_system_message = AsyncMock(return_value=None)

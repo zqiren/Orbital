@@ -495,7 +495,6 @@ pairPhone.relay.phone,Phone · {id},status,PairPhone.tsx,Label for a paired phon
 pairPhone.relay.linkedAt,Linked {date} at {time},status,PairPhone.tsx,When a device was paired,链接于 {date} {time},Dates/times come from locale formatting.
 pairPhone.relay.unlink,Unlink,button,PairPhone.tsx,Removes a paired device,解除链接,
 pairPhone.relay.unlinkTitle,Unlink this device,tooltip,PairPhone.tsx,Title on the unlink button,解除此设备的链接,
-pairPhone.cancelResend.error,Failed to cancel and resend.,message_error,SlotHeldNotice.tsx,Error from the cancel-and-send flow,取消并重发失败。,
 claudemd.banner,Your workspace CLAUDE.md may conflict with Orbital's project-state inheritance. Sub-agents may behave unexpectedly.,message_error,ClaudemdWarningBanner.tsx,Warning banner about CLAUDE.md conflicts,工作目录中的 CLAUDE.md 可能与 Orbital 的项目空间子agent记忆冲突。子Agent可能表现异常。,Do not translate CLAUDE.md or Orbital.
 claudemd.viewFile,view CLAUDE.md,button,ClaudemdWarningBanner.tsx,Link to open the CLAUDE.md file,查看 CLAUDE.md,Keep CLAUDE.md.
 claudemd.dismiss,dismiss,button,ClaudemdWarningBanner.tsx,Dismisses the warning banner,忽略,
@@ -510,10 +509,6 @@ composerDisabled.aria,Composer unavailable — queue is active,tooltip,ComposerD
 composerDisabled.prompt,Pause queue to start chatting.,description,ComposerDisabledPrompt.tsx,Notice when queue blocks the composer,暂停队列以开始聊天。,
 composerDisabled.pausing,Pausing…,status,ComposerDisabledPrompt.tsx,Button label while pausing the queue,暂停中…,
 composerDisabled.pauseQueue,Pause queue,button,ComposerDisabledPrompt.tsx,Pauses the queue to enable chat,暂停队列,
-slotHeld.body,"Session {id} is currently running. Wait for it to finish, or cancel it to send this message now.",description,SlotHeldNotice.tsx,Notice when another session holds the slot,会话 {id} 正在运行。等待它完成，或取消并立即发送此消息。,{id} is a session id.
-slotHeld.wait,Wait,button,SlotHeldNotice.tsx,Dismisses the slot-held notice,等待,
-slotHeld.cancelling,Cancelling…,status,SlotHeldNotice.tsx,Button label while cancelling,取消中…,
-slotHeld.cancelAndSend,Cancel running session and send,button,SlotHeldNotice.tsx,Cancels the running session and sends now,取消正在运行的会话并发送,
 subAgentBar.working,Working,status,SubAgentStatusBar.tsx,Sub-agent badge: turn running,工作中,
 subAgentBar.background,Background,status,SubAgentStatusBar.tsx,Sub-agent badge: background work alive,后台运行,
 subAgentBar.idle,Idle,status,SubAgentStatusBar.tsx,Sub-agent badge: idle,空闲,

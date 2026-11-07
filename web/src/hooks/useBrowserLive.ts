@@ -46,10 +46,13 @@ const INITIAL_BACKOFF_MS = 1000;
 const MAX_BACKOFF_MS = 10000;
 
 /** Mirrors useWebSocket.tsx's WS_URL derivation (~line 32-40) for the live-browser route. */
-function buildWsUrl(projectId: string): string {
+function buildWsUrl(projectId: string, sessionId?: string): string {
   let url =
     BASE_URL.replace(/^http/, 'ws') +
     `/api/v2/agents/${encodeURIComponent(projectId)}/browser/live`;
+  // Spec 155 §5.4: sessions run in parallel, each with its own pages — the
+  // live view mirrors the VIEWED session's page.
+  if (sessionId) url += '?session_id=' + encodeURIComponent(sessionId);
   if (isRelayMode) {
     try {
       const token = localStorage.getItem('relay_jwt');
@@ -63,7 +66,7 @@ function buildWsUrl(projectId: string): string {
   return url;
 }
 
-export function useBrowserLive(projectId: string, active: boolean): BrowserLive {
+export function useBrowserLive(projectId: string, active: boolean, sessionId?: string): BrowserLive {
   const [status, setStatus] = useState<LiveStatus>('idle');
   const [frame, setFrame] = useState<LiveFrame | null>(null);
   const [title, setTitle] = useState('');
@@ -109,7 +112,7 @@ export function useBrowserLive(projectId: string, active: boolean): BrowserLive 
     clearReconnectTimer();
     setStatus('connecting');
 
-    const ws = new WebSocket(buildWsUrl(projectId));
+    const ws = new WebSocket(buildWsUrl(projectId, sessionId));
     wsRef.current = ws;
 
     ws.onopen = () => {
@@ -168,7 +171,7 @@ export function useBrowserLive(projectId: string, active: boolean): BrowserLive 
         connectRef.current();
       }, delay);
     };
-  }, [projectId, closeSocket, clearReconnectTimer]);
+  }, [projectId, sessionId, closeSocket, clearReconnectTimer]);
 
   // `ws.onclose` above calls `connectRef.current()` rather than `connect`
   // directly — `connect` and the reconnect scheduling are mutually
@@ -191,7 +194,7 @@ export function useBrowserLive(projectId: string, active: boolean): BrowserLive 
       closeSocket();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, projectId, connect, closeSocket, clearReconnectTimer]);
+  }, [active, projectId, sessionId, connect, closeSocket, clearReconnectTimer]);
 
   const send = useCallback((msg: Record<string, unknown>) => {
     const ws = wsRef.current;

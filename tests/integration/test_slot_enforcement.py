@@ -7,10 +7,9 @@
 Per TASK/DISPATCH-2026-05-22.md §5 and TASK/INVESTIGATION-slot-enforcement-surface.md
 §5 (F6 Phase 1). Verifies the active-loop slot guard at the inject route:
 
-  1. Five sessions in one project attempting to start loops back-to-back:
-     the first succeeds (200), the next four receive 202 with structured
-     `slot_held` payload. When the first finishes, a retry for session 2
-     succeeds.
+  1. Five sessions in one project starting back-to-back: all run (200).
+     Spec 155 lifted the single slot; the 202 `slot_held` /
+     `queued_pending_slot` contract is gone.
   2. Backward compatibility: absent `session_id` skips the slot check
      entirely. Old clients continue to work unchanged.
   3. Inject from the holding session does NOT 202 — slot check is per-session,
@@ -146,88 +145,44 @@ def _restore(saved):
 
 
 @pytest.mark.asyncio
-async def test_five_sessions_in_one_project_serialize_via_slot():
-    """Five sessions, one project: first holds the slot; the next four are
-    ENQUEUED (Path A, spec 006) and serialize FIFO via the slot.
-
-    Rewritten from the old "reject with slot_held" contract: per spec 006 §5
-    the slot-held path now enqueues the message and returns 202
-    ``queued_pending_slot``, and the queued messages auto-dispatch FIFO when
-    the slot frees. (Per DISPATCH-2026-05-22 §5.5 test 1, updated.)
-    """
+async def test_five_sessions_in_one_project_all_run():
+    """Spec 155: five sessions, one project — every message runs at once
+    (200 started), nothing is enqueued behind another session, no 202."""
     project_id = "proj-five-sessions"
     mgr, project_store, _, _ = _make_agent_manager()
     project_store.get_project.return_value = {
         "project_id": project_id, "workspace": "/tmp/ws", "name": "p",
     }
-
-    # Session 1 holds the slot.
     handle, task = _inject_running_handle(mgr, project_id, "sess-1")
-    extra_tasks: list = []
+    started: list = []
+
+    async def _start_with_persisted_message(pid, config, content, nonce, *, session_id,
+                                            queue_state="chat", session=None):
+        started.append(session_id)
+        return "started"
+
+    mgr._start_with_persisted_message = _start_with_persisted_message  # type: ignore[assignment]
+    mgr._abuild_agent_config_from_project = AsyncMock(return_value=MagicMock())
+    mgr._hydrate_session = AsyncMock(return_value=None)
 
     client, saved = _build_test_client(mgr, project_store)
     try:
-        # Sessions 2..5: each ENQUEUED → 202 queued_pending_slot, FIFO position.
-        for pos, n in enumerate(range(2, 6), start=1):
+        for n in range(2, 6):
             resp = client.post(
                 f"/api/v2/agents/{project_id}/inject",
-                json={"content": f"hi from session {n}",
-                      "session_id": f"sess-{n}"},
+                json={"content": f"hi from session {n}", "session_id": f"sess-{n}"},
             )
-            assert resp.status_code == 202, (
-                f"session {n} expected 202, got {resp.status_code}: "
-                f"{resp.text}"
-            )
-            body = resp.json()
-            assert body["status"] == "queued_pending_slot"
-            assert body["holding_session_id"] == "sess-1"
-            assert body["queued_session_id"] == f"sess-{n}"
-            assert body["position"] == pos
-
-        # Registry holds all four, FIFO order. Persist-at-dispatch: NO handle
-        # was created for the queued sessions (nothing written to their JSONL).
-        assert len(mgr._pending_inject[project_id]) == 4
-        assert [p.session_id for p in mgr._pending_inject[project_id]] == [
-            "sess-2", "sess-3", "sess-4", "sess-5",
-        ]
-        for n in range(2, 6):
-            assert (project_id, f"sess-{n}") not in mgr._handles
-
-        # inject_message now plants a running handle for the dispatched session
-        # so dispatch serializes one session at a time (mirrors start_agent
-        # taking the slot).
-        async def _planting_inject(pid, content, *, nonce=None, session_id=None,
-                                   queue_state="chat"):
-            h, t = _inject_running_handle(mgr, pid, session_id)
-            extra_tasks.append(t)
-            return "started"
-        mgr.inject_message = _planting_inject  # type: ignore[assignment]
-
-        # Free the slot — sess-1 releases.
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
-        assert mgr.current_holder_session_id(project_id) is None
-
-        # Slot free → FIFO head (sess-2) dispatches; the rest stay queued.
-        mgr._release_slot(project_id)
-        for _ in range(10):
-            await asyncio.sleep(0)
-
-        assert mgr.current_holder_session_id(project_id) == "sess-2"
-        assert [p.session_id for p in mgr._pending_inject.get(project_id, [])] == [
-            "sess-3", "sess-4", "sess-5",
-        ]
+            assert resp.status_code == 200, resp.text
+            assert resp.json() == {"status": "started"}
+        assert started == ["sess-2", "sess-3", "sess-4", "sess-5"]
+        assert not hasattr(mgr, "_pending_inject")
     finally:
-        for t in [task, *extra_tasks]:
-            if not t.done():
-                t.cancel()
-                try:
-                    await t
-                except (asyncio.CancelledError, Exception):
-                    pass
+        if not task.done():
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
         client.close()
         _restore(saved)
 

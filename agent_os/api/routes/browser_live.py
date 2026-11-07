@@ -591,14 +591,20 @@ class _LiveStream:
     # -- page discovery -------------------------------------------------
 
     async def _current_page(self):
-        """The project's last open page, or None. Never creates one — the
-        panel watches the agent's browser, it does not start one. The single
-        exception is an explicit user gesture: typing an address (see
-        ``_open_page``)."""
+        """The viewer's session's last open page (spec 155 §5.4: sessions run
+        in parallel, each with its own pages); without a session, the
+        project's most recent page. None when there is none. Never creates
+        one — the panel watches the agent's browser, it does not start one.
+        The single exception is an explicit user gesture: typing an address
+        (see ``_open_page``)."""
         if self._bm is None:
             return None
         try:
-            pages = await self._bm.get_all_pages(self._project_id)
+            view_pages = getattr(self._bm, "get_view_pages", None)
+            if view_pages is not None:
+                pages = await view_pages(self._project_id, self._session_id)
+            else:
+                pages = await self._bm.get_all_pages(self._project_id)
         except Exception:
             logger.debug("browser_live: get_all_pages failed", exc_info=True)
             return None
@@ -847,7 +853,10 @@ class _LiveStream:
             await self._send_error("no browser is available")
             return False
         try:
-            page = await self._bm.get_page(self._project_id)
+            # The viewer's session's scope, so the agent of that session
+            # continues on the page the user opened.
+            from agent_os.daemon_v2.browser_manager import page_scope
+            page = await self._bm.get_page(page_scope(self._project_id, self._session_id))
         except Exception as exc:
             await self._send_error(f"could not open a browser page: {exc}")
             return False
