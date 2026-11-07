@@ -7,6 +7,7 @@
 import json
 import os
 import tempfile
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -46,7 +47,7 @@ class TestGetAllTranscriptEntries:
                 "get_project": lambda self, pid: {"workspace": workspace}
             })()
             mgr = SubAgentManager(
-                process_manager=None,
+                process_manager=MagicMock(),
                 project_store=project_store,
             )
 
@@ -62,7 +63,7 @@ class TestGetAllTranscriptEntries:
             transcript = SubAgentTranscript(workspace, "test-agent", "txn-001")
             transcript.append({"source": "test-agent", "content": "Hi", "timestamp": "2026-03-10T10:00:01Z"})
 
-            mgr = SubAgentManager(process_manager=None)
+            mgr = SubAgentManager(process_manager=MagicMock())
             mgr._transcripts[("proj1", "sess1", "test-agent")] = transcript  # session-scoped (Part E)
 
             entries = mgr.get_all_transcript_entries("proj1")
@@ -79,7 +80,7 @@ class TestGetAllTranscriptEntries:
                 "get_project": lambda self, pid: {"workspace": workspace}
             })()
             mgr = SubAgentManager(
-                process_manager=None,
+                process_manager=MagicMock(),
                 project_store=project_store,
             )
             mgr._transcripts[("proj1", "sess1", "claude-code")] = transcript  # session-scoped (Part E)
@@ -95,7 +96,7 @@ class TestGetAllTranscriptEntries:
                 "get_project": lambda self, pid: {"workspace": workspace}
             })()
             mgr = SubAgentManager(
-                process_manager=None,
+                process_manager=MagicMock(),
                 project_store=project_store,
             )
             entries = mgr.get_all_transcript_entries("proj1")
@@ -115,7 +116,7 @@ class TestGetAllTranscriptEntries:
                 "get_project": lambda self, pid: {"workspace": workspace}
             })()
             mgr = SubAgentManager(
-                process_manager=None,
+                process_manager=MagicMock(),
                 project_store=project_store,
             )
             entries = mgr.get_all_transcript_entries("proj1")
@@ -154,7 +155,7 @@ class TestChatCompositeEndpoint:
             project_store = type("PS", (), {
                 "get_project": lambda self, pid: {"workspace": workspace}
             })()
-            mgr = SubAgentManager(process_manager=None, project_store=project_store)
+            mgr = SubAgentManager(process_manager=MagicMock(), project_store=project_store)
             sub_entries = mgr.get_all_transcript_entries("proj1")
             for entry in sub_entries:
                 entry.setdefault("role", "agent")
@@ -199,7 +200,7 @@ class TestChatCompositeEndpoint:
             project_store = type("PS", (), {
                 "get_project": lambda self, pid: {"workspace": workspace}
             })()
-            mgr = SubAgentManager(process_manager=None, project_store=project_store)
+            mgr = SubAgentManager(process_manager=MagicMock(), project_store=project_store)
             sub_entries = mgr.get_all_transcript_entries("proj1")
             for entry in sub_entries:
                 entry.setdefault("role", "agent")
@@ -219,7 +220,7 @@ class TestChatCompositeEndpoint:
             project_store = type("PS", (), {
                 "get_project": lambda self, pid: {"workspace": workspace}
             })()
-            mgr = SubAgentManager(process_manager=None, project_store=project_store)
+            mgr = SubAgentManager(process_manager=MagicMock(), project_store=project_store)
             entries = mgr.get_all_transcript_entries("proj1")
 
             # Before normalization: no role
@@ -248,7 +249,7 @@ class TestChatCompositeEndpoint:
             project_store = type("PS", (), {
                 "get_project": lambda self, pid: {"workspace": workspace}
             })()
-            mgr = SubAgentManager(process_manager=None, project_store=project_store)
+            mgr = SubAgentManager(process_manager=MagicMock(), project_store=project_store)
             # _transcripts is empty — no active transcripts
             assert len(mgr._transcripts) == 0
 

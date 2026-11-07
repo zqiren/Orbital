@@ -69,8 +69,10 @@ class TestSubAgentChatBroadcast:
         chat_msgs = [b for _, b in broadcasts if b.get("type") == "chat.sub_agent_message"]
         assert len(chat_msgs) == 0, "tool_activity should not be broadcast as chat message"
 
-        # Activity translator should still be called
-        activity.on_message.assert_called_once()
+        # Activity translator should still be called, through the worker
+        # display path that tool events take.
+        activity.on_worker_chunk.assert_called_once()
+        assert activity.on_worker_chunk.call_args.args[0] == "tool_activity"
 
     @pytest.mark.asyncio
     async def test_approval_request_not_duplicated(self):

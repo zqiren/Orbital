@@ -17,6 +17,7 @@ on-request). Governance params must stay explicitly re-passed on resume;
 only the MODEL param becomes conditional.
 """
 
+import os
 import pytest
 
 from agent_os.agent.prompt_builder import Autonomy
@@ -74,7 +75,9 @@ class TestGovernanceParamsAlwaysRepassed:
         method, params = t._thread_open_request("/tmp/ws")
         assert method == ("thread/resume" if resume else "thread/start")
         assert params["cwd"] == "/tmp/ws"
-        assert params["approvalPolicy"] == "never"
+        # Hands-off is on-request on Windows, where Codex has no sandbox.
+        expected = "on-request" if os.name == "nt" else "never"
+        assert params["approvalPolicy"] == expected
         assert params["sandbox"] == "workspace-write"
         if resume:
             assert params["threadId"] == "T9"

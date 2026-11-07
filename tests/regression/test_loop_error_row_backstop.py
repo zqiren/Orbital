@@ -85,7 +85,8 @@ class HealthyProvider:
         )
 
 
-def _make_loop(tmp_path, provider, session_id: str) -> tuple[AgentLoop, Session]:
+def _make_loop(tmp_path, provider, session_id: str,
+               **loop_kwargs) -> tuple[AgentLoop, Session]:
     session = Session.new(session_id, str(tmp_path))
     context_mgr = ContextManager(
         session,
@@ -99,7 +100,7 @@ def _make_loop(tmp_path, provider, session_id: str) -> tuple[AgentLoop, Session]
     )
     loop = AgentLoop(
         session, provider, SimpleToolRegistry(), context_mgr,
-        project_dir=str(tmp_path), max_iterations=10,
+        project_dir=str(tmp_path), max_iterations=10, **loop_kwargs,
     )
     return loop, session
 
@@ -175,7 +176,11 @@ async def test_llm_error_keeps_its_own_row(tmp_path):
 
 @pytest.mark.asyncio
 async def test_healthy_run_is_untouched(tmp_path):
-    loop, session = _make_loop(tmp_path, HealthyProvider(), "backstop_healthy")
+    # The end-of-run memory record is its own system row; this test pins that
+    # a healthy run writes no error row, so that gate is switched off here.
+    loop, session = _make_loop(
+        tmp_path, HealthyProvider(), "backstop_healthy",
+        memory_record_enabled=False)
     persist_user_row(loop._session, "scan it")
 
     await loop.run()

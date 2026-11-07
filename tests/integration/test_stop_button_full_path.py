@@ -41,6 +41,7 @@ from agent_os.agent.providers.types import StreamChunk, TokenUsage
 from agent_os.agent.session import Session, persist_user_row
 from agent_os.agent.tools.base import ToolResult
 from agent_os.daemon_v2.agent_manager import AgentManager, ProjectHandle
+from tests.card_doubles import FakeCardStore
 
 
 # ---------------------------------------------------------------------------
@@ -122,11 +123,12 @@ def _make_manager_with_loop(workspace, project_id, provider):
         "project_id": project_id,
         "name": "Stop Button Full Path",
         "workspace": workspace,
-        "model": "fake-hang",
-        "api_key": "sk-test",
-        "provider": "custom",
-        "sdk": "openai",
     }
+    # The LLM half of the config comes from the default credential card.
+    settings_store = FakeCardStore.with_default(
+        card_id="card_default", provider="custom", model="fake-hang",
+        key="sk-test", base_url="http://127.0.0.1:9/v1", sdk="openai",
+    )
     ws = MagicMock()
     ws.broadcast = MagicMock()
     sub_agent_mgr = MagicMock()
@@ -143,6 +145,7 @@ def _make_manager_with_loop(workspace, project_id, provider):
         sub_agent_manager=sub_agent_mgr,
         activity_translator=activity_translator,
         process_manager=process_manager,
+        settings_store=settings_store,
     )
 
     session = Session.new(f"sess_{project_id}", workspace)

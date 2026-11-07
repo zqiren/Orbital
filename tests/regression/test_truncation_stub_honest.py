@@ -125,7 +125,7 @@ def test_stub_preserves_metadata_header(session):
     assert "Original: 1000 tokens" in stub
     assert "Full result:" in stub
     # Content-addressed archive (spec 066 phase 1a): the path is a blob.
-    assert "tool-results/blobs/" in stub
+    assert "tool-results/blobs/" in stub.replace("\\", "/")
 
 
 def test_threshold_unchanged(session):

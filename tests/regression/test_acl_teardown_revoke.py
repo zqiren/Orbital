@@ -24,12 +24,22 @@ pytestmark = pytest.mark.requires_windows
 
 from unittest.mock import MagicMock, call
 
+import pytest
+
 from agent_os.platform.types import SetupResult
 from agent_os.platform.windows.setup import SetupOrchestrator
 
 
 class TestTeardownRevokesACL:
     """Teardown must revoke ACL entries before deleting the sandbox account."""
+
+    @pytest.fixture(autouse=True)
+    def _workspace(self, tmp_path, monkeypatch):
+        # Teardown revokes only for a workspace that exists.
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        monkeypatch.setattr(SetupOrchestrator, "_get_default_workspace_path",
+                            lambda _self: str(workspace))
 
     def _make_orchestrator(self):
         """Create a SetupOrchestrator with mocked dependencies."""

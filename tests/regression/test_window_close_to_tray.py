@@ -23,14 +23,14 @@ def test_on_closing_never_returns_true_unconditionally():
 
 def test_on_closing_hides_window_on_windows():
     """_on_closing must call window.hide() for Windows/Linux platforms."""
-    source = inspect.getsource(main_mod.open_window)
+    source = inspect.getsource(main_mod._handle_window_close)
     assert "window.hide()" in source or "_window.hide()" in source, \
         "_on_closing must hide the window on Windows/Linux (not close it)"
 
 
 def test_on_closing_returns_false():
     """_on_closing must return False to prevent the window from being destroyed."""
-    source = inspect.getsource(main_mod.open_window)
+    source = inspect.getsource(main_mod._handle_window_close)
     assert "return False" in source, \
         "_on_closing must return False to prevent actual window close"
 

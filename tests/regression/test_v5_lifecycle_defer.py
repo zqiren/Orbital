@@ -267,7 +267,7 @@ class TestInjectSystemMessage:
         assert result == "deferred"
         mock_session.defer_message.assert_called_once_with(
             "[Sub-agent] claude-code started", role="system", source="daemon",
-            meta=None,
+            meta=None, kind=None,
         )
         # Should NOT have been appended directly
         mock_session.append.assert_not_called()

@@ -322,7 +322,7 @@ class TestTestOverride:
     @_runs_fake_cli
     def test_runs_check_command_without_a_shell(self, engine, tmp_path):
         binary, node_dir = _node_shim_cli(tmp_path)
-        with patch.dict(os.environ, {"PATH": "/usr/bin:/bin"}):
+        with patch.dict(os.environ, {"PATH": str(tmp_path)}):  # holds no node
             bad = engine.test_override(SLUG, binary, path_prepend=[])
             good = engine.test_override(SLUG, binary, path_prepend=[node_dir])
         assert bad["ok"] is False and "node" in bad["error"]
@@ -467,7 +467,7 @@ class TestRoutes:
     @patch("agent_os.agents.setup_engine.shutil.which", return_value=None)
     def test_put_refuses_a_failing_test(self, _which, client, store, tmp_path):
         binary, _node_dir = _node_shim_cli(tmp_path)
-        with patch.dict(os.environ, {"PATH": "/usr/bin:/bin"}):
+        with patch.dict(os.environ, {"PATH": str(tmp_path)}):  # holds no node
             r = client.put(f"/api/v2/settings/sub-agents/{SLUG}/locate",
                            json={"answer": binary})
         assert r.status_code == 400

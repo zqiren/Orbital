@@ -26,7 +26,7 @@ from agent_os.agents.setup_types import AgentSetupStatus
 
 
 def _fake_check_all(installed_slugs: list[str]):
-    def _fake() -> list[AgentSetupStatus]:
+    def _fake(allow_stale: bool = False, **_: object) -> list[AgentSetupStatus]:
         statuses: list[AgentSetupStatus] = [
             AgentSetupStatus(
                 slug="built-in", name="Built-in",

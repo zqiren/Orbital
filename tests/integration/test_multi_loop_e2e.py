@@ -29,6 +29,8 @@ import pytest
 from fastapi import FastAPI
 from starlette.testclient import TestClient
 
+from tests.card_doubles import FakeCardStore
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -78,6 +80,9 @@ def _make_agent_manager(workspace: str):
         sub_agent_manager=sub_agent_mgr,
         activity_translator=activity_translator,
         process_manager=process_manager,
+        settings_store=FakeCardStore.with_default(
+            provider="openai", model="gpt-4", key="sk-test",
+        ),
     )
     return mgr, ws, project_store, sub_agent_mgr
 

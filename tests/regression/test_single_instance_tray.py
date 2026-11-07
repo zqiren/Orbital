@@ -25,7 +25,11 @@ from pathlib import Path
 import pytest
 
 from agent_os.desktop import main as main_mod
-from agent_os.desktop import tray as tray_mod
+
+try:
+    from agent_os.desktop import tray as tray_mod
+except Exception as exc:  # pystray connects to a display when imported on Linux
+    pytest.skip(f"the tray needs a display: {exc}", allow_module_level=True)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]

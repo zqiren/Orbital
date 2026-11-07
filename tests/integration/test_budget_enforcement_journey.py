@@ -767,6 +767,9 @@ async def test_threshold_fires_once_with_codes_only_across_two_responses(
         get_budget_config=lambda: cfg,
         on_budget_event=events.append,
         max_iterations=5,
+        # The end-of-run memory record would be a third management call in
+        # the same window; this test counts only the two responses.
+        memory_record_enabled=False,
     )
     persist_user_row(loop._session, "hi")
     await loop.run()

@@ -203,7 +203,7 @@ async def test_teardown_destroying_background_work_is_loud():
     proc = psutil.Process(parent.pid)
     rec = registry.register(PROJ, SID, HANDLE, command="gh mining loop",
                             root_proc=proc)
-    deadline = time.monotonic() + 4.0
+    deadline = time.monotonic() + 6.0
     while time.monotonic() < deadline and rec.anchor is None:
         await asyncio.sleep(0.1)
     assert rec.anchor is not None

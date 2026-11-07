@@ -148,6 +148,7 @@ async def test_ledger_attributes_post_rotation_provider(tmp_path):
         fallback_providers=[fallback],
         project_dir=str(tmp_path),
         max_iterations=10,
+        memory_record_enabled=False,
     )
     persist_user_row(loop._session, "go")
     await loop.run()

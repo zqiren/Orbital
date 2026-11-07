@@ -17,6 +17,7 @@ claude's child-spawning behaviour (the real-claude path is covered by
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import time
@@ -109,7 +110,8 @@ async def test_stop_escalates_sigterm_to_sigkill():
         assert outcome.parent_dead is True
         assert _dead(p.pid), "SIGTERM-ignoring process survived escalation"
         # Proves we actually waited the SIGTERM grace before SIGKILL.
-        assert elapsed >= 0.5, f"escalation did not honour term_grace ({elapsed:.2f}s)"
+        if os.name != "nt":  # Windows has no SIGTERM to ignore: terminate kills
+            assert elapsed >= 0.5, f"escalation did not honour term_grace ({elapsed:.2f}s)"
     finally:
         try:
             psutil.Process(p.pid).kill()

@@ -127,6 +127,7 @@ def _run_turn(workspace, session_uuid, session_id, translator, stream_fn, msg):
     loop = AgentLoop(
         session, _Provider(stream_fn), _Registry(),
         ContextManager(session, _Builder(), _ctx(workspace)),
+        memory_record_enabled=False,
     )
     persist_user_row(loop._session, msg)
     asyncio.run(loop.run())
@@ -230,10 +231,12 @@ def test_reasoning_only_no_answer_persists_reasoning(client, project):
     resp = client.get(f"/api/v2/agents/{pid}/chat",
                       params={"session_id": "seam_reasoning_only"})
     assert resp.status_code == 200, resp.text
+    # Each empty partial is persisted before the nudge, so there may be several
+    # assistant rows; every one of them must keep the reasoning.
     assistant = [m for m in resp.json() if m.get("role") == "assistant"]
-    assert len(assistant) == 1, resp.json()
-    msg = assistant[0]
-    assert msg.get("reasoning_content") == reasoning, (
-        "LANDMINE: completed reasoning-only turn dropped reasoning_content "
-        "(silent-vanish): %r" % msg
-    )
+    assert assistant, resp.json()
+    for msg in assistant:
+        assert msg.get("reasoning_content") == reasoning, (
+            "LANDMINE: completed reasoning-only turn dropped reasoning_content "
+            "(silent-vanish): %r" % msg
+        )

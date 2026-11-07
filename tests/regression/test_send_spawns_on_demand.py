@@ -188,7 +188,9 @@ class TestDispatchIdMinting:
         mgr._lifecycle_observer.on_message_routed = AsyncMock()
 
         await mgr.send("proj_x", "claude-code", "first", session_id="sess_x")
+        await adapter._background_send_task
         await mgr.send("proj_x", "claude-code", "second", session_id="sess_x")
+        await adapter._background_send_task
 
         ids = [
             c.kwargs.get("dispatch_id")
@@ -237,36 +239,23 @@ class TestDispatchIdFifoDesyncGuard:
 
     async def test_send_clears_dispatch_id_when_blocking_response_is_falsy(self):
         """Closure requested after re-review: adapter.send() SUCCEEDS but the
-        response is falsy (empty/None) — the existing code has no ``else``
-        branch there at all, so ``note_turn_closed()`` never runs and no
-        boundary will ever pop this dispatch's id. Post-FIFO this isn't
-        merely a missing boundary row: it PERMANENTLY shifts the queue —
-        every later turn on this (project, session, handle) pops the WRONG
-        id until a respawn clears the whole thing. clear_dispatch must run
-        for the falsy-response case exactly like the raised-exception case.
+        response is falsy (empty/None). A blocking send returning is itself
+        the turn boundary, so note_turn_closed() must run and pop the id this
+        dispatch enqueued; otherwise every later turn on this (project,
+        session, handle) pops the WRONG id.
         """
         mgr, adapter = _manager_with_spawnable()
         # _IdleAdapter.send() (see helper above) leaves _last_response as
-        # None — exercises the falsy-response gap exactly. adapter._transport
+        # None — exercises the falsy-response path exactly. adapter._transport
         # stays None, so this goes through _dispatch_async's blocking
         # fallback (detached _background_send_task), not the SDK branch.
 
         await mgr.send("proj_x", "claude-code", "go", session_id="sess_x")
         await adapter._background_send_task   # let the detached task finish
 
-        mgr._process_manager.clear_dispatch.assert_called_once()
-        clear_call = mgr._process_manager.clear_dispatch.call_args
-        assert clear_call.args[0] == "proj_x"
-        assert clear_call.args[1] == "claude-code"
-        assert clear_call.kwargs.get("session_id") == "sess_x"
-
-        set_call = mgr._process_manager.set_active_dispatch.call_args
-        assert clear_call.args[2] == set_call.args[2]
-
-        # The gap this closes: no boundary was ever going to be written for
-        # this turn, since note_turn_closed is only reached inside `if
-        # response:`.
-        mgr._process_manager.note_turn_closed.assert_not_called()
+        mgr._process_manager.note_turn_closed.assert_called_once_with(
+            "proj_x", "claude-code", session_id="sess_x")
+        mgr._process_manager.clear_dispatch.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

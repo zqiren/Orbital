@@ -4,7 +4,7 @@
 
 """Regression (Root A / seam 3): the inject route's target send must forward
 the chat session id to the sub-agent manager's send()/start(), and stamp the
-RESOLVED session (never None) on the ack broadcast and the lifecycle marker.
+RESOLVED session (never None) on the lifecycle marker.
 
 Written for the @mention send; spec 091 deleted that path, and the composer
 pin (``target`` + ``pinned``) rides the same route and session funnel, so the
@@ -39,7 +39,7 @@ def _wire(monkeypatch, *, send_result="delivered"):
     agent_manager = MagicMock()
     # The target send persists via the canonical resolver
     # AgentManager.persist_mention_message(project_id, session_id, user_msg),
-    # which returns the ONE concrete session id threaded to dispatch + ack +
+    # which returns the ONE concrete session id threaded to dispatch and
     # lifecycle. Mirror its resolution: passthrough a client-supplied id, else
     # the project's persistent chat session (here a fixed funnel id).
     agent_manager.persist_mention_message = MagicMock(
@@ -66,9 +66,8 @@ async def test_target_send_forwards_client_session_id_to_send(monkeypatch):
     # send() receives the forwarded chat session id (not dropped to None)
     sam.send.assert_awaited_once()
     assert sam.send.await_args.kwargs.get("session_id") == "proj_x_sessA"
-    # ack broadcast carries the resolved session, not None
-    ack_payload = ws.broadcast.call_args.args[1]
-    assert ack_payload["session_id"] == "proj_x_sessA"
+    # the delivery is confirmed by the worker's own chat rows, not an ack
+    ws.broadcast.assert_not_called()
     # The route threads its initiator into send() itself — send()'s own
     # internal on_message_routed call (inside the real SubAgentManager, mocked
     # away here) is what carries the resolved session onward; the route fires
@@ -143,4 +142,3 @@ async def test_target_send_session_less_resolves_to_chat_session_not_raise(monke
 
     assert result == {"status": "delivered"}
     assert sam.send.await_args.kwargs.get("session_id") == "proj_x_chatfunnel"
-    assert ws.broadcast.call_args.args[1]["session_id"] == "proj_x_chatfunnel"

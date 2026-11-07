@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import tempfile
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -249,10 +250,11 @@ async def test_agent_manager_closure_emits_skipped_on_timeout():
     assert cb_start != -1, (
         "Could not locate 'session_end_refresh_callback' in agent_manager.py"
     )
-    # The next top-level `async def` or `def` at the same indent level marks
-    # the end of the closure. We take the next 3000 characters as the body —
-    # enough to include both except clauses without spilling into sibling defs.
-    cb_body = source[cb_start: cb_start + 3000]
+    # The closure ends at the next line indented back to the enclosing
+    # function's body level (8 spaces), which keeps sibling code out of the body.
+    cb_end = re.search(r"\n {8}\S", source[cb_start + 1:])
+    assert cb_end is not None
+    cb_body = source[cb_start: cb_start + 1 + cb_end.start()]
 
     te_idx = cb_body.find("except asyncio.TimeoutError:")
     ex_idx = cb_body.find("except Exception:")

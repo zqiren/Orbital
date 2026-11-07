@@ -61,7 +61,8 @@ class TestPermissionManager:
             # Current user should have full control on a temp dir they created
             info = permission_manager.check_access(current_user, tmpdir)
             # The creator typically has full control
-            assert info.path == tmpdir
+            # realpath: the temp dir may be spelled with an 8.3 short name.
+            assert os.path.realpath(info.path) == os.path.realpath(tmpdir)
             # We mainly verify the method runs without error and returns AccessInfo
             assert hasattr(info, "has_access")
             assert hasattr(info, "mode")

@@ -14,6 +14,7 @@ dependencies are required.
 """
 
 import re
+import socketserver
 import threading
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
@@ -115,10 +116,18 @@ class _TestHandler(SimpleHTTPRequestHandler):
         pass  # suppress request logs
 
 
+class _LoopbackServer(HTTPServer):
+    def server_bind(self):
+        # HTTPServer resolves its own name here, which can outlast the tests'
+        # timeout on a machine with slow reverse DNS, such as a macOS CI runner.
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
+
+
 @pytest.fixture(scope="module")
 def test_server():
     """Start a local HTTP server on an ephemeral port for the test module."""
-    server = HTTPServer(("127.0.0.1", 0), _TestHandler)
+    server = _LoopbackServer(("127.0.0.1", 0), _TestHandler)
     port = server.server_address[1]
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()

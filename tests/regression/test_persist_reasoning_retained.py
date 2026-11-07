@@ -30,7 +30,7 @@ from agent_os.agent.providers.types import (
 from agent_os.agent.tools.base import ToolResult
 from agent_os.agent.prompt_builder import PromptContext, Autonomy
 from agent_os.agent.session import Session, persist_user_row
-from agent_os.agent.loop import AgentLoop
+from agent_os.agent.loop import AgentLoop, _EMPTY_RESPONSE_NUDGE_LIMIT
 from agent_os.agent.context import ContextManager
 
 
@@ -98,6 +98,7 @@ async def test_text_only_turn_retains_reasoning(tmp_path):
     loop = AgentLoop(
         session, _Provider(), _Registry(),
         ContextManager(session, _Builder(), _ctx(str(tmp_path))),
+        memory_record_enabled=False,
     )
     persist_user_row(loop._session, "please answer")
     await loop.run()
@@ -131,13 +132,16 @@ async def test_text_only_turn_with_no_answer_retains_reasoning(tmp_path):
     loop = AgentLoop(
         session, _Provider(), _Registry(),
         ContextManager(session, _Builder(), _ctx(str(tmp_path))),
+        memory_record_enabled=False,
     )
     persist_user_row(loop._session, "please answer")
     await loop.run()
 
+    # Each empty reply is persisted as a partial row before the nudge, so the
+    # stub's reasoning-only reply lands once per attempt.
     assistant = [m for m in session.get_messages() if m["role"] == "assistant"]
-    assert len(assistant) == 1, assistant
-    msg = assistant[0]
-    assert msg.get("reasoning_content") == "thought hard but nothing to say", (
-        "reasoning-only persist dropped reasoning_content (silent-vanish): %r" % msg
-    )
+    assert len(assistant) == _EMPTY_RESPONSE_NUDGE_LIMIT + 1, assistant
+    for msg in assistant:
+        assert msg.get("reasoning_content") == "thought hard but nothing to say", (
+            "reasoning-only persist dropped reasoning_content (silent-vanish): %r" % msg
+        )

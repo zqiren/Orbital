@@ -126,7 +126,7 @@ class TestToolResultTruncationCS10:
         assert "Original: 2500 tokens" in stub
         assert "Full result:" in stub
         # Content-addressed archive (spec 066 phase 1a): the path is a blob.
-        assert "tool-results/blobs/" in stub
+        assert "tool-results/blobs/" in stub.replace("\\", "/")
 
     def test_stubs_do_not_embed_narration(self, session):
         """Stubs must NOT embed the agent's narration as a faux content summary."""

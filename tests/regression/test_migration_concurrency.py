@@ -171,7 +171,8 @@ def test_backups_are_written_before_the_rewrite(tmp_path):
     for name in ("settings.json", "projects.json"):
         bak = d / f"{name}.pre-cards"
         assert bak.exists(), f"no pre-migration backup of {name}"
-        assert oct(os.stat(bak).st_mode)[-3:] == "600", "backups hold plaintext keys"
+        if os.name != "nt":  # Windows has no POSIX mode bits to check
+            assert oct(os.stat(bak).st_mode)[-3:] == "600", "backups hold plaintext keys"
     # The backup must be the PRE-migration content, not a copy of the result.
     saved = json.loads((d / "projects.json.pre-cards").read_text())
     assert saved["proj_byok"]["api_key"] == "sk-project-SECRET-0001"

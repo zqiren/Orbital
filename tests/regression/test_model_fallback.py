@@ -509,6 +509,7 @@ class TestWarmProvider400Retry:
             session, primary, registry, context_mgr,
             fallback_providers=[],
             max_iterations=10,
+            memory_record_enabled=False,
         )
         persist_user_row(loop._session, "hello")
         await loop.run()
