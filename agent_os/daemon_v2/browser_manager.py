@@ -127,7 +127,10 @@ def _detect_locale() -> str:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", DeprecationWarning)
             raw = sys_locale.getdefaultlocale()[0]
-        if raw:
+        # "C" and "POSIX" (LANG=C.UTF-8, the default on servers and in
+        # containers) are not BCP-47 tags: Chromium rejects them and the
+        # browser fails to launch.
+        if raw and raw not in ("C", "POSIX"):
             return raw.replace("_", "-")
     except Exception:
         pass
