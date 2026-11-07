@@ -60,6 +60,10 @@ method in `data/home/.gemini/settings.json`:
 { "security": { "auth": { "selectedType": "gemini-api-key" } } }
 ```
 
+Orbital can't answer Gemini CLI's tool confirmation dialog, so a worker stops at
+its first tool call. To let it run, set its approval mode to `yolo` through
+`PUT /api/v2/settings/sub-agents/gemini-cli/config`.
+
 Other CLI logins also work from a terminal:
 
 ```bash
