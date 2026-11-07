@@ -536,6 +536,13 @@ class AgentManager:
                 labels[real] = path
         return roots, labels
 
+    def _scope_memory_roots(self, project_id: str, session_id: str | None) -> list[str]:
+        """The in-scope PROJECT roots whose memory files a session may read
+        (2026-11-07): a Quick Tasks session's scope chip selection, never a
+        granted folder; empty for a normal project. The read tools allow
+        exactly ``_path_utils.SECONDARY_MEMORY_FILES`` under these roots."""
+        return self._compute_scope_roots(project_id, session_id)[0][1:]
+
     def _portal_paths_for_project(self, workspace: str) -> list[str]:
         """The provider's granted portals under ``workspace``'s scope (D7)."""
         provider = self._platform_provider
@@ -1741,6 +1748,7 @@ class AgentManager:
             project_id, session_id, include_portals=True)[0]
         root_labels_cb = lambda: self._compute_scope_roots(
             project_id, session_id, include_portals=True)[1]
+        memory_roots_cb = lambda: self._scope_memory_roots(project_id, session_id)
         open_reads_cb = lambda: not self._project_safe_mode(project_id)
         safe_mode_cb = lambda: self._project_safe_mode(project_id)
         unsandboxed_cb = lambda: self._project_unsandboxed_executables(project_id)
@@ -1753,7 +1761,8 @@ class AgentManager:
                                        read_roots=read_roots_cb,
                                        context_window=context_window,
                                        open_reads=open_reads_cb,
-                                       cross_project=cross_project))
+                                       cross_project=cross_project,
+                                       memory_roots=memory_roots_cb))
         except ImportError:
             pass
         try:
@@ -1771,7 +1780,8 @@ class AgentManager:
             registry.register(GlobTool(workspace=config.workspace,
                                        read_roots=read_roots_cb, root_labels=root_labels_cb,
                                        open_reads=open_reads_cb,
-                                       cross_project=cross_project))
+                                       cross_project=cross_project,
+                                       memory_roots=memory_roots_cb))
         except ImportError:
             pass
         try:
@@ -1779,7 +1789,8 @@ class AgentManager:
             registry.register(GrepTool(workspace=config.workspace,
                                        read_roots=read_roots_cb, root_labels=root_labels_cb,
                                        open_reads=open_reads_cb,
-                                       cross_project=cross_project))
+                                       cross_project=cross_project,
+                                       memory_roots=memory_roots_cb))
         except ImportError:
             pass
         try:
@@ -1973,6 +1984,7 @@ class AgentManager:
             project_id, session_id, include_portals=True)[0]
         root_labels_cb = lambda: self._compute_scope_roots(
             project_id, session_id, include_portals=True)[1]
+        memory_roots_cb = lambda: self._scope_memory_roots(project_id, session_id)
         open_reads_cb = lambda: not self._project_safe_mode(project_id)
         safe_mode_cb = lambda: self._project_safe_mode(project_id)
         unsandboxed_cb = lambda: self._project_unsandboxed_executables(project_id)
@@ -1988,17 +2000,20 @@ class AgentManager:
             # worker reads ever need to scale with the model.
             registry.register(ReadTool(workspace=workspace, read_roots=read_roots_cb,
                                        context_window=None, open_reads=open_reads_cb,
-                                       cross_project=cross_project))
+                                       cross_project=cross_project,
+                                       memory_roots=memory_roots_cb))
             registry.register(WriteTool(workspace=workspace, session_id=session_id,
                                         worker=worker_handle))
             registry.register(EditTool(workspace=workspace, session_id=session_id,
                                        worker=worker_handle))
             registry.register(GlobTool(workspace=workspace,
                                        read_roots=read_roots_cb, root_labels=root_labels_cb,
-                                       open_reads=open_reads_cb, cross_project=cross_project))
+                                       open_reads=open_reads_cb, cross_project=cross_project,
+                                       memory_roots=memory_roots_cb))
             registry.register(GrepTool(workspace=workspace,
                                        read_roots=read_roots_cb, root_labels=root_labels_cb,
-                                       open_reads=open_reads_cb, cross_project=cross_project))
+                                       open_reads=open_reads_cb, cross_project=cross_project,
+                                       memory_roots=memory_roots_cb))
             registry.register(ShellTool(
                 workspace=workspace,
                 os_type=detect_os(),

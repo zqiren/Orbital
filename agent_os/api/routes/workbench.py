@@ -629,7 +629,13 @@ async def post_checked(req: CheckedRequest):
 
 # ── Routing (spec 154 §5.4) ─────────────────────────────────────────────
 
-ROUTE_TIMEOUT_S = 20.0
+# One budget for the whole routing step (2026-11-07): the first call may use
+# all of it; one retry follows a failed call only when at least
+# ROUTE_RETRY_MIN_S is left. The SDK's own retries are off for this call, so
+# its backoff can't eat the budget unseen.
+ROUTE_BUDGET_S = 45.0
+ROUTE_RETRY_MIN_S = 10.0
+ROUTE_RETRY_DELAY_S = 5.0  # an overloaded provider (429) needs a moment; 1 s failed both tries live
 GOALS_CAP = 1200
 STATE_LINES = 20
 STATE_CAP = 1200
@@ -655,6 +661,22 @@ def _read_capped(path: str, cap: int, *, lines: int | None = None) -> str:
     return text[:cap].strip()
 
 
+_MEM_COMMENT_LINE_RE = re.compile(r"^\s*<!--\s*mem\b.*-->\s*$")
+
+
+def _state_head(path: str) -> str:
+    """The head of PROJECT_STATE.md as routing context: the code-owned
+    ``<!--format …-->`` header (longer than the whole cap) and the
+    daemon's mem-id comment lines are dropped first, so the capped head is
+    the project's real state."""
+    raw = _read_capped(path, STATE_CAP * 8)
+    text = memory_entries.strip_format_header(raw)
+    lines = [ln for ln in text.splitlines() if not _MEM_COMMENT_LINE_RE.match(ln)]
+    body = "\n".join(lines[:STATE_LINES])[:STATE_CAP].strip()
+    # A file that is only its title (a new project) carries no state.
+    return "" if body.lstrip("#").strip().upper() in ("", "PROJECT_STATE") else body
+
+
 def route_candidates(projects: list[dict]) -> list[dict]:
     """Every project with a workspace, except Quick Tasks and projects
     excluded from the Workbench."""
@@ -667,7 +689,7 @@ def project_block(project: dict, session_names: list[str]) -> str:
     """One project's capped routing context (decided inputs, §5.4)."""
     pp = ProjectPaths(project.get("workspace", ""))
     goals = _read_capped(pp.project_goals, GOALS_CAP)
-    state = _read_capped(pp.project_state, STATE_CAP, lines=STATE_LINES)
+    state = _state_head(pp.project_state)
     parts = [f"## Project id: {project.get('project_id', '')}",
              f"Name: {project.get('name') or project.get('project_id', '')}"]
     if goals:
@@ -740,6 +762,12 @@ async def _recent_session_names(project_id: str) -> list[str]:
         rows = await asyncio.to_thread(_agent_manager.list_sessions, project_id)
     except Exception:
         return []
+    # The user's own conversations only: not the Memory session (the
+    # daemon's tidy pass) and not automation runs (their names are trigger
+    # headers, "[Triggered by schedule…"). Both are marked in the session
+    # meta (origin / trigger_type), not guessed from the title.
+    rows = [r for r in rows
+            if r.get("origin") != "memory" and not r.get("trigger_type")]
     rows = sorted(rows, key=lambda r: r.get("last_activity_at") or "", reverse=True)
     return [r["name"] for r in rows if isinstance(r.get("name"), str) and r["name"]][:RECENT_SESSIONS]
 
@@ -751,8 +779,20 @@ class RouteRequest(BaseModel):
 @router.post("/route")
 async def route_task(req: RouteRequest):
     """Pick the project for a task typed on the Workbench (project chip on
-    自动). One model call; an unclear task, a keyless install, a timeout or
-    any error lands in Quick Tasks (``by: "fallback"``). Never fails."""
+    自动).
+
+    Answers (HTTP 200 always):
+      * ``{"project_id", "by": "model"}`` — the model's pick;
+      * ``{"project_id": <Quick Tasks>, "by": "fallback", "reason"}`` — a
+        deliberate landing: the model chose no project, no API key, nothing
+        to route between;
+      * ``{"project_id": null, "by": "failed", "reason": <code>,
+        "attempts"}`` (2026-11-07) — the call failed after its one retry
+        (codes: ``timeout``, ``call_failed``, ``empty_reply``, ``no_json``,
+        ``unknown_project``). Nothing is sent; the Workbench asks the user
+        to pick a project. Additive: an older client reads a missing
+        project as a send that could not start.
+    """
     scratch = _scratch_project()
     fallback_pid = scratch.get("project_id") if scratch else None
 
@@ -774,23 +814,56 @@ async def route_task(req: RouteRequest):
         return fallback(f"no provider: {type(e).__name__}")
     if provider is None:
         return fallback("no API key")
+    set_retries = getattr(provider, "set_sdk_max_retries", None)
+    if callable(set_retries):
+        set_retries(0)
     try:
         names = await asyncio.gather(*[_recent_session_names(p["project_id"]) for p in candidates])
         blocks = await asyncio.to_thread(
             lambda: [project_block(p, n) for p, n in zip(candidates, names)])
-        messages = build_route_messages(blocks, text)
-        started = time.monotonic()
-        response = await asyncio.wait_for(
-            provider.complete(messages, disable_reasoning=True), timeout=ROUTE_TIMEOUT_S)
-        elapsed = time.monotonic() - started
-    except asyncio.TimeoutError:
-        return fallback(f"timed out after {ROUTE_TIMEOUT_S:.0f}s")
     except Exception as e:
-        return fallback(f"model call failed: {type(e).__name__}")
-    pid, reason = parse_route_reply(getattr(response, "text", None),
-                                    {p["project_id"] for p in candidates})
-    if pid is None:
-        return fallback(reason)
+        return fallback(f"context failed: {type(e).__name__}")
+    messages = build_route_messages(blocks, text)
+    candidate_ids = {p["project_id"] for p in candidates}
+
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + ROUTE_BUDGET_S
+    attempts = 0
+    code = "call_failed"
+    while True:
+        attempts += 1
+        started = loop.time()
+        try:
+            response = await asyncio.wait_for(
+                provider.complete(messages, disable_reasoning=True),
+                timeout=max(0.0, deadline - started))
+        except asyncio.TimeoutError:
+            code, detail = "timeout", f"timed out after {loop.time() - started:.0f}s"
+        except Exception as e:
+            code, detail = "call_failed", f"model call failed: {type(e).__name__}: {e}"[:300]
+        else:
+            elapsed = loop.time() - started
+            pid, reason = parse_route_reply(getattr(response, "text", None), candidate_ids)
+            if pid is not None:
+                return _routed(pid, response, elapsed)
+            if reason == "model chose no project":
+                return fallback(reason)  # deliberate: never retried
+            code = ("empty_reply" if reason == "empty reply"
+                    else "no_json" if reason.startswith("no JSON")
+                    else "unknown_project")
+            detail = reason
+        left = deadline - loop.time()
+        logger.warning("workbench route: attempt %d failed (%s; %.0fs of the budget left)",
+                       attempts, detail, max(0.0, left))
+        if attempts >= 2 or left - ROUTE_RETRY_DELAY_S < ROUTE_RETRY_MIN_S:
+            break
+        if ROUTE_RETRY_DELAY_S:
+            await asyncio.sleep(ROUTE_RETRY_DELAY_S)
+    logger.warning("workbench route: no project after %d attempt(s) (%s)", attempts, code)
+    return {"project_id": None, "by": "failed", "reason": code, "attempts": attempts}
+
+
+def _routed(pid: str, response, elapsed: float) -> dict:
     usage = getattr(response, "usage", None)
     input_tokens = getattr(usage, "input_tokens", None)
     output_tokens = getattr(usage, "output_tokens", None)

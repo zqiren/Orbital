@@ -25,6 +25,10 @@
  * that could not start keeps them. A sending task's chips stay on show
  * (uploading) but are not part of the next task.
  *
+ * Routing found no project (2026-11-07): the text (and the staged chips) are
+ * back, one error line heads the box and the project picker opens. The line
+ * goes on the next send or when a project is picked.
+ *
  * Keyless (no API key, 2026-11-05): routing needs Orbital's own model, so the
  * project chip never shows 自动. It starts on the last project sent to from
  * this browser (else Quick Tasks), and the picker's 自动 row stays visible
@@ -72,9 +76,10 @@ export interface WorkbenchComposerProps {
   agents: Array<{ slug: string; name: string }>;
   /** Orbital's own model line (the default card's model). */
   managerModel?: string;
-  /** Resolves when the send settled; false = the text came back. `uploadAll`
+  /** Resolves when the send settled; false = the text came back,
+   *  'unrouted' = it came back because 自动 found no project. `uploadAll`
    *  uploads the choice's staged files once the project is known. */
-  onSend: (choice: SendChoice, uploadAll: NonNullable<SendDeps['uploadAll']>) => Promise<boolean>;
+  onSend: (choice: SendChoice, uploadAll: NonNullable<SendDeps['uploadAll']>) => Promise<boolean | 'unrouted'>;
 }
 
 type Pop = 'none' | 'project' | 'agent';
@@ -105,6 +110,7 @@ export default function WorkbenchComposer({
   const agentChipRef = useRef<HTMLButtonElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [attError, setAttError] = useState<string | null>(null);
+  const [routeError, setRouteError] = useState(false);
   const {
     attachments, removeAttachment, retryAttachment, uploadAll,
     handleFilePickerChange, handlePaste, handleDrop,
@@ -195,11 +201,17 @@ export default function WorkbenchComposer({
     setAgent(null);
     setPop('none');
     setAttError(null);
+    setRouteError(false);
     const ids = files.map((f) => f.id);
     if (ids.length > 0) setInFlight((cur) => new Set([...cur, ...ids]));
     let ok = false;
     try {
-      ok = await onSend(choice, uploadAll);
+      const result = await onSend(choice, uploadAll);
+      ok = result === true;
+      if (result === 'unrouted') {
+        setRouteError(true);
+        setPop('project');
+      }
     } finally {
       // Gone only once the task went out; otherwise they stay for the retry.
       if (ok) for (const id of ids) removeAttachment(id);
@@ -241,6 +253,11 @@ export default function WorkbenchComposer({
         onDragLeave={(e) => { if (!hasFiles(e)) return; e.preventDefault(); setDragDepth((n) => Math.max(0, n - 1)); }}
         onDrop={(e) => { setDragDepth(0); setAttError(null); handleDrop(e); }}
       >
+        {routeError && (
+          <div className="wb-atterr" role="alert" data-testid="wb-route-error">
+            {t('workbench.composer.routeFailed')}
+          </div>
+        )}
         <textarea
           ref={inputRef}
           className="wb-input"
@@ -384,7 +401,7 @@ export default function WorkbenchComposer({
               aria-selected={effectiveProjectId === p.project_id}
               className="wb-opt"
               title={projectDisplayName(p, t)}
-              onClick={() => { setProjectId(p.project_id); setPop('none'); }}
+              onClick={() => { setProjectId(p.project_id); setRouteError(false); setPop('none'); }}
             >
               <span className="wb-gl"><Folder size={13} strokeWidth={1.9} aria-hidden="true" /></span>
               <span className="wb-tx"><span className="wb-n1">{projectDisplayName(p, t)}</span></span>

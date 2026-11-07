@@ -56,15 +56,62 @@ def resolve_safe(workspace: str, path: str) -> str | None:
 # The primary root (the reader's own workspace) is NOT subject to these.
 _SECONDARY_EXCLUDED_COMPONENTS = frozenset({"orbital", ".git"})
 
+# The one exception (2026-11-07): inside an in-scope PROJECT root (a Quick
+# Tasks session's scope, never a granted folder) these four memory files are
+# readable, so "what are my other projects doing?" can be answered from each
+# project's goals and state. Exact files, relative to the project root; the
+# rest of ``orbital/`` (sessions, history, ledger, skills, …) stays out.
+SECONDARY_MEMORY_FILES = (
+    "orbital/instructions/project_goals.md",
+    "orbital/PROJECT_STATE.md",
+    "orbital/INDEX.md",
+    "orbital/DECISIONS.md",
+)
+
 
 def _excluded_in_secondary(candidate_real: str, root_real: str) -> bool:
-    """True if ``candidate_real`` (inside ``root_real``) sits under an excluded subtree."""
+    """True if ``candidate_real`` (inside ``root_real``) sits under an excluded subtree.
+
+    Case-folded: on a case-insensitive disk ``ORBITAL/`` is ``orbital/``.
+    """
     rel = os.path.relpath(candidate_real, root_real)
-    return any(part in _SECONDARY_EXCLUDED_COMPONENTS for part in rel.split(os.sep))
+    return any(part.casefold() in _SECONDARY_EXCLUDED_COMPONENTS
+               for part in rel.split(os.sep))
+
+
+def memory_file_paths(root_real: str) -> list[str]:
+    """The allowlisted memory files' paths under the (real) project root."""
+    return [os.path.join(root_real, *rel.split("/")) for rel in SECONDARY_MEMORY_FILES]
+
+
+def is_memory_file(candidate_real: str, root_real: str) -> bool:
+    """True if ``candidate_real`` IS one of ``root_real``'s memory files.
+
+    Both sides are realpaths and the match is exact: the real file must sit
+    at the allowlisted location. A memory-file name that is a symlink to a
+    session log (or out of the root) resolves elsewhere and fails the match,
+    and so does a symlinked ``orbital/`` dir.
+    """
+    return candidate_real in memory_file_paths(root_real)
+
+
+def hidden_in_secondary(candidate_real: str, root_real: str, *,
+                        memory_ok: bool = False) -> bool:
+    """True when a secondary root's path must not be shown: under ``orbital/``
+    or ``.git/``, unless ``memory_ok`` and it is one of the memory files."""
+    if not _excluded_in_secondary(candidate_real, root_real):
+        return False
+    return not (memory_ok and is_memory_file(candidate_real, root_real))
+
+
+def real_memory_roots(memory_roots) -> set[str]:
+    """Realpaths of an optional memory-roots iterable (None → empty)."""
+    return {os.path.realpath(r) for r in (memory_roots or ()) if r}
 
 
 def resolve_safe_read(roots: list[str], path: str, *,
-                      open_reads: bool = False) -> str | None:
+                      open_reads: bool = False,
+                      memory_roots=None) -> str | None:
     """Resolve ``path`` for READ against a list of roots, or None if it escapes.
 
     ``roots[0]`` is the primary workspace; the rest are read-only reference
@@ -74,7 +121,9 @@ def resolve_safe_read(roots: list[str], path: str, *,
         secondary) — same containment as :func:`resolve_safe`.
       * Absolute ``path`` passes if it lands inside ANY root (realpath + the
         ``os.sep`` guard). Inside a SECONDARY root, paths under ``orbital/`` or
-        ``.git/`` are rejected (agent internals, not work product).
+        ``.git/`` are rejected (agent internals, not work product) — except
+        the :data:`SECONDARY_MEMORY_FILES` of a root listed in
+        ``memory_roots`` (the in-scope projects of a Quick Tasks session).
       * ``open_reads=True`` (spec 117 D3, a project with safe mode OFF): an
         absolute path is returned as its realpath with NO containment check —
         the shell can run ``rg /`` in that project, so confining the read
@@ -100,10 +149,12 @@ def resolve_safe_read(roots: list[str], path: str, *,
     if candidate == primary_real or candidate.startswith(primary_real + os.sep):
         return candidate
     # Secondary roots — allow if contained, minus excluded internal subtrees.
+    memory_reals = real_memory_roots(memory_roots)
     for root in roots[1:]:
         root_real = os.path.realpath(root)
         if candidate == root_real or candidate.startswith(root_real + os.sep):
-            if _excluded_in_secondary(candidate, root_real):
+            if hidden_in_secondary(candidate, root_real,
+                                   memory_ok=root_real in memory_reals):
                 return None
             return candidate
     return None

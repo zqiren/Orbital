@@ -19,6 +19,7 @@ Windows installers bundle ripgrep via agent_os/desktop/agentos.spec datas;
 macOS installers bundle both arches via agentos-macos.spec.
 """
 
+import fnmatch
 import logging
 import os
 import platform
@@ -33,8 +34,11 @@ from agent_os.utils.subprocess_flags import win_no_window_flags
 from ._path_utils import (
     OPEN_READS_PATH_SENTENCE,
     OPEN_READS_SENTENCE,
-    _excluded_in_secondary,
+    hidden_in_secondary,
+    is_memory_file,
+    memory_file_paths,
     open_reads_active,
+    real_memory_roots,
     resolve_safe_read,
 )
 from .base import Tool, ToolResult
@@ -117,7 +121,8 @@ class GrepTool(Tool):
                  read_roots: Callable[[], list[str]] | None = None,
                  root_labels: Callable[[], dict[str, str]] | None = None,
                  open_reads: Callable[[], bool] | None = None,
-                 cross_project: bool | None = None):
+                 cross_project: bool | None = None,
+                 memory_roots: Callable[[], list[str]] | None = None):
         # ``cross_project`` picks the LLM-facing text: the scratch (Quick
         # Tasks) wording that names other in-scope projects, or the normal
         # single-root wording. Defaults to "a root callable was given" so
@@ -134,6 +139,8 @@ class GrepTool(Tool):
         # anywhere on disk. The DEFAULT root list (an unscoped search) is the
         # same in both modes so it stays fast and relevant.
         self._open_reads = open_reads
+        # In-scope project roots whose memory files are searched (Quick Tasks).
+        self._memory_roots = memory_roots
         self.name = "grep"
         self.description = (
             "Search for text within workspace files using ripgrep. "
@@ -204,11 +211,14 @@ class GrepTool(Tool):
             primary_real = os.path.realpath(roots[0])
             secondary_reals = [os.path.realpath(r) for r in roots[1:]]
             labels = self._root_labels() if self._root_labels else {}
+            memory_list = self._memory_roots() if self._memory_roots else None
+            memory_reals = real_memory_roots(memory_list)
 
             path_arg = arguments.get("path", ".")
             if path_arg not in (".", "", None):
                 resolved = resolve_safe_read(
-                    roots, path_arg, open_reads=open_reads_active(self._open_reads))
+                    roots, path_arg, open_reads=open_reads_active(self._open_reads),
+                    memory_roots=memory_list)
                 if resolved is None:
                     return ToolResult(content=f"Error: path outside workspace: {path_arg}")
                 if not os.path.exists(resolved):
@@ -234,12 +244,13 @@ class GrepTool(Tool):
             truncated = False
             hard_error: tuple[int, str] | None = None
 
-            for search_dir in search_dirs:
-                owner = self._owning_root(search_dir, primary_real, secondary_reals)
-                is_secondary = owner is not None and owner != primary_real
+            for search_dir, owner, is_secondary, memory_ok, run in self._jobs(
+                    search_dirs, primary_real, secondary_reals, memory_reals, glob_filter):
+                targets, exclude_internal, named = run
                 rc, stdout, stderr = self._run_rg(
-                    rg, search_dir, pattern, fixed=fixed, glob_filter=glob_filter,
-                    exclude_internal=is_secondary,
+                    rg, targets, pattern, fixed=fixed,
+                    glob_filter=None if named else glob_filter,
+                    exclude_internal=exclude_internal, with_filename=named,
                 )
                 if rc is None:  # timeout / exec failure
                     return ToolResult(content=stderr)
@@ -260,7 +271,8 @@ class GrepTool(Tool):
                         if is_secondary:
                             # Defence in depth: rg already excludes these globs,
                             # but never surface another project's internals.
-                            if _excluded_in_secondary(abs_path, owner):
+                            if hidden_in_secondary(os.path.realpath(abs_path), owner,
+                                                   memory_ok=memory_ok):
                                 continue
                             secondary_lines[owner].append(f"{abs_path}:{lineno}:{content}")
                         else:
@@ -314,15 +326,50 @@ class GrepTool(Tool):
                 return root
         return None
 
+    def _jobs(self, search_dirs, primary_real, secondary_reals, memory_reals, glob_filter):
+        """The rg runs for each search dir: ``(search_dir, owner, is_secondary,
+        memory_ok, (targets, exclude_internal, named))``.
+
+        A secondary root is walked with ``orbital/`` and ``.git/`` pruned; an
+        in-scope project's memory files (2026-11-07) are then searched by
+        name in a second run, so rg never walks the rest of ``orbital/``.
+        rg ignores ``-g`` for files named on the command line, so the glob
+        filter is applied to those names here."""
+        for search_dir in search_dirs:
+            owner = self._owning_root(search_dir, primary_real, secondary_reals)
+            is_secondary = owner is not None and owner != primary_real
+            memory_ok = is_secondary and owner in memory_reals
+            if memory_ok and os.path.isfile(search_dir) and is_memory_file(search_dir, owner):
+                yield search_dir, owner, is_secondary, memory_ok, ([search_dir], False, True)
+                continue
+            yield search_dir, owner, is_secondary, memory_ok, ([search_dir], is_secondary, False)
+            if not memory_ok or not os.path.isdir(search_dir):
+                continue
+            base = os.path.realpath(search_dir)
+            files = [
+                path for path in memory_file_paths(owner)
+                if path.startswith(base + os.sep) and os.path.isfile(path)
+                and is_memory_file(os.path.realpath(path), owner)
+                and (glob_filter is None or _glob_allows(path, base, glob_filter))
+            ]
+            if files:
+                yield search_dir, owner, is_secondary, memory_ok, (files, False, True)
+
     @staticmethod
-    def _run_rg(rg: str, search_dir: str, pattern: str, *, fixed: bool,
-                glob_filter: str | None, exclude_internal: bool):
-        """Run ripgrep in one directory. Returns (returncode, stdout, stderr).
+    def _run_rg(rg: str, targets, pattern: str, *, fixed: bool,
+                glob_filter: str | None, exclude_internal: bool,
+                with_filename: bool = False):
+        """Run ripgrep over ``targets`` (one directory, or named files).
+        Returns (returncode, stdout, stderr).
 
         ``returncode`` is None on timeout / exec failure (stderr carries the
         user-facing error). ``exclude_internal`` adds globs that keep a
         secondary project's ``orbital/`` and ``.git/`` out of the results.
+        ``with_filename`` keeps the path on every line (rg drops it when it
+        is given a single file).
         """
+        if isinstance(targets, str):
+            targets = [targets]
         cmd = [
             rg,
             "--line-number",
@@ -331,13 +378,15 @@ class GrepTool(Tool):
             "--max-count", str(_MAX_COUNT_PER_FILE),
             "--max-columns", str(_MAX_COLUMNS),
         ]
+        if with_filename:
+            cmd.append("--with-filename")
         if fixed:
             cmd.append("-F")
         if glob_filter:
             cmd.extend(["-g", glob_filter])
         if exclude_internal:
             cmd.extend(["-g", "!orbital", "-g", "!.git"])
-        cmd.extend(["--", pattern, search_dir])
+        cmd.extend(["--", pattern, *targets])
         try:
             result = subprocess.run(
                 cmd, capture_output=True, text=True, timeout=_TIMEOUT_SECONDS,
@@ -351,6 +400,21 @@ class GrepTool(Tool):
         except Exception as e:
             return None, "", f"Error: failed to run grep: {str(e)}"
         return result.returncode, result.stdout or "", result.stderr or ""
+
+
+def _glob_allows(path: str, base: str, glob: str) -> bool:
+    """rg ``-g`` semantics, near enough, for a file named on the command
+    line: a glob without ``/`` matches the basename, one with ``/`` the path
+    relative to the search dir; a leading ``!`` excludes."""
+    negate = glob.startswith("!")
+    g = glob[1:] if negate else glob
+    if "/" in g:
+        target = os.path.relpath(path, base).replace(os.sep, "/")
+        g = g.lstrip("/")
+    else:
+        target = os.path.basename(path)
+    hit = fnmatch.fnmatch(target, g)
+    return not hit if negate else hit
 
 
 def _split_rg_line(line: str) -> tuple[str, str, str] | None:

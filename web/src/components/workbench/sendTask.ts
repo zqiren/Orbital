@@ -22,6 +22,11 @@
  *      `attachments` payload and the daemon writes the `<attached_files>`
  *      prefix, exactly as the chat composer sends them.
  *
+ * Routing that finds no project (2026-11-07: the call failed after its one
+ * retry, `by: "failed"`) is not a send: nothing is minted or uploaded, the
+ * text comes back and the outcome says `unrouted`, so the composer shows its
+ * one error line and opens the project picker.
+ *
  * Failure rule (one rule, no inference from error codes): after a failure,
  * if the session exists in that project the text was persisted — the card
  * stays and shows the failure like any failed run. Otherwise the pending card
@@ -143,7 +148,8 @@ export interface SendChoice {
 
 export type SendOutcome =
   | { ok: true; projectId: string; sessionId: string }
-  | { ok: false; restored: boolean };
+  /** `unrouted`: 自动 found no project; the user picks one. */
+  | { ok: false; restored: boolean; unrouted?: boolean };
 
 export async function sendWorkbenchTask(choice: SendChoice, deps: SendDeps): Promise<SendOutcome> {
   const text = choice.text.trim();
@@ -160,6 +166,7 @@ export async function sendWorkbenchTask(choice: SendChoice, deps: SendDeps): Pro
 
   let projectId = choice.projectId;
   let sessionId: string | null = null;
+  let unrouted = false;
   try {
     if (!projectId) {
       const routed = await api<{ project_id?: string | null }>('/api/v2/workbench/route', {
@@ -167,7 +174,10 @@ export async function sendWorkbenchTask(choice: SendChoice, deps: SendDeps): Pro
         body: JSON.stringify({ text: routeText(text, files) }),
       });
       projectId = routed?.project_id ?? null;
-      if (!projectId) throw new Error('no project to route to');
+      if (!projectId) {
+        unrouted = true;
+        throw new Error('no project to route to');
+      }
       draft.project_id = projectId;
       saveDraft(draft);
       updatePending(nonce, { project_id: projectId });
@@ -203,7 +213,7 @@ export async function sendWorkbenchTask(choice: SendChoice, deps: SendDeps): Pro
     }
     removePending(nonce);
     restoreComposer(text);
-    return { ok: false, restored: true };
+    return unrouted ? { ok: false, restored: true, unrouted: true } : { ok: false, restored: true };
   }
 }
 

@@ -37,3 +37,16 @@ def test_non_scratch_prompt_has_no_scope_section():
 def test_scratch_with_empty_scope_has_no_section():
     semi = _semi_stable(_ctx(scope_projects=[]))
     assert "Cross-Project Read Access" not in semi
+
+
+def test_scope_section_names_the_readable_memory_files():
+    """2026-11-07: the four memory files are readable; one static line says
+    where, the same for every project set (no per-project content)."""
+    semi = _semi_stable(_ctx())
+    line = next(ln for ln in semi.splitlines() if "orbital/PROJECT_STATE.md" in ln)
+    for rel in ("orbital/instructions/project_goals.md", "orbital/PROJECT_STATE.md",
+                "orbital/INDEX.md", "orbital/DECISIONS.md"):
+        assert f"<path>/{rel}" in line
+    assert "excluded" in line
+    other = _semi_stable(_ctx(scope_projects=[{"name": "X", "path": "/x"}]))
+    assert line in other.splitlines()

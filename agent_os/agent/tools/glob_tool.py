@@ -8,20 +8,125 @@ Read-only. Auto-approved under all autonomy presets. Paths are validated against
 the workspace root before expansion; absolute or escape-attempt paths are rejected.
 """
 
+import fnmatch
 import os
-from pathlib import Path
+import sys
+from pathlib import Path, PurePath
 from typing import Callable
 
 from ._path_utils import (
+    _SECONDARY_EXCLUDED_COMPONENTS,
     OPEN_READS_PATH_SENTENCE,
     OPEN_READS_SENTENCE,
-    _excluded_in_secondary,
+    hidden_in_secondary,
+    is_memory_file,
+    memory_file_paths,
     open_reads_active,
+    real_memory_roots,
     resolve_safe_read,
 )
 from .base import Tool, ToolResult
 
 _MAX_RESULTS = 1000
+
+
+# ── Secondary roots: a pruned walk (2026-11-07) ───────────────────────────
+#
+# ``Path.glob`` cannot skip a subtree, so over another project's root it
+# walked that project's whole ``orbital/`` (session logs, history, …) only to
+# drop every hit afterwards. Secondary roots use this walk instead: it follows
+# the pattern segment by segment like pathlib (``**`` = this dir and every
+# subdir, not through symlinked dirs; ``*``/``?``/``[…]`` per name, hidden
+# names included) and never enters an ``orbital`` or ``.git`` dir. The
+# allowlisted memory files are then matched against the pattern by name.
+
+def _pattern_segments(pattern: str) -> list[str] | None:
+    """The pattern's relative segments, or None when only ``Path.glob`` can
+    take it (absolute, ``..``, empty) — it then raises or walks as before."""
+    try:
+        pure = PurePath(pattern)
+    except (TypeError, ValueError):
+        return None
+    if pure.is_absolute() or pure.anchor:
+        return None
+    segs = [s for s in pure.parts if s not in ("", ".")]
+    if not segs or ".." in segs:
+        return None
+    return segs
+
+
+# Python 3.13 changed pathlib: a trailing ``**`` matches files as well as
+# directories (3.11/3.12: directories only). Follow the running interpreter.
+_TRAILING_STARSTAR_FILES = sys.version_info >= (3, 13)
+
+
+def _pruned(name: str) -> bool:
+    return name.casefold() in _SECONDARY_EXCLUDED_COMPONENTS
+
+
+def _select(dirpath: str, segs: list[str], out: list[str]) -> None:
+    if not segs:
+        out.append(dirpath)
+        return
+    seg, rest = segs[0], segs[1:]
+    try:
+        entries = list(os.scandir(dirpath))
+    except OSError:
+        return
+    if seg == "**":
+        _select(dirpath, rest, out)  # zero directories
+        for e in entries:
+            if _pruned(e.name):
+                continue
+            try:
+                is_dir = e.is_dir() and not e.is_symlink()
+            except OSError:
+                continue
+            if is_dir:
+                _select(e.path, segs, out)
+            elif not rest and _TRAILING_STARSTAR_FILES:
+                out.append(e.path)
+        return
+    for e in entries:
+        if _pruned(e.name) or not fnmatch.fnmatch(e.name, seg):
+            continue
+        if not rest:
+            out.append(e.path)
+            continue
+        try:
+            is_dir = e.is_dir()
+        except OSError:
+            continue
+        if is_dir:
+            _select(e.path, rest, out)
+
+
+def _parts_match(parts: list[str], segs: list[str]) -> bool:
+    if not segs:
+        return not parts
+    if segs[0] == "**":
+        return any(_parts_match(parts[i:], segs[1:]) for i in range(len(parts) + 1))
+    return (bool(parts) and fnmatch.fnmatch(parts[0], segs[0])
+            and _parts_match(parts[1:], segs[1:]))
+
+
+def _secondary_glob(search_dir: str, owner_real: str, segs: list[str],
+                    memory_ok: bool) -> list[str]:
+    """Matches under a secondary root's ``search_dir``: the pruned walk, plus
+    the owner's memory files when ``memory_ok`` and the pattern names them."""
+    found: list[str] = []
+    _select(search_dir, segs, found)
+    # Before 3.13 a trailing ** matches directories only.
+    if memory_ok and (segs[-1] != "**" or _TRAILING_STARSTAR_FILES):
+        base = os.path.realpath(search_dir)
+        for path in memory_file_paths(owner_real):
+            if not path.startswith(base + os.sep) or not os.path.isfile(path):
+                continue
+            if not is_memory_file(os.path.realpath(path), owner_real):
+                continue  # a symlink: the real file is not at that location
+            if _parts_match(os.path.relpath(path, base).split(os.sep), segs):
+                found.append(path)
+    return list(dict.fromkeys(found))
 
 
 class GlobTool(Tool):
@@ -31,7 +136,8 @@ class GlobTool(Tool):
                  read_roots: Callable[[], list[str]] | None = None,
                  root_labels: Callable[[], dict[str, str]] | None = None,
                  open_reads: Callable[[], bool] | None = None,
-                 cross_project: bool | None = None):
+                 cross_project: bool | None = None,
+                 memory_roots: Callable[[], list[str]] | None = None):
         # ``cross_project`` picks the LLM-facing text: the scratch (Quick
         # Tasks) wording that names other in-scope projects, or the normal
         # single-root wording. Defaults to "a root callable was given" so
@@ -47,6 +153,8 @@ class GlobTool(Tool):
         # Spec 117 D3: safe mode OFF → an explicit absolute path may point
         # anywhere on disk; the default root list is unchanged.
         self._open_reads = open_reads
+        # In-scope project roots whose memory files are listed (Quick Tasks).
+        self._memory_roots = memory_roots
         self.name = "glob"
         self.description = (
             "Find files matching a glob pattern (e.g. '**/*.py'). "
@@ -109,13 +217,16 @@ class GlobTool(Tool):
             primary_real = os.path.realpath(roots[0])
             secondary_reals = [os.path.realpath(r) for r in roots[1:]]
             labels = self._root_labels() if self._root_labels else {}
+            memory_list = self._memory_roots() if self._memory_roots else None
+            memory_reals = real_memory_roots(memory_list)
 
             path_arg = arguments.get("path", ".")
             if path_arg not in (".", "", None):
                 # Explicit path: scope the search to that single resolved dir
                 # (may be a secondary root's subtree via an absolute path).
                 resolved = resolve_safe_read(
-                    roots, path_arg, open_reads=open_reads_active(self._open_reads))
+                    roots, path_arg, open_reads=open_reads_active(self._open_reads),
+                    memory_roots=memory_list)
                 if resolved is None:
                     return ToolResult(content=f"Error: path outside workspace: {path_arg}")
                 if not os.path.exists(resolved):
@@ -139,10 +250,15 @@ class GlobTool(Tool):
             total = 0
             truncated = False
 
+            segs = _pattern_segments(pattern)
             for search_dir in search_dirs:
                 owner = self._owning_root(search_dir, primary_real, secondary_reals)
                 try:
-                    iterator = Path(search_dir).glob(pattern)
+                    if owner is not None and owner != primary_real and segs is not None:
+                        iterator = _secondary_glob(search_dir, owner, segs,
+                                                   memory_ok=owner in memory_reals)
+                    else:
+                        iterator = Path(search_dir).glob(pattern)
                 except (ValueError, OSError) as e:
                     return ToolResult(content=f"Error: invalid pattern '{pattern}': {str(e)}")
                 try:
@@ -163,7 +279,8 @@ class GlobTool(Tool):
                             rel = os.path.relpath(entry_real, primary_real).replace(os.sep, "/")
                             primary_matches.append(rel)
                         else:
-                            if _excluded_in_secondary(entry_real, owner_real):
+                            if hidden_in_secondary(entry_real, owner_real,
+                                                   memory_ok=owner_real in memory_reals):
                                 continue  # other project's orbital/ or .git/
                             secondary_matches[owner_real].append(entry_real)
                         total += 1

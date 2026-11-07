@@ -703,7 +703,9 @@ class PromptBuilder:
             "- `glob`/`grep` already search every in-scope project automatically; "
             "cross-project matches are prefixed with `[project: <name>]`.",
             "- Relative paths always resolve inside YOUR OWN workspace.",
-            "- Other projects' `orbital/` and `.git/` internals are excluded.",
+            "- Each project's memory is readable at `<path>/orbital/instructions/project_goals.md`, "
+            "`<path>/orbital/PROJECT_STATE.md`, `<path>/orbital/INDEX.md` and "
+            "`<path>/orbital/DECISIONS.md`; the rest of its `orbital/`, and `.git/`, is excluded.",
             "- When the user says \"my projects\", they usually mean the projects "
             "listed above — look there before asking which project they mean.",
         ]
