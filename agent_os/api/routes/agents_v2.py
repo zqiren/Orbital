@@ -4895,7 +4895,14 @@ async def update_sub_agent_memory(
 # ---- Network utilities ----
 
 def _get_lan_ip() -> str | None:
-    """Get LAN IP, preferring local network (192.168/172.16) over VPN (10.x)."""
+    """Get LAN IP, preferring local network (192.168/172.16) over VPN (10.x).
+
+    ``AGENT_OS_PUBLIC_HOST`` wins: in a container the detected address is the
+    bridge IP, which no phone can reach.
+    """
+    public_host = os.environ.get("AGENT_OS_PUBLIC_HOST")
+    if public_host:
+        return public_host
     import socket as _sock
     candidates: list[str] = []
     try:

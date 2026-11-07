@@ -848,10 +848,11 @@ def _assemble_app(app: FastAPI, data_dir: str | None) -> FastAPI:
                 index_path = os.path.join(spa_dir, "index.html")
                 with open(index_path, "r", encoding="utf-8") as f:
                     raw = f.read()
+                flags = "window.__AGENT_OS_LOCAL__=true;"
+                if os.environ.get("AGENT_OS_HEADLESS"):
+                    flags += "window.__AGENT_OS_HEADLESS__=true;"
                 _cached_index_html = raw.replace(
-                    "<head>",
-                    "<head><script>window.__AGENT_OS_LOCAL__=true;</script>",
-                    1,
+                    "<head>", f"<head><script>{flags}</script>", 1,
                 )
             return HTMLResponse(_cached_index_html)
 

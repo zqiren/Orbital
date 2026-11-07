@@ -5,6 +5,7 @@
 declare global {
   interface Window {
     __AGENT_OS_LOCAL__?: boolean;
+    __AGENT_OS_HEADLESS__?: boolean;
   }
 }
 
@@ -25,6 +26,24 @@ export const isRelayMode: boolean = (() => {
   // No flag + non-localhost = relay
   return true;
 })();
+
+/** True when the daemon runs on a server, with no desktop app of its own. */
+export const isHeadlessDaemon: boolean = Boolean(window.__AGENT_OS_HEADLESS__);
+
+/**
+ * Whether this client skips first-run setup. A phone reaching a desktop daemon
+ * leaves setup to the desktop, but a headless daemon has no desktop: every
+ * client is remote there, so one of them has to run it.
+ */
+export function skipsFirstRunSetup(
+  hostname: string,
+  relayMode: boolean = isRelayMode,
+  headless: boolean = isHeadlessDaemon,
+): boolean {
+  if (relayMode) return true;
+  if (headless) return false;
+  return hostname !== 'localhost' && hostname !== '127.0.0.1';
+}
 
 export const BASE_URL: string =
   import.meta.env.VITE_API_URL || window.location.origin;

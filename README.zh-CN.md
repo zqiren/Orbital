@@ -291,6 +291,10 @@ cd web && npx vite --host 127.0.0.1 --port 5173
 
 Agent 运行期间，Orbital 会通过系统级别的接口阻止机器进入休眠（Windows 和 macOS 都支持）。所有 agent 闲下来之后，会重新允许系统休眠。系统托盘图标会显示当前 agent 活动状态。
 
+### Linux 服务器
+
+Linux 暂无桌面版，但 daemon 和 Web 界面可以用 Docker 在服务器上无界面运行。详见 [在 Linux 服务器上运行 Orbital](docs/deploy-linux-server.md)（英文）。
+
 ---
 
 ## 开发与测试

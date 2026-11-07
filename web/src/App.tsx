@@ -52,7 +52,7 @@ import GlobalSettings, { requestedSettingsSection } from './components/GlobalSet
 import CalendarPage from './components/CalendarPage';
 import WorkbenchPage from './components/WorkbenchPage';
 import { useT } from './i18n/useT';
-import { api, isRelayMode } from './config';
+import { api, isRelayMode, skipsFirstRunSetup } from './config';
 import {
   SUB_AGENTS_RUNNING_EVENTS,
   createSubAgentsRunningSync,
@@ -247,7 +247,7 @@ export default function App() {
   // Check platform status on mount
   // Remote (phone) clients skip platform setup — it's a desktop-only concern
   useEffect(() => {
-    if (isRelayMode || (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1')) {
+    if (skipsFirstRunSetup(window.location.hostname)) {
       setSetupComplete(true);
       setNeedsWizard(false);
       // Fetch projects with retry — daemon tunnel may not be ready on page load
