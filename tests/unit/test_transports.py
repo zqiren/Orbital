@@ -100,6 +100,7 @@ class TestPTYTransport:
         await t.start("python", ["-u", "-c",
             "import sys; [print('GOT:' + line.strip(), flush=True) for line in sys.stdin]"],
             ".")
+        t._ready = True  # nothing reads this process's output here
         result = await t.send("hello")
         assert result is None  # PTY send returns None (streaming)
         await t.stop()
