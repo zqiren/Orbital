@@ -911,6 +911,10 @@ class SettingsStore:
             cards[0].id if cards else None
         )
         raw["llm"] = {"fallback_models": global_fallbacks}
+        # A key the keychain did not take stays where it was, as project keys
+        # do below: otherwise this write is the end of the only live copy.
+        if global_card is not None and global_card.id in key_errors and g_key:
+            raw["llm"]["api_key"] = g_key
         self._write_raw(raw)
 
         # Saving a project row STRIPS its legacy llm fields, including the
