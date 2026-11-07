@@ -134,7 +134,10 @@ async def test_routes_to_the_model_pick_with_quick_tasks_credential(projects):
     assert body == {"project_id": "proj_site", "by": "model"}
     assert mgr.config_for == ["proj_scratch"]          # Quick Tasks' credential
     (messages, disable_reasoning), = prov.calls
-    assert disable_reasoning is True
+    # Thinking stays at the model's default (2026-11-07): turning it off
+    # saved 1-2 s at best and broke routing whenever a provider's model
+    # stopped accepting the catalog's off-switch (glm-5.2 on OpenCode Go).
+    assert disable_reasoning is False
     system, user = messages
     # Candidates only: no Quick Tasks, no excluded project; task last.
     assert "proj_site" in system["content"] and "proj_app" in system["content"]

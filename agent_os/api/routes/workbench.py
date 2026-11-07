@@ -835,7 +835,10 @@ async def route_task(req: RouteRequest):
         started = loop.time()
         try:
             response = await asyncio.wait_for(
-                provider.complete(messages, disable_reasoning=True),
+                # Thinking left at the model's default: off saved 1-2 s and
+                # broke routing whenever a model stopped accepting the
+                # catalog's off-switch (glm-5.2 on OpenCode Go, 2026-11-07).
+                provider.complete(messages),
                 timeout=max(0.0, deadline - started))
         except asyncio.TimeoutError:
             code, detail = "timeout", f"timed out after {loop.time() - started:.0f}s"
