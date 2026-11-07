@@ -565,10 +565,15 @@ def test_guess_scan_writes_first_then_asks(tmp_path, en_locale):
     i_goals = flat.index("project_goals.md")
     assert i_state < i_index < i_goals
     assert f"{tmp_path}/orbital/instructions/project_goals.md" in text
-    # Round 4: no closing question and no next step — the daemon posts the
-    # confirm card.
+    # Round 4: no closing question — the daemon posts the confirm card.
+    # Round 5: the summary ends with 1-3 numbered next steps, the same ones
+    # recorded under PROJECT_STATE's "## Next steps" (the card reads them
+    # there); still never started.
     assert "is this right?" not in flat and "这样理解对吗" not in flat
-    assert "do not suggest a next step or task" in flat
+    assert "do not suggest a next step" not in flat
+    assert "End the reply with the same steps, numbered" in flat
+    assert "`## Next steps` heading (exactly that heading" in flat
+    assert "Do not ask a question and do not start any step" in flat
     # Live round 4: one scan ended with mark_task_complete and no summary.
     assert "That summary is your final message, as plain text" in flat
     assert "Do not start any work" in flat
@@ -771,6 +776,9 @@ def test_worker_guess_prompt_is_the_manager_text_behind_the_preamble(tmp_path):
     flat = _flat(text)
     assert "这样理解对吗" not in flat and op.SHARED_MEMORY_LINE_ZH in flat
     assert "Write NOTHING until the user confirms" not in text
+    # Round 5: the worker gets the same next-steps rule (it writes the file
+    # itself, so the card reads it the same way).
+    assert "`## Next steps` heading (exactly that heading" in flat
     one = build_instruction("claude-code", {"workspace": ws}, "scan", skel,
                             guess_lang="en", multi_agent=False)
     assert op.SHARED_MEMORY_LINE_EN not in _flat(one)
@@ -1070,9 +1078,11 @@ def test_deferred_wizard_imports_wait_for_a_trigger_not_a_restart(store, tmp_pat
     assert unscanned_count(ProjectStore(str(tmp_path / "data"))) == 0
 
 
-def _confirm_env(tmp_path, *, keyed):
+def _confirm_env(tmp_path, *, keyed, state=None, lang="zh"):
     """A real AgentManager behind agents_v2 (the keyless harness), one
-    imported project whose scan wrote goals, and the confirm card posted."""
+    imported project whose scan wrote goals, and the confirm card posted.
+    ``state``: the PROJECT_STATE.md the scan wrote (round 5: its Next steps
+    section feeds the card)."""
     import asyncio as _asyncio
     import json as _json
 
@@ -1085,8 +1095,10 @@ def _confirm_env(tmp_path, *, keyed):
     ws.mkdir()
     (ws / "README.md").write_text("# lib\n")
     pid = create_project(tc, ws)["project_id"]
-    deps["project_store"].update_project(pid, {import_scan.LANG_FIELD: "zh"})
+    deps["project_store"].update_project(pid, {import_scan.LANG_FIELD: lang})
     _write_goals(ws)
+    if state is not None:
+        (ws / "orbital" / "PROJECT_STATE.md").write_text(state, encoding="utf-8")
     sid = "scan_sess_1"
     # The scan session exists on disk (its first row).
     from agent_os.agent.session import Session
@@ -1109,7 +1121,7 @@ def test_post_scan_confirm_opens_the_ask_and_its_session_row(tmp_path):
     assert card["_kind"] == "ask_card" and card["_meta"]["event"] == "ask_opened"
     assert card["_meta"]["ask_id"] == ask_id and card["_meta"]["import_scan_confirm"] is True
     assert deps["project_store"].get_project(pid)[import_scan.ASK_FIELD] == {
-        "id": ask_id, "session_id": sid, "yes": "对"}
+        "id": ask_id, "session_id": sid, "yes": "对", "change": "需要改"}
 
 
 def _answer(tc, pid, sid, ask_id, words, target=None):
@@ -1159,7 +1171,29 @@ def test_yes_on_a_worker_session_dispatches_nothing_either(tmp_path):
     deps["sub_agent_manager"].send.assert_not_awaited()
 
 
-def test_a_correction_runs_one_turn_with_the_note_in_that_message_only(tmp_path, monkeypatch):
+def test_needs_changes_runs_one_turn_with_the_note_in_that_message_only(tmp_path, monkeypatch):
+    """The 需要改 option runs one guarded turn (round 4). Round 5: only that
+    option carries the note — a typed reply is a normal message (below)."""
+    tc, deps, pid, sid, ws, ask_id, _ = _confirm_env(tmp_path, keyed=True)
+    sent = []
+
+    async def spy(project_id, content, **k):
+        sent.append(content)
+        return "delivered"
+
+    monkeypatch.setattr(deps["agent_manager"], "inject_message", spy)
+    r = _answer(tc, pid, sid, ask_id, "需要改")
+    assert r.status_code == 200, r.text
+    assert len(sent) == 1
+    assert sent[0].startswith(f'[Answer to ask {ask_id}, already closed:')
+    assert "需要改\n\n<orbital_turn_note>" in sent[0]
+    assert "只改 orbital/ 下的文件" in sent[0] and sent[0].endswith("</orbital_turn_note>")
+
+
+def test_a_typed_reply_is_a_normal_message(tmp_path, monkeypatch):
+    """Round 5: the daemon cannot tell a typed correction from a typed "做第
+    2 步", so typed text goes through as the user's own message (no note, so
+    the gate opens on it as on any reply)."""
     tc, deps, pid, sid, ws, ask_id, _ = _confirm_env(tmp_path, keyed=True)
     sent = []
 
@@ -1171,28 +1205,21 @@ def test_a_correction_runs_one_turn_with_the_note_in_that_message_only(tmp_path,
     r = _answer(tc, pid, sid, ask_id, "不对，这是给团队用的配置工具")
     assert r.status_code == 200, r.text
     assert len(sent) == 1
-    assert sent[0].startswith(f'[Answer to ask {ask_id}, already closed:')
-    assert "不对，这是给团队用的配置工具\n\n<orbital_turn_note>" in sent[0]
-    assert "只改 orbital/ 下的文件" in sent[0] and sent[0].endswith("</orbital_turn_note>")
-    # Needs-changes alone runs the same guarded turn.
-    tc2, deps2, pid2, sid2, ws2, ask2, _ = _confirm_env(tmp_path / "two", keyed=True)
-    sent.clear()
-    monkeypatch.setattr(deps2["agent_manager"], "inject_message", spy)
-    _answer(tc2, pid2, sid2, ask2, "需要改")
-    assert len(sent) == 1 and "<orbital_turn_note>" in sent[0]
+    assert sent[0].endswith("\n不对，这是给团队用的配置工具")
+    assert "<orbital_turn_note>" not in sent[0] and "<orbital_picked_step>" not in sent[0]
 
 
-def test_a_worker_correction_sends_the_note_but_stores_only_the_words(tmp_path):
+def test_a_worker_needs_changes_sends_the_note_but_stores_only_the_words(tmp_path):
     import json as _json
 
     tc, deps, pid, sid, ws, ask_id, _ = _confirm_env(tmp_path, keyed=False)
-    r = _answer(tc, pid, sid, ask_id, "不对，是公众号连载", target="claude-code")
+    r = _answer(tc, pid, sid, ask_id, "需要改", target="claude-code")
     assert r.status_code == 200, r.text
     args, _k = deps["sub_agent_manager"].send.await_args
-    assert args[2].endswith("</orbital_turn_note>") and "不对，是公众号连载" in args[2]
+    assert args[2].endswith("</orbital_turn_note>") and "需要改" in args[2]
     rows = [_json.loads(l) for l in open(ws / "orbital" / "sessions" / f"{sid}.jsonl", encoding="utf-8")]
     user = [r for r in rows if r.get("role") == "user"]
-    assert user[-1]["content"].endswith("不对，是公众号连载")
+    assert user[-1]["content"].endswith("需要改")
     assert "<orbital_turn_note>" not in user[-1]["content"]
 
 
@@ -1249,3 +1276,206 @@ def test_an_open_scan_ask_is_still_handled_after_a_restart(tmp_path, monkeypatch
     monkeypatch.setattr(deps2["agent_manager"], "inject_message", spy)
     r = _answer(tc2, pid, sid, ask_id, "对")
     assert r.status_code == 200 and r.json()["status"] == "recorded" and called == []
+
+
+# ---------------------------------------------------------------------------
+# Round 5: the scan proposes next steps; the confirm card offers step 1
+# ---------------------------------------------------------------------------
+
+_STATE_WITH_STEPS = (
+    "<!--format PROJECT_STATE is what is true NOW-->\n"
+    "# Project State\n\n"
+    "## Current focus\n- tinyparse v0.3.0\n\n"
+    "## Next steps\n"
+    "- Implement `dumps()` so it round-trips with `loads()`\n"
+    "<!--mem id=a1 created=2026-11-07-->\n"
+    "  detail line under the bullet, not a step\n"
+    "- Add line numbers to `ParseError`\n"
+    "- Publish 0.4.0 to PyPI\n"
+    "- A fourth one past the cap\n\n"
+    "## Notes\n- not a step\n"
+)
+
+
+def _rows(ws, sid):
+    import json as _json
+    return [_json.loads(l) for l in open(ws / "orbital" / "sessions" / f"{sid}.jsonl",
+                                         encoding="utf-8")]
+
+
+def test_next_steps_reads_the_state_files_section(tmp_path):
+    from agent_os.onboarding.import_scan import next_steps
+
+    orb = tmp_path / "orbital"
+    orb.mkdir()
+    assert next_steps(str(tmp_path)) == []                     # no state file
+    (orb / "PROJECT_STATE.md").write_text(_STATE_WITH_STEPS, encoding="utf-8")
+    assert next_steps(str(tmp_path)) == [
+        "Implement `dumps()` so it round-trips with `loads()`",
+        "Add line numbers to `ParseError`",
+        "Publish 0.4.0 to PyPI",
+    ]
+    # The heading as earlier scans wrote it, in either language; numbered items.
+    for heading in ("## Likely next steps (guess)", "## Next steps (best guess)",
+                    "## 下一步", "### Next Steps"):
+        (orb / "PROJECT_STATE.md").write_text(
+            f"# S\n\n{heading}\n1. 续写第二篇\n2) 动笔《散步》\n", encoding="utf-8")
+        assert next_steps(str(tmp_path)) == ["续写第二篇", "动笔《散步》"], heading
+    # Nothing clearly next: no section, or only a placeholder.
+    for body in ("# S\n\n## Current focus\n- x\n", "# S\n\n## Next steps\n- (none yet)\n",
+                 "# S\n\n## Next steps\n- 无\n"):
+        (orb / "PROJECT_STATE.md").write_text(body, encoding="utf-8")
+        assert next_steps(str(tmp_path)) == [], body
+
+
+def test_the_card_with_steps_offers_step_one(tmp_path):
+    from agent_os.agent import asks
+
+    tc, deps, pid, sid, ws, ask_id, rows = _confirm_env(
+        tmp_path, keyed=True, state=_STATE_WITH_STEPS)
+    (ask,) = [a for a in asks.read_asks(str(ws / "orbital")) if a.id == ask_id]
+    assert ask.text == "这样理解对吗？" and ask.is_open
+    assert ask.options == ("对，做第 1 步", "对，先不做", "需要改")
+    assert ask.detail == (
+        "1. Implement `dumps()` so it round-trips with `loads()`\n"
+        "2. Add line numbers to `ParseError`\n"
+        "3. Publish 0.4.0 to PyPI")
+    assert rows[-1]["_meta"]["import_scan_confirm"] is True
+    rec = deps["project_store"].get_project(pid)[import_scan.ASK_FIELD]
+    assert rec["id"] == ask_id and rec["yes"] == "对，先不做"
+    assert rec["go"] == "对，做第 1 步" and rec["change"] == "需要改"
+    assert rec["steps"][0] == "Implement `dumps()` so it round-trips with `loads()`"
+    # English import.
+    tc2, deps2, pid2, sid2, ws2, ask2, _ = _confirm_env(
+        tmp_path / "en", keyed=True, state=_STATE_WITH_STEPS, lang="en")
+    (a2,) = [a for a in asks.read_asks(str(ws2 / "orbital")) if a.id == ask2]
+    assert a2.text == "Did I get this right?"
+    assert a2.options == ("Yes, do step 1", "Yes, not now", "Needs changes")
+
+
+def test_the_card_without_steps_is_unchanged(tmp_path):
+    from agent_os.agent import asks
+
+    tc, deps, pid, sid, ws, ask_id, _ = _confirm_env(
+        tmp_path, keyed=True, state="# S\n\n## Current focus\n- x\n")
+    (ask,) = [a for a in asks.read_asks(str(ws / "orbital")) if a.id == ask_id]
+    assert ask.options == ("对", "需要改") and ask.detail == ""
+    rec = deps["project_store"].get_project(pid)[import_scan.ASK_FIELD]
+    assert rec["yes"] == "对" and "go" not in rec and "steps" not in rec
+
+
+def _spy_inject(monkeypatch, mgr):
+    sent = []
+
+    async def spy(project_id, content, **k):
+        sent.append(content)
+        return "delivered"
+
+    monkeypatch.setattr(mgr, "inject_message", spy)
+    monkeypatch.setattr(mgr, "start_agent", spy)
+    return sent
+
+
+def test_do_step_one_runs_once_with_an_explicit_approval(tmp_path, monkeypatch):
+    from agent_os.agent import asks
+
+    tc, deps, pid, sid, ws, ask_id, _ = _confirm_env(
+        tmp_path, keyed=True, state=_STATE_WITH_STEPS)
+    sent = _spy_inject(monkeypatch, deps["agent_manager"])
+    r = _answer(tc, pid, sid, ask_id, "对，做第 1 步")
+    assert r.status_code == 200, r.text
+    assert len(sent) == 1                                   # exactly one run
+    msg = sent[0]
+    # The user's tap text stays the visible answer; the approval names step 1.
+    assert msg.startswith(f'[Answer to ask {ask_id}, already closed: "这样理解对吗？"]\n对，做第 1 步')
+    assert ("<orbital_picked_step>对，按第 1 步开始：Implement `dumps()` so it "
+            "round-trips with `loads()`</orbital_picked_step>") in msg
+    assert "<orbital_turn_note>" not in msg                 # not a guarded turn
+    (ask,) = [a for a in asks.read_asks(str(ws / "orbital")) if a.id == ask_id]
+    assert not ask.is_open
+
+
+def test_do_step_one_opens_the_gate_and_the_approval_stays_in_context(tmp_path):
+    from agent_os.agent.context import strip_turn_notes
+    from agent_os.agent.session import Session
+
+    s = Session.new("g2", str(tmp_path), session_id="g2", origin="cold_start")
+    s.append({"role": "assistant", "content": "summary\n1. a\n2. b"})
+    s.set_onboarding_gate(True)
+    block = import_scan.picked_step_block("zh", "a")
+    s.append({"role": "user", "source": "user", "content": "对，做第 1 步\n\n" + block})
+    assert s.onboarding_gate is False                       # the user's go
+    later = strip_turn_notes(s.get_messages() + [{"role": "user", "content": "next"}])
+    assert block in later[-2]["content"]                    # kept on later turns
+
+
+def test_do_step_one_on_a_worker_sends_the_approval_stores_the_tap(tmp_path):
+    tc, deps, pid, sid, ws, ask_id, _ = _confirm_env(
+        tmp_path, keyed=False, state=_STATE_WITH_STEPS)
+    r = _answer(tc, pid, sid, ask_id, "对，做第 1 步", target="claude-code")
+    assert r.status_code == 200, r.text
+    assert deps["sub_agent_manager"].send.await_count == 1
+    args, _k = deps["sub_agent_manager"].send.await_args
+    assert "<orbital_picked_step>对，按第 1 步开始：Implement" in args[2]
+    user = [r for r in _rows(ws, sid) if r.get("role") == "user"]
+    assert user[-1]["content"].endswith("\n对，做第 1 步")
+
+
+def test_not_now_is_zero_call_and_keeps_the_gate(tmp_path, monkeypatch):
+    from agent_os.agent import asks
+    from agent_os.agent.session import Session
+
+    tc, deps, pid, sid, ws, ask_id, _ = _confirm_env(
+        tmp_path, keyed=True, state=_STATE_WITH_STEPS)
+    sent = _spy_inject(monkeypatch, deps["agent_manager"])
+    s = Session.load(str(ws / "orbital" / "sessions" / f"{sid}.jsonl"))
+    s.set_onboarding_gate(True)
+    r = _answer(tc, pid, sid, ask_id, "对，先不做")
+    assert r.status_code == 200 and r.json()["status"] == "recorded"
+    assert sent == []
+    (ask,) = [a for a in asks.read_asks(str(ws / "orbital")) if a.id == ask_id]
+    assert not ask.is_open
+    assert Session.load(s.filepath).onboarding_gate is True
+
+
+@pytest.mark.parametrize("typed", ["对", "对。", " 对！", "对的", "Yes", "yes."])
+def test_a_typed_yes_is_still_zero_call(tmp_path, monkeypatch, typed):
+    """The round-3 bug: a bare 对 must never become the go-ahead, on either
+    card, typed or tapped."""
+    for state in (_STATE_WITH_STEPS, None):
+        root = tmp_path / ("steps" if state else "plain")
+        tc, deps, pid, sid, ws, ask_id, _ = _confirm_env(root, keyed=True, state=state)
+        sent = _spy_inject(monkeypatch, deps["agent_manager"])
+        r = _answer(tc, pid, sid, ask_id, typed)
+        assert r.status_code == 200 and r.json()["status"] == "recorded", (typed, state)
+        assert sent == []
+
+
+def test_typed_do_step_two_is_a_normal_run(tmp_path, monkeypatch):
+    tc, deps, pid, sid, ws, ask_id, _ = _confirm_env(
+        tmp_path, keyed=True, state=_STATE_WITH_STEPS)
+    sent = _spy_inject(monkeypatch, deps["agent_manager"])
+    r = _answer(tc, pid, sid, ask_id, "做第 2 步")
+    assert r.status_code == 200, r.text
+    assert len(sent) == 1 and sent[0].endswith("\n做第 2 步")
+    assert "<orbital_turn_note>" not in sent[0] and "<orbital_picked_step>" not in sent[0]
+
+
+def test_needs_changes_on_the_steps_card_is_the_guarded_turn(tmp_path, monkeypatch):
+    tc, deps, pid, sid, ws, ask_id, _ = _confirm_env(
+        tmp_path, keyed=True, state=_STATE_WITH_STEPS)
+    sent = _spy_inject(monkeypatch, deps["agent_manager"])
+    _answer(tc, pid, sid, ask_id, "需要改")
+    assert len(sent) == 1 and "<orbital_turn_note>" in sent[0]
+    assert "<orbital_picked_step>" not in sent[0]
+
+
+def test_a_round_four_record_still_answers(tmp_path, monkeypatch):
+    """An ask posted by the round-4 daemon (record without go/change): 对 is
+    zero-call, 需要改 the guarded turn."""
+    tc, deps, pid, sid, ws, ask_id, _ = _confirm_env(tmp_path, keyed=True)
+    deps["project_store"].update_project(pid, {import_scan.ASK_FIELD: {
+        "id": ask_id, "session_id": sid, "yes": "对"}})
+    sent = _spy_inject(monkeypatch, deps["agent_manager"])
+    _answer(tc, pid, sid, ask_id, "需要改")
+    assert len(sent) == 1 and "<orbital_turn_note>" in sent[0]

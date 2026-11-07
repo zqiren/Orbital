@@ -19,9 +19,12 @@ export function parseAskAnswer(content: string): { question: string | null; rest
 
 /** Spec 160 round 4: the one-turn daemon note the inject route folds into an
  *  answer to the import scan's confirm card. The model reads it on that turn;
- *  the chat never shows it. */
-const TURN_NOTE_RE = /\s*<orbital_turn_note>[\s\S]*?<\/orbital_turn_note>/g;
+ *  the chat never shows it. Round 5: the same for the approval a 对，做第 1 步
+ *  tap carries (`<orbital_picked_step>`): the bubble shows the tap. */
+const TURN_NOTE_RE = /\s*<(orbital_turn_note|orbital_picked_step)>[\s\S]*?<\/\1>/g;
 
 export function stripTurnNote(content: string): string {
-  return content.includes('<orbital_turn_note>') ? content.replace(TURN_NOTE_RE, '') : content;
+  return content.includes('<orbital_turn_note>') || content.includes('<orbital_picked_step>')
+    ? content.replace(TURN_NOTE_RE, '')
+    : content;
 }

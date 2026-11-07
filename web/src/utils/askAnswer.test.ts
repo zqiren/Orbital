@@ -14,6 +14,15 @@ describe('stripTurnNote (spec 160 round 4)', () => {
     expect(parseAskAnswer(shown)).toEqual({ question: '这样理解对吗？', rest: '不对，是公众号连载' });
   });
 
+  it('hides the picked-step approval behind a tap (round 5); the bubble shows the tap', () => {
+    const wire = `${formatAskAnswer('abc123', '这样理解对吗？', '对，做第 1 步')}\n\n`
+      + '<orbital_picked_step>对，按第 1 步开始：实现 dumps() 并补测试</orbital_picked_step>';
+    const shown = stripTurnNote(wire);
+    expect(shown).not.toContain('orbital_picked_step');
+    expect(shown).not.toContain('dumps()');
+    expect(parseAskAnswer(shown)).toEqual({ question: '这样理解对吗？', rest: '对，做第 1 步' });
+  });
+
   it('leaves every other message byte-identical', () => {
     const plain = 'Fix the <b>tag</b> in README\n\nthanks';
     expect(stripTurnNote(plain)).toBe(plain);

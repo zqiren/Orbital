@@ -48,6 +48,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
@@ -103,7 +104,30 @@ CONFIRM_ASK = {
     "zh": ("这样理解对吗？", "对", "需要改"),
     "en": ("Did I get this right?", "Yes", "Needs changes"),
 }
-# On the project: {"id": <ask id>, "session_id": <scan session>, "yes": <opt>}.
+# Round 5: the scan recorded next steps (PROJECT_STATE's ``## Next steps``):
+# the card lists them as its detail and offers step 1.
+# ``(question, go, not-now, needs-changes)``: go runs step 1 (one run, the
+# user's go), not-now is the zero-call close, needs-changes the guarded turn.
+CONFIRM_ASK_STEPS = {
+    "zh": ("这样理解对吗？", "对，做第 1 步", "对，先不做", "需要改"),
+    "en": ("Did I get this right?", "Yes, do step 1", "Yes, not now", "Needs changes"),
+}
+# The words step 1's run carries after the user's tap (hidden from the
+# bubble, kept in context): an explicit approval naming the step.
+PICKED_STEP_OPEN = "<orbital_picked_step>"
+PICKED_STEP_CLOSE = "</orbital_picked_step>"
+PICKED_STEP = {
+    "zh": "对，按第 1 步开始：{step}",
+    "en": "Yes, go ahead with step 1: {step}",
+}
+# A bare yes typed (or tapped) on either card is always the zero-call close
+# (the round-3 bug: a bare 对 became the go-ahead). Compared after
+# ``_norm_answer``.
+BARE_YES = frozenset({"对", "对的", "是的", "没错", "yes", "correct"})
+MAX_STEPS = 3
+# On the project: {"id": <ask id>, "session_id": <scan session>,
+# "yes": <zero-call option>, "change": <needs-changes option>} plus, with
+# steps, "go": <do-step-1 option> and "steps": [<text>, ...].
 ASK_FIELD = "import_scan_ask"
 
 # The one-turn instruction a non-yes answer carries (folded into that user
@@ -125,6 +149,90 @@ TURN_NOTES = {
 
 def confirm_ask(lang: str) -> tuple[str, str, str]:
     return CONFIRM_ASK.get(lang, CONFIRM_ASK["en"])
+
+
+def confirm_ask_steps(lang: str) -> tuple[str, str, str, str]:
+    return CONFIRM_ASK_STEPS.get(lang, CONFIRM_ASK_STEPS["en"])
+
+
+def picked_step_block(lang: str, step: str) -> str:
+    text = PICKED_STEP.get(lang, PICKED_STEP["en"]).format(step=" ".join(step.split()))
+    return f"{PICKED_STEP_OPEN}{text}{PICKED_STEP_CLOSE}"
+
+
+_STEPS_HEADING_RE = re.compile(r"^#{2,6}\s+.*(next\s+steps?|下一步)", re.IGNORECASE)
+_HEADING_RE = re.compile(r"^#{1,6}\s")
+_ITEM_RE = re.compile(r"^(?:[-*+]|\d+[.)])\s+(.*\S)")
+_PLACEHOLDER_RE = re.compile(r"^[(（].*[)）]$|^(none|无|暂无|n/a)[.。]?$", re.IGNORECASE)
+
+
+def next_steps(workspace: str) -> list[str]:
+    """Round 5: the next steps the scan recorded — the items under the first
+    ``## Next steps`` (or ``下一步``) heading of ``orbital/PROJECT_STATE.md``,
+    top-level bullets or numbered lines only (indented detail and the
+    daemon's mem-comments are not steps), placeholders like "(none yet)"
+    dropped, at most 3. ``[]`` when the file or the section is missing.
+    A file the run wrote is the record: no chat text is parsed, and a
+    worker runner writes it the same way."""
+    if not workspace:
+        return []
+    from agent_os.agent.project_paths import ProjectPaths
+    try:
+        with open(ProjectPaths(workspace).project_state, encoding="utf-8",
+                  errors="replace") as fh:
+            lines = fh.read().splitlines()
+    except OSError:
+        return []
+    steps: list[str] = []
+    inside = False
+    for line in lines:
+        if _HEADING_RE.match(line):
+            if inside:
+                break
+            inside = bool(_STEPS_HEADING_RE.match(line))
+            continue
+        if not inside:
+            continue
+        m = _ITEM_RE.match(line)
+        if not m:
+            continue
+        text = " ".join(m.group(1).split())
+        if _PLACEHOLDER_RE.match(text):
+            continue
+        steps.append(text)
+        if len(steps) >= MAX_STEPS:
+            break
+    return steps
+
+
+def _norm_answer(text: str | None) -> str:
+    return " ".join((text or "").split()).strip(" 。.!！~～,，、").casefold()
+
+
+def classify_answer(rec: dict, words: str | None, lang: str) -> str:
+    """What the answer to the scan's confirm card asks for:
+
+    * ``"yes"`` — the zero-call close: the card's not-now / 对 option, or a
+      bare yes typed on either card;
+    * ``"go"`` — the do-step-1 option: one run, the user's go;
+    * ``"change"`` — the 需要改 option: one guarded turn;
+    * ``"message"`` — anything else typed: the user's own message, sent as
+      is (the daemon can't tell a correction from "做第 2 步").
+
+    Options are matched as exact text (normalised for spaces, closing
+    punctuation and case), so a tap and the same words typed are one answer.
+    A round-4 record (no ``change``) falls back to the language's label."""
+    said = _norm_answer(words)
+    if not said:
+        return "message"
+    if said == _norm_answer(rec.get("yes")) or said in BARE_YES:
+        return "yes"
+    if rec.get("go") and rec.get("steps") and said == _norm_answer(rec.get("go")):
+        return "go"
+    change = rec.get("change") or confirm_ask(lang)[2]
+    if said == _norm_answer(change):
+        return "change"
+    return "message"
 
 
 def turn_note_block(lang: str) -> str:

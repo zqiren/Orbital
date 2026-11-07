@@ -651,7 +651,10 @@ class TestKeylessImportScan:
         assert text.startswith("You are claude-code working directly")
         assert "STAGE 3 — WRITE YOUR GUESS → ASK" in text
         assert "这样理解对吗" not in text            # round 4: the daemon asks
-        assert "do not suggest a next step or task" in " ".join(text.split())
+        # Round 5: the worker records 1-3 next steps for the card, starts none.
+        flat = " ".join(text.split())
+        assert "`## Next steps` heading (exactly that heading" in flat
+        assert "do not start any step" in flat
         assert "README.md" in text and "orbital/" not in text.split("[WORKSPACE SKELETON]")[-1]
         meta = _rows(ws, sid)[0]
         assert meta["name"] == "项目梳理" and "name_provisional" not in meta

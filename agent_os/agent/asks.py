@@ -562,20 +562,24 @@ def open_ask(
     *,
     due: str | None = None,
     today: str | None = None,
+    detail: str = "",
 ) -> Ask | None:
     """Open one ask with a fresh id. ``None`` (no write) when an ask with the
-    same text is already open."""
+    same text is already open. ``detail``: markdown written as the indented
+    lines under the open line (spec 160 round 5: the scan's next steps)."""
     today = today or _today()
     text = _one_line(text)
     if not text:
         raise ValueError("an ask needs text")
+    detail = "\n".join(ln.rstrip() for ln in (detail or "").strip("\n").split("\n")).strip()
 
     def build(by_id):
         key = _norm(text)
         if any(a.is_open and _norm(a.text) == key for a in by_id.values()):
             return [], None
-        e = Event("open", _mint_id(by_id), today, None, text, due)
-        ask = Ask(e.id, text, due, today, "open", today, None, "", len(by_id))
+        e = Event("open", _mint_id(by_id), today, None, text, due, detail=detail)
+        ask = Ask(e.id, text, due, today, "open", today, None, "", len(by_id),
+                  detail=detail)
         return [render_event(e)], ask
 
     return _append_lines(orbital_dir, build, today)
