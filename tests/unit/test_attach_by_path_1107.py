@@ -13,6 +13,7 @@ the attachment is a read grant for every agent in the project.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import subprocess
 from types import SimpleNamespace
@@ -175,11 +176,13 @@ class TestGrants:
         assert not attachment_grants.is_granted("p1", "a.txt")
 
     def test_local_paths_parsed_from_prefix(self):
+        # A platform-absolute path ("C:\\Users\\…" on Windows, "/Users/…" elsewhere).
+        local = os.path.abspath(os.path.join(os.sep, "Users", "me", "My (draft).txt"))
         content = ("<attached_files>\n"
                    "- uploads/shot.png (image/png, 2.0 KB)\n"
-                   "- /Users/me/My (draft).txt (text/plain, 5 B, the user's local file, not copied)\n"
+                   f"- {local} (text/plain, 5 B, the user's local file, not copied)\n"
                    "</attached_files>\n\nhi")
-        assert attachment_grants.local_paths_in(content) == ["/Users/me/My (draft).txt"]
+        assert attachment_grants.local_paths_in(content) == [local]
 
     def test_hydrate_from_session_rows_once_and_skips_missing(self, tmp_path):
         f = tmp_path / "keep.txt"
@@ -393,7 +396,9 @@ class TestDesktopPickFiles:
         assert [e["name"] for e in out] == ["a.txt"]
         js = native_drop_js(out)
         assert js.startswith('window.dispatchEvent(new CustomEvent("orbital:native-drop"')
-        assert os.path.realpath(str(a)) in js
+        # The path rides inside a JSON string, so compare it JSON-escaped
+        # (backslashes double on Windows).
+        assert json.dumps(os.path.realpath(str(a)))[1:-1] in js
 
 
 class TestShellFocusNote:
@@ -417,5 +422,5 @@ class TestShellFocusNote:
         out = tool.execute(command=f"head -1 {f} {other}")
         assert "[focus]" in out.content
         warning = out.content.split("\n", 1)[0]
-        assert "home/b.txt" in warning
-        assert "home/a.txt" not in warning
+        assert os.path.join("home", "b.txt") in warning
+        assert os.path.join("home", "a.txt") not in warning

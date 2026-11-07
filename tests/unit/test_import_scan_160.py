@@ -946,14 +946,16 @@ def test_a_queued_project_turned_off_before_its_turn_is_not_started(store, tmp_p
         q.kick("card_created")
         for _ in range(30):
             await asyncio.sleep(0)
-        assert runner.started == [a, b]          # c waits for a slot
+        # a and b take the two slots together; their start order is not
+        # deterministic (it differs on Windows), only that c waits.
+        assert sorted(runner.started) == sorted([a, b])
         turn_off_waiting(store)                  # running a/b untouched, c off
         runner.release.set()
         await q.idle()
         return runner
 
     runner = _run(go())
-    assert runner.started == [a, b]
+    assert sorted(runner.started) == sorted([a, b])
     assert store.get_project(c)[import_scan.STATE_FIELD] == OFF
     assert store.get_project(a)[import_scan.STATE_FIELD] == DONE
 
