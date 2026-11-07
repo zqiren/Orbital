@@ -67,7 +67,8 @@ class ReadTool(Tool):
                  read_roots: Callable[[], list[str]] | None = None,
                  context_window: int | None = None,
                  open_reads: Callable[[], bool] | None = None,
-                 cross_project: bool | None = None):
+                 cross_project: bool | None = None,
+                 memory_roots: Callable[[], list[str]] | None = None):
         # ``cross_project`` picks the LLM-facing text: the scratch (Quick
         # Tasks) wording that names other in-scope projects, or the normal
         # single-root wording. Defaults to "a root callable was given" so
@@ -84,6 +85,9 @@ class ReadTool(Tool):
         # Spec 117 D3: ``open_reads()`` True → the project's safe mode is OFF
         # and any absolute path on disk is readable. Read per call.
         self._open_reads = open_reads
+        # The in-scope project roots whose memory files are readable (Quick
+        # Tasks, 2026-11-07). Per call, like ``read_roots``; None → none.
+        self._memory_roots = memory_roots
         self.name = "read"
         if not cross_project:
             self.description = "Read a file or list a directory within the workspace."
@@ -97,7 +101,9 @@ class ReadTool(Tool):
             path_desc = (
                 "Relative path (e.g. 'src/main.py') reads from YOUR workspace. To "
                 "read a file in another in-scope project, pass its ABSOLUTE path. "
-                "Other projects' orbital/ and .git/ internals are not readable."
+                "Other projects' orbital/ and .git/ internals are not readable, "
+                "except their memory files: orbital/instructions/project_goals.md, "
+                "orbital/PROJECT_STATE.md, orbital/INDEX.md, orbital/DECISIONS.md."
             )
         # NOTE: the pagination contract lives in the offset/limit parameter
         # descriptions rather than in ``self.description``. Both go to the
@@ -159,7 +165,8 @@ class ReadTool(Tool):
             if not roots:
                 roots = [self._workspace]
             resolved = resolve_safe_read(
-                roots, path, open_reads=open_reads_active(self._open_reads))
+                roots, path, open_reads=open_reads_active(self._open_reads),
+                memory_roots=self._memory_roots() if self._memory_roots else None)
             if resolved is None:
                 return ToolResult(content=f"Error: path outside workspace: {path}")
 

@@ -145,10 +145,15 @@ export default function WorkbenchPage({
     async (choice: SendChoice, uploadAll: NonNullable<SendDeps['uploadAll']>) => {
       setOpenError(null);
       const outcome = await sendWorkbenchTask(choice, { newSession, injectMessage, uploadAll });
-      if (!outcome.ok) setOpenError(t('workbench.error.open'));
+      // No project found: the composer shows its own line and the picker.
+      if (!outcome.ok) {
+        if (outcome.unrouted) return 'unrouted' as const;
+        setOpenError(t('workbench.error.open'));
+        return false;
+      }
       // A routed send too: the next keyless default is where the last task went.
-      else rememberLastProject(outcome.projectId);
-      return outcome.ok;
+      rememberLastProject(outcome.projectId);
+      return true;
     },
     [newSession, injectMessage, t],
   );

@@ -712,6 +712,17 @@ class LLMProvider:
         ``mm:think``)."""
         return getattr(self.reasoning, "inline_tag", "think") or "think"
 
+    def set_sdk_max_retries(self, n: int) -> None:
+        """Set the SDK client's own automatic retries (default 2, with
+        backoff). A caller with its own deadline and retry, the Workbench
+        router, sets 0 so the SDK's backoff on a 429/5xx cannot spend its
+        budget unseen. Applies to this instance only."""
+        self._sdk_max_retries = n
+        if self._openai_client is not None:
+            self._openai_client = self._openai_client.with_options(max_retries=n)
+        if self._anthropic_client is not None:
+            self._anthropic_client = self._anthropic_client.with_options(max_retries=n)
+
     def update_api_key(self, new_key: str) -> None:
         """Hot-swap the API key, reconstructing the underlying client."""
         if new_key == self.api_key:
@@ -724,6 +735,9 @@ class LLMProvider:
         else:
             self._openai_client = openai.AsyncOpenAI(
                 base_url=self.base_url, api_key=new_key, default_headers=self.extra_headers)
+        retries = getattr(self, "_sdk_max_retries", None)
+        if retries is not None:
+            self.set_sdk_max_retries(retries)
 
     def _prepare_messages_openai(self, messages: list) -> list:
         """Prepare messages for OpenAI SDK: strip internal fields, handle multimodal

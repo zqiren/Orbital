@@ -451,6 +451,76 @@ describe('Workbench — send', () => {
     expect(cards()).toHaveLength(0);
   });
 
+  it('routing failed (2026-11-07): no session, the text is back, one error line on the composer, the picker open', async () => {
+    await renderPage([], {
+      'POST /api/v2/workbench/route': () => ({ project_id: null, by: 'failed', reason: 'timeout', attempts: 2 }),
+    });
+    fireEvent.change(screen.getByTestId('wb-composer-input'), { target: { value: '记一个问题' } });
+    fireEvent.click(screen.getByTestId('wb-composer-send'));
+    await waitFor(() => expect(screen.getByTestId('wb-route-error')).toBeInTheDocument());
+    expect(screen.getByTestId('wb-route-error')).toHaveTextContent("Couldn't pick a project. Choose one and send again.");
+    await waitFor(() => expect(screen.getByTestId('wb-composer-input')).toHaveValue('记一个问题'));
+    expect(screen.getByTestId('wb-pop-project')).toBeInTheDocument();
+    // One error line only: not the page's open-error banner as well.
+    expect(screen.queryByTestId('workbench-open-error')).toBeNull();
+    expect(apiMock.mock.calls.some((c) => String(c[0]).endsWith('/new-session'))).toBe(false);
+    expect(cards()).toHaveLength(0);
+    // The error sits at the top of the composer box, above the text.
+    const box = screen.getByTestId('wb-composer-box');
+    expect(box.firstElementChild).toBe(screen.getByTestId('wb-route-error'));
+  });
+
+  it('routing failed: picking a project clears the error, and that send goes to the pick', async () => {
+    let injected: Record<string, unknown> | null = null;
+    await renderPage([], {
+      'POST /api/v2/workbench/route': () => ({ project_id: null, by: 'failed', reason: 'call_failed', attempts: 2 }),
+      'POST /api/v2/agents/proj-a/new-session': () => ({ session_id: 'new-7', pinned_target: null }),
+      'POST /api/v2/agents/proj-a/inject': (init) => { injected = JSON.parse(init!.body!); return { status: 'started' }; },
+    });
+    fireEvent.change(screen.getByTestId('wb-composer-input'), { target: { value: 'file this' } });
+    fireEvent.click(screen.getByTestId('wb-composer-send'));
+    await waitFor(() => expect(screen.getByTestId('wb-pop-project')).toBeInTheDocument());
+    fireEvent.click(within(screen.getByTestId('wb-pop-project')).getByText('Marketing'));
+    expect(screen.queryByTestId('wb-route-error')).toBeNull();
+    fireEvent.click(screen.getByTestId('wb-composer-send'));
+    await waitFor(() => expect(injected).not.toBeNull());
+    expect(injected).toMatchObject({ content: 'file this', session_id: 'new-7' });
+  });
+
+  it('routing failed: the next send clears the error', async () => {
+    let calls = 0;
+    await renderPage([], {
+      'POST /api/v2/workbench/route': () => {
+        calls += 1;
+        return calls === 1
+          ? { project_id: null, by: 'failed', reason: 'timeout', attempts: 2 }
+          : new Promise(() => {}); // the second send is still routing
+      },
+    });
+    fireEvent.change(screen.getByTestId('wb-composer-input'), { target: { value: 'again' } });
+    fireEvent.click(screen.getByTestId('wb-composer-send'));
+    await waitFor(() => expect(screen.getByTestId('wb-route-error')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('wb-composer-input')).toHaveValue('again'));
+    fireEvent.keyDown(window, { key: 'Escape' });
+    fireEvent.click(screen.getByTestId('wb-composer-send'));
+    expect(screen.queryByTestId('wb-route-error')).toBeNull();
+  });
+
+  it('routing failed: staged attachments stay in the composer and nothing uploaded', async () => {
+    uploadMock.mockReset();
+    await renderPage([], {
+      'POST /api/v2/workbench/route': () => ({ project_id: null, by: 'failed', reason: 'timeout', attempts: 1 }),
+    });
+    fireEvent.change(screen.getByTestId('wb-attach-input'), {
+      target: { files: [new File(['hi'], 'spec.txt', { type: 'text/plain' })] },
+    });
+    fireEvent.change(screen.getByTestId('wb-composer-input'), { target: { value: 'with a file' } });
+    fireEvent.click(screen.getByTestId('wb-composer-send'));
+    await waitFor(() => expect(screen.getByTestId('wb-route-error')).toBeInTheDocument());
+    expect(within(screen.getByTestId('wb-chip-strip')).getByText('spec.txt')).toBeInTheDocument();
+    expect(uploadMock).not.toHaveBeenCalled();
+  });
+
   it('an unsent draft from the last page load comes back into the composer', async () => {
     localStorage.setItem(DRAFT_KEY, JSON.stringify({ text: 'half sent', nonce: 'n', project_id: null, session_id: null }));
     await renderPage([]);

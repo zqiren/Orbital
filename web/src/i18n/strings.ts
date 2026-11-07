@@ -1469,6 +1469,7 @@ export const STRINGS = {
   "workbench.composer.needsKey": { en: "Needs an API key", zh: "需要 API Key" },
   "workbench.composer.placeholder": { en: "What do you want done?", zh: "今天要做什么？" },
   "workbench.composer.project": { en: "Project", zh: "项目" },
+  "workbench.composer.routeFailed": { en: "Couldn't pick a project. Choose one and send again.", zh: "没判断出发到哪个项目，选一个再发" },
   "workbench.composer.send": { en: "Send", zh: "发送" },
   "workbench.composer.whoDoesWhat": { en: "Tell Orbital who does what", zh: "告诉 Orbital 谁做什么" },
   "workbench.filter.all": { en: "All projects", zh: "全部项目" },
