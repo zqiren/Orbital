@@ -267,7 +267,8 @@ def test_a_stale_pid_file_admits_exactly_one_racer(tmp_path):
             time.sleep(0.005)
         try:
             acquire_pid_file(pathlib.Path({str(pid_path)!r}))
-            print("acquired")
+            print("acquired", flush=True)
+            time.sleep(1.5)  # a daemon stays up; exiting would free the file
         except DaemonAlreadyRunning:
             print("refused")
     """)
@@ -303,3 +304,20 @@ def test_a_live_pid_file_is_still_refused(tmp_path):
     finally:
         holder.kill()
         holder.wait()
+
+
+def test_a_claim_in_progress_is_waited_for_then_refused(tmp_path, monkeypatch):
+    """A daemon that can't get the claim lock must not race the holder."""
+    from agent_os.utils import pid_file
+    from agent_os.utils.file_lock import DirectFileLock
+
+    monkeypatch.setattr(pid_file, "_CLAIM_LOCK_TIMEOUT_S", 0.1)
+    pid_path = tmp_path / "daemon.pid"
+    holder = DirectFileLock(f"{pid_path}.lock")
+    holder.acquire()
+    try:
+        with pytest.raises(pid_file.DaemonAlreadyRunning):
+            pid_file.acquire_pid_file(pid_path)
+    finally:
+        holder.release()
+    assert not pid_path.exists()

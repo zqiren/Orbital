@@ -24,9 +24,15 @@ import json
 import logging
 import os
 import sys
+import time
 from pathlib import Path
 
+from agent_os.utils.file_lock import DirectFileLock, FileLockError
+
 logger = logging.getLogger(__name__)
+
+# How long a starting daemon waits for another one to finish claiming the file.
+_CLAIM_LOCK_TIMEOUT_S = 5.0
 
 _DEFAULT_PID_PATH = Path.home() / "orbital" / "daemon.pid"
 _active_pid_path: Path | None = None
@@ -147,25 +153,28 @@ def _is_process_alive(pid: int) -> bool:
         return False
 
 
-def acquire_pid_file(pid_path: Path | None = None) -> None:
-    """Write PID file, refusing to start if another instance is alive.
+def _hold_claim_lock(path: Path) -> DirectFileLock:
+    """Take the lock that serialises claiming ``path``.
 
-    Args:
-        pid_path: Path for the PID file. Defaults to ~/orbital/daemon.pid.
-
-    Raises:
-        DaemonAlreadyRunning: If an existing daemon process is alive.
+    Exclusive create only protects the create. Reclaiming a stale file also
+    unlinks it, and a racer that judged the file stale could unlink the file
+    another racer had just claimed, then create its own: two daemons, each
+    holding a PID file. The whole claim therefore runs under this lock, which
+    the OS drops if its holder dies.
     """
-    global _active_pid_path
-    path = pid_path or _DEFAULT_PID_PATH
-    path = Path(path)
+    lock = DirectFileLock(f"{path}.lock")
+    deadline = time.monotonic() + _CLAIM_LOCK_TIMEOUT_S
+    while True:
+        try:
+            lock.acquire()
+            return lock
+        except FileLockError:
+            if time.monotonic() >= deadline:
+                raise DaemonAlreadyRunning(-1) from None
+            time.sleep(0.02)
 
-    # Idempotent: if we already own this PID file, allow re-acquire
-    if _active_pid_path is not None and _active_pid_path.resolve() == path.resolve():
-        return
 
-    path.parent.mkdir(parents=True, exist_ok=True)
-
+def _claim_pid_file(path: Path) -> None:
     # Claim the file by CREATING it exclusively. Reading, judging the PID dead,
     # and then writing are three steps, and two daemons starting together both
     # passed the judgement before either wrote — that is how two instances came
@@ -212,6 +221,32 @@ def acquire_pid_file(pid_path: Path | None = None) -> None:
             os.unlink(str(path))
         except FileNotFoundError:
             pass
+
+
+def acquire_pid_file(pid_path: Path | None = None) -> None:
+    """Write PID file, refusing to start if another instance is alive.
+
+    Args:
+        pid_path: Path for the PID file. Defaults to ~/orbital/daemon.pid.
+
+    Raises:
+        DaemonAlreadyRunning: If an existing daemon process is alive.
+    """
+    global _active_pid_path
+    path = pid_path or _DEFAULT_PID_PATH
+    path = Path(path)
+
+    # Idempotent: if we already own this PID file, allow re-acquire
+    if _active_pid_path is not None and _active_pid_path.resolve() == path.resolve():
+        return
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    lock = _hold_claim_lock(path)
+    try:
+        _claim_pid_file(path)
+    finally:
+        lock.release()
 
     _write_meta(path)
     _active_pid_path = path
