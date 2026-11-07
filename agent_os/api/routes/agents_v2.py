@@ -1689,16 +1689,33 @@ async def post_scan_confirm(project_id: str, session_id: str) -> str | None:
     """Spec 160 round 4: the scan wrote its guess; the DAEMON asks whether it
     is right — an ask card (这样理解对吗？ · 对 | 需要改) through the asks write
     path, plus the ``ask_opened`` row an agent-opened ask gets, so the
-    composer and the Workbench show it. Returns the ask id."""
+    composer and the Workbench show it. Returns the ask id.
+
+    Round 5: when the scan recorded next steps (PROJECT_STATE's ``## Next
+    steps``), the card lists them as its detail and offers step 1
+    (对，做第 1 步 | 对，先不做 | 需要改)."""
     from agent_os.agent import asks
     from agent_os.agent.context import ask_card_row
-    from agent_os.onboarding.import_scan import ASK_FIELD, confirm_ask, guess_lang
+    from agent_os.onboarding.import_scan import (
+        ASK_FIELD, confirm_ask, confirm_ask_steps, guess_lang, next_steps,
+    )
     project = _project_store.get_project(project_id)
     if not project:
         return None
-    question, yes, no = confirm_ask(guess_lang(project))
-    orbital = ProjectPaths(project.get("workspace", "")).orbital_dir
-    opened = await asyncio.to_thread(asks.open_ask, orbital, f"{question} options: {yes} | {no}")
+    lang = guess_lang(project)
+    workspace = project.get("workspace", "")
+    steps = await asyncio.to_thread(next_steps, workspace)
+    if steps:
+        question, go, yes, no = confirm_ask_steps(lang)
+        text = f"{question} options: {go} | {yes} | {no}"
+        detail = "\n".join(f"{i}. {step}" for i, step in enumerate(steps, 1))
+        record = {"yes": yes, "change": no, "go": go, "steps": steps}
+    else:
+        question, yes, no = confirm_ask(lang)
+        text, detail = f"{question} options: {yes} | {no}", ""
+        record = {"yes": yes, "change": no}
+    orbital = ProjectPaths(workspace).orbital_dir
+    opened = await asyncio.to_thread(asks.open_ask, orbital, text, detail=detail)
     if opened is None:
         return None  # the same question is already open in this project
     folded = {a.id: a for a in await asyncio.to_thread(asks.read_asks, orbital)}
@@ -1708,7 +1725,7 @@ async def post_scan_confirm(project_id: str, session_id: str) -> str | None:
     await _retry_session_lock(
         lambda: _agent_manager.persist_mention_message(project_id, session_id, row))
     _project_store.update_project(project_id, {ASK_FIELD: {
-        "id": opened.id, "session_id": session_id, "yes": yes}})
+        "id": opened.id, "session_id": session_id, **record}})
     if _ws_manager is not None:
         _ws_manager.broadcast(project_id, {"type": "workbench.changed",
                                            "project_id": project_id})
@@ -1990,16 +2007,27 @@ async def inject_message(project_id: str, req: InjectRequest):
     turn_note = ""
     if req.ask_id:
         from agent_os.api.routes.workbench import close_answered_ask
-        from agent_os.onboarding.import_scan import guess_lang, scan_ask_of, turn_note_block
+        from agent_os.onboarding.import_scan import (
+            classify_answer, guess_lang, picked_step_block, scan_ask_of, turn_note_block,
+        )
         scan_ask = scan_ask_of(project, req.ask_id)
         close_answered_ask(project, req.ask_id, req.ask_answer or req.content)
         if scan_ask is not None:
-            # Spec 160 round 4: the import scan's confirm card. Its yes option
-            # is answered by the daemon alone; anything else runs one turn
-            # with the guard instruction folded into this message only.
-            if (req.ask_answer or "").strip() == scan_ask.get("yes"):
+            # Spec 160 round 4/5: the import scan's confirm card.
+            # * yes / not-now (or a bare 对 typed): the daemon alone, no run;
+            # * do step 1: one run carrying an explicit approval of step 1
+            #   (hidden from the bubble; a real reply, so the gate opens);
+            # * needs-changes: one turn with the guard instruction folded
+            #   into this message only (the gate holds through it);
+            # * anything else typed: the user's own message, as is.
+            lang = guess_lang(project)
+            kind = classify_answer(scan_ask, req.ask_answer or req.content, lang)
+            if kind == "yes":
                 return await _record_scan_yes(project_id, req)
-            turn_note = "\n\n" + turn_note_block(guess_lang(project))
+            if kind == "go":
+                turn_note = "\n\n" + picked_step_block(lang, scan_ask["steps"][0])
+            elif kind == "change":
+                turn_note = "\n\n" + turn_note_block(lang)
 
     # Single-slot enforcement now lives at the MANAGER level: start_agent()
     # raises ValueError("Slot held by session …") when a different session

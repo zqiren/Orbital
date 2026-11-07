@@ -109,17 +109,22 @@ def _shared_memory_bullet(indent: str, lang: str | None = None) -> str:
 
 def _guess_reply(lang: str, multi_agent: bool) -> str:
     """How the guess-first run ends. Round 4: no closing question — the
-    daemon posts the confirm card itself once the goals file exists."""
+    daemon posts the confirm card itself once the goals file exists. Round 5:
+    the summary ends with the 1-3 next steps the run recorded under
+    PROJECT_STATE's ``## Next steps`` (the card offers step 1 from there);
+    none is started."""
     language = "Chinese (简体中文)" if lang == "zh" else "English"
     text = (
         f"- Reply to the user in {language}, plain words, no file names, at most 5 short\n"
-        "  lines: what you think this project is for and where it stands.\n"
+        "  lines before the steps: what you think this project is for and where it stands.\n"
     )
     if multi_agent:
         text += _shared_memory_bullet("", "zh" if lang == "zh" else "en")
     return text + (
-        "- Do not ask a question and do not suggest a next step or task: Orbital asks the\n"
-        "  user whether your understanding is right once you stop.\n"
+        "- End the reply with the same steps, numbered (1. …), in the same order as in\n"
+        "  PROJECT_STATE.md; none when you wrote none.\n"
+        "- Do not ask a question and do not start any step: Orbital asks the user whether\n"
+        "  your understanding is right, and offers your step 1, once you stop.\n"
         "- That summary is your final message, as plain text, not a tool call (do not call\n"
         "  mark_task_complete). Then stop. Do not start any work or dispatch an agent in this run."
     )
@@ -159,7 +164,10 @@ def guess_first_instruction(workspace: str, *, lang: str = "en",
         "STAGE 3 — WRITE YOUR GUESS → ASK:\n"
         "- Do not wait for a confirmation before writing; the guess is the point. With the\n"
         "  `write` tool, in this order:\n"
-        "  (1) orbital/PROJECT_STATE.md (current focus, in-progress work, next steps),\n"
+        "  (1) orbital/PROJECT_STATE.md (current focus, in-progress work, and under a\n"
+        "  `## Next steps` heading (exactly that heading, whatever the language) 1-3 concrete\n"
+        "  next steps, never more than 3, as `- ` bullets, best first, each grounded in what\n"
+        "  you read; leave the heading out when nothing is clearly next),\n"
         "  (2) orbital/INDEX.md (navigation map: important files/dirs, one line each),\n"
         "  (3) LAST, your best guess at the Goals to\n"
         f"  {workspace}/orbital/instructions/project_goals.md (Mission, Triggers, Scope,\n"
