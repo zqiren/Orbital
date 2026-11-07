@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import os
 
+import pytest
+
 from agent_os.platform.null import NullProvider
 
 
@@ -23,7 +25,10 @@ def test_scope_is_compared_by_realpath(tmp_path):
     real = tmp_path / "real"
     real.mkdir()
     link = tmp_path / "link"
-    os.symlink(real, link)
+    try:
+        os.symlink(real, link)
+    except OSError:
+        pytest.skip("creating symlinks needs a privilege on this machine")
     provider = NullProvider()
     provider.grant_folder_access("/data", "read_write", scope=str(link))
     assert provider.portal_paths_for_scope(str(real)) == {"/data": "read_write"}
