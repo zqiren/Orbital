@@ -324,6 +324,16 @@ class TestDispatch:
             "result": {"turn": {"id": "U1"}}})
         await asyncio.wait_for(task, timeout=2.0)
 
+    def test_external_sandbox_follows_the_environment(self, monkeypatch):
+        monkeypatch.setenv("AGENT_OS_EXTERNAL_SANDBOX", "1")
+        assert _transport()._external_sandbox is True
+        monkeypatch.delenv("AGENT_OS_EXTERNAL_SANDBOX")
+        assert _transport()._external_sandbox is False
+
+    def test_explicit_external_sandbox_wins_over_the_environment(self, monkeypatch):
+        monkeypatch.setenv("AGENT_OS_EXTERNAL_SANDBOX", "1")
+        assert _transport(external_sandbox=False)._external_sandbox is False
+
 
 class TestApprovals:
     REQUEST = {"jsonrpc": "2.0", "id": 0,

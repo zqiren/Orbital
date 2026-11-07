@@ -153,7 +153,7 @@ class CodexTransport(AgentTransport):
 
     def __init__(self, autonomy: "Autonomy | None" = None,
                  resume_record: dict | None = None,
-                 external_sandbox: bool = False):
+                 external_sandbox: bool | None = None):
         record = resume_record or {}
         # Same attribute name as SDKTransport: the manager's honesty
         # downgrade (sub_agent_manager.py ~731) compares it to the record.
@@ -168,6 +168,11 @@ class CodexTransport(AgentTransport):
         # Spec 149: reasoning effort from argv, sent on each turn/start.
         self._effort: str | None = None
         self._autonomy: Autonomy | None = autonomy
+        # A container is the sandbox there, and it can't host Codex's own:
+        # bubblewrap needs user namespaces, which Docker's default seccomp
+        # profile denies, so every command would fail.
+        if external_sandbox is None:
+            external_sandbox = bool(os.environ.get("AGENT_OS_EXTERNAL_SANDBOX"))
         self._external_sandbox = external_sandbox
         self._alive = False
         self._workspace = ""

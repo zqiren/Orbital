@@ -56,6 +56,7 @@ ENV HOME=/home/orbital \
     AGENT_OS_SPA_DIR=/app/web/dist \
     AGENT_OS_DATA_DIR=/home/orbital/.orbital \
     AGENT_OS_UPDATE_CHECK=0 \
+    AGENT_OS_EXTERNAL_SANDBOX=1 \
     PYTHON_KEYRING_BACKEND=keyrings.alt.file.PlaintextKeyring \
     NPM_CONFIG_PREFIX=/home/orbital/.npm-global \
     PATH=/home/orbital/.npm-global/bin:/home/orbital/.local/bin:/usr/local/bin:/usr/bin:/bin
