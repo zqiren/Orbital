@@ -91,16 +91,16 @@ The worker can change. The project continues.
 
 > Want the step-by-step version with screenshots? See the **[Orbital user guide](https://orbital.top/en/guide/)**: API keys, projects, switching agents, the task queue, automations and project settings.
 
-1. **Launch Orbital** — the setup wizard guides you through two steps:
+1. **Launch Orbital** — the setup wizard walks you through four steps: first confirm the coding agents Orbital found on this computer, then import the projects you already worked on with them (both can be skipped), then set the API key and connect your accounts.
 
-   **Step 1 — LLM Provider:** In mainland China, tap **Sign in with TokenDance**, authorize, and start on free tokens. Otherwise pick a provider from the preset cards, follow the key-console link to grab an API key, and paste it in. Supports DeepSeek, Anthropic, OpenAI, Moonshot, and a dozen other providers.
+   **Step 3 — LLM Provider:** In mainland China, tap **Sign in with TokenDance**, authorize, and start on free tokens. Otherwise pick a provider from the preset cards, follow the key-console link to grab an API key, and paste it in. Supports DeepSeek, Anthropic, OpenAI, Moonshot, and a dozen other providers.
 
-   <p align="center"><img src="docs/screenshots/apikey-setup.png" alt="Setup wizard step 1: pick an LLM provider from preset cards and enter your API key" width="480"></p>
+   <p align="center"><img src="docs/screenshots/apikey-setup.png" alt="Setup wizard step 3: pick an LLM provider and enter your API key" width="480"></p>
 
 
-   **Step 2 — Connect Your Accounts:** Link API connectors (Google Calendar, Drive) and sign in to sites your agents will need (Google, GitHub, etc.) so they can browse without getting blocked by CAPTCHAs. Everything here is optional and can be done later in Settings.
+   **Step 4 — Connect Your Accounts:** Link API connectors (Google Calendar, Drive) and sign in to sites your agents will need (Google, GitHub, etc.) so they can browse without getting blocked by CAPTCHAs. Everything here is optional and can be done later in Settings.
 
-   <p align="center"><img src="docs/screenshots/connect-accounts.png" alt="Setup wizard step 2: connect accounts — API connectors and agent browser sign-in" width="480"></p>
+   <p align="center"><img src="docs/screenshots/connect-accounts.png" alt="Setup wizard step 4: connect accounts — API connectors and agent browser sign-in" width="480"></p>
 
 
 2. **Create a project** — give it a name, pick a workspace directory, set an autonomy level
@@ -273,28 +273,14 @@ The agent must declare an outcome on every item; it can't silently drift to the 
 </details>
 
 <details>
-<summary><strong>Workbench — what only you can decide</strong> (beta)</summary>
+<summary><strong>Workbench — one place to send any task</strong> (beta)</summary>
 
-Some things an agent genuinely cannot finish for you: a spend decision, a message that has to come from your account, a judgment call between three options it already researched. As the agent works, it flags those in the project's state file — and the **Workbench** collects them from every project into one list.
+The **Workbench** is the home screen: one box for everything you want done, across every project. Type the task in a line and Orbital routes it to the right project and the right agent, with that project's context. Or pick the project and the agent yourself from the two chips under the box.
 
-Each card carries its provenance, so you are never asked to act on a bare instruction. Expand **Why I believe this** and you see the evidence the agent recorded and the session it came from. Cards sort overdue-first, then oldest, and each one exits in a single tap — **Done** once you've handled it, **Delete** when it stopped mattering. Tapping the card itself opens that project's chat with the decision pre-filled, so answering is one message instead of a hunt for context.
+Under the box is one list of cards, newest first: tasks that are running, replies waiting for you to read, and questions an agent can't settle without you, each marked with the project it came from. A question shows the choices the agent offered, so one tap answers it. Its detail renders as markdown, and the reply field takes typed words or attached files. Tap a card's title to open its session, or the check mark once you've dealt with it.
 
-The **Today** strip along the top lists the day's automation slots, including the ones that already fired — so a single glance covers both what needs you and what ran without you.
-
-<p align="center"><img src="docs/screenshots/workbench.png" alt="Workbench: decisions and actions flagged across every project, each with its source project, how long it has been waiting, and Done / Delete exits" width="100%"></p>
-<p align="center"><em>Every project's open decisions in one list — with the evidence behind each one a click away</em></p>
-
-</details>
-
-<details>
-<summary><strong>Calendar</strong> (beta)</summary>
-
-Automations you set up months ago shouldn't fire invisibly. Every enabled schedule trigger projects its upcoming runs onto a week grid, so the rhythm of the project is something you can see rather than remember. Dated commitments the agent recorded in the project state land on the same grid and drop off once they're resolved, and connecting Google Calendar brings those events into the same view.
-
-The project agent can read this calendar too, so "what's already on the schedule" is context it plans around instead of something you have to restate.
-
-<p align="center"><img src="docs/screenshots/calendar.png" alt="Calendar week view showing a project's recurring automations: a daily issues check, a Monday backlog triage, and a Tuesday release-notes draft" width="100%"></p>
-<p align="center"><em>The week ahead, as your automations will actually run it</em></p>
+<p align="center"><img src="docs/screenshots/workbench.png" alt="Workbench: a box to send any task, with project and agent chips, above one list of cards: a running task, finished replies from Codex and Claude Code, and a question with one-tap options, each labelled with its project and the agent that took it" width="100%"></p>
+<p align="center"><em>One place to send a task, and to see every status, reply and question across your projects</em></p>
 
 </details>
 
