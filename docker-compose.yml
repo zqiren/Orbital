@@ -1,0 +1,21 @@
+# Published on loopback only: the daemon has no authentication of its own.
+# Read docs/deploy-linux-server.md before widening this.
+services:
+  orbital:
+    build: .
+    image: orbital:local
+    container_name: orbital
+    hostname: orbital
+    restart: unless-stopped
+    cap_drop: [ALL]
+    cap_add: [NET_ADMIN, SETUID, SETGID, SETPCAP]
+    security_opt: ["no-new-privileges:true"]
+    shm_size: 1g
+    environment:
+      TZ: ${TZ:-UTC}
+      AGENT_OS_PUBLIC_HOST: ${AGENT_OS_PUBLIC_HOST:-}
+    ports:
+      - "127.0.0.1:8000:8000"
+      - "127.0.0.1:6080:6080"
+    volumes:
+      - ./data/home:/home/orbital

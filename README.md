@@ -618,6 +618,10 @@ Open `http://localhost:5173` in your browser. The setup wizard runs on first lau
 
 Orbital prevents system sleep while agents are actively working (via OS-level sleep inhibition on Windows and macOS). When all agents are idle, sleep is re-allowed. The system tray icon shows current agent activity status.
 
+### Linux server
+
+There is no Linux desktop build, but the daemon and web UI run headless in Docker. See [Running Orbital on a Linux server](docs/deploy-linux-server.md).
+
 ---
 
 ## Development

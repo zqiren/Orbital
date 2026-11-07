@@ -31,6 +31,12 @@ def _drain(transport) -> list[TransportEvent]:
     return events
 
 
+@pytest.fixture(autouse=True)
+def _no_external_sandbox_from_the_environment(monkeypatch):
+    # The Docker image sets this; tests that want it set it themselves.
+    monkeypatch.delenv("AGENT_OS_EXTERNAL_SANDBOX", raising=False)
+
+
 def _transport(**kwargs) -> CodexTransport:
     t = CodexTransport(**kwargs)
     t._thread_id = "T1"
@@ -323,6 +329,16 @@ class TestDispatch:
         await t._route_server_message({"jsonrpc": "2.0", "id": stdin.frames[0]["id"],
             "result": {"turn": {"id": "U1"}}})
         await asyncio.wait_for(task, timeout=2.0)
+
+    def test_external_sandbox_follows_the_environment(self, monkeypatch):
+        monkeypatch.setenv("AGENT_OS_EXTERNAL_SANDBOX", "1")
+        assert _transport()._external_sandbox is True
+        monkeypatch.delenv("AGENT_OS_EXTERNAL_SANDBOX")
+        assert _transport()._external_sandbox is False
+
+    def test_explicit_external_sandbox_wins_over_the_environment(self, monkeypatch):
+        monkeypatch.setenv("AGENT_OS_EXTERNAL_SANDBOX", "1")
+        assert _transport(external_sandbox=False)._external_sandbox is False
 
 
 class TestApprovals:
