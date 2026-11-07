@@ -1666,6 +1666,15 @@ async def cold_start_scan(project_id: str):
             return await _worker_onboarding(project_id, "scan", skeleton)
         finally:
             _ONBOARDING_STARTING.discard(project_id)
+    return await _start_manager_scan(project_id, skeleton, cold_start=True)
+
+
+async def _start_manager_scan(project_id: str, skeleton: str, *,
+                              cold_start, title: str | None = None) -> dict:
+    """The manager half of the cold-start scan: validate, mint, start a
+    content-less loop. ``cold_start`` picks the prompt flavour — ``True`` is
+    the card's propose → confirm → write; ``"guess"`` / ``"guess:<lang>"`` is spec
+    160's read → write the guess → ask (``PromptContext.cold_start``)."""
     config = _agent_manager._build_agent_config_from_project(project_id)
     # Validate the provider BEFORE minting: a credential failure must surface
     # as a structured 400 the frontend can translate, and must not leave an
@@ -1682,16 +1691,117 @@ async def cold_start_scan(project_id: str):
             project_id, config,
             initial_message=None,
             session_id=session_id,
-            cold_start=True,
+            cold_start=cold_start,
             cold_start_skeleton=skeleton,
         )
     except ProviderConfigError as e:
         # Belt-and-braces: settings changed between validate and start.
         raise HTTPException(status_code=400,
                             detail={"code": e.code, "message": str(e)})
+    if title:
+        # Spec 160 round 3: the scan session keeps "项目梳理" (a final name,
+        # like a rename: the user's first reply does not retitle it).
+        from agent_os.daemon_v2.models import make_session_key
+        handle = _agent_manager._handles.get(make_session_key(project_id, session_id))
+        if handle is not None:
+            handle.session.set_name(title)
     return {"status": "started", "session_id": session_id,
             "session_uuid": minted.get("session_uuid", session_id),
             "runner": "orbital"}
+
+
+async def post_scan_confirm(project_id: str, session_id: str) -> str | None:
+    """Spec 160 round 4: the scan wrote its guess; the DAEMON asks whether it
+    is right — an ask card (这样理解对吗？ · 对 | 需要改) through the asks write
+    path, plus the ``ask_opened`` row an agent-opened ask gets, so the
+    composer and the Workbench show it. Returns the ask id."""
+    from agent_os.agent import asks
+    from agent_os.agent.context import ask_card_row
+    from agent_os.onboarding.import_scan import ASK_FIELD, confirm_ask, guess_lang
+    project = _project_store.get_project(project_id)
+    if not project:
+        return None
+    question, yes, no = confirm_ask(guess_lang(project))
+    orbital = ProjectPaths(project.get("workspace", "")).orbital_dir
+    opened = await asyncio.to_thread(asks.open_ask, orbital, f"{question} options: {yes} | {no}")
+    if opened is None:
+        return None  # the same question is already open in this project
+    folded = {a.id: a for a in await asyncio.to_thread(asks.read_asks, orbital)}
+    row = ask_card_row(folded.get(opened.id, opened))
+    row["timestamp"] = datetime.now(timezone.utc).isoformat()
+    row["_meta"]["import_scan_confirm"] = True
+    await _retry_session_lock(
+        lambda: _agent_manager.persist_mention_message(project_id, session_id, row))
+    _project_store.update_project(project_id, {ASK_FIELD: {
+        "id": opened.id, "session_id": session_id, "yes": yes}})
+    if _ws_manager is not None:
+        _ws_manager.broadcast(project_id, {"type": "workbench.changed",
+                                           "project_id": project_id})
+    logger.info("import scan: confirm card %s posted in %s/%s", opened.id, project_id,
+                session_id)
+    return opened.id
+
+
+async def _record_scan_yes(project_id: str, req: "InjectRequest") -> dict:
+    """The scan's confirm card answered with its yes option: the daemon
+    records the user's row and dispatches nothing — no run, no LLM call. The
+    row carries no ``source: user`` so the onboarding gate stays armed: the
+    user's NEXT real message is the go-ahead."""
+    user_msg: dict = {
+        "role": "user",
+        "content": req.content,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "_meta": {"event": "import_scan_confirmed"},
+    }
+    if req.nonce:
+        user_msg["nonce"] = req.nonce
+    if req.target:
+        user_msg["target"] = req.target
+    try:
+        session_id = await _retry_session_lock(
+            lambda: _agent_manager.persist_mention_message(
+                project_id, req.session_id, user_msg))
+    except FileLockError:
+        raise HTTPException(status_code=503, detail="Chat session is busy — please retry")
+    if _ws_manager is not None:
+        _ws_manager.broadcast(project_id, {
+            "type": "chat.user_message", "project_id": project_id,
+            "session_id": session_id, "content": user_msg["content"],
+            "nonce": user_msg.get("nonce", ""), "timestamp": user_msg["timestamp"],
+        })
+    return {"status": "recorded", "session_id": session_id}
+
+
+async def start_import_scan(project_id: str, runner: str = "orbital") -> str:
+    """Spec 160 §5.2: the background read of an imported project — the
+    cold-start mint path, in its guess-first flavour, titled 项目梳理 /
+    Project overview. ``runner`` is ``"orbital"`` (the manager, with a key)
+    or ``"worker"`` (a keyless project's effective pinned worker, through the
+    existing keyless path ``_worker_onboarding``). Returns the session id;
+    raises on any refusal (the queue counts that as a failed attempt)."""
+    from agent_os.agent.workspace_scan import scan_workspace
+    from agent_os.onboarding.import_scan import guess_flavour, guess_lang, scan_title
+    project = _project_store.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="project not found")
+    workspace = project.get("workspace", "")
+    if not workspace or not os.path.isdir(workspace):
+        raise HTTPException(status_code=400, detail="workspace missing")
+    lang = guess_lang(project)
+    skeleton = await asyncio.to_thread(scan_workspace, workspace)
+    if runner == "orbital":
+        if not _agent_manager.manager_ready(project_id):
+            raise HTTPException(status_code=400, detail="manager has no key")
+        started = await _start_manager_scan(project_id, skeleton,
+                                            cold_start=guess_flavour(project),
+                                            title=scan_title(lang))
+        return started["session_id"]
+    workers = await asyncio.to_thread(_agent_manager.available_worker_slugs, project_id)
+    started = await _worker_onboarding(
+        project_id, "scan", skeleton, guess_lang=lang,
+        # §5.4 keyless: "more than one agent" = two workers to switch between.
+        multi_agent=len(workers) >= 2, title=scan_title(lang))
+    return started["session_id"]
 
 
 # Projects with a start-onboarding request between its guard and its mint. The
@@ -1719,7 +1829,7 @@ def _orbital_sessions(entries) -> list[dict]:
 
 
 async def _worker_onboarding(project_id: str, mode: str,
-                             skeleton: str | None = None) -> dict:
+                             skeleton: str | None = None, **scan_kwargs) -> dict:
     """The keyless branch of start-onboarding / cold-start-scan (contract §5).
 
     Orbital's own agent has no key here, so the project's effective pinned
@@ -1743,6 +1853,7 @@ async def _worker_onboarding(project_id: str, mode: str,
         return await start_worker_onboarding(
             _agent_manager, _sub_agent_manager, project_id, runner,
             mode=mode, skeleton_text=skeleton, ws_manager=_ws_manager,
+            **scan_kwargs,
         )
     except WorkerDispatchError as e:
         raise HTTPException(status_code=502, detail={
@@ -1901,9 +2012,19 @@ async def inject_message(project_id: str, req: InjectRequest):
     # hands the raw text to send().
     inject_session_id = req.session_id
 
+    turn_note = ""
     if req.ask_id:
         from agent_os.api.routes.workbench import close_answered_ask
+        from agent_os.onboarding.import_scan import guess_lang, scan_ask_of, turn_note_block
+        scan_ask = scan_ask_of(project, req.ask_id)
         close_answered_ask(project, req.ask_id, req.ask_answer or req.content)
+        if scan_ask is not None:
+            # Spec 160 round 4: the import scan's confirm card. Its yes option
+            # is answered by the daemon alone; anything else runs one turn
+            # with the guard instruction folded into this message only.
+            if (req.ask_answer or "").strip() == scan_ask.get("yes"):
+                return await _record_scan_yes(project_id, req)
+            turn_note = "\n\n" + turn_note_block(guess_lang(project))
 
     # Single-slot enforcement now lives at the MANAGER level: start_agent()
     # raises ValueError("Slot held by session …") when a different session
@@ -2024,7 +2145,7 @@ async def inject_message(project_id: str, req: InjectRequest):
                 project_id, mention_session_id)
         try:
             result = await _sub_agent_manager.send(
-                project_id, req.target, effective_content,
+                project_id, req.target, effective_content + turn_note,
                 session_id=mention_session_id, dispatch_id=dispatch_id,
                 initiator=initiator,
             )
@@ -2095,7 +2216,7 @@ async def inject_message(project_id: str, req: InjectRequest):
         # deliberate v1 audit-field asymmetry.
         try:
             result = await _agent_manager.inject_message(
-                project_id, effective_content, nonce=req.nonce,
+                project_id, effective_content + turn_note, nonce=req.nonce,
                 session_id=req.session_id,
             )
         except ProviderConfigError as e:
@@ -3859,6 +3980,9 @@ async def tokendance_signin(req: TokenDanceSigninRequest | None = None):
     telemetry.latch("key_set")
 
     test = await _test_and_record(card.id)
+    # Spec 160 §5.2: a key became available (the wizard's one-click path).
+    from agent_os.onboarding import import_scan
+    import_scan.kick("card_created")
     return {
         "card": _settings_store.masked_card(_settings_store.get_card(card.id)),
         "test": test,

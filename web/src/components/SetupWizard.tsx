@@ -42,6 +42,7 @@ import { api, ApiError } from '../config';
 import { useCredentialCards } from '../hooks/useCredentialCards';
 import type { Connector, ConnectorListResponse, Project } from '../types';
 import LLMProviderSettings from './LLMProviderSettings';
+import TokenCostSign from './TokenCostSign';
 import ImportProjectsStep from './ImportProjectsStep';
 import WizardAgentsStep from './WizardAgentsStep';
 import { useSubAgentList } from '../hooks/useSubAgentList';
@@ -177,6 +178,14 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
   const defaultCard = cards.find((c) => c.id === defaultCardId) ?? undefined;
   const [checkingKey, setCheckingKey] = useState(false);
   const saveRef = useRef<(() => Promise<boolean>) | null>(null);
+  // Spec 160 §5.3: imported projects this key would read once (from the
+  // key form's own settings read, made after the import).
+  const [unscannedImports, setUnscannedImports] = useState(0);
+  // Round 2: the user's own agent that reads them when the key is skipped.
+  const [scanAgent, setScanAgent] = useState<string | null>(null);
+  // Round 2 opt-out, one switch per button (per batch, never lasting).
+  const [nextScanOn, setNextScanOn] = useState(true);
+  const [skipScanOn, setSkipScanOn] = useState(true);
 
   // Accounts step — API connector cards. null = fetch not resolved yet;
   // fetch failure resolves to [] so the browser group renders alone.
@@ -348,7 +357,9 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
     try {
       await api('/api/v2/settings', {
         method: 'PUT',
-        body: JSON.stringify({ setup_api_key_skipped: true }),
+        body: JSON.stringify(skipScanOn
+          ? { setup_api_key_skipped: true }
+          : { setup_api_key_skipped: true, import_scan: false }),
       });
       setStep('accounts');
     } catch {
@@ -356,7 +367,7 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
     } finally {
       setSkippingKey(false);
     }
-  }, [t]);
+  }, [t, skipScanOn]);
 
   // Connector connect — the backend runs a BLOCKING loopback OAuth flow (up
   // to ~300 s while the user completes browser consent), so the card shows a
@@ -480,6 +491,10 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
           >
             <ImportProjectsStep
               scan={scan}
+              // Spec 160: with no key yet, the read waits for the key step's
+              // Save or Skip; with one, the key step is skipped and the import
+              // itself starts it.
+              deferScan={!keySet}
               onBack={() => setStep('agents')}
               onSkip={afterProjects}
               onImported={(_result, landing) => {
@@ -499,6 +514,8 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
               card={defaultCard}
               hideSaveButton
               saveRef={saveRef}
+              onUnscannedImports={(n, agent) => { setUnscannedImports(n); setScanAgent(agent); }}
+              importScan={nextScanOn}
               providerPicker="cards"
               // One-click sign-in creates (or re-keys) a card on the daemon;
               // re-read so "Adjust settings" edits THAT card, not the one
@@ -517,20 +534,25 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
             </p>
 
             <div className="mt-6 flex flex-col items-end">
-              <button
-                onClick={handleNext}
-                disabled={checkingKey || skippingKey}
-                className="bg-accent text-white text-sm font-medium rounded-lg px-5 py-2.5 hover:bg-accent/90 transition-all duration-150 disabled:opacity-50 inline-flex items-center gap-2"
-              >
-                {checkingKey ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    {t('wizard.checking')}
-                  </>
-                ) : (
-                  t('wizard.next')
-                )}
-              </button>
+              <div className="flex items-center gap-2.5">
+                {/* Spec 160 §5.3: saving the key reads the imported projects
+                    once; the count says so, the sentence waits for a hover. */}
+                <TokenCostSign n={unscannedImports} scan={nextScanOn} onScanChange={setNextScanOn} />
+                <button
+                  onClick={handleNext}
+                  disabled={checkingKey || skippingKey}
+                  className="bg-accent text-white text-sm font-medium rounded-lg px-5 py-2.5 hover:bg-accent/90 transition-all duration-150 disabled:opacity-50 inline-flex items-center gap-2"
+                >
+                  {checkingKey ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      {t('wizard.checking')}
+                    </>
+                  ) : (
+                    t('wizard.next')
+                  )}
+                </button>
+              </div>
               {nextError && (
                 <p className="text-xs text-error mt-2" data-testid="wizard-next-error">
                   {nextError}
@@ -559,15 +581,21 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
               </div>
             ) : (
               <div className="mt-5 pt-4 border-t border-border flex flex-col items-end text-right">
-                <button
-                  type="button"
-                  onClick={handleSkipKey}
-                  disabled={checkingKey || skippingKey}
-                  data-testid="wizard-skip-key"
-                  className="text-sm font-medium text-secondary hover:text-primary underline-offset-2 hover:underline transition-colors duration-150 disabled:opacity-50 max-md:min-h-[44px]"
-                >
-                  {t('wizard.skipKey')}
-                </button>
+                <div className="flex items-center gap-2.5">
+                  {/* Spec 160 round 2: skipping hands the reading to the
+                      user's own agent, which spends its quota. */}
+                  <TokenCostSign n={unscannedImports} kind="skip" agent={scanAgent}
+                    scan={skipScanOn} onScanChange={setSkipScanOn} />
+                  <button
+                    type="button"
+                    onClick={handleSkipKey}
+                    disabled={checkingKey || skippingKey}
+                    data-testid="wizard-skip-key"
+                    className="text-sm font-medium text-secondary hover:text-primary underline-offset-2 hover:underline transition-colors duration-150 disabled:opacity-50 max-md:min-h-[44px]"
+                  >
+                    {t('wizard.skipKey')}
+                  </button>
+                </div>
                 <p
                   className="mt-1 text-xs text-secondary/80 leading-relaxed max-w-[380px]"
                   data-testid="wizard-skip-key-hint"

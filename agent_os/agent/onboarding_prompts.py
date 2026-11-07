@@ -81,13 +81,107 @@ def cold_start_instruction(workspace: str, skeleton_text: str | None = None) -> 
     return text
 
 
+# Spec 160 §5.4: the one line the first message carries when the user has
+# more than one agent here. Verbatim; the model picks the user's language.
+SHARED_MEMORY_LINE_ZH = (
+    "这个项目里，不管用哪个 Agent、开几个会话，都用同一份项目记忆。"
+    "随时切换 Agent 或新开会话，不用重新解释。"
+)
+SHARED_MEMORY_LINE_EN = (
+    "Every agent and every session in this project works from the same project "
+    "memory. Switch agents or open a new session anytime; no need to explain again."
+)
+
+
+def _shared_memory_bullet(indent: str, lang: str | None = None) -> str:
+    """The §5.4 line as a prompt bullet: both languages when the user's is
+    not known yet (the interview), else just the one the reply is in."""
+    if lang == "zh":
+        return f"{indent}- Include this one line exactly as written: {SHARED_MEMORY_LINE_ZH}\n"
+    if lang == "en":
+        return f"{indent}- Include this one line exactly as written: {SHARED_MEMORY_LINE_EN}\n"
+    return (
+        f"{indent}- Then add this one line exactly as written, in the user's language:\n"
+        f"{indent}  中文: {SHARED_MEMORY_LINE_ZH}\n"
+        f"{indent}  English: {SHARED_MEMORY_LINE_EN}\n"
+    )
+
+
+def _guess_reply(lang: str, multi_agent: bool) -> str:
+    """How the guess-first run ends. Round 4: no closing question — the
+    daemon posts the confirm card itself once the goals file exists."""
+    language = "Chinese (简体中文)" if lang == "zh" else "English"
+    text = (
+        f"- Reply to the user in {language}, plain words, no file names, at most 5 short\n"
+        "  lines: what you think this project is for and where it stands.\n"
+    )
+    if multi_agent:
+        text += _shared_memory_bullet("", "zh" if lang == "zh" else "en")
+    return text + (
+        "- Do not ask a question and do not suggest a next step or task: Orbital asks the\n"
+        "  user whether your understanding is right once you stop.\n"
+        "- That summary is your final message, as plain text, not a tool call (do not call\n"
+        "  mark_task_complete). Then stop. Do not start any work or dispatch an agent in this run."
+    )
+
+
+def guess_first_instruction(workspace: str, *, lang: str = "en",
+                            multi_agent: bool = False) -> str:
+    """Spec 160 §5.2: the cold-start scan of an imported project, guess
+    first. Nobody is waiting on this run (the import started it): read, write
+    the best guess at state, index and goals, then leave one short summary.
+    Round 4: the daemon then posts the confirm card (这样理解对吗？ · 对 |
+    需要改); the onboarding gate arms on the goals write.
+
+    The whole scan run keeps this section, goals file or not (the queue
+    resets the flavour when the run ends, so a later turn gets the plain
+    directive).
+
+    ``lang`` (``zh`` | ``en``) is the language of that reply: the UI
+    language the import was made in, else the system's.
+    ``multi_agent``: more than one agent is enabled here, so the reply also
+    carries the shared-memory line (§5.4)."""
+    return (
+        "## COLD-START WORKSPACE SCAN\n\n"
+        "This is an imported project with an existing workspace. The user brought it into\n"
+        "Orbital; you read it once and write down your best guess of what it is, so every\n"
+        "agent in this project starts from the same record. Nobody is waiting on this run:\n"
+        "work through it, then leave one short message the user reads later. A deterministic\n"
+        "[WORKSPACE SKELETON] (every gitignore-respected file + size) has been provided to\n"
+        "you as a system message. Work through three stages:\n\n"
+        "STAGE 2 — READ (informed by the skeleton sizes):\n"
+        "- Use the skeleton's sizes to plan BEFORE opening files. Small total →\n"
+        "  read broadly. Large total → read high-signal files (README, config,\n"
+        "  entry points, the largest meaningful sources) and sample the rest.\n"
+        "- You have NO precise token meter. You will see a coarse 'Context usage:'\n"
+        "  line each turn. When it crosses ~70%, STOP reading and move to Stage 3\n"
+        "  with what you have.\n\n"
+        "STAGE 3 — WRITE YOUR GUESS → ASK:\n"
+        "- Do not wait for a confirmation before writing; the guess is the point. With the\n"
+        "  `write` tool, in this order:\n"
+        "  (1) orbital/PROJECT_STATE.md (current focus, in-progress work, next steps),\n"
+        "  (2) orbital/INDEX.md (navigation map: important files/dirs, one line each),\n"
+        "  (3) LAST, your best guess at the Goals to\n"
+        f"  {workspace}/orbital/instructions/project_goals.md (Mission, Triggers, Scope,\n"
+        "  Rules, Preferences; under 1500 words). Mission, Triggers and Scope are your guess\n"
+        "  from the files. Rules and Preferences only where a file states them (README,\n"
+        "  notes, config, imported memories); otherwise write \"(none yet)\": the user adds\n"
+        "  them. Never invent a style, tone or working rule the files don't state.\n"
+        + _guess_reply(lang, multi_agent)
+    )
+
+
 def interview_instruction(workspace: str, *, is_scratch: bool,
                           project_name: str = "",
-                          project_instructions: str = "") -> str:
+                          project_instructions: str = "",
+                          multi_agent: bool = False) -> str:
     """The onboarding-interview section the management agent's prompt carries.
 
     ``project_name`` / ``project_instructions`` are what the user typed when
-    creating the project (the section quotes them back).
+    creating the project (the section quotes them back). ``multi_agent``
+    (spec 160 §5.4): more than one agent is enabled here, so the greeting
+    also carries the shared-memory line. Never on scratch, which keeps no
+    project memory.
     """
     # Scratch (Quick Tasks) keeps no project memory, so the "this
     # project becomes an asset" introduction would be a false promise
@@ -113,6 +207,7 @@ def interview_instruction(workspace: str, *, is_scratch: bool,
             "     editable, and usable by any other AI tool they open in this folder.\n"
             "   - That the work accumulates: every task leaves the project better understood, so you\n"
             "     get faster and more accurate the longer you work together.\n"
+            + (_shared_memory_bullet("   ") if multi_agent else "") +
             "   Write it in the user's language and your own words. Do not recite this list, do not\n"
             "   oversell, and do not let it crowd out the question that follows.\n"
         )
@@ -224,6 +319,16 @@ def worker_cold_start_instruction(slug: str, workspace: str,
     """The cold-start scan, for a worker CLI, with the skeleton inlined."""
     return (worker_preamble(slug, workspace, scan=True)
             + cold_start_instruction(workspace, None)
+            + "\n\n" + _bounded_skeleton(_prompt_separators(skeleton_text or "")))
+
+
+def worker_guess_first_instruction(slug: str, workspace: str, skeleton_text: str, *,
+                                   lang: str = "en", multi_agent: bool = False) -> str:
+    """Spec 160 round 2: the guess-first import scan on a keyless project's
+    pinned worker — the manager's guess text behind the worker preamble,
+    with the skeleton inlined (one message, so no directive ending)."""
+    return (worker_preamble(slug, workspace, scan=True)
+            + guess_first_instruction(workspace, lang=lang, multi_agent=multi_agent)
             + "\n\n" + _bounded_skeleton(_prompt_separators(skeleton_text or "")))
 
 

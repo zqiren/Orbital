@@ -622,9 +622,13 @@ class Session:
         # The user's reply lifts the onboarding gate. Only a real user row:
         # system rows, daemon rows (the [MEMORY] record, worker records) and an
         # automation's trigger header do not count as the user's go.
+        # Spec 160 round 4: the answer to the import scan's confirm card runs
+        # one guarded turn (it carries a turn note); the gate holds through
+        # it and lifts on the user's next message.
         if (self.onboarding_gate and message.get("role") == "user"
                 and message.get("source") == "user"
-                and trigger_type_of(message.get("content")) is None):
+                and trigger_type_of(message.get("content")) is None
+                and "<orbital_turn_note>" not in str(message.get("content") or "")):
             self.onboarding_gate = False
             meta_fields["onboarding_gate"] = False
 

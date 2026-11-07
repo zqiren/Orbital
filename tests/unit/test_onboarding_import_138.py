@@ -4,7 +4,8 @@
 
 """Spec 138 onboarding routes over a staged history home: the scan status,
 the extended importable-projects payload (candidates + groups) and the batch
-import (deferred seeding, group membership, hidden agents, skip reasons)."""
+import (deferred root seed, orbital/ at import since spec 160, group
+membership, hidden agents, skip reasons)."""
 
 from __future__ import annotations
 
@@ -142,8 +143,12 @@ def test_import_creates_deferred_projects_with_members_and_hidden_agents(app_env
         p = app_env.store.get_project(c["project_id"])
         assert p["deferred_seed"] is True
         assert p["disabled_sub_agents"] == ["gemini-cli"]
+        # Spec 160 §5.1: orbital/ is written at import; the root AGENTS.md
+        # (the only write outside orbital/) still waits for first use.
         assert not os.path.exists(os.path.join(c["workspace"], "AGENTS.md"))
-        assert not os.path.exists(os.path.join(c["workspace"], "orbital"))
+        assert os.path.isdir(os.path.join(c["workspace"], "orbital", "skills"))
+        assert p["orbital_seeded"] is True
+        assert p["import_scan"] == "pending"
     group_project = app_env.store.get_project(out["created"][1]["project_id"])
     assert sorted(m["native_id"] for m in group_project["imported_sessions"]) == ["d1", "d2"]
     assert all(m["agent"] == "claude-code" for m in group_project["imported_sessions"])

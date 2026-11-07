@@ -42,9 +42,17 @@ class WorkerDispatchError(RuntimeError):
 
 
 def build_instruction(slug: str, project: dict, mode: str,
-                      skeleton_text: str | None = None) -> str:
-    """The onboarding instruction ``slug`` receives for ``mode``."""
+                      skeleton_text: str | None = None, *,
+                      guess_lang: str | None = None,
+                      multi_agent: bool = False) -> str:
+    """The onboarding instruction ``slug`` receives for ``mode``.
+    ``guess_lang`` (spec 160): the import scan's guess-first flavour, in that
+    reply language; None keeps the card's propose-first scan."""
     workspace = project.get("workspace", "")
+    if mode == "scan" and guess_lang is not None:
+        return onboarding_prompts.worker_guess_first_instruction(
+            slug, workspace, skeleton_text or "", lang=guess_lang,
+            multi_agent=multi_agent)
     if mode == "scan":
         return onboarding_prompts.worker_cold_start_instruction(
             slug, workspace, skeleton_text or "")
@@ -63,10 +71,14 @@ def _now() -> str:
 async def start_worker_onboarding(agent_manager, sub_agent_manager,
                                   project_id: str, slug: str, *, mode: str,
                                   skeleton_text: str | None = None,
-                                  ws_manager=None) -> dict:
+                                  ws_manager=None, guess_lang: str | None = None,
+                                  multi_agent: bool = False,
+                                  title: str | None = None) -> dict:
     """Mint a session pinned to ``slug`` and hand it the onboarding.
 
-    ``mode`` is ``"interview"`` or ``"scan"``. Returns the route's 201 body.
+    ``mode`` is ``"interview"`` or ``"scan"``; ``guess_lang`` /
+    ``multi_agent`` / ``title`` are the spec 160 import scan's. Returns the
+    route's 201 body.
     Raises ``WorkerDispatchError`` when ``send`` refuses the dispatch (the
     session then holds a ``sub_agent_dispatch_failed`` row, the same row the
     pinned inject route writes), and ``RuntimeError`` when no sub-agent
@@ -77,7 +89,8 @@ async def start_worker_onboarding(agent_manager, sub_agent_manager,
     if sub_agent_manager is None:
         raise RuntimeError(f"no sub-agent manager available to run '{slug}'")
     project = agent_manager._project_store.get_project(project_id) or {}
-    instruction = build_instruction(slug, project, mode, skeleton_text)
+    instruction = build_instruction(slug, project, mode, skeleton_text,
+                                    guess_lang=guess_lang, multi_agent=multi_agent)
 
     minted = await agent_manager.new_session(project_id)
     session_id = minted["session_id"]
@@ -97,6 +110,10 @@ async def start_worker_onboarding(agent_manager, sub_agent_manager,
             origin="cold_start" if mode == "scan" else "chat",
         )
     agent_manager._wire_session_observers(session, project_id, session_id)
+    if title:
+        # Spec 160 round 3: the import scan's session keeps "项目梳理" (a
+        # final name; the user's first reply does not retitle it).
+        session.set_name(title)
     session.set_pinned_target(slug)
     session.append({
         "role": "system",

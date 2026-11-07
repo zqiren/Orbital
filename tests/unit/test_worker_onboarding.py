@@ -38,8 +38,10 @@ def _no_env_key(monkeypatch):
 # (f266ddf) BEFORE the lift, with ONE deliberate contract change since
 # (fix/1105-prompts, owner 2026-11-05): onboarding ends with a proposed first
 # step and waits for the user's go instead of "begin working", and the step-2
-# summary proposes who does what. Edit only for a deliberate contract change:
-# it is the byte-identity reference.
+# summary proposes who does what. Spec 160 §5.4 (owner 2026-11-06) adds the
+# shared-memory line to the greeting when more than one agent is enabled.
+# Edit only for a deliberate contract change: it is the byte-identity
+# reference.
 # ---------------------------------------------------------------------------
 
 def _frozen_onboarding_or_directive(self, context) -> str:
@@ -101,6 +103,17 @@ def _frozen_onboarding_or_directive(self, context) -> str:
                 "     editable, and usable by any other AI tool they open in this folder.\n"
                 "   - That the work accumulates: every task leaves the project better understood, so you\n"
                 "     get faster and more accurate the longer you work together.\n"
+            )
+            if context.enabled_agents:
+                greeting += (
+                    "   - Then add this one line exactly as written, in the user's language:\n"
+                    "     中文: 这个项目里，不管用哪个 Agent、开几个会话，都用同一份项目记忆。"
+                    "随时切换 Agent 或新开会话，不用重新解释。\n"
+                    "     English: Every agent and every session in this project works from the "
+                    "same project memory. Switch agents or open a new session anytime; no need "
+                    "to explain again.\n"
+                )
+            greeting += (
                 "   Write it in the user's language and your own words. Do not recite this list, do not\n"
                 "   oversell, and do not let it crowd out the question that follows.\n"
             )
@@ -195,6 +208,7 @@ def _ctx(workspace, **over):
 
 _CASES = {
     "interview": {},
+    "interview_single_agent": {"enabled_agents": []},
     "interview_no_instructions": {"project_instructions": ""},
     "interview_scratch": {"is_scratch": True},
     "cold_start": {"cold_start": True},
@@ -237,8 +251,12 @@ def test_manager_flavours_are_the_section_text(tmp_path):
     builder = PromptBuilder(ws)
     assert op.interview_instruction(
         ws, is_scratch=False, project_name="Demo",
-        project_instructions="Build a thing",
+        project_instructions="Build a thing", multi_agent=True,
     ) == builder._onboarding_or_directive(_ctx(tmp_path))
+    assert op.interview_instruction(
+        ws, is_scratch=False, project_name="Demo",
+        project_instructions="Build a thing",
+    ) == builder._onboarding_or_directive(_ctx(tmp_path, enabled_agents=[]))
     assert op.cold_start_instruction(ws, None) == \
         builder._onboarding_or_directive(_ctx(tmp_path, cold_start=True))
 
@@ -608,3 +626,33 @@ class TestGuardIgnoresVirtualImports:
         self._with_imports(deps, monkeypatch, extra=[done])
         r = tc.post(f"/api/v2/agents/{row['project_id']}/start-onboarding")
         assert r.status_code == 409
+
+
+# ---------------------------------------------------------------------------
+# Spec 160 round 2 — the import scan on a keyless project's worker
+# ---------------------------------------------------------------------------
+
+
+class TestKeylessImportScan:
+    def test_worker_gets_the_guess_text_and_the_session_its_title(self, tmp_path, monkeypatch):
+        import asyncio as _asyncio
+
+        from agent_os.api.routes import agents_v2
+        from agent_os.onboarding import import_scan
+
+        tc, deps, row = _keyless(tmp_path, files={"README.md": "# lib\n"})
+        pid, ws = row["project_id"], row["workspace"]
+        deps["project_store"].update_project(pid, {import_scan.LANG_FIELD: "zh"})
+        sid = _asyncio.run(agents_v2.start_import_scan(pid, "worker"))
+        sub = deps["sub_agent_manager"]
+        args, kwargs = sub.send.await_args
+        assert args[1] == "claude-code" and kwargs["session_id"] == sid
+        text = args[2]
+        assert text.startswith("You are claude-code working directly")
+        assert "STAGE 3 — WRITE YOUR GUESS → ASK" in text
+        assert "这样理解对吗" not in text            # round 4: the daemon asks
+        assert "do not suggest a next step or task" in " ".join(text.split())
+        assert "README.md" in text and "orbital/" not in text.split("[WORKSPACE SKELETON]")[-1]
+        meta = _rows(ws, sid)[0]
+        assert meta["name"] == "项目梳理" and "name_provisional" not in meta
+        assert meta["origin"] == "cold_start"

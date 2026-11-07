@@ -64,7 +64,11 @@ def _list_files(workspace: str) -> list[str]:
 
 def scan_workspace(workspace: str, *, max_files: int = _DEFAULT_MAX_FILES) -> str:
     """Build a bounded inventory string of (path, size) for the workspace."""
-    rels = _list_files(workspace)
+    # Orbital's own folder is not the project: its memory files, history
+    # blobs and queue would crowd the inventory (spec 160 writes orbital/ at
+    # import, before the scan runs).
+    rels = [r for r in _list_files(workspace)
+            if r.replace("\\", "/").split("/", 1)[0] != "orbital"]
     sized: list[tuple[str, int]] = []
     for rel in rels:
         try:

@@ -7,7 +7,7 @@
  * Cancel and Import sat at the end of the scrolling list, so a long list hid
  * both. Now a × in the header and a footer that stays in view.
  */
-import { render, screen, cleanup, fireEvent } from '@testing-library/react';
+import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import type { OnboardingScan } from '../hooks/useOnboardingScan';
 
@@ -28,12 +28,13 @@ const scan: OnboardingScan = {
 };
 
 vi.mock('../hooks/useOnboardingScan', () => ({ useOnboardingScan: () => scan }));
-vi.mock('../config', () => ({ api: vi.fn() }));
+const apiMock = vi.hoisted(() => vi.fn());
+vi.mock('../config', () => ({ api: apiMock }));
 vi.mock('./FolderBrowserPanel', () => ({ default: () => null }));
 
 import ImportProjectsDialog from './ImportProjectsDialog';
 
-afterEach(cleanup);
+afterEach(() => { cleanup(); apiMock.mockReset(); });
 
 describe('ImportProjectsDialog', () => {
   it('closes from the × in the header', () => {
@@ -52,5 +53,28 @@ describe('ImportProjectsDialog', () => {
     expect(footer.contains(screen.getByTestId('import-submit'))).toBe(true);
     fireEvent.click(screen.getByTestId('import-skip'));
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+});
+
+
+describe('ImportProjectsDialog — cost sign (spec 160 round 2)', () => {
+  it('with a key: the token sentence beside Import, counting the checked rows', async () => {
+    apiMock.mockResolvedValue({ llm: { api_key_set: true }, setup: {}, import_scan_agent: null });
+    render(<ImportProjectsDialog onClose={vi.fn()} onImported={vi.fn()} />);
+    const sign = await screen.findByTestId('token-cost-sign');
+    expect(sign.getAttribute('data-kind')).toBe('importKey');
+    expect(sign.textContent).toBe('30');
+  });
+
+  it('keyless with a ready agent: the agent sentence (round 3: no Skip needed); no agent: no sign', async () => {
+    apiMock.mockResolvedValue({ llm: { api_key_set: false }, setup: { api_key_skipped: false },
+      import_scan_agent: { slug: 'claude-code', name: 'Claude Code' } });
+    const { unmount } = render(<ImportProjectsDialog onClose={vi.fn()} onImported={vi.fn()} />);
+    expect((await screen.findByTestId('token-cost-sign')).getAttribute('data-kind')).toBe('importAgent');
+    unmount();
+    apiMock.mockResolvedValue({ llm: { api_key_set: false }, setup: {}, import_scan_agent: null });
+    render(<ImportProjectsDialog onClose={vi.fn()} onImported={vi.fn()} />);
+    await waitFor(() => expect(apiMock).toHaveBeenCalled());
+    expect(screen.queryByTestId('token-cost-sign')).toBeNull();
   });
 });

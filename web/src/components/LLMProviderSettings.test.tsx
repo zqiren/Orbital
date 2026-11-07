@@ -102,10 +102,13 @@ interface MockSettings {
   provider?: string;
 }
 
-function mockApi(opts: { settings?: MockSettings; providers?: ProviderRegistry } = {}) {
+function mockApi(opts: {
+  settings?: MockSettings; providers?: ProviderRegistry; unscannedImports?: number;
+} = {}) {
   apiMock.mockImplementation(async (path: string) => {
     if (path === '/api/v2/settings') {
       return {
+        unscanned_imports: opts.unscannedImports,
         llm: {
           api_key_set: false,
           api_key_masked: '',
@@ -1049,6 +1052,33 @@ describe('LLMProviderSettings — card save (spec 082 §3.2)', () => {
     await waitFor(() => expect(onCardSaved).toHaveBeenCalled());
   });
 
+  it('round 2: the sign\'s switch is on by default; off rides on Save as import_scan:false', async () => {
+    for (const turnOff of [false, true]) {
+      apiMock.mockReset();
+      mockCardApi();
+      const base = apiMock.getMockImplementation()!;
+      apiMock.mockImplementation(async (path: string, opts?: RequestInit) =>
+        path === '/api/v2/settings'
+          ? { ...(await base(path, opts)), unscanned_imports: 2 }
+          : base(path, opts));
+      render(<LLMProviderSettings mode="global" />);
+      await fillAndVerifyNewCard();
+      const sign = await screen.findByTestId('token-cost-sign');
+      if (turnOff) {
+        fireEvent.click(sign);
+        const sw = screen.getByTestId('token-cost-switch');
+        expect(sw.getAttribute('aria-checked')).toBe('true');
+        fireEvent.click(sw);
+        expect(screen.getByTestId('token-cost-switch').getAttribute('aria-checked')).toBe('false');
+      }
+      fireEvent.click(saveButton());
+      await waitFor(() => expect(cardCall('POST')).toBeTruthy());
+      const body = JSON.parse(String((cardCall('POST')![1] as RequestInit).body));
+      expect(body.import_scan).toBe(turnOff ? false : undefined);
+      cleanup();
+    }
+  });
+
   it('shows the save-test verdict inline on success', async () => {
     mockCardApi();
     render(<LLMProviderSettings mode="global" />);
@@ -1286,5 +1316,35 @@ describe('LLMProviderSettings — Test Connection is compulsory before Save; pas
     await waitFor(() => expect(save().disabled).toBe(false));
     const body = JSON.parse(String((apiMock.mock.calls.find(([p]) => p === '/api/v2/providers/test')![1] as RequestInit).body));
     expect(body).toMatchObject({ card_id: 'card_tb', model: 'deepseek-reasoner' });
+  });
+});
+
+
+// ---- Spec 160 §5.3: the token sign beside Save ----
+
+describe('token sign (spec 160)', () => {
+  it('sits beside Save with the count when imported projects wait for a key', async () => {
+    mockApi({ unscannedImports: 4 });
+    render(<LLMProviderSettings mode="global" />);
+    const sign = await screen.findByTestId('token-cost-sign');
+    expect(sign.textContent).toBe('4');
+    // Same row as the primary button, before it.
+    const save = screen.getByTestId('card-save');
+    expect(sign.parentElement).toBe(save.parentElement);
+    expect(sign.compareDocumentPosition(save) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('is absent with no unscanned import, and reports the count to a caller', async () => {
+    const seen: number[] = [];
+    mockApi({ unscannedImports: 0 });
+    render(<LLMProviderSettings mode="global" hideSaveButton onUnscannedImports={(n) => seen.push(n)} />);
+    await waitFor(() => expect(seen).toEqual([0]));
+    expect(screen.queryByTestId('token-cost-sign')).toBeNull();
+    cleanup();
+    mockApi({ unscannedImports: 2 });
+    render(<LLMProviderSettings mode="global" hideSaveButton onUnscannedImports={(n) => seen.push(n)} />);
+    await waitFor(() => expect(seen).toEqual([0, 2]));
+    // Save is hidden here, so the caller shows the sign beside its own button.
+    expect(screen.queryByTestId('token-cost-sign')).toBeNull();
   });
 });

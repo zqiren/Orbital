@@ -52,7 +52,7 @@ import { useT } from '../i18n/useT';
 import { useAgent } from '../hooks/useAgent';
 import { markChecked, useCheckedMarks } from '../hooks/useSeenReplies';
 import {
-  activityText, hideClosedAsk, holdCard, refreshFeed, useWorkbenchFeed,
+  activityText, hideClosedAsk, holdCard, refreshFeed, releaseCard, useWorkbenchFeed,
 } from '../hooks/useWorkbenchFeed';
 import { projectDisplayName } from '../utils/projectDisplayName';
 import { formatAskAnswer } from '../utils/askAnswer';
@@ -213,10 +213,15 @@ export default function WorkbenchPage({
       const content = ask ? formatAskAnswer(ask.id, ask.text, words) : words;
       const target = row.agent ?? undefined;
       holdCard({ ...row, session_id: sessionId });
-      await injectMessage(
+      const result = await injectMessage(
         row.project_id, content, target, newNonce(), undefined, sessionId, !!target,
         undefined, ask ? { id: ask.id, words } : undefined,
       );
+      // Spec 160 round 4: a 对 on the import scan's card is recorded by the
+      // daemon and starts no turn, so nothing would release the hold.
+      if (result && typeof result === 'object' && (result as { status?: string }).status === 'recorded') {
+        releaseCard(row.project_id, sessionId);
+      }
       void refreshFeed();
       return true;
     } catch {

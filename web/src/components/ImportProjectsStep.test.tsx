@@ -157,6 +157,49 @@ describe('ImportProjectsStep — the Import count', () => {
   });
 });
 
+describe('ImportProjectsStep — cost sign (spec 160 round 2)', () => {
+  it('counts the checked rows beside Import, with the key or the agent sentence', () => {
+    const { unmount } = render(<ImportProjectsStep scan={scanOf()} onImported={vi.fn()}
+      scanRunner={{ key: true, agent: null }} />);
+    const sign = screen.getByTestId('token-cost-sign');
+    expect(sign.getAttribute('data-kind')).toBe('importKey');
+    expect(sign.textContent).toBe(submit().textContent?.match(/\d+/)?.[0]);
+    expect(sign.nextElementSibling).toBe(submit());
+    unmount();
+    render(<ImportProjectsStep scan={scanOf()} onImported={vi.fn()}
+      scanRunner={{ key: false, agent: 'Claude Code' }} />);
+    expect(screen.getByTestId('token-cost-sign').getAttribute('data-kind')).toBe('importAgent');
+  });
+
+  it('round 2: switched off, the import request carries import_scan:false', async () => {
+    importResponse = async () => ({ created: [], skipped: [] });
+    render(<ImportProjectsStep scan={scanOf()} onImported={vi.fn()}
+      scanRunner={{ key: true, agent: null }} />);
+    fireEvent.click(screen.getByTestId('token-cost-sign'));
+    fireEvent.click(screen.getByTestId('token-cost-switch'));
+    await act(async () => { fireEvent.click(submit()); });
+    const post = apiMock.mock.calls.find(([p]) => p === '/api/v2/onboarding/import');
+    expect(JSON.parse(post?.[1]?.body).import_scan).toBe(false);
+  });
+
+  it('round 3: the wizard defers the read to its key step (defer_scan); the dialog does not', async () => {
+    for (const defer of [true, false]) {
+      apiMock.mockClear();
+      importResponse = async () => ({ created: [], skipped: [] });
+      const { unmount } = render(<ImportProjectsStep scan={scanOf()} onImported={vi.fn()} deferScan={defer} />);
+      await act(async () => { fireEvent.click(submit()); });
+      const post = apiMock.mock.calls.find(([p]) => p === '/api/v2/onboarding/import');
+      expect(JSON.parse(post?.[1]?.body).defer_scan).toBe(defer ? true : undefined);
+      unmount();
+    }
+  });
+
+  it('no runner (the wizard) shows no sign', () => {
+    render(<ImportProjectsStep scan={scanOf()} onImported={vi.fn()} />);
+    expect(screen.queryByTestId('token-cost-sign')).toBeNull();
+  });
+});
+
 describe('ImportProjectsStep — Import', () => {
   it('POSTs one import with the checked folders and groups, reports unchecks, and hands back the landing project', async () => {
     importResponse = async () => ({
@@ -182,6 +225,8 @@ describe('ImportProjectsStep — Import', () => {
         { id: 'grp_decks', workspace: '/Users/x/Desktop/decks' },
         { id: 'grp_loose', workspace: '/Users/x/new-decks' },
       ],
+      // Spec 160: the UI language the background read replies in.
+      lang: 'en',
     });
     expect(telemetry).toContainEqual({ event: 'projects_unchecked', fields: { n: 1 } });
     // grp_decks (2 days ago) is more recent than grp_loose (4 days ago).

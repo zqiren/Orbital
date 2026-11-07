@@ -65,7 +65,12 @@ class PromptContext:
     last_state_update_outcome: str | None = None
     refresh_in_flight: bool = False
     refresh_in_flight_since_turn: int | None = None
-    cold_start: bool = False  # first-session import scan mode (Stage 1-3)
+    # First-session import scan mode (Stage 1-3). True = the scan card's
+    # propose → confirm → write; "guess" / "guess:<zh|en>" = spec 160's
+    # background read of an imported project (write the guess → a short
+    # summary; the daemon posts the confirm card), in the import's UI
+    # language when it was known.
+    cold_start: bool | str = False
     # Scratch cross-project READ scope (Spec 12 §2a): [{"name","path"}] for
     # each in-scope project (secondary read roots). Empty/None for normal
     # projects and scratch sessions scoped off.
@@ -586,9 +591,23 @@ class PromptBuilder:
         is byte-identical to the inline text it replaced.
         """
         from agent_os.agent.onboarding_prompts import (
-            cold_start_instruction, interview_instruction,
+            cold_start_instruction, guess_first_instruction, interview_instruction,
         )
         from agent_os.agent.project_paths import ProjectPaths
+        # Spec 160 §5.4: more than one agent here (Orbital's own + a worker).
+        multi_agent = bool(context.enabled_agents) and not context.is_scratch
+        flavour = context.cold_start if isinstance(context.cold_start, str) else ""
+        guess = flavour == "guess" or flavour.startswith("guess:")
+        if guess:
+            # The scan run keeps its section, goals file or not; the queue
+            # resets the flavour when the run ends (round 4).
+            guess_lang = flavour.partition(":")[2]
+            if guess_lang not in ("zh", "en"):
+                # No UI language known: the system's (default_lang's rule).
+                from agent_os.onboarding.deferred_seed import default_lang
+                guess_lang = default_lang()
+            return guess_first_instruction(context.workspace, lang=guess_lang,
+                                           multi_agent=multi_agent)
         goals_path = ProjectPaths(context.workspace).project_goals
         content = self._read_truncated(goals_path)
         if content is None and context.cold_start:
@@ -598,6 +617,7 @@ class PromptBuilder:
                 context.workspace, is_scratch=context.is_scratch,
                 project_name=context.project_name,
                 project_instructions=context.project_instructions,
+                multi_agent=multi_agent,
             )
         return (
             "## PROJECT DIRECTIVE\n\n"

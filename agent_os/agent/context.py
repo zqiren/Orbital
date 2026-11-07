@@ -13,6 +13,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 from dataclasses import replace
 from datetime import datetime
 from typing import NamedTuple
@@ -170,6 +171,29 @@ MEMORY_TIDY_KIND = "memory_tidy"
 # runtime note rather than something the user typed (backlog #38).
 _RUNTIME_MARKER = "[runtime]"
 _RUNTIME_SEP = "\n\n"
+
+
+# Spec 160 round 4: a daemon instruction for ONE turn, folded into the user
+# message it answers (never a system row: DeepSeek hoists those). The model
+# reads it only while that message is the latest user turn; the chat never
+# shows it.
+_TURN_NOTE_RE = re.compile(r"\s*<orbital_turn_note>.*?</orbital_turn_note>", re.DOTALL)
+
+
+def strip_turn_notes(messages: list[dict]) -> list[dict]:
+    """Every user message's ``<orbital_turn_note>`` except the latest user
+    message's, removed from the copy bound for the provider (the session row
+    is never touched). The latest user message is the turn being answered."""
+    last_user = max((i for i, m in enumerate(messages) if m.get("role") == "user"),
+                    default=-1)
+    out = []
+    for i, msg in enumerate(messages):
+        content = msg.get("content")
+        if (i != last_user and msg.get("role") == "user" and isinstance(content, str)
+                and "<orbital_turn_note>" in content):
+            msg = {**msg, "content": _TURN_NOTE_RE.sub("", content)}
+        out.append(msg)
+    return out
 
 
 class ContextManager:
@@ -664,6 +688,9 @@ class ContextManager:
 
         # Daemon event rows ride the wire as positional turns
         sliding_window = self._remap_positional_events(sliding_window)
+        # Spec 160 round 4: a one-turn daemon note rides one user message;
+        # every older message is sent without it.
+        sliding_window = strip_turn_notes(sliding_window)
 
         # Apply tool result pruning on old messages
         sliding_window = self._prune_old_tool_results(sliding_window)

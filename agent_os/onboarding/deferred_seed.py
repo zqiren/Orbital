@@ -17,6 +17,17 @@ verbatim to ``orbital/imported/claude-code/``, listed in an ``INDEX.md``
 there, and pointed at by ONE line in ``orbital/INDEX.md``, so every agent in
 the project can read them. Unlike the first two steps, a failed fold leaves
 ``deferred_seed`` set and the next first use retries it.
+
+Spec 160 §5.1 splits the seed in two. The ``orbital/`` part (default skills +
+the fold) runs at import, keyless too, so the background scan has a folder
+to write its guess into: :func:`seed_orbital_folder`, which marks
+``orbital_seeded`` when it fully succeeded. The root ``AGENTS.md`` (the only
+write outside ``orbital/``) still waits for first use, and ``deferred_seed``
+keeps meaning "root file not yet written": :func:`ensure_project_seeded`
+writes it, re-running the ``orbital/`` part only when the import's run did
+not finish it (a failed fold is still retried on first use; a finished one
+is never copied over again). A v0.20.0 daemon ignores ``orbital_seeded`` and
+runs its whole first-use seed, which is idempotent.
 """
 
 from __future__ import annotations
@@ -35,6 +46,9 @@ DEFERRED_SEED_FIELD = "deferred_seed"
 # Durable "came from the import" marker (spec 153 §4.4): ``deferred_seed`` is
 # cleared on first use and cannot stand in for it.
 IMPORTED_FIELD = "imported"
+# Spec 160 §5.1: the ``orbital/`` part of the seed (skills + fold) finished at
+# import; first use then writes only the root AGENTS.md.
+ORBITAL_SEEDED_FIELD = "orbital_seeded"
 
 # Workspace-relative, POSIX separators (the wire form of a workspace path).
 IMPORTED_NOTES_DIR = "orbital/imported/claude-code"
@@ -49,6 +63,53 @@ def is_deferred(project: dict | None) -> bool:
     return isinstance(project, dict) and bool(project.get(DEFERRED_SEED_FIELD))
 
 
+def _seed_orbital_part(project_store, project_id: str, *, scanner=None,
+                       lang: str | None = None) -> bool:
+    """Default skills + the private-notes fold. True when both finished (a
+    skills failure reconciles on the next agent start, like project
+    creation); False when the fold failed. Caller holds ``_lock``."""
+    from agent_os.daemon_v2.default_skills_installer import install_default_skills
+    try:
+        install_default_skills(project_store, project_id)
+    except Exception:
+        logger.error("deferred seed: default skills failed for %s", project_id,
+                     exc_info=True)
+    workspace = (project_store.get_project(project_id) or {}).get("workspace") or ""
+    try:
+        n = fold_private_notes(workspace, workspace_notes(workspace, scanner), lang=lang)
+    except Exception:
+        logger.error("deferred seed: private notes fold failed for %s; "
+                     "retrying on next use", project_id, exc_info=True)
+        return False
+    logger.info("deferred seed: orbital/ seeded for %s (%d private notes folded)",
+                project_id, n)
+    return True
+
+
+def seed_orbital_folder(project_store, project_id: str, *, scanner=None,
+                        lang: str | None = None) -> bool:
+    """Spec 160 §5.1: the ``orbital/`` part of a deferred project's seed, run
+    at import. Returns True when this call ran it. ``deferred_seed`` stays
+    set (the root AGENTS.md still waits for first use); ``orbital_seeded``
+    is set only when the fold finished, so a failed fold is retried on first
+    use. Idempotent; never raises; blocking — call it off the event loop."""
+    try:
+        project = project_store.get_project(project_id)
+        if not is_deferred(project) or project.get(ORBITAL_SEEDED_FIELD):
+            return False
+        with _lock:
+            project = project_store.get_project(project_id)
+            if not is_deferred(project) or project.get(ORBITAL_SEEDED_FIELD):
+                return False
+            if _seed_orbital_part(project_store, project_id, scanner=scanner, lang=lang):
+                project_store.update_project(project_id, {ORBITAL_SEEDED_FIELD: True})
+            return True
+    except Exception:
+        logger.warning("deferred seed: could not seed orbital/ for %s", project_id,
+                       exc_info=True)
+        return False
+
+
 def ensure_project_seeded(project_store, project_id: str, *, scanner=None,
                           lang: str | None = None) -> bool:
     """Seed a deferred project now. Returns True when this call seeded it,
@@ -57,37 +118,31 @@ def ensure_project_seeded(project_store, project_id: str, *, scanner=None,
 
     ``scanner`` is the history scanner whose notes list feeds the fold (read
     directly for this one workspace when it is absent or not ready);
-    ``lang`` the language of the imported index's header line."""
+    ``lang`` the language of the imported index's header line.
+
+    The ``orbital/`` part is skipped when the import already finished it
+    (``orbital_seeded``, spec 160)."""
     try:
         if not is_deferred(project_store.get_project(project_id)):
             return False
         with _lock:
-            if not is_deferred(project_store.get_project(project_id)):
+            project = project_store.get_project(project_id)
+            if not is_deferred(project):
                 return False
             from agent_os.daemon_v2.agent_md_seeder import seed_project_agent_md
-            from agent_os.daemon_v2.default_skills_installer import install_default_skills
-            try:
-                install_default_skills(project_store, project_id)
-            except Exception:
-                logger.error("deferred seed: default skills failed for %s", project_id,
-                             exc_info=True)
+            orbital_ok = (bool(project.get(ORBITAL_SEEDED_FIELD))
+                          or _seed_orbital_part(project_store, project_id,
+                                                scanner=scanner, lang=lang))
             try:
                 seed_project_agent_md(project_store, project_id)
             except Exception:
                 logger.error("deferred seed: AGENTS.md failed for %s", project_id,
                              exc_info=True)
-            workspace = (project_store.get_project(project_id) or {}).get("workspace") or ""
-            try:
-                n = fold_private_notes(workspace, workspace_notes(workspace, scanner),
-                                       lang=lang)
-            except Exception:
+            if not orbital_ok:
                 # The field stays set: the next first use retries the fold.
-                logger.error("deferred seed: private notes fold failed for %s; "
-                             "retrying on next use", project_id, exc_info=True)
                 return True
             project_store.update_project(project_id, {DEFERRED_SEED_FIELD: False})
-            logger.info("deferred seed: seeded %s on first use (%d private notes folded)",
-                        project_id, n)
+            logger.info("deferred seed: seeded %s on first use", project_id)
             return True
     except Exception:
         logger.warning("deferred seed: could not seed %s", project_id, exc_info=True)

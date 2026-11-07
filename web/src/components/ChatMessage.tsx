@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Orbital Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { parseAskAnswer } from '../utils/askAnswer';
+import { parseAskAnswer, stripTurnNote } from '../utils/askAnswer';
 import { useState, type CSSProperties } from 'react';
 import type { DisplayItem } from '../utils/chatTransform';
 import { parseAttachmentsBlock } from '../lib/attachment-parsing';
@@ -101,7 +101,7 @@ export default function ChatMessage({ message, agentName, workspace, onOpenPath 
   if (message.type === 'user_message') {
     // An automation run's header line: the heading and the list row already
     // name the automation, so the bubble carries the task text only.
-    const { strippedContent: afterTrigger } = parseTriggerHeader(message.content);
+    const { strippedContent: afterTrigger } = parseTriggerHeader(stripTurnNote(message.content));
     const { strippedContent: afterAttachments, attachments } = parseAttachmentsBlock(afterTrigger);
     // Spec 132: a `/`-picked skill's block follows the attachments block.
     const { strippedContent, skill } = parseSkillBlock(afterAttachments);

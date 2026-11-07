@@ -350,6 +350,24 @@ describe('Workbench — card actions', () => {
     });
   });
 
+  it('spec 160 round 4: a 对 the daemon recorded (no turn) does not leave the card held in 进行中', async () => {
+    const scan = row({
+      session_id: 'scan', session_uuid: 'scan', name: '项目梳理',
+      ask: { id: 'a1b2c3', text: '这样理解对吗？', due: null, created: '2026-11-07', overdue: false, options: ['对', '需要改'], detail: '' },
+      last_reply_at: iso(2),
+    });
+    await renderPage([scan, ...FEED], {
+      'POST /api/v2/agents/proj-a/inject': () => ({ status: 'recorded', session_id: 'scan' }),
+    });
+    fireEvent.click(within(cardWith('这样理解对吗？')).getByRole('button', { name: '对' }));
+    await waitFor(() => expect(apiMock.mock.calls.some((c) => c[0] === '/api/v2/agents/proj-a/inject')).toBe(true));
+    // The feed answers without the card (its ask closed, the user spoke last).
+    routes['GET /api/v2/workbench/feed'] = () => ({ rows: FEED, window_days: 14 });
+    await act(async () => { await refreshFeed(); });
+    // Not drawn from a held snapshot in 进行中 either.
+    expect(cards().some((c) => (c.textContent ?? '').includes('这样理解对吗'))).toBe(false);
+  });
+
   it('a card answered from its field sits in 进行中 until the turn ends, then comes back to 等你 unchecked', async () => {
     await renderPage();
     const done = cardWith('Hero copy');

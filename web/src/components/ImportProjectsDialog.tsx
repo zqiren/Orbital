@@ -8,7 +8,8 @@
  * same checklist (ImportProjectsStep), the same scan, the same one POST.
  */
 
-import { useEffect, useId } from 'react';
+import { useEffect, useId, useState } from 'react';
+import { api } from '../config';
 import { X } from 'lucide-react';
 import { useT } from '../i18n/useT';
 import { useOnboardingScan } from '../hooks/useOnboardingScan';
@@ -24,6 +25,29 @@ export default function ImportProjectsDialog({ onClose, onImported }: ImportProj
   const t = useT();
   const titleId = useId();
   const scan = useOnboardingScan();
+  // Spec 160: who reads the imported projects once (the sign beside
+  // Import): Orbital with a key, else the user's own ready agent; else
+  // nobody (round 3: no longer tied to the wizard's Skip).
+  const [scanRunner, setScanRunner] = useState<{ key: boolean; agent: string | null } | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await api<{
+          llm?: { api_key_set?: boolean };
+              import_scan_agent?: { name: string } | null;
+        }>('/api/v2/settings');
+        if (cancelled || !data) return;
+        if (data.llm?.api_key_set) setScanRunner({ key: true, agent: null });
+        else if (data.import_scan_agent?.name) {
+          setScanRunner({ key: false, agent: data.import_scan_agent.name });
+        }
+      } catch {
+        /* no sign */
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -70,6 +94,7 @@ export default function ImportProjectsDialog({ onClose, onImported }: ImportProj
           skipLabel={t('importProjects.cancel')}
           onImported={onImported}
           scrollable
+          scanRunner={scanRunner}
         />
       </div>
     </div>

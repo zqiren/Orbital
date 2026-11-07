@@ -184,6 +184,14 @@ export function holdCard(row: WorkbenchFeedRow): void {
   set({ held });
 }
 
+/** Spec 160 round 4: the reply started no turn (the daemon recorded a 对 on
+ *  the import scan's confirm card): let the held card go at once. */
+export function releaseCard(projectId: string, sessionId: string | null | undefined): void {
+  const held = new Map(state.held);
+  if (!held.delete(sessionKeyOf(projectId, sessionId ?? null))) return;
+  set({ held });
+}
+
 export function hideClosedAsk(projectId: string, askId: string): void {
   set({ closedAsks: new Set([...state.closedAsks, `${projectId}\u0000${askId}`]) });
 }

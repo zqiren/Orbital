@@ -43,9 +43,17 @@ const MockApiError = vi.hoisted(() => {
   };
 });
 vi.mock('../config', () => ({ api: apiMock, ApiError: MockApiError }));
-vi.mock('./LLMProviderSettings', () => ({
-  default: () => <div data-testid="llm-provider-settings-stub" />,
-}));
+const stubUnscanned = vi.hoisted(() => ({ n: 0, agent: null as string | null }));
+vi.mock('./LLMProviderSettings', async () => {
+  const { useEffect } = await import('react');
+  return {
+    // Spec 160: the real form reports the unscanned-imports count it read.
+    default: ({ onUnscannedImports }: { onUnscannedImports?: (n: number, agent: string | null) => void }) => {
+      useEffect(() => { onUnscannedImports?.(stubUnscanned.n, stubUnscanned.agent); }, [onUnscannedImports]);
+      return <div data-testid="llm-provider-settings-stub" />;
+    },
+  };
+});
 
 type WsHandler = (event: unknown) => void;
 const wsHandlers = vi.hoisted(() => new Map<string, Set<(event: unknown) => void>>());
@@ -402,6 +410,20 @@ describe('SetupWizard — Finish', () => {
     expect(localStorage.getItem(TOUR_STORAGE_KEY)).toBe('pending');
   });
 
+  it('spec 160 round 3: with no key the import defers the read to the key step; with a key it does not', async () => {
+    for (const apiKeySet of [false, true]) {
+      apiMock.mockClear();
+      mockApi({ apiKeySet, importable: SOME_PROJECTS });
+      const { unmount } = render(<SetupWizard onComplete={vi.fn()} />);
+      await continueFromAgents();
+      await waitFor(() => expect(screen.getByText('Your projects')).toBeTruthy());
+      await act(async () => { fireEvent.click(screen.getByTestId('import-submit')); });
+      const post = apiMock.mock.calls.find(([p]) => p === '/api/v2/onboarding/import');
+      expect(JSON.parse(String((post?.[1] as RequestInit).body)).defer_scan).toBe(apiKeySet ? undefined : true);
+      unmount();
+    }
+  });
+
   it('without an import, hands App no landing project (Create Project follows)', async () => {
     mockApi({ apiKeySet: true });
     const onComplete = vi.fn();
@@ -637,6 +659,32 @@ describe('SetupWizard — skip the key step', () => {
     expect(screen.getByText('Next →')).toBeTruthy();
   });
 
+  it('shows the token sign beside Next only when imported projects wait (spec 160)', async () => {
+    mockApi({ apiKeySet: false });
+    stubUnscanned.n = 0;
+    await renderAtKey();
+    expect(screen.queryByTestId('token-cost-sign')).toBeNull();
+    cleanup();
+    stubUnscanned.n = 3;
+    mockApi({ apiKeySet: false });
+    await renderAtKey();
+    const sign = await screen.findByTestId('token-cost-sign');
+    expect(sign.textContent).toBe('3');
+    expect(sign.nextElementSibling?.textContent).toBe('Next →');
+    // No worker ready: nothing beside Skip.
+    expect(screen.getAllByTestId('token-cost-sign')).toHaveLength(1);
+    cleanup();
+    stubUnscanned.agent = 'Claude Code';
+    mockApi({ apiKeySet: false });
+    await renderAtKey();
+    const skipSign = (await screen.findAllByTestId('token-cost-sign'))
+      .find((el) => el.getAttribute('data-kind') === 'skip');
+    expect(skipSign?.textContent).toBe('3');
+    expect(skipSign?.nextElementSibling).toBe(screen.getByTestId('wizard-skip-key'));
+    stubUnscanned.n = 0;
+    stubUnscanned.agent = null;
+  });
+
   it('Skip persists setup_api_key_skipped and advances to the accounts step', async () => {
     mockApi({ apiKeySet: false });
     await renderAtKey();
@@ -646,6 +694,22 @@ describe('SetupWizard — skip the key step', () => {
 
     // [0] is the Agents step's hidden list.
     expect(settingsPuts().slice(1)).toEqual([{ setup_api_key_skipped: true }]);
+  });
+
+  it('round 2: Skip with the sign switched off sends import_scan:false', async () => {
+    stubUnscanned.n = 2;
+    stubUnscanned.agent = 'Claude Code';
+    mockApi({ apiKeySet: false });
+    await renderAtKey();
+    const skipSign = (await screen.findAllByTestId('token-cost-sign'))
+      .find((el) => el.getAttribute('data-kind') === 'skip')!;
+    fireEvent.click(skipSign);
+    fireEvent.click(screen.getByTestId('token-cost-switch'));
+    fireEvent.click(screen.getByTestId('wizard-skip-key'));
+    await waitFor(() => expect(screen.getByText('Connect Your Accounts')).toBeTruthy());
+    expect(settingsPuts().slice(1)).toEqual([{ setup_api_key_skipped: true, import_scan: false }]);
+    stubUnscanned.n = 0;
+    stubUnscanned.agent = null;
   });
 
   it('a failed Skip shows an error line and stays on the key step', async () => {

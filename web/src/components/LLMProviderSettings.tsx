@@ -19,10 +19,14 @@ import type { Locale } from '../i18n/locales';
 import watchaLogo from '../assets/watcha-logo.png';
 import Select from './Select';
 import ProviderCombobox from './ProviderCombobox';
+import TokenCostSign from './TokenCostSign';
 
 interface LLMSettingsResponse {
   /** Spec-less keyless mode (2026-10-21): the wizard's "Skip for now" choice. */
   setup?: { api_key_skipped?: boolean };
+  /** Spec 160 §5.3: imported projects a saved key would read once. */
+  unscanned_imports?: number;
+  import_scan_agent?: { slug: string; name: string } | null;
   llm: {
     api_key_set: boolean;
     api_key_masked: string;
@@ -51,6 +55,14 @@ interface LLMProviderSettingsProps {
   hideSaveButton?: boolean;
   /** Ref to expose save function to parent */
   saveRef?: React.MutableRefObject<(() => Promise<boolean>) | null>;
+  /** Spec 160 §5.3: the unscanned-imports count this form read, for a caller
+   *  that hides the Save button and shows the token sign beside its own;
+   *  `agent` is the product name of the worker a keyless scan would use. */
+  onUnscannedImports?: (n: number, agent: string | null) => void;
+  /** Round 2: the opt-out switch of a sign the caller shows beside its own
+   *  button (the wizard's 下一步). Absent: this form's own sign beside Save
+   *  holds it. Off rides on the save request as ``import_scan: false``. */
+  importScan?: boolean;
   /** Provider picker style. 'cards' is wizard-only (Spec 17): since spec 138
    * a searchable combobox (ProviderCombobox), no longer a chip row; everywhere
    * else keeps the compact dropdown. Default 'dropdown'. */
@@ -127,6 +139,8 @@ export default function LLMProviderSettings({
   onCardSaved,
   hideSaveButton,
   saveRef,
+  onUnscannedImports,
+  importScan,
   providerPicker = 'dropdown',
 }: LLMProviderSettingsProps) {
   const t = useT();
@@ -143,6 +157,11 @@ export default function LLMProviderSettings({
   // before creating a project" — projects work, pinned to their agent.
   const [apiKeySkipped, setApiKeySkipped] = useState(false);
   const [globalLoaded, setGlobalLoaded] = useState(false);
+  const [unscannedImports, setUnscannedImports] = useState(0);
+  const [scanOn, setScanOn] = useState(true);
+  const effectiveScan = importScan ?? scanOn;
+  const onUnscannedRef = useRef(onUnscannedImports);
+  onUnscannedRef.current = onUnscannedImports;
 
   // Field state
   const [provider, setProvider] = useState('');
@@ -222,6 +241,9 @@ export default function LLMProviderSettings({
         if (!cancelled) {
           setGlobalSettings(data.llm);
           setApiKeySkipped(!!data.setup?.api_key_skipped);
+          const n = typeof data.unscanned_imports === 'number' ? data.unscanned_imports : 0;
+          setUnscannedImports(n);
+          onUnscannedRef.current?.(n, data.import_scan_agent?.name ?? null);
         }
       } catch {
         // not configured
@@ -734,6 +756,8 @@ export default function LLMProviderSettings({
         body.base_url = typedBaseUrl;
       }
       if (apiKey.trim()) body.api_key = apiKey.trim();
+      // Round 2: the sign's switch was off — don't read the waiting imports.
+      if (!effectiveScan) body.import_scan = false;
       // Only when edited: an untouched name stays auto-generated, so it
       // keeps following provider/model the way the daemon intends.
       if (cardName.trim() && cardName.trim() !== (card?.name ?? '')) {
@@ -1223,6 +1247,7 @@ export default function LLMProviderSettings({
       {!hideSaveButton && (
         <div className="pt-2">
           <div className="flex items-center gap-3">
+            <TokenCostSign n={unscannedImports} scan={scanOn} onScanChange={setScanOn} />
             <button
               type="submit"
               disabled={saving || card?.read_only || !connectionTested}

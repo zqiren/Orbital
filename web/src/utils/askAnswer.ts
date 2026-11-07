@@ -16,3 +16,12 @@ export function parseAskAnswer(content: string): { question: string | null; rest
   if (!match) return { question: null, rest: content };
   return { question: match[1], rest: content.replace(ANSWER_RE, '') };
 }
+
+/** Spec 160 round 4: the one-turn daemon note the inject route folds into an
+ *  answer to the import scan's confirm card. The model reads it on that turn;
+ *  the chat never shows it. */
+const TURN_NOTE_RE = /\s*<orbital_turn_note>[\s\S]*?<\/orbital_turn_note>/g;
+
+export function stripTurnNote(content: string): string {
+  return content.includes('<orbital_turn_note>') ? content.replace(TURN_NOTE_RE, '') : content;
+}

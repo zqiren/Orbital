@@ -154,6 +154,9 @@ class UpdateSettingsRequest(BaseModel):
     setup_api_key_skipped: bool | None = None
     # Spec 138: global hidden sub-agents (replace). Omitted = untouched.
     sub_agents_hidden: list[str] | None = None
+    # Spec 160 round 2: the sign's switch beside Skip. False = don't read the
+    # imported projects still waiting. Omitted = untouched.
+    import_scan: bool | None = None
 
 
 class SetApiKeyRequest(BaseModel):
@@ -169,6 +172,9 @@ class CreateCardRequest(BaseModel):
     sdk: str | None = None
     api_key: str | None = None
     model: str
+    # Spec 160 round 2: the sign's switch beside Save. False = don't read
+    # the imported projects still waiting. Not a card field.
+    import_scan: bool | None = None
 
 
 class UpdateCardRequest(BaseModel):
@@ -184,6 +190,8 @@ class UpdateCardRequest(BaseModel):
     sdk: str | None = None
     api_key: str | None = None
     model: str | None = None
+    # Spec 160 round 2: as on CreateCardRequest. Not a card field.
+    import_scan: bool | None = None
 
 
 def _card_error(code: str, message: str, status: int = 400) -> HTTPException:
@@ -267,6 +275,8 @@ async def create_card(req: CreateCardRequest):
     test = await _test_and_record(card.id, reuse_recent=True)
     # Pi borrows a card key for its configured model's provider.
     _refresh_agents_in_background(_model_provider_slugs())
+    _import_scan_switch(req.import_scan)
+    _import_scan_kick("card_created")
     return {"card": _masked(card.id), "test": test}
 
 
@@ -280,7 +290,7 @@ async def update_card(card_id: str, req: UpdateCardRequest):
     _reject_read_only(card_id)
     card = _card_or_404(card_id)
     fields = {k: v for k, v in req.model_dump().items()
-              if k in req.model_fields_set}
+              if k in req.model_fields_set and k != "import_scan"}
     if "name" in fields and not (fields["name"] or "").strip():
         fields.pop("name")
     provider = fields.get("provider", card.provider)
@@ -297,6 +307,9 @@ async def update_card(card_id: str, req: UpdateCardRequest):
     test = await _test_and_record(card_id, reuse_recent=True) if retest else None
     if retest:
         _refresh_agents_in_background(_model_provider_slugs())
+    _import_scan_switch(req.import_scan)
+    if "api_key" in fields:
+        _import_scan_kick("card_updated")
     return {"card": _masked(card_id), "test": test}
 
 
@@ -360,6 +373,7 @@ async def set_default_card(card_id: str):
     if card_id != ENV_CARD_ID:
         _settings_store.set_default_card(card_id)
     effective = _settings_store.effective_default_card_id()
+    _import_scan_kick("default_card_changed")
     return {"default_card_id": effective, "applied": effective == card_id}
 
 
@@ -371,9 +385,39 @@ async def test_card(card_id: str):
     return {"card": _masked(card_id), "test": test}
 
 
+def _import_scan_switch(on: bool | None) -> None:
+    """The sign's switch rode on this request: off turns every imported
+    project still waiting to ``off`` before the action's trigger fires."""
+    if on is False:
+        from agent_os.onboarding.import_scan import turn_off_waiting
+        turn_off_waiting(_project_store)
+
+
+def _import_scan_kick(reason: str) -> None:
+    """Spec 160 §5.2 trigger 2: a key became available, so imported projects
+    still waiting for their one read can start (the queue checks each
+    project's key itself; a no-op when nothing waits)."""
+    from agent_os.onboarding import import_scan
+    import_scan.kick(reason)
+
+
 @router.get("/settings")
 async def get_settings():
-    return _settings_store.get_masked()
+    from agent_os.onboarding.import_scan import unscanned_count
+
+    out = _settings_store.get_masked()
+    # Spec 160 §5.3: how many imported projects a key saved now would read
+    # once (the token sign beside the key form's Save).
+    if isinstance(out, dict):
+        out = {**out, "unscanned_imports": await asyncio.to_thread(
+            unscanned_count, _project_store)}
+        # Round 2: the agent a keyless scan would spend ({slug, name}), for
+        # the sign beside Skip and the import dialog. None: no worker ready.
+        from agent_os.api.routes import agents_v2
+        from agent_os.onboarding.import_scan import scan_agent
+        out["import_scan_agent"] = await asyncio.to_thread(
+            scan_agent, agents_v2._agent_manager, _project_store)
+    return out
 
 
 def _apply_legacy_llm_fields(req: UpdateSettingsRequest) -> None:
@@ -499,9 +543,15 @@ async def update_settings(req: UpdateSettingsRequest):
         telemetry.emit("key_set",
                        {"provider": card.provider if card else "custom"})
         telemetry.latch("key_set")
+        _import_scan_kick("legacy_key_saved")
     if req.setup_api_key_skipped:
         # Spec 138: the wizard's "Skip for now" on the Orbital-agent key step.
         telemetry.latch("key_skipped")
+        # Spec 160 round 2: the user chose their own agents, so imported
+        # projects are read by the pinned worker now (unless the sign's
+        # switch beside Skip was off).
+        _import_scan_switch(req.import_scan)
+        _import_scan_kick("key_skipped")
 
     return _settings_store.get_masked()
 
@@ -523,6 +573,7 @@ async def set_api_key(req: SetApiKeyRequest):
     telemetry.emit("key_set",
                    {"provider": card.provider if card else "custom"})
     telemetry.latch("key_set")
+    _import_scan_kick("legacy_key_saved")
     return {**result, "card_id": result.get("card_id",
                                             card.id if card else None)}
 

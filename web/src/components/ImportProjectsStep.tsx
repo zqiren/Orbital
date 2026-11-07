@@ -24,6 +24,8 @@ import { useState } from 'react';
 import { Check, ChevronDown, ChevronRight, FolderOpen, Loader2 } from 'lucide-react';
 import { api } from '../config';
 import { useT } from '../i18n/useT';
+import { useLocale } from '../i18n/LocaleContext';
+import TokenCostSign from './TokenCostSign';
 import type { StringKey } from '../i18n/strings';
 import { formatRelativeTime } from '../utils/relativeTime';
 import {
@@ -58,6 +60,14 @@ interface ImportProjectsStepProps {
   /** The dialog's layout: the list scrolls and the actions sit in a footer
    *  below it, always in view (a long list used to hide Cancel and Import). */
   scrollable?: boolean;
+  /** Spec 160 round 2 (the dialog only): who reads the imported projects
+   *  once — Orbital with the key, else the user's own agent (product name).
+   *  Null/absent: nobody, no sign. The wizard imports before its key step,
+   *  so it passes nothing. */
+  scanRunner?: { key: boolean; agent: string | null } | null;
+  /** The wizard: its import comes before the key step, so the read waits
+   *  for that step's Save or Skip (``defer_scan`` on the request). */
+  deferScan?: boolean;
 }
 
 const basename = (p: string) => p.replace(/\\/g, '/').split('/').filter(Boolean).pop() ?? p;
@@ -92,13 +102,18 @@ export default function ImportProjectsStep({
   onSkip,
   skipLabel,
   scrollable = false,
+  scanRunner,
+  deferScan = false,
 }: ImportProjectsStepProps) {
   const t = useT();
+  const { locale } = useLocale();
   const [ticks, setTicks] = useState<TickOverrides>({});
   const [chosen, setChosen] = useState<Record<string, string>>({});
   const [showMinor, setShowMinor] = useState(false);
   const [browsingGroup, setBrowsingGroup] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
+  // Round 2 opt-out (the dialog's sign): off = import without the read.
+  const [scanOn, setScanOn] = useState(true);
   const [importError, setImportError] = useState(false);
 
   const data = scan.importable;
@@ -121,7 +136,13 @@ export default function ImportProjectsStep({
     try {
       const result = await api<ImportResult>('/api/v2/onboarding/import', {
         method: 'POST',
-        body: JSON.stringify(request),
+        // Spec 160: the language the background read replies in.
+        body: JSON.stringify({
+          ...request,
+          lang: locale,
+          ...(scanRunner && !scanOn ? { import_scan: false } : {}),
+          ...(deferScan ? { defer_scan: true } : {}),
+        }),
       });
       const safe: ImportResult = {
         created: Array.isArray(result?.created) ? result.created : [],
@@ -354,6 +375,15 @@ export default function ImportProjectsStep({
           >
             {skipLabel ?? t('wizard.skip')}
           </button>
+        )}
+        {scanRunner && (
+          <TokenCostSign
+            n={count}
+            kind={scanRunner.key ? 'importKey' : 'importAgent'}
+            agent={scanRunner.agent}
+            scan={scanOn}
+            onScanChange={setScanOn}
+          />
         )}
         <button
           type="button"
