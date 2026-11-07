@@ -285,6 +285,23 @@ def _reasoning_off_payload(spec: str) -> dict | None:
     return None
 
 
+#: ``(provider, base_url, model)`` whose reasoning-off switch the server
+#: refused this process (see ``_complete_openai``).
+_REASONING_OFF_REJECTED: set[tuple] = set()
+
+
+def _rejects_reasoning_off(exc) -> bool:
+    """True when *exc* is a 400 saying reasoning/thinking cannot be turned
+    off, i.e. the request's reasoning-off switch was refused."""
+    if getattr(exc, "status_code", None) != 400:
+        return False
+    text = str(exc).lower()
+    if not any(w in text for w in ("thinking", "reasoning")):
+        return False
+    return any(w in text for w in ("not supported", "unsupported", "only",
+                                   "cannot", "can't", "not allowed", "invalid"))
+
+
 def _content_is_blank(content) -> bool:
     """True when a message's content is empty/whitespace-only.
 
@@ -693,6 +710,9 @@ class LLMProvider:
             return True
         return _reasoning_off_payload(enable[len("param:"):]) is None
 
+    def _off_key(self) -> tuple:
+        return (self.provider, self.base_url, self.model)
+
     def _inline_think_mode(self) -> bool:
         """True when this model emits reasoning inline as ``<think>…</think>``
         within ``content`` (ReasoningInfo.field is None + supported). Such
@@ -989,7 +1009,7 @@ class LLMProvider:
         """OpenAI SDK non-streaming path."""
         messages = self._prepare_messages_openai(messages)
         extra_kwargs: dict = {}
-        if disable_reasoning:
+        if disable_reasoning and self._off_key() not in _REASONING_OFF_REJECTED:
             off_switch = _build_reasoning_off_switch(self.model, self.reasoning)
             if off_switch is not None:
                 extra_kwargs["extra_body"] = off_switch
@@ -1010,7 +1030,28 @@ class LLMProvider:
         except (ContextOverflowError, LLMError):
             raise
         except Exception as exc:
-            _classify_error(exc)
+            if "extra_body" not in body or not _rejects_reasoning_off(exc):
+                _classify_error(exc)
+            # The catalog says reasoning can be turned off, the model says it
+            # cannot (OpenCode Go's glm-5.2 now answers as the thinking-only
+            # GLM-5.3, smoke 2026-11-07). Go once more with reasoning on, and
+            # stop sending the switch for this model until the daemon restarts
+            # (callers like the Workbench router build a provider per call).
+            logging.getLogger(__name__).warning(
+                "model %s rejected the reasoning-off switch; retrying "
+                "with reasoning on: %s", self.model, str(exc)[:200])
+            _REASONING_OFF_REJECTED.add(self._off_key())
+            body.pop("extra_body")
+            _dump_llm_request(self, body, path="complete", headers=headers)
+            try:
+                response = await self._openai_client.chat.completions.create(
+                    **body,
+                    **_extra_headers_kw(headers),
+                )
+            except (ContextOverflowError, LLMError):
+                raise
+            except Exception as exc2:
+                _classify_error(exc2)
 
         choice = response.choices[0]
         message = choice.message
