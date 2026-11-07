@@ -11,7 +11,8 @@ NO row, NO terminal log, and NO daemon-log error. With instrumentation it must
 be visible at BOTH layers on the real callback path:
 
   - loop layer (Point 3): a `run_terminal` diag with disposition=error,
-    rows_appended=0 (the silent fingerprint), emitted from run()'s finally.
+    emitted from run()'s finally. The backstop persists one failure row, so
+    rows_appended=1 and that row is the visible run-failure notice.
   - manager layer (Point 4): AgentManager._on_loop_done logs the exception
     type/message/traceback (real callback, not a mock).
 
@@ -117,7 +118,11 @@ async def test_uncaught_exception_visible_at_both_layers(tmp_path, caplog):
                  and r.diag.get("event") == "run_terminal"]
     assert len(terminals) == 1, f"expected one run_terminal, got {terminals}"
     assert terminals[0]["disposition"] == "error"
-    assert terminals[0]["rows_appended"] == 0
+    assert terminals[0]["rows_appended"] == 1
+    failure_rows = [m for m in session.get_messages()
+                    if m["role"] == "system"
+                    and "Run failed (RuntimeError)" in m.get("content", "")]
+    assert len(failure_rows) == 1, session.get_messages()
 
     # Point 4 — manager logged the exception type + message (real callback).
     mgr_errors = [r for r in caplog.records

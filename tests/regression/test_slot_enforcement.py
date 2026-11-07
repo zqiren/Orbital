@@ -71,7 +71,7 @@ def _stale_handle() -> MagicMock:
 
 def _config() -> MagicMock:
     c = MagicMock()
-    c.api_key = ""
+    c.api_key = "sk-test"
     c.llm_fallback_models = []
     c.utility_model = None
     return c

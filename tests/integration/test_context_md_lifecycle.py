@@ -14,10 +14,9 @@ Uses a mock LLM (no live API key) to drive run_session_end_routine and verify:
 
 from __future__ import annotations
 
-import json
-
 import pytest
 
+from agent_os.agent import memory_editor
 from agent_os.agent.workspace_files import WorkspaceFileManager, run_session_end_routine
 from agent_os.agent.session import Session
 from agent_os.agent.context import ContextManager
@@ -37,29 +36,12 @@ def _base_ctx(workspace: str) -> PromptContext:
     )
 
 
-class _Resp:
-    def __init__(self, text):
-        self.text = text
-
-
-class _JsonProvider:
-    """Mock provider whose complete() returns a fixed JSON session-end payload."""
-
-    def __init__(self, payload: dict):
-        self._text = json.dumps(payload)
-
-    async def complete(self, messages, tools=None, disable_reasoning=False):
-        return _Resp(self._text)
-
-    async def stream(self, messages, tools=None, **kwargs):
-        # The merge streams (a 15-min idle connection is unreliable); replay
-        # complete()'s payload as chunks so this test keeps its own subject.
-        from agent_os.agent.providers.types import StreamChunk, TokenUsage
-        resp = await self.complete(messages)
-        text = getattr(resp, "text", "") or ""
-        for i in range(0, len(text), 256):
-            yield StreamChunk(text=text[i:i + 256])
-        yield StreamChunk(is_final=True, usage=TokenUsage(input_tokens=1, output_tokens=1))
+def _memory_turn(mgr, index_text):
+    """A Memory-session turn that rewrites INDEX.md to ``index_text``."""
+    async def run_turn(task_text):
+        mgr.write("index", index_text)
+        return memory_editor.TurnResult(mode="disk", llm_calls=1, ended="text_complete")
+    return run_turn
 
 
 NEW_CONTEXT = (
@@ -81,13 +63,11 @@ async def test_session_end_restructures_old_context_md(tmp_path):
     session = Session.new("ctxlife", str(tmp_path))
     session.append({"role": "user", "content": "did stuff", "source": "user"})
 
-    provider = _JsonProvider({
-        "project_state": "Working on CONTEXT.md feature.",
-        "index": NEW_CONTEXT,
-    })
+    run_turn = _memory_turn(mgr, NEW_CONTEXT)
 
     await run_session_end_routine(
-        session, provider, mgr, session_uuid=session.session_uuid, force=True,
+        session, None, mgr, session_uuid=session.session_uuid, force=True,
+        run_turn=run_turn,
     )
 
     updated = mgr.read("index")
@@ -95,7 +75,7 @@ async def test_session_end_restructures_old_context_md(tmp_path):
     assert "## Overview" in updated and "## Key Files" in updated
     # old flat-only content replaced (no longer just dash entries); the write
     # path self-heals the <!--format--> header on top.
-    assert updated.endswith(NEW_CONTEXT + "\n")
+    assert updated.endswith(NEW_CONTEXT)
     assert "- **Tencent:** vendor" not in updated
 
 
@@ -108,9 +88,10 @@ async def test_updated_context_md_appears_in_next_prepare(tmp_path):
     session = Session.new("ctxlife2", str(tmp_path))
     session.append({"role": "user", "content": "x", "source": "user"})
 
-    provider = _JsonProvider({"project_state": "s", "index": NEW_CONTEXT})
+    run_turn = _memory_turn(mgr, NEW_CONTEXT)
     await run_session_end_routine(
-        session, provider, mgr, session_uuid=session.session_uuid, force=True,
+        session, None, mgr, session_uuid=session.session_uuid, force=True,
+        run_turn=run_turn,
     )
 
     # Fresh session reads the updated file from disk

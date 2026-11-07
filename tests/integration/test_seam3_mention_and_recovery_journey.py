@@ -81,7 +81,10 @@ def test_mention_journey_reaches_running_sub_agent(client_and_project):
     assert resp.status_code == 200, resp.text
     # The route reached send() (not the seam-3 resolver crash) and dispatched.
     assert "Message sent to researcher" in resp.json()["status"]
-    assert sam._adapters[make_session_key(pid, sid)]["researcher"]._transport.dispatched == "hello"
+    # Dispatch may carry a context preamble (recap / source-log paths) ahead
+    # of the user's message; the message itself must arrive last, intact.
+    dispatched = sam._adapters[make_session_key(pid, sid)]["researcher"]._transport.dispatched
+    assert dispatched.endswith("\n\nhello")
 
 
 def test_session_less_pending_approval_poll_returns_200_not_500(client_and_project):

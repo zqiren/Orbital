@@ -29,6 +29,7 @@ import pytest
 
 from agent_os.config.provider_registry import ProviderRegistry
 from agent_os.daemon_v2.agent_manager import AgentManager
+from tests.card_doubles import FakeCardStore
 
 
 # ── stubs (mirrors tests/regression/test_api_key_refresh.py) ────────────
@@ -69,18 +70,6 @@ class FakeCredentialStore:
         return self._key
 
 
-class FakeSettingsStore:
-    def __init__(self, api_key=None, model=None, base_url=None, provider=None):
-        self._settings = MagicMock()
-        self._settings.llm.api_key = api_key
-        self._settings.llm.model = model
-        self._settings.llm.base_url = base_url
-        self._settings.llm.provider = provider
-
-    def get(self):
-        return self._settings
-
-
 class FakeActivityTranslator:
     def on_message(self, msg, pid, session_id=None):
         pass
@@ -103,7 +92,8 @@ class RecordingProviderFactory:
 
     def __call__(self, model, api_key=None, base_url=None, sdk="openai",
                  max_output=16384, capabilities=None, reasoning=None,
-                 provider="unknown"):
+                 provider="unknown", extra_headers=None, session_header=None,
+                 session_scope=None):
         inst = MagicMock(name=f"LLMProvider({provider}/{model})")
         inst.model = model
         inst.api_key = api_key
@@ -129,15 +119,20 @@ class RecordingProviderFactory:
 PROJECT_A = {
     "id": "proj_live",
     "name": "live-resolve",
-    "api_key": "key-a",
-    "model": "kimi-k2",
-    "provider": "moonshot",
-    "base_url": "https://api.moonshot.cn/v1",
-    "sdk": "openai",
+    "card_id": "card_a",
     "autonomy": "hands_off",
 }
 
 SESSION_ID = "sess-live-resolve"
+
+
+def _make_cards():
+    cards = FakeCardStore()
+    cards.add(card_id="card_a", provider="moonshot", model="kimi-k2",
+              key="key-a", base_url="https://api.moonshot.cn/v1")
+    cards.add(card_id="card_b", provider="deepseek", model="deepseek-chat",
+              key="key-b", base_url="https://api.deepseek.com")
+    return cards
 
 
 def _make_manager(project_store):
@@ -150,7 +145,7 @@ def _make_manager(project_store):
         platform_provider=None,
         registry=MagicMock(),
         setup_engine=None,
-        settings_store=FakeSettingsStore(),
+        settings_store=_make_cards(),
         credential_store=FakeCredentialStore(),
         browser_manager=None,
         user_credential_store=None,
@@ -173,12 +168,7 @@ async def _start_session(mgr, project_id):
 
 
 def _switch_project_to_b(project_store, project_id):
-    project_store._projects[project_id].update({
-        "provider": "deepseek",
-        "model": "deepseek-chat",
-        "base_url": "https://api.deepseek.com",
-        "api_key": "key-b",
-    })
+    project_store._projects[project_id].update({"card_id": "card_b"})
 
 
 @pytest.mark.asyncio

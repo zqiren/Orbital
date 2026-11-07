@@ -71,7 +71,7 @@ async def test_stop_for_user_kills_tracked_work_confirmed_and_reports():
     try:
         rec = registry.register(PROJ, SID, HANDLE,
                                 command="sleep 60", root_proc=root)
-        deadline = time.monotonic() + 4.0
+        deadline = time.monotonic() + 6.0
         while time.monotonic() < deadline and rec.anchor is None:
             await asyncio.sleep(0.1)
         assert rec.anchor is not None

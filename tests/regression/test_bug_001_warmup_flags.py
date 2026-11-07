@@ -60,9 +60,12 @@ async def test_warmup_uses_full_chrome_flags(browser_manager):
 
         # Critical anti-detection flag must be present
         assert "--disable-blink-features=AutomationControlled" in args
-        # All CHROME_FLAGS should be included
+        # All CHROME_FLAGS should be included, except --start-minimized: the
+        # sign-in window must stay visible for the user to close it.
+        assert "--start-minimized" not in args
         for flag in BrowserManager.CHROME_FLAGS:
-            assert flag in args, f"Missing flag: {flag}"
+            if flag != "--start-minimized":
+                assert flag in args, f"Missing flag: {flag}"
 
 
 @pytest.mark.asyncio

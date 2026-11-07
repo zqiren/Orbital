@@ -72,6 +72,7 @@ async def test_loop_accumulates_session_cache_tokens(tmp_path):
         _CacheProvider(input_tok=1000, output_tok=20, cache_read_tok=800),
         _MockToolRegistry(),
         cm,
+        memory_record_enabled=False,
     )
 
     persist_user_row(loop._session, "hi")
@@ -90,6 +91,7 @@ async def test_loop_logs_session_cache_summary_at_run_end(tmp_path, caplog):
         _CacheProvider(input_tok=1000, output_tok=20, cache_read_tok=750),
         _MockToolRegistry(),
         cm,
+        memory_record_enabled=False,
     )
 
     with caplog.at_level(logging.INFO, logger="orbital.cache_audit"):

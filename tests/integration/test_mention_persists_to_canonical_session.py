@@ -83,8 +83,10 @@ def test_mention_persists_to_dispatched_session_and_survives_reload(client_proje
               "session_id": sid},
     )
     assert resp.status_code == 200, resp.text
-    # Dispatch reached the running sub-agent.
-    assert sam._adapters[make_session_key(pid, sid)]["claude-code"]._transport.dispatched == content
+    # Dispatch reached the running sub-agent. A worker's first dispatch carries
+    # a recap block ahead of the authored message, so the message is the tail.
+    dispatched = sam._adapters[make_session_key(pid, sid)]["claude-code"]._transport.dispatched
+    assert dispatched.endswith(content), dispatched
 
     sessions_dir = ProjectPaths(workspace).sessions_dir
     # No fabricated subagent_<hex> session was minted.

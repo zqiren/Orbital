@@ -91,6 +91,7 @@ def _build_loop(tmp_path, *, budget_config, on_budget_event, output_tokens=50):
         get_budget_config=get_budget_config,
         on_budget_event=on_budget_event,
         max_iterations=5,
+        memory_record_enabled=False,
     )
     return loop
 

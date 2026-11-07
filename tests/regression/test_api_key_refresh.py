@@ -15,6 +15,7 @@ key matches the global key, so projects inherit the live global key at runtime.
 """
 
 import asyncio
+import json
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -22,6 +23,7 @@ from agent_os.agent.providers.openai_compat import LLMProvider
 from agent_os.daemon_v2.agent_manager import AgentManager, ProjectHandle
 from agent_os.daemon_v2.models import AgentConfig
 from agent_os.daemon_v2.credential_store import ApiKeyStore
+from agent_os.daemon_v2.settings_store import CredentialCard
 from agent_os.config.provider_registry import ProviderRegistry
 
 
@@ -96,6 +98,21 @@ class FakeSettingsStore:
     def get(self):
         return self._settings
 
+    def default_card(self):
+        return CredentialCard(
+            id="card_global", name="Global", provider="custom",
+            model=self._settings.llm.model, base_url=self._settings.llm.base_url,
+        )
+
+    def resolve_card(self, card_id):
+        return None
+
+    def key_for(self, card_id):
+        return self._settings.llm.api_key or ""
+
+    def touch_card_used(self, card_id):
+        pass
+
 
 class FakeActivityTranslator:
     def on_message(self, msg, pid):
@@ -145,19 +162,16 @@ def _make_manager(project_store=None, credential_store=None, settings_store=None
 async def test_hot_resume_uses_updated_key(tmp_path):
     """After the global key changes, _start_loop() should refresh the provider."""
     project_id = "proj_001"
-    cred_store = FakeCredentialStore(key="new-key")
     project_store = FakeProjectStore({
         project_id: {
             "id": project_id,
             "workspace": str(tmp_path),
-            "api_key": "",  # empty -> inherits global key
             "name": "test",
         },
     })
     mgr = _make_manager(
         project_store=project_store,
-        credential_store=cred_store,
-        settings_store=FakeSettingsStore(),
+        settings_store=FakeSettingsStore(api_key="new-key"),  # rotated key
     )
 
     # Start agent with old key
@@ -190,22 +204,20 @@ async def test_hot_resume_uses_updated_key(tmp_path):
 async def test_hot_resume_no_op_when_key_unchanged(tmp_path):
     """When the key hasn't changed, the internal client object should be preserved."""
     project_id = "proj_002"
-    cred_store = FakeCredentialStore(key="same-key")
     project_store = FakeProjectStore({
         project_id: {
             "id": project_id,
             "workspace": str(tmp_path),
-            "api_key": "",
             "name": "test",
         },
     })
     mgr = _make_manager(
         project_store=project_store,
-        credential_store=cred_store,
-        settings_store=FakeSettingsStore(),
+        settings_store=FakeSettingsStore(api_key="same-key"),
     )
 
     config = _make_config(str(tmp_path), api_key="same-key")
+    config.card_id = "card_global"
     await mgr.start_agent(project_id, config, session_id=SID)
 
     handle = mgr._handles[(project_id, SID)]
@@ -288,8 +300,8 @@ def test_create_project_does_not_copy_global_key(tmp_path):
         store = ProjectStore(data_dir=data_dir)
         project = store.get_project(pid)
         assert project is not None
-        assert project["api_key"] == "", \
-            f"Expected empty string but got '{project['api_key']}'"
+        assert "api_key" not in project
+        assert "global-key" not in str(project)
     finally:
         agents_v2._credential_store = original_cred
 
@@ -297,8 +309,8 @@ def test_create_project_does_not_copy_global_key(tmp_path):
 # ── Test 5: create_project preserves different key ──────────────────────
 
 
-def test_create_project_preserves_different_key(tmp_path):
-    """POST with a BYOK key (different from global) should store it as-is."""
+def test_create_project_never_stores_a_submitted_key(tmp_path):
+    """Keys live on credential cards, so a key in the POST is not stored."""
     from agent_os.api.app import create_app
     from fastapi.testclient import TestClient
 
@@ -328,7 +340,8 @@ def test_create_project_preserves_different_key(tmp_path):
         store = ProjectStore(data_dir=data_dir)
         project = store.get_project(pid)
         assert project is not None
-        assert project["api_key"] == "my-byok-key"
+        assert "api_key" not in project
+        assert "my-byok-key" not in json.dumps(project)
     finally:
         agents_v2._credential_store = original_cred
 
@@ -341,7 +354,6 @@ async def test_inject_message_case3_falls_through_to_keychain(tmp_path):
     """When project has api_key='', inject_message Case 3 should pick up
     the current global key from the credential store."""
     project_id = "proj_006"
-    cred_store = FakeCredentialStore(key="current-global-key")
     project_store = FakeProjectStore({
         project_id: {
             "id": project_id,
@@ -356,8 +368,7 @@ async def test_inject_message_case3_falls_through_to_keychain(tmp_path):
     })
     mgr = _make_manager(
         project_store=project_store,
-        credential_store=cred_store,
-        settings_store=FakeSettingsStore(),
+        settings_store=FakeSettingsStore(api_key="current-global-key"),
     )
 
     # Patch start_agent to capture the config it receives

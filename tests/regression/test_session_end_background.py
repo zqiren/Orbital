@@ -42,6 +42,7 @@ def test_atomic_write_no_partial_reads():
 
         # Write initial content
         wfm.write("state", "OLD_CONTENT")
+        old_stored = wfm.read("state")
 
         new_content = "X" * 1_000_000  # 1MB
         results = []
@@ -60,13 +61,15 @@ def test_atomic_write_no_partial_reads():
 
         # Perform atomic write
         wfm.write("state", new_content)
+        new_stored = wfm.read("state")
 
         stop.set()
         t.join(timeout=2)
 
-        # Every read must be either old content or new content
+        # Every read must be either the old or the new stored content (the
+        # write path adds the format header and normalises entries).
         for r in results:
-            assert r == "OLD_CONTENT" or r == new_content, \
+            assert r == old_stored or r == new_stored, \
                 f"Partial read detected: len={len(r)}"
 
 

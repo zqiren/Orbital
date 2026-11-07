@@ -105,8 +105,9 @@ class _Registry:
         pass
 
 
-def _loop(session, provider, registry, ws):
-    return AgentLoop(session, provider, registry, ContextManager(session, _Builder(), _ctx(ws)))
+def _loop(session, provider, registry, ws, **kwargs):
+    return AgentLoop(session, provider, registry, ContextManager(session, _Builder(), _ctx(ws)),
+                     **kwargs)
 
 
 # --- loop-level tests -------------------------------------------------------
@@ -143,7 +144,8 @@ async def test_non_yield_tool_result_continues_the_loop(tmp_path):
         _text("the sub-agent is still running"),
     ])
     registry = _Registry({"agent_message": ToolResult(content="running")})  # no meta
-    loop = _loop(session, provider, registry, str(tmp_path))
+    # The end-of-run memory record is its own LLM call; keep it out of this count.
+    loop = _loop(session, provider, registry, str(tmp_path), memory_record_enabled=False)
 
     persist_user_row(loop._session, "check status")
     await loop.run()

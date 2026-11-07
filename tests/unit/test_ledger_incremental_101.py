@@ -159,8 +159,8 @@ def test_same_size_rewrite_is_detected(tmp_path, override_file):
     _write(path, _lines([_rec(1, output=111)]))
     spend(project, "daily", now=NOW, override_path=override_file)
 
-    os.utime(path, ns=(1, 1))  # make sure the rewrite's mtime differs
     _write(path, _lines([_rec(1, output=222)]), mode="w")  # same byte length
+    os.utime(path, ns=(1, 1))  # filesystems can round two quick writes together
     result = spend(project, "daily", now=NOW, override_path=override_file)
     assert result["breakdown"][0]["tokens"]["output"] == 222
 

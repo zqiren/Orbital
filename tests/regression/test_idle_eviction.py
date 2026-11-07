@@ -55,7 +55,7 @@ async def test_idle_handle_evicted_after_timeout():
     sk = ("proj_idle", "default")
     mgr._handles[sk] = _handle(time.time() - 9999)
 
-    async def _pop(pid, *, session_id=None):
+    async def _pop(pid, *, session_id=None, keep_browser=False):
         mgr._handles.pop((pid, session_id), None)
 
     mgr.stop_agent = AsyncMock(side_effect=_pop)
@@ -63,7 +63,7 @@ async def test_idle_handle_evicted_after_timeout():
     evicted = await mgr._evict_idle_once()
 
     assert sk in evicted
-    mgr.stop_agent.assert_awaited_once_with("proj_idle", session_id="default")
+    mgr.stop_agent.assert_awaited_once_with("proj_idle", session_id="default", keep_browser=True)
     assert sk not in mgr._handles
 
 
@@ -187,7 +187,7 @@ async def test_true_idle_subagents_do_not_block_eviction():
     sk = ("proj_trueidle", "default")
     mgr._handles[sk] = _handle(time.time() - 9999)
 
-    async def _pop(pid, *, session_id=None):
+    async def _pop(pid, *, session_id=None, keep_browser=False):
         mgr._handles.pop((pid, session_id), None)
 
     mgr.stop_agent = AsyncMock(side_effect=_pop)
@@ -195,7 +195,7 @@ async def test_true_idle_subagents_do_not_block_eviction():
     evicted = await mgr._evict_idle_once()
 
     assert sk in evicted
-    mgr.stop_agent.assert_awaited_once_with("proj_trueidle", session_id="default")
+    mgr.stop_agent.assert_awaited_once_with("proj_trueidle", session_id="default", keep_browser=True)
 
 
 @pytest.mark.asyncio
@@ -207,7 +207,7 @@ async def test_eviction_failure_does_not_abort_sweep():
     mgr._handles[sk_bad] = _handle(time.time() - 9999)
     mgr._handles[sk_good] = _handle(time.time() - 9999)
 
-    async def _maybe_fail(pid, *, session_id=None):
+    async def _maybe_fail(pid, *, session_id=None, keep_browser=False):
         if pid == "proj_bad":
             raise RuntimeError("teardown blew up")
         mgr._handles.pop((pid, session_id), None)
@@ -235,7 +235,7 @@ async def test_eviction_sweep_loop_fires_and_evicts():
     sk = ("proj_sweep", "default")
     mgr._handles[sk] = _handle(time.time() - 9999)
 
-    async def _pop(pid, *, session_id=None):
+    async def _pop(pid, *, session_id=None, keep_browser=False):
         mgr._handles.pop((pid, session_id), None)
 
     mgr.stop_agent = AsyncMock(side_effect=_pop)
@@ -250,7 +250,7 @@ async def test_eviction_sweep_loop_fires_and_evicts():
         await asyncio.sleep(0.02)
 
     assert sk not in mgr._handles, "sweep loop should have evicted the idle handle"
-    mgr.stop_agent.assert_awaited_with("proj_sweep", session_id="default")
+    mgr.stop_agent.assert_awaited_with("proj_sweep", session_id="default", keep_browser=True)
 
     # shutdown() must cancel the sweep task.
     mgr._sub_agent_manager.stop_all = AsyncMock()

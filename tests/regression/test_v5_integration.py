@@ -59,7 +59,7 @@ async def test_lifecycle_to_session_injection():
     injected = []
 
     am = MagicMock()
-    async def fake_inject(project_id, content, session_id=None):  # session_id threaded since Piece 3 (2ce0182)
+    async def fake_inject(project_id, content, session_id=None, meta=None):  # session_id threaded since Piece 3 (2ce0182)
         session.append({"role": "system", "content": content, "source": "daemon"})
         injected.append(content)
         return "delivered"
@@ -160,7 +160,7 @@ async def test_chat_composite_merges_session_and_transcripts():
         project_store = type("PS", (), {
             "get_project": lambda self, pid: {"workspace": workspace}
         })()
-        mgr = SubAgentManager(process_manager=None, project_store=project_store)
+        mgr = SubAgentManager(process_manager=MagicMock(), project_store=project_store)
         sub_entries = mgr.get_all_transcript_entries("proj1")
         for entry in sub_entries:
             entry.setdefault("role", "agent")

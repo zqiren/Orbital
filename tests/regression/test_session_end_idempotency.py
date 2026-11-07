@@ -26,14 +26,12 @@ completion set, so periodic mid-session refresh triggers can always re-run.
 """
 
 import asyncio
-import json
 import logging
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
-from tests.testutils import streamable
-
+from agent_os.agent import memory_editor
 from agent_os.agent import workspace_files as wsf_module
 from agent_os.agent.workspace_files import (
     WorkspaceFileManager,
@@ -65,18 +63,20 @@ def _mock_session(messages=None, session_id="sess_test"):
     return session
 
 
-def _mock_provider(response_text):
-    provider = streamable(AsyncMock())
-    resp = MagicMock()
-    resp.text = response_text
-    provider.complete.return_value = resp
-    return provider
+def _mock_turn(ws, tag="x", fail=None):
+    """A Memory-session turn that records each call and rewrites INDEX.md, the
+    one file the turn may rewrite whole. ``fail`` makes the turn raise instead."""
+    calls = []
 
+    async def run_turn(task_text):
+        calls.append(task_text)
+        if fail is not None:
+            raise fail
+        ws.write("index", f"## People\n- Person {tag}")
+        return memory_editor.TurnResult(mode="disk", llm_calls=1, ended="text_complete")
 
-def _valid_llm_response(tag="x"):
-    """A well-formed memory-editor reply (spec 089): choices by id, plus the
-    one whole file the editor may rewrite — INDEX.md."""
-    return json.dumps({"index": f"## People\n- Person {tag}"})
+    run_turn.calls = calls
+    return run_turn
 
 
 def _force_delta(ws: WorkspaceFileManager, tag="seed"):
@@ -117,11 +117,13 @@ async def test_no_delta_gate_blocks_llm_without_a_change(tmp_path):
     assert wsf_module._has_cleanup_delta(ws) is False
 
     session = _mock_session(session_id="s_nodelta")
-    provider = _mock_provider(_valid_llm_response("s_nodelta"))
-    await run_session_end_routine(session, provider, ws, session_uuid="s_nodelta")
+    run_turn = _mock_turn(ws, "s_nodelta")
+    await run_session_end_routine(
+        session, None, ws, session_uuid="s_nodelta", run_turn=run_turn,
+    )
 
     # No delta → no LLM call, and nothing recorded for the boundary.
-    assert provider.complete.call_count == 0
+    assert run_turn.calls == []
     assert "s_nodelta" not in wsf_module._completed_session_ends
 
 
@@ -135,18 +137,18 @@ async def test_duplicate_session_id_short_circuits(tmp_path, caplog):
     ws = WorkspaceFileManager(str(tmp_path))
     _force_delta(ws, "s1")
     session = _mock_session(session_id="s1")
-    provider = _mock_provider(_valid_llm_response("s1"))
+    run_turn = _mock_turn(ws, "s1")
 
-    await run_session_end_routine(session, provider, ws, session_uuid="s1")
-    assert provider.complete.call_count == 1
+    await run_session_end_routine(session, None, ws, session_uuid="s1", run_turn=run_turn)
+    assert len(run_turn.calls) == 1
     # First successful run records the boundary.
     assert "s1" in wsf_module._completed_session_ends
 
     with caplog.at_level(logging.INFO, logger="agent_os.agent.workspace_files"):
-        await run_session_end_routine(session, provider, ws, session_uuid="s1")
+        await run_session_end_routine(session, None, ws, session_uuid="s1", run_turn=run_turn)
 
     # Second call must NOT have hit the LLM (idempotency short-circuit).
-    assert provider.complete.call_count == 1
+    assert len(run_turn.calls) == 1
     # Short-circuit must log at INFO.
     assert any(
         "already completed" in rec.message and rec.levelno == logging.INFO
@@ -167,17 +169,17 @@ async def test_different_session_ids_both_run(tmp_path):
     ws1 = WorkspaceFileManager(str(tmp_path / "p1"))
     _force_delta(ws1, "s1")
     session1 = _mock_session(session_id="s1")
-    provider1 = _mock_provider(_valid_llm_response("s1"))
-    await run_session_end_routine(session1, provider1, ws1, session_uuid="s1")
+    turn1 = _mock_turn(ws1, "s1")
+    await run_session_end_routine(session1, None, ws1, session_uuid="s1", run_turn=turn1)
 
     ws2 = WorkspaceFileManager(str(tmp_path / "p2"))
     _force_delta(ws2, "s2")
     session2 = _mock_session(session_id="s2")
-    provider2 = _mock_provider(_valid_llm_response("s2"))
-    await run_session_end_routine(session2, provider2, ws2, session_uuid="s2")
+    turn2 = _mock_turn(ws2, "s2")
+    await run_session_end_routine(session2, None, ws2, session_uuid="s2", run_turn=turn2)
 
-    assert provider1.complete.call_count == 1
-    assert provider2.complete.call_count == 1
+    assert len(turn1.calls) == 1
+    assert len(turn2.calls) == 1
 
     # Both session_ids are in the completion set
     assert "s1" in wsf_module._completed_session_ends
@@ -199,12 +201,12 @@ async def test_concurrent_calls_same_session_id(tmp_path):
     _force_delta(ws, "s_conc")
     session = _mock_session(session_id="s_conc")
 
-    # Shared provider so we can count total calls across both tasks.
-    provider = _mock_provider(_valid_llm_response("s_conc"))
+    # Shared turn runner so we can count total calls across both tasks.
+    run_turn = _mock_turn(ws, "s_conc")
 
     results = await asyncio.gather(
-        run_session_end_routine(session, provider, ws, session_uuid="s_conc"),
-        run_session_end_routine(session, provider, ws, session_uuid="s_conc"),
+        run_session_end_routine(session, None, ws, session_uuid="s_conc", run_turn=run_turn),
+        run_session_end_routine(session, None, ws, session_uuid="s_conc", run_turn=run_turn),
         return_exceptions=True,
     )
 
@@ -214,8 +216,8 @@ async def test_concurrent_calls_same_session_id(tmp_path):
 
     # LLM was called exactly once — second task short-circuited (idempotency
     # flag or no-delta marker set by the first).
-    assert provider.complete.call_count == 1, (
-        f"expected LLM call count=1, got {provider.complete.call_count}. "
+    assert len(run_turn.calls) == 1, (
+        f"expected LLM call count=1, got {len(run_turn.calls)}. "
         f"The idempotency / no-delta guard did not prevent the duplicate run."
     )
 
@@ -248,15 +250,14 @@ async def test_llm_failure_runs_backstop_and_does_not_raise(tmp_path):
     _force_delta(ws, "s_fail")
     session = _mock_session(session_id="s_fail")
 
-    failing_provider = streamable(AsyncMock())
-    failing_provider.complete.side_effect = RuntimeError("LLM exploded")
+    failing_turn = _mock_turn(ws, "fail", fail=RuntimeError("LLM exploded"))
 
     # Must NOT raise — the deterministic backstop owns durability now.
     await run_session_end_routine(
-        session, failing_provider, ws, session_uuid="s_fail",
+        session, None, ws, session_uuid="s_fail", run_turn=failing_turn,
     )
 
-    assert failing_provider.complete.call_count == 1
+    assert len(failing_turn.calls) == 1
     # Durable content survives the LLM failure (never deleted by the backstop).
     decisions = ws.read("decisions") or ""
     assert "Seed s_fail" in decisions
@@ -274,22 +275,24 @@ async def test_bypass_idempotency_reruns_and_does_not_record(tmp_path):
     # First bypass run with a delta primed.
     _force_delta(ws, "first")
     session = _mock_session(session_id="s_bypass")
-    provider1 = _mock_provider(_valid_llm_response("first"))
+    turn1 = _mock_turn(ws, "first")
     await run_session_end_routine(
-        session, provider1, ws, session_uuid="s_bypass", bypass_idempotency=True,
+        session, None, ws, session_uuid="s_bypass", bypass_idempotency=True,
+        run_turn=turn1,
     )
-    assert provider1.complete.call_count == 1
+    assert len(turn1.calls) == 1
     # bypass must NOT record the boundary.
     assert "s_bypass" not in wsf_module._completed_session_ends
 
     # Prime a new delta and run again under the SAME session_uuid — bypass means
     # it runs again rather than short-circuiting.
     _force_delta(ws, "second")
-    provider2 = _mock_provider(_valid_llm_response("second"))
+    turn2 = _mock_turn(ws, "second")
     await run_session_end_routine(
-        session, provider2, ws, session_uuid="s_bypass", bypass_idempotency=True,
+        session, None, ws, session_uuid="s_bypass", bypass_idempotency=True,
+        run_turn=turn2,
     )
-    assert provider2.complete.call_count == 1
+    assert len(turn2.calls) == 1
     assert "s_bypass" not in wsf_module._completed_session_ends
 
     # The second pass's INDEX is what persisted.
@@ -306,8 +309,7 @@ async def test_session_uuid_is_required_keyword_only(tmp_path):
     (enforces deliberate caller updates; no silent regressions)."""
     ws = WorkspaceFileManager(str(tmp_path))
     session = _mock_session(session_id="s_kw")
-    provider = _mock_provider(_valid_llm_response("s_kw"))
 
     with pytest.raises(TypeError):
         # Missing session_uuid kwarg
-        await run_session_end_routine(session, provider, ws)
+        await run_session_end_routine(session, None, ws)

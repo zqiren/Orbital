@@ -200,6 +200,7 @@ def _run_real_loop(workspace: str, provider: _StubProvider, model: str) -> None:
     loop = AgentLoop(
         session, provider, _Registry(), context_mgr,
         project_dir=workspace, max_iterations=5,
+        memory_record_enabled=False,
     )
     persist_user_row(loop._session, "go")
     asyncio.run(loop.run())

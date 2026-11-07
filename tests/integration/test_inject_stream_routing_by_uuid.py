@@ -29,6 +29,7 @@ from starlette.testclient import TestClient
 
 from agent_os.agent.project_paths import ProjectPaths
 from agent_os.daemon_v2.agent_manager import AgentManager
+from agent_os.daemon_v2.settings_store import CredentialCard, GlobalSettings
 from agent_os.api.routes import agents_v2
 
 
@@ -50,11 +51,31 @@ def _seed_disk_session(workspace: str):
         f.write("\n".join(json.dumps(r) for r in rows) + "\n")
 
 
+class _CardStore:
+    """The one default credential card the project resolves to."""
+
+    def __init__(self):
+        self._card = CredentialCard(id="card_default", name="Default",
+                                    provider="custom", model="gpt-4")
+
+    def get(self):
+        return GlobalSettings()
+
+    def default_card(self):
+        return self._card
+
+    def resolve_card(self, card_id):
+        return None
+
+    def key_for(self, card_id):
+        return "sk-test"
+
+
 def _make_manager(workspace: str):
     project_store = MagicMock()
     project_store.get_project.return_value = {
         "workspace": workspace, "name": "Proj", "autonomy": "hands_off",
-        "model": "gpt-4", "api_key": "sk-test", "sdk": "openai",
+        "model": "gpt-4", "sdk": "openai",
         "provider": "custom", "enabled_sub_agents": [],
     }
     project_store.update_runtime = MagicMock()
@@ -68,7 +89,7 @@ def _make_manager(workspace: str):
         sub_agent_manager=sub_agent_mgr, activity_translator=activity_translator,
         process_manager=MagicMock(), platform_provider=None,
         registry=MagicMock(), setup_engine=MagicMock(),
-        settings_store=None, credential_store=None,
+        settings_store=_CardStore(), credential_store=None,
     )
     return mgr, project_store, sub_agent_mgr
 

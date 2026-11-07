@@ -18,20 +18,31 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from agent_os.daemon_v2.agent_manager import AgentManager
+from tests.card_doubles import FakeCardStore
 
 
-def _manager(project: dict, global_llm):
+def _manager(project: dict, global_llm, project_card: dict | None = None):
+    """Global settings become the default credential card; a project that
+    pins its own setup gets a card of its own (the card carries
+    provider, model, endpoint and key together)."""
+    cards = FakeCardStore()
+    cards.add(
+        card_id="card_global", provider=global_llm.provider,
+        model=global_llm.model, key=global_llm.api_key or "",
+        base_url=global_llm.base_url, sdk=global_llm.sdk, make_default=True,
+    )
+    if project_card is not None:
+        cards.add(card_id="card_project", **project_card)
+        project = {**project, "card_id": "card_project"}
     project_store = MagicMock()
     project_store.get_project = MagicMock(return_value=project)
-    settings_store = MagicMock()
-    settings_store.get = MagicMock(return_value=SimpleNamespace(llm=global_llm))
     return AgentManager(
         project_store=project_store,
         ws_manager=MagicMock(),
         sub_agent_manager=MagicMock(),
         activity_translator=MagicMock(),
         process_manager=MagicMock(),
-        settings_store=settings_store,
+        settings_store=cards,
     )
 
 
@@ -45,13 +56,9 @@ GLOBAL = SimpleNamespace(
 
 
 def test_project_inherits_global_provider_when_model_unset():
-    # Mirrors the real orbital-marketing project: provider left at "custom",
-    # model/base_url empty so they inherit global.
-    mgr = _manager(
-        {"workspace": "/tmp/x", "provider": "custom", "model": "",
-         "base_url": None, "sdk": "openai", "api_key": ""},
-        GLOBAL,
-    )
+    # Mirrors the real orbital-marketing project: no card of its own, so it
+    # follows the global default card wholesale.
+    mgr = _manager({"workspace": "/tmp/x"}, GLOBAL)
     cfg = mgr._build_agent_config_from_project("proj")
     assert cfg.model == "MiniMax-M3"
     assert cfg.base_url == "https://api.minimaxi.com/v1"
@@ -62,9 +69,10 @@ def test_project_keeps_own_provider_when_it_pins_a_model():
     # A project that specifies its own model keeps its own provider — global
     # is not allowed to override an explicitly self-hosted setup.
     mgr = _manager(
-        {"workspace": "/tmp/x", "provider": "custom", "model": "my-local-model",
-         "base_url": "http://localhost:1234/v1", "sdk": "openai", "api_key": "k"},
-        GLOBAL,
+        {"workspace": "/tmp/x"}, GLOBAL,
+        project_card=dict(provider="custom", model="my-local-model",
+                          base_url="http://localhost:1234/v1", sdk="openai",
+                          key="k"),
     )
     cfg = mgr._build_agent_config_from_project("proj")
     assert cfg.model == "my-local-model"
@@ -77,9 +85,9 @@ def test_cross_provider_project_does_not_inherit_global_base_url():
     # endpoint. The fallback must stay within the project's provider — the
     # registry default, not another provider's URL.
     mgr = _manager(
-        {"workspace": "/tmp/x", "provider": "moonshot", "model": "kimi-k2.5",
-         "base_url": None, "sdk": "openai", "api_key": "sk-moonshot"},
-        GLOBAL,
+        {"workspace": "/tmp/x"}, GLOBAL,
+        project_card=dict(provider="moonshot", model="kimi-k2.5",
+                          base_url=None, sdk="openai", key="sk-moonshot"),
     )
     cfg = mgr._build_agent_config_from_project("proj")
     assert cfg.provider == "moonshot"
@@ -97,30 +105,31 @@ def test_cross_provider_project_does_not_inherit_global_api_key():
         sdk="openai", fallback_models=[],
     )
     mgr = _manager(
-        {"workspace": "/tmp/x", "provider": "moonshot", "model": "kimi-k2.5",
-         "base_url": "https://api.moonshot.cn/v1", "sdk": "openai", "api_key": ""},
-        global_with_key,
+        {"workspace": "/tmp/x"}, global_with_key,
+        project_card=dict(provider="moonshot", model="kimi-k2.5",
+                          base_url="https://api.moonshot.cn/v1", sdk="openai",
+                          key=""),
     )
     cfg = mgr._build_agent_config_from_project("proj")
     assert cfg.api_key == ""
 
 
 def test_same_provider_project_still_inherits_global_base_url_and_key():
-    # A project pinning a model on the SAME provider as global keeps the
-    # old inheritance — overriding just the model (or just the key) against
-    # the shared endpoint is a legitimate setup.
+    # A project pinning a model on the SAME provider and endpoint as global
+    # keeps the shared endpoint; its own key stays its own.
     mgr = _manager(
-        {"workspace": "/tmp/x", "provider": "minimax", "model": "MiniMax-M2.7",
-         "base_url": None, "sdk": "openai", "api_key": ""},
+        {"workspace": "/tmp/x"},
         SimpleNamespace(
             provider="minimax", model="MiniMax-M3",
             base_url="https://api.minimaxi.com/v1", api_key="shared-key",
             sdk="openai", fallback_models=[],
         ),
+        project_card=dict(provider="minimax", model="MiniMax-M2.7",
+                          region="china", sdk="openai", key="sk-own-key"),
     )
     cfg = mgr._build_agent_config_from_project("proj")
     assert cfg.base_url == "https://api.minimaxi.com/v1"
-    assert cfg.api_key == "shared-key"
+    assert cfg.api_key == "sk-own-key"
 
 
 # --- Same invariant, second entry point: POST /agents/start -----------------
@@ -148,19 +157,18 @@ def start_client(monkeypatch):
 
     project = {
         "project_id": "p1", "id": "p1", "workspace": "/tmp/ws",
-        "provider": "opencode-zen", "model": "hy3-free",
-        "api_key": "sk-project-own-key", "base_url": None,
+        "card_id": "card_zen",
         "name": "p1", "autonomy": "hands_off",
     }
     project_store = MagicMock()
     project_store.get_project = MagicMock(return_value=project)
-    global_llm = SimpleNamespace(
-        provider="tokendance", model="deepseek-v4-flash",
-        base_url="https://tokendance.space/gateway/v1",
-        api_key="sk-global-tokendance-key", sdk="openai", fallback_models=[],
+    settings_store = FakeCardStore.with_default(
+        card_id="card_global", provider="tokendance",
+        model="deepseek-v4-flash", key="sk-global-tokendance-key",
+        base_url="https://tokendance.space/gateway/v1", sdk="openai",
     )
-    settings_store = MagicMock()
-    settings_store.get = MagicMock(return_value=SimpleNamespace(llm=global_llm))
+    settings_store.add(card_id="card_zen", provider="opencode-zen",
+                       model="hy3-free", key="sk-project-own-key")
     credential_store = MagicMock()
     credential_store.get_api_key = MagicMock(return_value="sk-global-tokendance-key")
 
@@ -208,8 +216,8 @@ def test_start_route_resolves_endpoint_from_the_pinned_provider(start_client):
 def test_start_route_does_not_lend_the_global_key_across_providers(start_client):
     """A key belongs to the provider it was issued for. Pairing the global key
     with another provider's endpoint is the classic wrong-provider 401."""
-    client, manager, project = start_client
-    project["api_key"] = ""
+    client, manager, _ = start_client
+    manager._settings_store.keys["card_zen"] = ""
     resp = client.post("/api/v2/agents/start", json={"project_id": "p1"})
     assert resp.status_code in (200, 400), resp.text
     if manager.start_agent.await_count:
@@ -221,9 +229,7 @@ def test_start_route_still_inherits_within_the_same_provider(start_client):
     """Same provider: inheriting the global endpoint and key is correct and
     is how a project left on defaults works at all."""
     client, manager, project = start_client
-    project["provider"] = "tokendance"
-    project["model"] = "deepseek-v4-flash"
-    project["api_key"] = ""
+    project["card_id"] = None
     resp = client.post("/api/v2/agents/start", json={"project_id": "p1"})
     assert resp.status_code == 200, resp.text
     config = _started_config(manager)
@@ -247,11 +253,7 @@ GLOBAL_ANTHROPIC_CUSTOM = SimpleNamespace(
 
 
 def test_project_without_model_inherits_global_sdk():
-    mgr = _manager(
-        {"workspace": "/tmp/x", "provider": "custom", "model": "",
-         "base_url": None, "sdk": "openai", "api_key": ""},
-        GLOBAL_ANTHROPIC_CUSTOM,
-    )
+    mgr = _manager({"workspace": "/tmp/x"}, GLOBAL_ANTHROPIC_CUSTOM)
     cfg = mgr._build_agent_config_from_project("proj")
     assert cfg.model == "my-anthropic-router"
     assert cfg.sdk == "anthropic"  # <-- the fix (was "openai")
@@ -264,9 +266,10 @@ def test_project_with_own_model_keeps_its_own_sdk():
     """A model-pinned project keeps its own protocol — the global sdk must not
     leak into an explicitly self-hosted setup."""
     mgr = _manager(
-        {"workspace": "/tmp/x", "provider": "custom", "model": "my-local-model",
-         "base_url": "http://localhost:1234/v1", "sdk": "openai", "api_key": "k"},
-        GLOBAL_ANTHROPIC_CUSTOM,
+        {"workspace": "/tmp/x"}, GLOBAL_ANTHROPIC_CUSTOM,
+        project_card=dict(provider="custom", model="my-local-model",
+                          base_url="http://localhost:1234/v1", sdk="openai",
+                          key="k"),
     )
     cfg = mgr._build_agent_config_from_project("proj")
     assert cfg.sdk == "openai"
@@ -287,10 +290,10 @@ GLOBAL_USABLE = SimpleNamespace(
 
 def test_auth_rung_present_for_byok_project():
     mgr = _manager(
-        {"workspace": "/tmp/x", "provider": "moonshot", "model": "kimi-k2.5",
-         "base_url": "https://api.moonshot.cn/v1", "sdk": "openai",
-         "api_key": "sk-project"},
-        GLOBAL_USABLE,
+        {"workspace": "/tmp/x"}, GLOBAL_USABLE,
+        project_card=dict(provider="moonshot", model="kimi-k2.5",
+                          base_url="https://api.moonshot.cn/v1", sdk="openai",
+                          key="sk-project"),
     )
     af = mgr._build_agent_config_from_project("proj").auth_fallback
     assert af is not None
@@ -301,11 +304,7 @@ def test_auth_rung_present_for_byok_project():
 
 
 def test_auth_rung_absent_when_project_inherits_the_global_key():
-    mgr = _manager(
-        {"workspace": "/tmp/x", "provider": "custom", "model": "",
-         "base_url": None, "sdk": "openai", "api_key": ""},
-        GLOBAL_USABLE,
-    )
+    mgr = _manager({"workspace": "/tmp/x"}, GLOBAL_USABLE)
     cfg = mgr._build_agent_config_from_project("proj")
     assert cfg.api_key == "sk-global"  # inherited — nothing different to try
     assert cfg.auth_fallback is None
@@ -313,23 +312,25 @@ def test_auth_rung_absent_when_project_inherits_the_global_key():
 
 def test_auth_rung_absent_when_global_has_no_key():
     mgr = _manager(
-        {"workspace": "/tmp/x", "provider": "moonshot", "model": "kimi-k2.5",
-         "base_url": "https://api.moonshot.cn/v1", "sdk": "openai",
-         "api_key": "sk-project"},
+        {"workspace": "/tmp/x"},
         SimpleNamespace(provider="minimax", model="MiniMax-M3",
                         base_url="https://api.minimaxi.com/v1", api_key=None,
                         sdk="openai", fallback_models=[]),
+        project_card=dict(provider="moonshot", model="kimi-k2.5",
+                          base_url="https://api.moonshot.cn/v1", sdk="openai",
+                          key="sk-project"),
     )
     assert mgr._build_agent_config_from_project("proj").auth_fallback is None
 
 
 def test_auth_rung_absent_when_global_has_no_model():
     mgr = _manager(
-        {"workspace": "/tmp/x", "provider": "moonshot", "model": "kimi-k2.5",
-         "base_url": "https://api.moonshot.cn/v1", "sdk": "openai",
-         "api_key": "sk-project"},
-        SimpleNamespace(provider="minimax", model=None,
+        {"workspace": "/tmp/x"},
+        SimpleNamespace(provider="minimax", model="",
                         base_url="https://api.minimaxi.com/v1",
                         api_key="sk-global", sdk="openai", fallback_models=[]),
+        project_card=dict(provider="moonshot", model="kimi-k2.5",
+                          base_url="https://api.moonshot.cn/v1", sdk="openai",
+                          key="sk-project"),
     )
     assert mgr._build_agent_config_from_project("proj").auth_fallback is None

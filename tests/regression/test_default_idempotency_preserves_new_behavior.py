@@ -27,6 +27,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from agent_os.agent import memory_editor
 from agent_os.agent import workspace_files as wsf_module
 from agent_os.agent.workspace_files import WorkspaceFileManager, run_session_end_routine
 
@@ -52,6 +53,18 @@ def _mock_provider(tag="ok"):
     })
     provider.complete.return_value = resp
     return provider
+
+
+def _turn_runner():
+    """A Memory turn runner that counts its calls and changes nothing."""
+    calls = []
+
+    async def run_turn(task_text):
+        calls.append(task_text)
+        return memory_editor.TurnResult(mode="disk", llm_calls=1, tool_calls=0, ended="text_complete")
+
+    run_turn.calls = calls
+    return run_turn
 
 
 def _force_layer1_delta(ws, marker="poke"):
@@ -84,18 +97,20 @@ async def test_default_bypass_false_short_circuits_on_duplicate(tmp_path):
     ws = WorkspaceFileManager(str(tmp_path))
     session = _mock_session("s_new")
     provider = _mock_provider("first")
+    turn = _turn_runner()
 
     # First call — fresh workspace (no marker) => delta present => runs normally.
-    await run_session_end_routine(session, provider, ws, session_uuid="s_new")
-    assert provider.complete.call_count == 1
+    await run_session_end_routine(session, provider, ws, session_uuid="s_new", force=True, run_turn=turn)
+    assert len(turn.calls) == 1
     assert "s_new" in wsf_module._completed_session_ends
 
     # Second call with same session_id — must short-circuit on the IDEMPOTENCY
     # guard, even though a real delta now exists (gate would otherwise allow it).
     _force_layer1_delta(ws)
+    turn2 = _turn_runner()
     provider2 = _mock_provider("second")
-    await run_session_end_routine(session, provider2, ws, session_uuid="s_new")
-    assert provider2.complete.call_count == 0, (
+    await run_session_end_routine(session, provider2, ws, session_uuid="s_new", force=True, run_turn=turn2)
+    assert len(turn2.calls) == 0, (
         "Second call with same session_id must short-circuit on the idempotency "
         "guard when bypass_idempotency=False, even with a Layer-1 delta present"
     )
@@ -107,11 +122,14 @@ async def test_bypass_true_does_not_add_to_completion_set(tmp_path):
     ws = WorkspaceFileManager(str(tmp_path))
     session = _mock_session("s_bypass")
     provider = _mock_provider("bypass")
+    turn = _turn_runner()
 
     await run_session_end_routine(
         session, provider, ws,
         session_uuid="s_bypass",
         bypass_idempotency=True,
+        force=True,
+        run_turn=turn,
     )
 
     # The session must NOT be in the set — periodic refresh should not block /new.
@@ -119,7 +137,7 @@ async def test_bypass_true_does_not_add_to_completion_set(tmp_path):
         "bypass_idempotency=True must not mark session complete; "
         "/new must still be able to run the routine"
     )
-    assert provider.complete.call_count == 1, "LLM was called once"
+    assert len(turn.calls) == 1, "Memory turn ran once"
 
 
 @pytest.mark.asyncio
@@ -134,7 +152,7 @@ async def test_bypass_true_runs_even_after_default_call(tmp_path):
 
     # First: /new runs with default (bypass=False).
     provider_new = _mock_provider("new")
-    await run_session_end_routine(session, provider_new, ws, session_uuid="s_both")
+    await run_session_end_routine(session, provider_new, ws, session_uuid="s_both", force=True, run_turn=_turn_runner())
     assert "s_both" in wsf_module._completed_session_ends
 
     # A subsequent session touched a Layer-1 file => the no-delta gate would
@@ -142,12 +160,15 @@ async def test_bypass_true_runs_even_after_default_call(tmp_path):
     # guard, which bypass_idempotency=True must override.
     _force_layer1_delta(ws)
     provider_refresh = _mock_provider("refresh")
+    turn_refresh = _turn_runner()
     await run_session_end_routine(
         session, provider_refresh, ws,
         session_uuid="s_both",
         bypass_idempotency=True,
+        force=True,
+        run_turn=turn_refresh,
     )
-    assert provider_refresh.complete.call_count == 1, (
+    assert len(turn_refresh.calls) == 1, (
         "bypass_idempotency=True must run even after default-path completed for "
         "same session_id (idempotency guard overridden, delta present)"
     )
@@ -165,6 +186,8 @@ async def test_default_path_marks_complete_after_bypass(tmp_path):
         session, provider_refresh, ws,
         session_uuid="s_order",
         bypass_idempotency=True,
+        force=True,
+        run_turn=_turn_runner(),
     )
     assert "s_order" not in wsf_module._completed_session_ends
 
@@ -173,9 +196,10 @@ async def test_default_path_marks_complete_after_bypass(tmp_path):
     # completion (not merely skipped by the no-delta gate).
     _force_layer1_delta(ws)
     provider_new = _mock_provider("new")
-    await run_session_end_routine(session, provider_new, ws, session_uuid="s_order")
+    turn_new = _turn_runner()
+    await run_session_end_routine(session, provider_new, ws, session_uuid="s_order", force=True, run_turn=turn_new)
     assert "s_order" in wsf_module._completed_session_ends
-    assert provider_new.complete.call_count == 1
+    assert len(turn_new.calls) == 1
 
 
 @pytest.mark.asyncio
@@ -192,24 +216,30 @@ async def test_no_delta_gate_skips_llm_even_when_idempotency_would_allow(tmp_pat
 
     # First bypass run consolidates and writes the cleanup marker.
     provider_first = _mock_provider("first")
+    turn_first = _turn_runner()
     await run_session_end_routine(
         session, provider_first, ws,
         session_uuid="s_nodelta",
         bypass_idempotency=True,
+        force=True,
+        run_turn=turn_first,
     )
-    assert provider_first.complete.call_count == 1
+    assert len(turn_first.calls) == 1
     # Marker now matches current mtimes => no un-consolidated delta.
     assert wsf_module._has_cleanup_delta(ws) is False
 
     # Second bypass run with NOTHING changed: idempotency guard is bypassed, but
     # the no-delta gate must short-circuit before any LLM call.
     provider_second = _mock_provider("second")
+    turn_second = _turn_runner()
     await run_session_end_routine(
         session, provider_second, ws,
         session_uuid="s_nodelta",
         bypass_idempotency=True,
+        force=True,
+        run_turn=turn_second,
     )
-    assert provider_second.complete.call_count == 0, (
+    assert len(turn_second.calls) == 0, (
         "no-delta gate must skip the LLM even when bypass_idempotency=True "
         "clears the idempotency guard"
     )
@@ -217,11 +247,14 @@ async def test_no_delta_gate_skips_llm_even_when_idempotency_would_allow(tmp_pat
     # And once a Layer-1 file changes again, the bypass refresh runs the LLM.
     _force_layer1_delta(ws)
     provider_third = _mock_provider("third")
+    turn_third = _turn_runner()
     await run_session_end_routine(
         session, provider_third, ws,
         session_uuid="s_nodelta",
         bypass_idempotency=True,
+        force=True,
+        run_turn=turn_third,
     )
-    assert provider_third.complete.call_count == 1, (
+    assert len(turn_third.calls) == 1, (
         "a fresh Layer-1 delta must re-arm the routine after a no-delta skip"
     )

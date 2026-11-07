@@ -308,9 +308,12 @@ class TestBug001_BrowserWarmupFlags:
             assert "--disable-blink-features=AutomationControlled" in args, \
                 "Missing critical anti-detection flag"
 
-            # All CHROME_FLAGS must be present
+            # All CHROME_FLAGS must be present, except the minimized start:
+            # the warmup window is the one the user signs in through.
+            assert "--start-minimized" not in args
             for flag in BrowserManager.CHROME_FLAGS:
-                assert flag in args, f"Missing flag: {flag}"
+                if flag != "--start-minimized":
+                    assert flag in args, f"Missing flag: {flag}"
 
     @pytest.mark.asyncio
     async def test_stealth_called_before_goto(self, browser_manager):

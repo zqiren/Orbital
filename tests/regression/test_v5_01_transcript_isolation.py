@@ -145,8 +145,9 @@ class TestProcessManagerIsolation:
                       if c[0][1].get("type") == "chat.sub_agent_message"]
         assert len(chat_calls) == 0
 
-        # But activity_translator was called
-        activity.on_message.assert_called()
+        # But activity_translator was called, through the live capsule hook
+        activity.on_worker_chunk.assert_called_once()
+        assert activity.on_worker_chunk.call_args.args[0] == "tool_activity"
 
 
 async def _async_iter(items):

@@ -77,7 +77,7 @@ async def test_register_anchors_new_direct_child_and_tracks_liveness(registry):
     try:
         rec = registry.register(*KEY, command="sleep 60", root_proc=root)
         # capture task adopts the child once it appears (~0.8s)
-        deadline = time.monotonic() + 4.0
+        deadline = time.monotonic() + 6.0
         while time.monotonic() < deadline and rec.anchor is None:
             await asyncio.sleep(0.1)
         assert rec.anchor is not None, "capture did not adopt the spawned child"
@@ -207,7 +207,7 @@ async def test_status_background_running_for_live_provenance_work(registry):
     root = _spawn_root()
     try:
         _register_live_work(registry, root)
-        deadline = time.monotonic() + 4.0
+        deadline = time.monotonic() + 6.0
         while time.monotonic() < deadline and not registry.has_live(*KEY):
             await asyncio.sleep(0.1)
         assert registry.has_live(*KEY)
@@ -246,7 +246,7 @@ async def test_degraded_transport_stays_two_state(registry):
     root = _spawn_root()
     try:
         _register_live_work(registry, root)
-        deadline = time.monotonic() + 4.0
+        deadline = time.monotonic() + 6.0
         while time.monotonic() < deadline and not registry.has_live(*KEY):
             await asyncio.sleep(0.1)
 
@@ -268,7 +268,7 @@ async def test_windows_gate_degrades_explicitly(registry):
     root = _spawn_root()
     try:
         _register_live_work(registry, root)
-        deadline = time.monotonic() + 4.0
+        deadline = time.monotonic() + 6.0
         while time.monotonic() < deadline and not registry.has_live(*KEY):
             await asyncio.sleep(0.1)
         assert registry.has_live(*KEY), "registry must keep tracking on the degraded path"

@@ -533,7 +533,7 @@ async def test_acp_sdk_transport_does_not_create_memory_md(seeded_workspace):
     )
 
     class FakeACPSDKTransport:
-        def __init__(self, *, resume_record=None):
+        def __init__(self, *, resume_record=None, config_options=None):
             pass
 
         async def start(self, command, args, workspace, env=None):
