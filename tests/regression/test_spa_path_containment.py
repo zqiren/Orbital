@@ -54,7 +54,10 @@ def test_sibling_folder_sharing_the_prefix_is_refused(spa):
 
 def test_symlink_leaving_the_spa_dir_is_refused(spa):
     client, root = spa
-    (root / "spa" / "link.txt").symlink_to(root / "outside.txt")
+    try:
+        (root / "spa" / "link.txt").symlink_to(root / "outside.txt")
+    except OSError:
+        pytest.skip("creating symlinks needs a privilege on this machine")
     assert client.get("/link.txt").status_code == 404
 
 
