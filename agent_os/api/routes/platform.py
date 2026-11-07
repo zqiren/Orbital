@@ -176,7 +176,9 @@ def _resolve_grant_scope(project_id: str | None) -> str:
 async def platform_folders_grant(req: FolderGrantRequest):
     """Grant sandbox access to a folder within a project's portal scope."""
     scope = _resolve_grant_scope(req.project_id)
-    result = _platform_provider.grant_folder_access(req.path, req.mode, scope=scope)
+    # Off the event loop: on Windows this is icacls over the whole folder.
+    result = await asyncio.to_thread(
+        _platform_provider.grant_folder_access, req.path, req.mode, scope=scope)
     if not result.success:
         raise HTTPException(status_code=400, detail=result.error or "Grant failed")
     return {"status": "ok", **asdict(result)}

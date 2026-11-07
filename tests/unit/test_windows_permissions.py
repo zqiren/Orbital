@@ -138,14 +138,95 @@ def test_revoke_has_no_recursive_flag(pm, tmp_path):
     assert "/T" not in args
 
 
-def test_folder_access_grant_keeps_the_recursive_flag(pm, tmp_path):
-    """Spec 109 D1 keeps ``/T`` on ``grant_access``: the Folder-access UI
-    grants arbitrary user folders behind a visible action (with a spinner),
-    and the workspace + worker home are empty at setup — no stall to fix."""
-    with patch.object(PermissionManager, "_run_icacls", return_value=_ok()) as run:
-        assert pm.grant_access(USER, str(tmp_path), "read_only").success
+# --- grant_access: no per-file walk, and nothing to do on a repeat ---------
+#
+# Feedback row 4 (2026-11-07, Windows 11, v0.20.0): ``grant_access`` ran
+# ``icacls <workspace> /grant ... /T`` on EVERY session start — the scan, the
+# onboarding start, each new session — and on the daemon's event loop. On an
+# imported D:\ project tree with nested repositories that froze the whole app
+# for 1016 s. Spec 109 kept ``/T`` here on the belief the workspace is empty
+# at setup; an imported project (spec 160) is not.
+
+WORKER_SID = "S-1-5-21-1-2-3-1001"
+_INHERIT = 0x01 | 0x02  # OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE
+
+
+def _allow(mask, flags=_INHERIT, sid=WORKER_SID):
+    from agent_os.platform.windows.acl import ACCESS_ALLOWED_ACE_TYPE, Ace
+    return Ace(type=ACCESS_ALLOWED_ACE_TYPE, flags=flags, mask=mask, sid=sid)
+
+
+@pytest.fixture
+def worker_sid(monkeypatch):
+    monkeypatch.setattr(
+        "agent_os.platform.windows.permissions.acl.account_sid",
+        lambda name: WORKER_SID if name == USER else None,
+    )
+
+
+def _dacl(monkeypatch, aces):
+    monkeypatch.setattr(
+        "agent_os.platform.windows.permissions.acl.read_dacl", lambda path: aces)
+
+
+@pytest.mark.parametrize("mode,perm", [("read_only", f"{USER}:(OI)(CI)R"),
+                                       ("read_write", f"{USER}:(OI)(CI)F")])
+def test_folder_grant_is_inheritable_and_not_recursive(pm, tmp_path, mode, perm,
+                                                       worker_sid, monkeypatch):
+    """Same rule as the toolchain roots (spec 109 D1, verified V1): an
+    inheritable ACE on the root reaches every inheriting descendant, so the
+    per-file ``/T`` walk only costs time — 8x on the 10^5-file V1 tree."""
+    _dacl(monkeypatch, [])
+    with patch.object(PermissionManager, "_run_icacls", return_value=_ok()) as run, \
+            patch.object(PermissionManager, "_root_hardening_present", return_value=True):
+        assert pm.grant_access(USER, str(tmp_path), mode).success
     args = run.call_args[0][0]
-    assert f"{USER}:(OI)(CI)R" in args and "/T" in args
+    assert perm in args and "/grant" in args
+    assert "/T" not in args, "the per-file walk froze the daemon (feedback row 4)"
+
+
+@pytest.mark.parametrize("mode,mask", [("read_only", 0x120089),
+                                       ("read_write", 0x1F01FF),
+                                       ("read_only", 0x1F01FF)])
+def test_folder_grant_skips_a_root_that_already_has_the_entry(pm, tmp_path, mode, mask,
+                                                              worker_sid, monkeypatch):
+    """Every ``/grant`` re-propagates through the whole subtree even when the
+    ACE is already there (spec 109 V1). Session starts re-grant the workspace
+    every time, so a root that already carries an explicit inheritable allow
+    covering the mode costs one DACL read and no icacls write."""
+    _dacl(monkeypatch, [_allow(mask)])
+    with patch.object(PermissionManager, "_run_icacls", return_value=_ok()) as run, \
+            patch.object(PermissionManager, "_root_hardening_present", return_value=True):
+        result = pm.grant_access(USER, str(tmp_path), mode)
+    assert result.success and result.path == os.path.realpath(str(tmp_path))
+    run.assert_not_called()
+
+
+@pytest.mark.parametrize("aces", [
+    None,                                         # DACL unreadable
+    [],                                           # nothing for the worker
+    [_allow(0x1F01FF, flags=_INHERIT | 0x10)],    # inherited copy only
+    [_allow(0x1F01FF, flags=0)],                  # this folder only
+    [_allow(0x120089)],                           # read, but write requested
+    [_allow(0x1F01FF, sid="S-1-5-21-9-9-9-500")],  # someone else's entry
+])
+def test_folder_grant_still_writes_without_a_covering_entry(pm, tmp_path, aces,
+                                                            worker_sid, monkeypatch):
+    _dacl(monkeypatch, aces)
+    with patch.object(PermissionManager, "_run_icacls", return_value=_ok()) as run, \
+            patch.object(PermissionManager, "_root_hardening_present", return_value=True):
+        assert pm.grant_access(USER, str(tmp_path), "read_write").success
+    assert "/grant" in run.call_args[0][0]
+
+
+def test_read_write_fast_path_still_hardens_the_root(pm, tmp_path, worker_sid, monkeypatch):
+    """The skip covers the worker entry only; a root missing the user /
+    OWNER RIGHTS entries still gets them (spec 077 W3, bench 2026-10-19)."""
+    _dacl(monkeypatch, [_allow(0x1F01FF)])
+    with patch.object(PermissionManager, "_run_icacls", return_value=_ok()) as run, \
+            patch.object(PermissionManager, "_root_hardening_present", return_value=False):
+        assert pm.grant_access(USER, str(tmp_path), "read_write").success
+    assert run.call_count == 1 and "*S-1-3-4:(OI)(CI)M" in run.call_args[0][0]
 
 
 def test_icacls_timeout_returns_failure_not_exception(pm, tmp_path, monkeypatch):

@@ -2256,8 +2256,11 @@ async def put_session_scope(project_id: str, session_id: str, body: SessionScope
             raise HTTPException(
                 status_code=422, detail=f"Unknown project ids: {unknown}"
             )
-    return _agent_manager.set_session_scope(
-        project_id, session_id, body.mode, body.selected_project_ids
+    # Off the event loop: a wider scope grants a read portal (icacls on
+    # Windows) on each newly in-scope project workspace.
+    return await asyncio.to_thread(
+        _agent_manager.set_session_scope,
+        project_id, session_id, body.mode, body.selected_project_ids,
     )
 
 

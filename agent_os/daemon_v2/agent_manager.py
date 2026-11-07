@@ -1155,10 +1155,16 @@ class AgentManager:
             if caps.isolation_method != "none" and not caps.setup_complete:
                 logger.warning("Sandbox not configured — agent will run without isolation")
             if caps.isolation_method != "none":
+                # Off the event loop: on Windows this is icacls over the
+                # workspace plus a W3 pass over its repositories, and on a
+                # large imported tree that held the loop — chat, UI, every
+                # other session — for 1016 s (feedback row 4, 2026-11-07).
+                #
                 # Portals are per-scope (Spec 12 §2b): a project's own workspace
                 # grant is keyed by its own workspace realpath, so it never
                 # leaks into another project's Seatbelt profile.
-                self._platform_provider.grant_folder_access(
+                await asyncio.to_thread(
+                    self._platform_provider.grant_folder_access,
                     config.workspace, "read_write",
                     scope=os.path.realpath(config.workspace),
                 )
@@ -1166,8 +1172,9 @@ class AgentManager:
                 # in-scope project workspace so its SHELL can cross-project read
                 # exactly what its file tools can (Spec 12 §2a).
                 if config.is_scratch:
-                    self._sync_scratch_read_portals(
-                        project_id, session_id, config.workspace
+                    await asyncio.to_thread(
+                        self._sync_scratch_read_portals,
+                        project_id, session_id, config.workspace,
                     )
 
         # 1. Providers (centralized API key resolution) — shared with the
@@ -4532,7 +4539,9 @@ class AgentManager:
             # newly-granted portal appears only in this project's profile
             # (Spec 12 §2b) — never in a sibling project's sandbox.
             workspace = handle.config_snapshot.get("workspace", "")
-            result = self._platform_provider.grant_folder_access(
+            # Off the event loop (feedback row 4): icacls over a big folder.
+            result = await asyncio.to_thread(
+                self._platform_provider.grant_folder_access,
                 path, mode, scope=os.path.realpath(workspace),
             )
             if result.success:

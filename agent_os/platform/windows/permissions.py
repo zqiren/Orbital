@@ -56,6 +56,30 @@ OWNER_RIGHTS_SID = "S-1-3-4"
 _FULL_CONTROL = 0x1F01FF
 _MODIFY = 0x1301BF
 
+#: What ``icacls ... R`` / ``F`` write, as file-specific rights.
+_READ = 0x120089
+_MODE_MASKS: dict[str, int] = {"read_only": _READ, "read_write": _FULL_CONTROL}
+
+_GENERIC_READ = 0x80000000
+_GENERIC_WRITE = 0x40000000
+_GENERIC_EXECUTE = 0x20000000
+_GENERIC_ALL = 0x10000000
+
+
+def _file_rights(mask: int) -> int:
+    """*mask* with the generic bits mapped to file rights (FILE_GENERIC_*)."""
+    out = mask & 0x00FFFFFF
+    if mask & _GENERIC_ALL:
+        out |= _FULL_CONTROL
+    if mask & _GENERIC_READ:
+        out |= _READ
+    if mask & _GENERIC_WRITE:
+        out |= 0x120116
+    if mask & _GENERIC_EXECUTE:
+        out |= 0x1200A0
+    return out
+
+
 #: Classification of what a target already holds for the worker.
 DenyState = Literal["none", "current", "stale"]
 
@@ -107,10 +131,24 @@ class PermissionManager:
             # by the time the worker creates anything (bench 2026-10-19).
             self.harden_writable_root(resolved)
 
-        # /C: one file the user cannot re-permission (a worker-owned file on a
-        # drive where the user holds no change-permissions) must not stop the
-        # walk over the rest of the tree.
-        result = self._run_icacls([resolved, "/grant", perm, "/T", "/C", "/Q"])
+        # Every session start re-grants its workspace, and every ``/grant``
+        # re-propagates through the whole subtree even when the identical ACE
+        # is already there (spec 109 V1). A root that already carries the
+        # entry costs one DACL read; files created later inherit it.
+        if self._has_root_grant(username, resolved, _MODE_MASKS[mode]):
+            return PermissionResult(success=True, path=resolved)
+
+        # Inheritable and NOT ``/T`` — the same rule as the toolchain roots
+        # (spec 109 D1, verified V1): the root ACE reaches every inheriting
+        # descendant, while ``/T`` also wrote an explicit ACE on each file
+        # one at a time. On an imported D:\ project tree that walk held the
+        # daemon for 1016 s (feedback row 4, 2026-11-07). A subtree with
+        # inheritance turned off does not get the entry; that is one click in
+        # Settings > Folder access on the subtree itself.
+        # /C: one entry the user cannot re-permission (a worker-owned file on
+        # a drive where the user holds no change-permissions) must not stop
+        # the propagation over the rest of the tree.
+        result = self._run_icacls([resolved, "/grant", perm, "/C", "/Q"])
         if result.returncode != 0:
             err = result.stderr.strip() or result.stdout.strip()
             if _processed_some(result.stdout):
@@ -318,6 +356,23 @@ class PermissionManager:
             )
 
         return has(user_sid, _FULL_CONTROL) and has(OWNER_RIGHTS_SID, _MODIFY)
+
+    def _has_root_grant(self, username: str, resolved: str, need: int) -> bool:
+        """True when *resolved* itself carries an explicit, inheritable allow
+        for *username* that covers *need*. ``False`` whenever unsure."""
+        sid = self._sid_for(username)
+        aces = acl.read_dacl(resolved)
+        if sid is None or aces is None:
+            return False
+        inherit = acl.OBJECT_INHERIT_ACE | acl.CONTAINER_INHERIT_ACE
+        return any(
+            a.type == acl.ACCESS_ALLOWED_ACE_TYPE and a.sid == sid
+            and not a.flags & (acl.INHERITED_ACE | acl.INHERIT_ONLY_ACE
+                                | acl.NO_PROPAGATE_INHERIT_ACE)
+            and a.flags & inherit == inherit
+            and _file_rights(a.mask) & need == need
+            for a in aces
+        )
 
     def _sid_for(self, username: str) -> str | None:
         cache = self.__dict__.setdefault("_sid_cache", {})
