@@ -147,7 +147,7 @@ def client(api_app):
 class TestBug001_BrowserWarmupAPI:
     """Hit POST /api/v2/platform/browser/warmup and verify flags."""
 
-    def test_warmup_endpoint_calls_launch_warmup(self, client):
+    def test_warmup_endpoint_calls_launch_warmup(self, client, monkeypatch):
         """POST /browser/warmup → returns 'launched' when warmup_active transitions."""
         test_client, deps = client
         bm = deps["browser_manager"]
@@ -155,13 +155,15 @@ class TestBug001_BrowserWarmupAPI:
         # Mock launch_warmup (background task won't actually run in TestClient)
         bm.launch_warmup = AsyncMock()
         # warmup_active: False on first check (not already active), True after sleep
-        type(bm).warmup_active = PropertyMock(side_effect=[False, True])
+        monkeypatch.setattr(
+            type(bm), "warmup_active", PropertyMock(side_effect=[False, True]),
+        )
 
         resp = test_client.post("/api/v2/platform/browser/warmup")
         assert resp.status_code == 200
         assert resp.json()["status"] == "launched"
 
-    def test_warmup_launch_uses_full_flags(self, client):
+    def test_warmup_launch_uses_full_flags(self, client, monkeypatch):
         """When launch_warmup runs, it passes all CHROME_FLAGS to playwright."""
         test_client, deps = client
         bm = deps["browser_manager"]
@@ -176,7 +178,9 @@ class TestBug001_BrowserWarmupAPI:
 
         bm.launch_warmup = capture_warmup
         # warmup_active: False on first check, True after sleep
-        type(bm).warmup_active = PropertyMock(side_effect=[False, True])
+        monkeypatch.setattr(
+            type(bm), "warmup_active", PropertyMock(side_effect=[False, True]),
+        )
 
         resp = test_client.post("/api/v2/platform/browser/warmup")
         assert resp.status_code == 200
