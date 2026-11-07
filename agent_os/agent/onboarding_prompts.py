@@ -107,15 +107,17 @@ def _shared_memory_bullet(indent: str, lang: str | None = None) -> str:
     )
 
 
-def _guess_reply(lang: str, multi_agent: bool) -> str:
+def _guess_reply(lang: str, multi_agent: bool, agent_picks: bool = False) -> str:
     """How the guess-first run ends. Round 4: no closing question — the
     daemon posts the confirm card itself once the goals file exists. Round 5:
     the summary ends with the 1-3 next steps the run recorded under
     PROJECT_STATE's ``## Next steps`` (the card offers step 1 from there);
     none is started."""
     language = "Chinese (简体中文)" if lang == "zh" else "English"
+    # With a LANGUAGE section (2026-11-07) the agent picks the language.
+    where = "the language chosen under LANGUAGE below" if agent_picks else language
     text = (
-        f"- Reply to the user in {language}, plain words, no file names, at most 5 short\n"
+        f"- Reply to the user in {where}, plain words, no file names, at most 5 short\n"
         "  lines before the steps: what you think this project is for and where it stands.\n"
     )
     if multi_agent:
@@ -131,7 +133,8 @@ def _guess_reply(lang: str, multi_agent: bool) -> str:
 
 
 def guess_first_instruction(workspace: str, *, lang: str = "en",
-                            multi_agent: bool = False) -> str:
+                            multi_agent: bool = False,
+                            language: str | None = None) -> str:
     """Spec 160 §5.2: the cold-start scan of an imported project, guess
     first. Nobody is waiting on this run (the import started it): read, write
     the best guess at state, index and goals, then leave one short summary.
@@ -145,7 +148,9 @@ def guess_first_instruction(workspace: str, *, lang: str = "en",
     ``lang`` (``zh`` | ``en``) is the language of that reply: the UI
     language the import was made in, else the system's.
     ``multi_agent``: more than one agent is enabled here, so the reply also
-    carries the shared-memory line (§5.4)."""
+    carries the shared-memory line (§5.4).
+    ``language``: the ``## LANGUAGE`` section (``onboarding.user_language``);
+    given, the agent picks the reply language from it instead of ``lang``."""
     return (
         "## COLD-START WORKSPACE SCAN\n\n"
         "This is an imported project with an existing workspace. The user brought it into\n"
@@ -175,7 +180,8 @@ def guess_first_instruction(workspace: str, *, lang: str = "en",
         "  from the files. Rules and Preferences only where a file states them (README,\n"
         "  notes, config, imported memories); otherwise write \"(none yet)\": the user adds\n"
         "  them. Never invent a style, tone or working rule the files don't state.\n"
-        + _guess_reply(lang, multi_agent)
+        + _guess_reply(lang, multi_agent, agent_picks=language is not None)
+        + (f"\n\n{language}" if language else "")
     )
 
 
@@ -331,12 +337,14 @@ def worker_cold_start_instruction(slug: str, workspace: str,
 
 
 def worker_guess_first_instruction(slug: str, workspace: str, skeleton_text: str, *,
-                                   lang: str = "en", multi_agent: bool = False) -> str:
+                                   lang: str = "en", multi_agent: bool = False,
+                                   language: str | None = None) -> str:
     """Spec 160 round 2: the guess-first import scan on a keyless project's
     pinned worker — the manager's guess text behind the worker preamble,
     with the skeleton inlined (one message, so no directive ending)."""
     return (worker_preamble(slug, workspace, scan=True)
-            + guess_first_instruction(workspace, lang=lang, multi_agent=multi_agent)
+            + guess_first_instruction(workspace, lang=lang, multi_agent=multi_agent,
+                                      language=language)
             + "\n\n" + _bounded_skeleton(_prompt_separators(skeleton_text or "")))
 
 

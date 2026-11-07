@@ -558,6 +558,34 @@ async def update_settings(req: UpdateSettingsRequest):
     return _settings_store.get_masked()
 
 
+class UiLanguageRequest(BaseModel):
+    ui_language: str | None = None
+    ui_languages: list[str] | None = None
+
+
+@router.put("/settings/ui-language")
+async def set_ui_language(req: UiLanguageRequest):
+    """The app reports its interface language and the device's preferred
+    languages, on load and on every language change. Onboarding prompts hand
+    them to the agent (``onboarding.user_language``). Junk tags are dropped;
+    the file is written only on a change."""
+    from agent_os.onboarding.user_language import clean_tag, clean_tags
+
+    current = _settings_store.get()
+    ui = clean_tag(req.ui_language) if req.ui_language is not None else None
+    langs = clean_tags(req.ui_languages) if req.ui_languages is not None else None
+    changed = False
+    if ui is not None and ui != current.ui_language:
+        current.ui_language = ui
+        changed = True
+    if langs is not None and langs != current.ui_languages:
+        current.ui_languages = langs
+        changed = True
+    if changed:
+        await asyncio.to_thread(_settings_store.update, current)
+    return {"ui_language": current.ui_language, "ui_languages": current.ui_languages}
+
+
 @router.put("/settings/api-key")
 async def set_api_key(req: SetApiKeyRequest):
     """Set the DEFAULT card's key (§3.8 shim, one release).

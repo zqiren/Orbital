@@ -80,6 +80,10 @@ class PromptContext:
     # byte-identical; False (an "open" project — commands run as the user)
     # lets the agent act on the user's own requests outside the workspace.
     safe_mode: bool = True
+    # 2026-11-07: what Orbital knows of the user's language ({"ui", "device",
+    # "system"}, ``onboarding.user_language``). Only onboarding sections use
+    # it; None leaves them as they were.
+    language_signals: dict | None = None
 
     def __post_init__(self):
         if self.active_sub_agents is None:
@@ -606,19 +610,22 @@ class PromptBuilder:
                 # No UI language known: the system's (default_lang's rule).
                 from agent_os.onboarding.deferred_seed import default_lang
                 guess_lang = default_lang()
-            return guess_first_instruction(context.workspace, lang=guess_lang,
-                                           multi_agent=multi_agent)
+            return guess_first_instruction(
+                context.workspace, lang=guess_lang, multi_agent=multi_agent,
+                language=self._language_section(context, flavour.partition(":")[2]))
         goals_path = ProjectPaths(context.workspace).project_goals
         content = self._read_truncated(goals_path)
+        language = self._language_section(context)
+        tail = f"\n\n{language}" if language else ""
         if content is None and context.cold_start:
-            return cold_start_instruction(context.workspace)
+            return cold_start_instruction(context.workspace) + tail
         if content is None:
             return interview_instruction(
                 context.workspace, is_scratch=context.is_scratch,
                 project_name=context.project_name,
                 project_instructions=context.project_instructions,
                 multi_agent=multi_agent,
-            )
+            ) + tail
         return (
             "## PROJECT DIRECTIVE\n\n"
             f"{content}\n\n"
@@ -635,6 +642,15 @@ class PromptBuilder:
         )
 
     # -- Semi-stable sections (placed before history for caching) --
+
+    @staticmethod
+    def _language_section(context: PromptContext, import_lang: str | None = None) -> str | None:
+        """The onboarding ``## LANGUAGE`` section, or None without signals."""
+        signals = getattr(context, "language_signals", None)
+        if not signals:
+            return None
+        from agent_os.onboarding.user_language import language_section
+        return language_section(signals, import_lang=import_lang or None)
 
     def _global_preferences(self, context: PromptContext) -> str | None:
         if not context.global_preferences_path:

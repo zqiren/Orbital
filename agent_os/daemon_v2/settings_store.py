@@ -157,6 +157,12 @@ class GlobalSettings(BaseModel):
     # each NEW project's ``disabled_sub_agents``; per-project settings win
     # and existing projects are untouched. Nothing is uninstalled.
     sub_agents_hidden: list[str] = []
+    # The interface language the app last reported (``en`` | ``zh``) and the
+    # device's preferred languages (``navigator.languages``). Per device, so
+    # the last report wins. Onboarding prompts hand them to the agent, which
+    # picks the language it speaks (``onboarding.user_language``).
+    ui_language: str | None = None
+    ui_languages: list[str] = []
 
 
 # ---------------------------------------------------------------------------

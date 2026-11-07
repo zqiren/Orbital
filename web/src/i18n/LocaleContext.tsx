@@ -7,6 +7,7 @@ import {
   type ReactNode,
 } from 'react';
 import { DEFAULT_LOCALE, LOCALE_STORAGE_KEY, type Locale } from './locales';
+import { reportUiLanguage } from './reportLanguage';
 
 interface LocaleContextValue {
   locale: Locale;
@@ -48,6 +49,9 @@ export function LocaleProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     document.documentElement.lang = locale;
+    // The daemon hands it to onboarding prompts so the agent speaks the
+    // user's language (not under vitest: every test renders this provider).
+    if (import.meta.env.MODE !== 'test') void reportUiLanguage(locale);
   }, [locale]);
 
   const setLocale = useCallback((next: Locale) => {

@@ -44,24 +44,43 @@ class WorkerDispatchError(RuntimeError):
 def build_instruction(slug: str, project: dict, mode: str,
                       skeleton_text: str | None = None, *,
                       guess_lang: str | None = None,
-                      multi_agent: bool = False) -> str:
+                      multi_agent: bool = False,
+                      language_signals: dict | None = None) -> str:
     """The onboarding instruction ``slug`` receives for ``mode``.
     ``guess_lang`` (spec 160): the import scan's guess-first flavour, in that
-    reply language; None keeps the card's propose-first scan."""
+    reply language; None keeps the card's propose-first scan.
+    ``language_signals``: the user's language signals; given, the
+    instruction carries the ``## LANGUAGE`` section and the worker picks the
+    language it speaks."""
+    from agent_os.onboarding.user_language import language_section
+
     workspace = project.get("workspace", "")
     if mode == "scan" and guess_lang is not None:
         return onboarding_prompts.worker_guess_first_instruction(
             slug, workspace, skeleton_text or "", lang=guess_lang,
-            multi_agent=multi_agent)
+            multi_agent=multi_agent,
+            language=(language_section(language_signals, import_lang=guess_lang)
+                      if language_signals else None))
+    tail = f"\n\n{language_section(language_signals)}" if language_signals else ""
     if mode == "scan":
         return onboarding_prompts.worker_cold_start_instruction(
-            slug, workspace, skeleton_text or "")
+            slug, workspace, skeleton_text or "") + tail
     return onboarding_prompts.worker_interview_instruction(
         slug, workspace,
         project_name=project.get("name", "") or "",
         project_instructions=project.get("instructions", "") or "",
         is_scratch=bool(project.get("is_scratch")),
-    )
+    ) + tail
+
+
+def _language_signals(agent_manager) -> dict | None:
+    """The user's language signals from the manager's settings store."""
+    try:
+        from agent_os.onboarding.user_language import signals_from_settings
+        store = getattr(agent_manager, "_settings_store", None)
+        return signals_from_settings(store.get() if store is not None else None)
+    except Exception:
+        return None
 
 
 def _now() -> str:
@@ -90,7 +109,8 @@ async def start_worker_onboarding(agent_manager, sub_agent_manager,
         raise RuntimeError(f"no sub-agent manager available to run '{slug}'")
     project = agent_manager._project_store.get_project(project_id) or {}
     instruction = build_instruction(slug, project, mode, skeleton_text,
-                                    guess_lang=guess_lang, multi_agent=multi_agent)
+                                    guess_lang=guess_lang, multi_agent=multi_agent,
+                                    language_signals=_language_signals(agent_manager))
 
     minted = await agent_manager.new_session(project_id)
     session_id = minted["session_id"]

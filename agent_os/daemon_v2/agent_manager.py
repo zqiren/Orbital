@@ -559,6 +559,16 @@ class AgentManager:
 
     # ── Spec 117 — the project's safe-mode switch, read per call ──────────
 
+    def _language_signals(self) -> dict | None:
+        """What Orbital knows of the user's language, for onboarding prompts
+        (``onboarding.user_language``). None when the settings are unreadable."""
+        try:
+            from agent_os.onboarding.user_language import signals_from_settings
+            store = self._settings_store
+            return signals_from_settings(store.get() if store is not None else None)
+        except Exception:
+            return None
+
     def _project_safe_mode(self, project_id: str) -> bool:
         """``True`` → spec-077 sandbox; ``False`` → open. Absent key = on."""
         if self._project_store is None:
@@ -1268,6 +1278,7 @@ class AgentManager:
             # Spec 117 D3: the FOCUS rule follows the switch (absent key = on).
             # Kept current on a live flip by on_safe_mode_changed.
             safe_mode=self._project_safe_mode(project_id),
+            language_signals=self._language_signals(),
         )
 
         # 4b. Reconcile default skills for legacy projects that never had them
