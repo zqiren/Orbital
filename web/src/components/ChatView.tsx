@@ -755,7 +755,6 @@ import type {
   AgentNotifyEvent,
   StateRefreshLifecycleEvent,
   WorkspaceClaudemdWarningEvent,
-  PendingEnqueuedEvent,
   PendingDispatchedEvent,
   PendingCancelledEvent,
   FanoutStartedEvent,
@@ -772,7 +771,6 @@ import ApprovalCard from './ApprovalCard';
 import CredentialCard from './CredentialCard';
 import RefreshTurnStatus from './RefreshTurnStatus';
 import ClaudemdWarningBanner, { type ClaudemdWarning } from './ClaudemdWarningBanner';
-import SlotHeldNotice from './SlotHeldNotice';
 import PendingInputNotice from './PendingInputNotice';
 import { ColdStartCard } from './ColdStartCard';
 import SubAgentStatusBar from './SubAgentStatusBar';
@@ -800,12 +798,9 @@ interface ChatViewProps {
    * still being resolved by the parent (ChatTab) — ChatView renders an empty
    * state and skips history load until a sessionId arrives.
    *
-   * Single active-loop slot model: only ONE session in a project executes at
-   * a time. Live WS events (stream/activity/approvals) carry only project_id,
-   * not session_id, so they always belong to the slot holder. ChatView
-   * appends those live events to the viewed conversation ONLY when the viewed
-   * `sessionId` matches the holder (resolved via run-status
-   * `current_holder_session_id`). See §5 of the T5 task brief.
+   * Sessions of a project run in parallel (spec 155). `agentStatus` is THIS
+   * session's status, and live WS events render only when their
+   * `session_id` is this one.
    */
   sessionId?: string;
   /**
@@ -865,19 +860,15 @@ interface StreamState {
 }
 
 // Pending-input queue (spec 006 · v3). One queued message awaiting its turn,
-// keyed by nonce in `pendingInputs`. Two kinds (§11c):
-//   - `'cross'` — slot held by ANOTHER session (`_pending_inject`); `holder` is
-//     that session. Offers [Run now].
-//   - `'same'`  — THIS session's own turn is mid-flight (`session._queue`);
-//     `holder` is unused. No Run-now (it drains automatically).
+// keyed by nonce in `pendingInputs`: THIS session's own turn is mid-flight
+// (`session._queue`); it drains automatically when that turn ends. (Spec 155
+// removed the cross-session kind: no session waits for another.)
 // `content`/`timestamp` mirror the kept optimistic bubble so cancel/dispatch can
 // locate and remove it. `rawText` is the user's RAW typed text (BEFORE
 // buildAttachmentsBlock) — what ↑/tap-recall loads back into the composer (§12
 // R4). `hasAttachments` gates recall off (don't half-restore chips).
 interface PendingInputEntry {
-  kind: 'cross' | 'same';
   sessionId: string;
-  holder: string;
   content: string;
   rawText: string;
   hasAttachments: boolean;
@@ -986,14 +977,6 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   // the very first paint — useState's initializer runs once, at mount, so
   // this cannot re-apply on a later re-render with a changed prop.
   const [inputText, setInputText] = useState(initialDraft ?? '');
-  // Slot holder: the F1 session_id currently holding the project's
-  // active-loop slot (from run-status `current_holder_session_id`), or null
-  // if no session is running. Single-slot model — only ONE session runs at a
-  // time. Live WS events carry only project_id, so they belong to this
-  // holder. ChatView appends them to the viewed conversation ONLY when the
-  // viewed session IS the holder (viewing a non-holder session shows its
-  // static history; live events for the holder are dropped here).
-  const [holderSessionId, setHolderSessionId] = useState<string | null>(null);
   // The pinned-send "●●●" bubble, stamped with the session that sent it so a
   // switch while the inject is in flight doesn't carry it along (spec 096).
   const [subAgentLoading, setSubAgentLoading] = useState<
@@ -1167,26 +1150,11 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   }, [selectedSkillIndex]);
 
   const [injectError, setInjectError] = useState<string | null>(null);
-  // Track J Phase 1: intermediate "slot held" notice. Set when /inject
-  // returns 202 with `slot_held` because the caller's session_id didn't
-  // hold the project's active-loop slot. See SlotHeldNotice.tsx.
-  const [slotHeldNotice, setSlotHeldNotice] = useState<
-    | {
-        holdingSessionId: string;
-        pendingContent: string;
-        pendingTarget?: string;
-        pendingNonce: string;
-        pendingAttachments?: Array<{ path: string; mime: string; size: number }>;
-        pendingSkill?: SkillCatalogEntry;
-      }
-    | null
-  >(null);
-  // Pending-input queue (spec 006, Path A). A NONCE-KEYED OVERLAY — NOT a flag
-  // in `items` (the historyItems memo reseed would stomp that). Each entry is a
-  // message the user sent to a session while another session held the project's
-  // single active-loop slot; the backend accepted + queued it (202
-  // `queued_pending_slot`) and auto-dispatches it when the slot frees. The map
-  // is PROJECT-scoped; the waiting affordance renders only for entries whose
+  // Pending-input queue (spec 006). A NONCE-KEYED OVERLAY — NOT a flag in
+  // `items` (the historyItems memo reseed would stomp that). Each entry is a
+  // message the user sent to a session while that session's own turn was
+  // running (`queued_same_session`); it drains when the turn ends. The map is
+  // PROJECT-scoped; the waiting affordance renders only for entries whose
   // `sessionId` is the viewed session. `content`/`timestamp` identify the kept
   // optimistic bubble so cancel/dispatch can locate it. Cleared per-nonce on
   // `chat.pending_dispatched` (sole clear trigger) / `chat.pending_cancelled`,
@@ -1352,13 +1320,10 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   // session switch (the effect closes over a stale inputText otherwise).
   const inputTextRef = useRef('');
   // Latest sessionId, readable synchronously inside WS handlers (which close
-  // over the value at registration time otherwise). The holder-comparison
-  // and inject-target paths read this ref to stay current.
+  // over the value at registration time otherwise). The inject-target paths
+  // read this ref to stay current.
   const sessionIdRef = useRef<string | undefined>(sessionId);
   sessionIdRef.current = sessionId;
-  // Latest holder, readable synchronously inside WS handlers.
-  const holderSessionIdRef = useRef<string | null>(holderSessionId);
-  holderSessionIdRef.current = holderSessionId;
   // Latest pending-input map, readable synchronously inside WS handlers and the
   // nonce-eviction sweep (which must EXEMPT pending nonces — spec §3h F4 — so a
   // long wait can't evict the nonce before the dispatch echo dedups against the
@@ -1387,36 +1352,29 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   // holder" fallback) is gone: it defaulted to SHOW, which leaked events across
   // sessions whenever the holder was momentarily unresolved. There is no
   // default-to-show path anymore — an event with no/other session_id is dropped.
-  //
-  // ``holderSessionId`` is retained, but ONLY as a fact (which session holds the
-  // project's active-loop slot), never as an event-routing gate. It drives:
-  //   - the cancel target (Stop cancels the RUNNING session, not the viewed one),
-  //   - child props that need the live session, and
-  //   - ``isActivelyRunning`` below (a RENDER concern: is the VIEWED session the
-  //     one currently executing — used to keep the trailing capsule spinning).
 
-  // FE-3 / FE-A1: the trailing open capsule is only genuinely "running" when
-  // the viewed session is the one actively executing — i.e. the viewed session
-  // IS the holder and the project is running. Applied at RENDER time below (the
-  // agent_run case), NOT fed into the transform, so a status flip never
-  // invalidates the memo (FE-A1).
-  const viewedSessionIsHolder =
-    sessionId !== undefined && sessionId === holderSessionId;
-  const isActivelyRunning = viewedSessionIsHolder && agentStatus === 'running';
+  // Spec 155: sessions run in parallel and `agentStatus` is the VIEWED
+  // session's own status (App keeps one per session), so "the viewed session
+  // is the one running" is simply "a session is viewed".
+  //
+  // FE-3 / FE-A1: the trailing open capsule is only genuinely "running" while
+  // the viewed session runs. Applied at RENDER time below (the agent_run
+  // case), NOT fed into the transform, so a status flip never invalidates the
+  // memo (FE-A1).
+  const viewingSession = sessionId !== undefined;
+  const isActivelyRunning = viewingSession && agentStatus === 'running';
   // Spec 065 §5.9: the open turn of the viewed session has not ended while
-  // it holds the slot mid-run (waiting on a worker or an approval counts):
-  // its changed-files line would still be growing.
+  // it is mid-run (waiting on a worker or an approval counts): its
+  // changed-files line would still be growing.
   const turnInFlight =
-    viewedSessionIsHolder &&
+    viewingSession &&
     (agentStatus === 'running' || agentStatus === 'waiting' || agentStatus === 'pending_approval');
   // Each turn's last capsule → the turn's span (user row to next user row).
   const turnSpans = useMemo(() => lastCapsuleOfTurns(items), [items]);
-  // Spec 096: `showThinking` is set per project (the status is project-wide
-  // and this instance outlives session switches), so it only ever renders on
-  // the holder. Holder, not isActivelyRunning: the spinner stays through the
-  // holder's running → waiting on purpose. Any new reader of showThinking
-  // needs the same gate.
-  const thinkingVisible = showThinking && viewedSessionIsHolder;
+  // Spec 096: `showThinking` follows the viewed session's status (this
+  // instance outlives session switches). Not isActivelyRunning: the spinner
+  // stays through running → waiting on purpose.
+  const thinkingVisible = showThinking && viewingSession;
   const subAgentLoadingTarget =
     subAgentLoading && subAgentLoading.sessionId === sessionId
       ? subAgentLoading.target
@@ -1469,9 +1427,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     // of stranding the prior session's stale overlay. On idle the catch-up
     // (refreshRawMessages → historyItems change) re-runs this with the turn no
     // longer in flight, restoring canonical server history.
-    const viewedIsHolder =
-      sessionIdRef.current !== undefined &&
-      sessionIdRef.current === holderSessionIdRef.current;
+    const viewedIsHolder = sessionIdRef.current !== undefined;
     const turnInFlight =
       agentStatusRef.current === 'running' || agentStatusRef.current === 'waiting';
     const itemsAreForViewedSession = itemsSessionRef.current === sessionIdRef.current;
@@ -1731,25 +1687,24 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   }, [projectId, scrollToBottom]);
 
   /**
-   * Resolve the project's current active-loop slot holder (the F1 session_id
-   * running right now, or null). run-status returns `current_holder_session_id`.
-   * Live WS events belong to this holder; the holder gates whether they are
-   * appended to the viewed conversation (see viewingHolder above). Fetched on
-   * mount, on agentStatus/sessionId change, and via the existing 5s poll.
+   * The viewed session's run-status (spec 155: per session). Hydrates a
+   * classified error after reload and hands the session's status to App on a
+   * fresh view, so a session running when the page opened shows as running.
+   * Fetched on mount and on agentStatus/sessionId change.
    */
-  const holderAbortRef = useRef<AbortController | null>(null);
-  const fetchHolder = useCallback(() => {
+  const runStatusAbortRef = useRef<AbortController | null>(null);
+  const fetchRunStatus = useCallback(() => {
     // Bug #48 (fix C): rapid session switching re-fires this on every switch.
     // Abort the superseded request so responses can't pile up or resolve out
-    // of order (a slow older response would overwrite a newer holder value).
-    holderAbortRef.current?.abort();
+    // of order (a slow older response would overwrite a newer value).
+    runStatusAbortRef.current?.abort();
+    if (!sessionId) return;
     const controller = new AbortController();
-    holderAbortRef.current = controller;
-    const qs = sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : '';
+    runStatusAbortRef.current = controller;
+    const qs = `?session_id=${encodeURIComponent(sessionId)}`;
     api<{
       project_id: string;
       status: string;
-      current_holder_session_id?: string | null;
       last_terminal_event?: {
         type: string;
         details?: string | null;
@@ -1759,7 +1714,13 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       signal: controller.signal,
     })
       .then((result) => {
-        setHolderSessionId(result.current_holder_session_id ?? null);
+        if (result.status !== agentStatusRef.current) {
+          window.dispatchEvent(
+            new CustomEvent('agent-status-override', {
+              detail: { project_id: projectId, session_id: sessionId, status: result.status },
+            }),
+          );
+        }
         // Hydrate a classified error after reload (the agent.status broadcast
         // that carried it is ephemeral). Only fill in when nothing fresher is
         // already showing.
@@ -1771,7 +1732,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         }
       })
       .catch(() => {
-        // best effort — leave the prior holder value in place
+        // best effort — leave the prior status in place
       });
   }, [projectId, sessionId]);
 
@@ -1801,7 +1762,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   }, []);
 
   // Pending-input queue (spec 006 v3 §11c + §12 R2). Recall a queued message
-  // (cross- OR same-session) into the composer for editing — shared by the
+  // into the composer for editing — shared by the
   // desktop ↑ accelerator and the mobile tap-to-edit affordance. This is
   // SERVER-AUTHORITATIVE: we await the cancel/dequeue and only load the text
   // when the backend confirms it removed a STILL-QUEUED entry (`removed===true`).
@@ -1857,8 +1818,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     getPending(projectId)
       .then((res) => {
         if (!res) return;
-        const list = res.pending ?? [];
-        const holder = res.holder ?? '';
+        const list = (res.pending ?? []).filter((p) => p.kind === undefined || p.kind === 'same');
         const viewed = sessionIdRef.current;
         // Build the next map from server truth, preserving any existing entry's
         // content/timestamp (its bubble identity) via the committed ref.
@@ -1877,9 +1837,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
             rebuilt.push([
               p.nonce,
               {
-                kind: p.kind,
                 sessionId: p.session_id,
-                holder,
                 content: p.content,
                 rawText: hasAttachments ? '' : p.content,
                 hasAttachments,
@@ -1942,13 +1900,11 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       });
   }, [projectId, getPending]);
 
-  // Keep the holder fresh: on mount/project change, on every agentStatus
-  // transition (a status change always implies the slot may have been
-  // acquired/released), and whenever the viewed session changes (so the
-  // viewingHolder comparison is correct for the newly-viewed session).
+  // Keep the viewed session's status fresh: on mount/project change, on every
+  // agentStatus transition, and whenever the viewed session changes.
   useEffect(() => {
-    fetchHolder();
-  }, [fetchHolder, agentStatus, statusTick, sessionId]);
+    fetchRunStatus();
+  }, [fetchRunStatus, agentStatus, statusTick, sessionId]);
 
   // A session/project switch shows a different conversation — drop the
   // previous session's error notice (hydration re-fills it if it applies).
@@ -2244,37 +2200,19 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   // Live machinery rows accumulate inside an open agent_run capsule; on
   // terminal status the capsule is finalized so it collapses.
   //
-  // agentStatus is PROJECT-wide (it reflects the slot holder). Conversation
+  // agentStatus is the VIEWED session's status (spec 155). Conversation
   // mutations here (finalize capsule, catch-up fetch, new_session reset)
-  // therefore only apply when the VIEWED session is the holder. The thinking
-  // indicator is set project-wide and gated per session at render
-  // (thinkingVisible). The Stop-button affordance (isCancelling) is
-  // project-wide and is always cleared on a terminal status regardless of
-  // which session is viewed.
+  // apply while a session is viewed; live events route strictly by
+  // session_id in the handlers below.
   useEffect(() => {
-    // "viewing" = the viewed session IS the running/holder session. This is a
-    // render-state concern (finalize capsule), NOT event routing — live
-    // events route strictly by session_id in the handlers below.
-    const viewing =
-      sessionIdRef.current !== undefined &&
-      sessionIdRef.current === holderSessionIdRef.current;
+    const viewing = sessionIdRef.current !== undefined;
     if (agentStatus === 'idle' || agentStatus === 'error') {
       // Loop has actually exited — clear the in-flight cancel affordance.
       // Effect re-runs on agentStatus change, so this naturally coincides
-      // with the agent.status:idle WS broadcast from _on_loop_done. This is
-      // composer-global and must run even when viewing a non-holder session.
-      // (A stopped/cancelled agent reports as `idle` — there is no separate
+      // with the agent.status:idle WS broadcast from _on_loop_done. (A
+      // stopped/cancelled agent reports as `idle` — there is no separate
       // `stopped` run status.)
       setIsCancelling(false);
-      // Clear the thinking indicator and catch up the latest message even
-      // when `viewing` is false. Reason: under multi-session, the holder
-      // fetch racing with the running→idle transition can collapse
-      // `viewingHolder` to false in the same tick the idle event arrives —
-      // leaving the spinner stuck and the final reply unfetched on the
-      // session that actually ran. These two cleanups are about loop state,
-      // not the visible chat surface, so they are safe to run unconditionally.
-      // See docs/investigations/INVESTIGATION-thinking-stuck-after-dispatch.md
-      // (Option 1).
       setShowThinking(false);
       if (wasRunningRef.current) {
         wasRunningRef.current = false;
@@ -2292,9 +2230,6 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       const finalStatus = agentStatus === 'idle' ? 'completed' : 'error';
       setItems((prev) => finalizeLiveCapsule(prev, finalStatus));
     } else if (agentStatus === 'running') {
-      // Set even when the holder isn't resolved (or isn't viewed) yet: the
-      // render gates it per session, and a holder fetch landing after this
-      // tick would otherwise leave the holder's spinner off all turn.
       // wasRunningRef stays behind the guard — it drives the viewed
       // session's idle catch-up.
       setShowThinking(true);
@@ -2304,9 +2239,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       // Fetch pending approval via REST in case the WS event was missed.
       // Covers status poll discovering a stale approval after reconnect.
       // Not gated on `viewing`: the fetch is scoped to the viewed session
-      // (?session_id=), so it can only surface that session's own card, and
-      // the holder may not be resolved yet (fresh mount) or may have been
-      // released while the turn sits paused on the approval.
+      // (?session_id=), so it can only surface that session's own card.
       fetchPendingApproval();
     } else if (agentStatus === 'new_session') {
       if (!viewing) return;
@@ -2382,7 +2315,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       // ready. Let it run — the dedup Map guarantees no duplicates.
       fetchPendingApproval();
       // Pending-input queue (spec 006 §3h): a relay tunnel drop / mobile
-      // foreground may have missed pending_enqueued/dispatched/cancelled events.
+      // foreground may have missed pending dispatched/cancelled events.
       // Rebuild the overlay from GET /pending so waiting affordances survive.
       reconcilePending();
     }
@@ -2397,18 +2330,17 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   }, [stream]);
 
   useEffect(() => {
-    if (!agentStatus) return;
+    if (!agentStatus || !sessionId) return;
     const timer = setInterval(() => {
-      api<{ project_id: string; status: string; current_holder_session_id?: string | null }>(
-        `/api/v2/agents/${encodeURIComponent(projectId)}/run-status`,
+      // Spec 155: the VIEWED session's status, never the project's.
+      api<{ project_id: string; status: string }>(
+        `/api/v2/agents/${encodeURIComponent(projectId)}/run-status?session_id=${encodeURIComponent(sessionId)}`,
       )
         .then((result) => {
-          // Keep the slot holder current from the same poll response.
-          setHolderSessionId(result.current_holder_session_id ?? null);
           if (result.status !== agentStatus) {
             window.dispatchEvent(
               new CustomEvent('agent-status-override', {
-                detail: { project_id: projectId, status: result.status },
+                detail: { project_id: projectId, session_id: sessionId, status: result.status },
               }),
             );
           } else if (result.status === 'pending_approval') {
@@ -2419,7 +2351,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         .catch(() => {});
     }, 5_000);
     return () => clearInterval(timer);
-  }, [agentStatus, projectId, fetchPendingApproval]);
+  }, [agentStatus, projectId, sessionId, fetchPendingApproval]);
 
   // Polling safety net: while the agent is running, poll /pending-approval
   // every 5 seconds so approvals surface even if the WS event was missed
@@ -2436,13 +2368,9 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   }, [agentStatus, fetchPendingApproval]);
 
   useEffect(() => {
-    // Single active-loop slot model: WS events carry only project_id, never
-    // session_id, so any live agent event belongs to the project's slot
-    // holder. We append it to the VIEWED conversation only when the viewed
-    // session IS the holder. When viewing a non-holder session, these live
-    // events pertain to the holder and must not bleed into the static
-    // history being shown (see §5 of the T5 brief). The user's own typed
-    // message (handleUserMessage nonce path) is the one exception — it always
+    // Live agent events carry their session_id and render only into the
+    // VIEWED session (seam 3 strict routing; spec 155 runs sessions in
+    // parallel). The user's own typed message (handleUserMessage nonce path)
     // renders optimistically for the session it was sent into.
     // Spec 100: a sub-agent's thinking, buffered per worker and applied at
     // most once per frame (one setItems for everything that arrived). The
@@ -2920,56 +2848,6 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       });
     }
 
-    // Pending-input queue (spec 006 §3h). A message was accepted + queued behind
-    // the slot holder. Dedup by nonce (mirroring handleUserMessage): the origin
-    // tab already rendered the optimistic bubble + map entry in handleSend, so it
-    // ignores its own echo; OTHER tabs render the optimistic bubble + add the
-    // map entry. The bubble renders only for the viewed session, but the map
-    // entry is project-scoped (the affordance gates on the viewed session).
-    function handlePendingEnqueued(event: WebSocketEvent) {
-      const e = event as PendingEnqueuedEvent;
-      if (e.project_id !== projectId) return;
-      if (!e.nonce) return;
-      // Our own send (origin) or a relay retry already handled — ignore.
-      if (localNoncesRef.current.has(e.nonce)) return;
-      // Register so the eventual dispatch echo dedups against the bubble we
-      // render here (and exempt from eviction while it sits in pendingInputs).
-      localNoncesRef.current.set(e.nonce, 0);
-      const ts = new Date().toISOString();
-      // pending_enqueued is always cross-session (it carries a holder). We only
-      // have the wire `content` from another tab — detect an attachments-block
-      // prefix to gate recall (§12 R4); otherwise content IS the raw text.
-      const hasAttachments = hasMachineBlocks(e.content);
-      setPendingInputs((prev) => {
-        const next = new Map(prev);
-        next.set(e.nonce, {
-          kind: 'cross',
-          sessionId: e.session_id,
-          holder: e.holder,
-          content: e.content,
-          rawText: hasAttachments ? '' : e.content,
-          hasAttachments,
-          timestamp: ts,
-        });
-        return next;
-      });
-      // Optimistic bubble only for the viewed session — pushed to BOTH items
-      // and rawMessages so the transform-once reseed reproduces it.
-      if (e.session_id !== sessionIdRef.current) return;
-      setItems((prev) => {
-        const afterCapsule = finalizeLiveCapsule(prev, 'completed');
-        return [
-          ...afterCapsule,
-          { type: 'user_message', content: e.content, timestamp: ts },
-        ];
-      });
-      setRawMessages((prev) => [
-        ...prev,
-        { role: 'user', content: e.content, source: 'user', timestamp: ts },
-      ]);
-      scrollToBottom();
-    }
-
     // Pending-input queue (spec 006 §3h). The queued message started dispatching
     // — clear ITS waiting affordance by removing the nonce from pendingInputs.
     // This is the SOLE clear trigger (agent.status carries no session_id). The
@@ -3105,7 +2983,6 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     on('agent.notify', handleAgentNotify);
     on('state_refresh.lifecycle', handleStateRefresh);
     on('workspace_claudemd_warning', handleClaudemdWarning);
-    on('chat.pending_enqueued', handlePendingEnqueued);
     on('chat.pending_dispatched', handlePendingDispatched);
     on('chat.pending_cancelled', handlePendingCancelled);
     on('fanout.started', handleFanoutStarted);
@@ -3135,7 +3012,6 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       off('agent.notify', handleAgentNotify);
       off('state_refresh.lifecycle', handleStateRefresh);
       off('workspace_claudemd_warning', handleClaudemdWarning);
-      off('chat.pending_enqueued', handlePendingEnqueued);
       off('chat.pending_dispatched', handlePendingDispatched);
       off('chat.pending_cancelled', handlePendingCancelled);
       off('fanout.started', handleFanoutStarted);
@@ -3633,45 +3509,12 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       ) {
         persistPin(sessionId, target);
       }
-      // Pending-input queue (spec 006 §3h): the happy-path 202. The backend
-      // ACCEPTED + queued this message behind the slot holder; it auto-dispatches
-      // when the slot frees. KEEP the optimistic bubble (unlike slot_held below,
-      // which removes it) and add a nonce→entry to `pendingInputs` so the bubble
-      // shows a "Waiting for {holder}…" affordance. The kept bubble's nonce is
-      // exempt from the 30s eviction so the dispatch echo dedups against it.
-      if (
-        result &&
-        typeof result === 'object' &&
-        result.status === 'queued_pending_slot' &&
-        result.holding_session_id
-      ) {
-        const holder = result.holding_session_id;
-        const queuedSession = result.queued_session_id ?? sessionId;
-        if (queuedSession !== undefined) {
-          setPendingInputs((prev) => {
-            const next = new Map(prev);
-            next.set(nonce, {
-              kind: 'cross',
-              sessionId: queuedSession,
-              holder,
-              content: wireContent,
-              rawText: text,
-              hasAttachments: attachmentsPayload.length > 0 || skill !== null,
-              timestamp: optimisticTimestamp,
-            });
-            return next;
-          });
-        }
-        scrollToBottom();
-        return;
-      }
       // Pending-input queue (spec 006 v3 §11d.4): the same-session 200. The
       // backend ACCEPTED + queued this message behind the VIEWED session's own
       // in-flight turn (`session._queue`); it drains automatically when that
       // turn ends. KEEP the optimistic bubble and add a same-session
       // `pendingInputs` entry so the bubble shows the "Waiting for the current
-      // response to finish." line and is ↑/tap-recallable. No holder, no
-      // Run-now (there is no other session to cancel).
+      // response to finish." line and is ↑/tap-recallable.
       if (
         result &&
         typeof result === 'object' &&
@@ -3681,9 +3524,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         setPendingInputs((prev) => {
           const next = new Map(prev);
           next.set(nonce, {
-            kind: 'same',
             sessionId,
-            holder: '',
             content: wireContent,
             rawText: text,
             hasAttachments: attachmentsPayload.length > 0 || skill !== null,
@@ -3692,54 +3533,6 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
           return next;
         });
         scrollToBottom();
-        return;
-      }
-      // Track J Phase 1 (now the ENQUEUE-FAILURE fallback only): backend
-      // returned 202 with `slot_held` because enqueue itself raised. Strip the
-      // optimistic user_message we just appended (it didn't land), restore the
-      // typed text to the composer, and surface the intermediate notice with
-      // [Wait] / [Cancel-and-send] affordances.
-      if (
-        result &&
-        typeof result === 'object' &&
-        result.status === 'slot_held' &&
-        result.holding_session_id
-      ) {
-        setItems((prev) => {
-          // Remove only the latest user_message we just appended (by
-          // nonce-free identity: type + content + most recent timestamp).
-          // Walk from the end so concurrent state updates leave older
-          // user_messages intact.
-          for (let i = prev.length - 1; i >= 0; i--) {
-            const it = prev[i];
-            if (it.type === 'user_message' && it.content === wireContent) {
-              return [...prev.slice(0, i), ...prev.slice(i + 1)];
-            }
-          }
-          return prev;
-        });
-        // F1: also strip the optimistic entry we pushed into rawMessages so
-        // the transform-once memo doesn't re-emit a phantom user bubble.
-        setRawMessages((prev) => {
-          for (let i = prev.length - 1; i >= 0; i--) {
-            const m = prev[i];
-            if (m.role === 'user' && m.content === wireContent && m.timestamp === optimisticTimestamp) {
-              return [...prev.slice(0, i), ...prev.slice(i + 1)];
-            }
-          }
-          return prev;
-        });
-        setInputText(text);
-        if (skill) setPickedSkillState({ sessionId, skill });
-        setSlotHeldNotice({
-          holdingSessionId: result.holding_session_id,
-          pendingContent: content,
-          pendingTarget: target,
-          pendingNonce: nonce,
-          pendingAttachments:
-            attachmentsPayload.length > 0 ? attachmentsPayload : undefined,
-          pendingSkill: skill ?? undefined,
-        });
         return;
       }
       // If the backend auto-denied a pending approval because we sent this
@@ -4466,7 +4259,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                     resolved: !!resolved,
                   }}
                   projectId={projectId}
-                  sessionId={holderSessionId ?? sessionId}
+                  sessionId={sessionId}
                   onResolve={(toolCallId: string) => {
                     setApprovals((prev) => {
                       const next = new Map(prev);
@@ -4483,7 +4276,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                   key={`apr-${item.tool_call_id}`}
                   approval={item}
                   projectId={projectId}
-                  sessionId={holderSessionId ?? sessionId}
+                  sessionId={sessionId}
                   resolved={resolved}
                   onResolve={(toolCallId: string, resolution: 'approved' | 'denied') => {
                     setApprovals((prev) => {
@@ -4531,7 +4324,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                     reason: a.tool_args?.reason as string ?? '',
                   }}
                   projectId={projectId}
-                  sessionId={holderSessionId ?? sessionId}
+                  sessionId={sessionId}
                   onResolve={(toolCallId: string) => {
                     setApprovals((prev) => {
                       const next = new Map(prev);
@@ -4548,7 +4341,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                   key={`rt-apr-${a.tool_call_id}`}
                   approval={a}
                   projectId={projectId}
-                  sessionId={holderSessionId ?? sessionId}
+                  sessionId={sessionId}
                   resolved={a.resolved}
                   onResolve={(toolCallId: string, resolution: 'approved' | 'denied') => {
                     setApprovals((prev) => {
@@ -4632,76 +4425,15 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         </div>
       )}
 
-      {slotHeldNotice && (
-        <div className="shrink-0 px-4">
-          <SlotHeldNotice
-            holdingSessionId={slotHeldNotice.holdingSessionId}
-            onWait={() => setSlotHeldNotice(null)}
-            onCancelAndSend={async () => {
-              // Cancel the running turn on the holding session, then re-inject
-              // the previously-typed message. The backend /cancel now accepts a
-              // session_id so it stops the SPECIFIC session holding the slot
-              // (slotHeldNotice.holdingSessionId), not just the default one.
-              await cancelMessage(projectId, slotHeldNotice.holdingSessionId);
-              const pending = slotHeldNotice;
-              // Replace the notice with the actual user message (per
-              // DISPATCH-2026-05-22 §5.4). After /cancel the slot is freed, so
-              // re-inject targeting the VIEWED session — it now takes the slot
-              // and the message lands in the conversation the user is looking
-              // at (single active-loop slot model).
-              setSlotHeldNotice(null);
-              setInputText('');
-              setPickedSkillState(null);
-              const pendingSkill = pending.pendingSkill;
-              // pendingContent already carries a built-in's inline block.
-              const pendingParts = skillSendParts(pendingSkill, buildSkillBlock, buildInlineSkillBlock);
-              const wireContent = pendingParts.pointerBlock + pending.pendingContent;
-              setItems((prev) => [
-                ...prev,
-                {
-                  type: 'user_message' as const,
-                  content: wireContent,
-                  timestamp: new Date().toISOString(),
-                  ...(pending.pendingTarget && { target: pending.pendingTarget }),
-                },
-              ]);
-              await injectMessage(
-                projectId,
-                pending.pendingContent,
-                pending.pendingTarget,
-                pending.pendingNonce,
-                pending.pendingAttachments,
-                sessionId,
-                undefined,
-                pendingParts.payload,
-              );
-            }}
-          />
-        </div>
-      )}
-
       {/* Pending-input queue (spec 006 v3 §11b/§11c/§12): a muted waiting line
-          under each queued message bubble for the VIEWED session. Cross-session
-          entries also get a single [Run now] (cancel the holder ONLY — the
-          queued message self-dispatches, no re-inject). The line is tappable to
-          recall/edit (mobile equivalent of ↑; §12 R1) — no [Stop waiting]. */}
+          under each queued message bubble for the VIEWED session. The line is
+          tappable to recall/edit (mobile equivalent of ↑; §12 R1). */}
       {Array.from(pendingInputs.entries())
         .filter(([, entry]) => sessionId !== undefined && entry.sessionId === sessionId)
         .map(([nonce, entry]) => (
           <div key={`pending-${nonce}`} className="shrink-0 px-4">
             <PendingInputNotice
-              kind={entry.kind}
               canEdit={!entry.hasAttachments}
-              onRunNow={
-                entry.kind === 'cross'
-                  ? async () => {
-                      // Run now = cancel the HOLDER only (spec §3h F5). NO
-                      // re-inject: the queued message dispatches itself when the
-                      // slot frees.
-                      await cancelMessage(projectId, entry.holder);
-                    }
-                  : undefined
-              }
               onEdit={() => recallQueuedMessage(nonce)}
             />
           </div>
@@ -4882,9 +4614,8 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                     if (isCancelling) return;
                     setCancelTimeoutNotice(null);
                     setIsCancelling(true);
-                    // Cancel the SPECIFIC running session: prefer the resolved
-                    // slot holder, falling back to the viewed session.
-                    cancelMessage(projectId, holderSessionId ?? sessionId).catch(() => {
+                    // Stop THIS session only (spec 155: others keep running).
+                    cancelMessage(projectId, sessionId).catch(() => {
                       // POST failed (offline, daemon down, etc.) — drop the
                       // optimistic state immediately so the user can retry
                       // instead of waiting for the 10s timeout.
@@ -4897,7 +4628,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                     if (isCancelling) return;
                     setCancelTimeoutNotice(null);
                     setIsCancelling(true);
-                    cancelMessage(projectId, holderSessionId ?? sessionId).catch(() => {
+                    cancelMessage(projectId, sessionId).catch(() => {
                       setIsCancelling(false);
                       setCancelTimeoutNotice(t('chat.cancelFailed'));
                     });

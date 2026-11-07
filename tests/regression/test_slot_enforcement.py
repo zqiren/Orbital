@@ -45,9 +45,10 @@ def _manager() -> AgentManager:
     mgr._project_store.get_project.return_value = {"name": "proj"}
     # No platform isolation → skip the capability block before the provider.
     mgr._platform_provider = None
-    # First call after the guard raises the sentinel.
-    mgr._provider_registry = MagicMock()
-    mgr._provider_registry.get_model_info.side_effect = _PastGuard()
+    # First call after the entry guards raises the sentinel (the provider
+    # build; the old get_model_info sentinel sat behind the key check and
+    # never fired once that check moved earlier).
+    mgr._build_llm_providers = MagicMock(side_effect=_PastGuard())
     return mgr
 
 
@@ -78,11 +79,11 @@ def _config() -> MagicMock:
 
 
 @pytest.mark.asyncio
-async def test_cross_session_slot_guard_rejects_second_session():
-    """Session A holds the slot; starting session B raises."""
+async def test_a_second_session_starts_while_another_runs():
+    """Spec 155: session A running no longer blocks starting session B."""
     mgr = _manager()
     mgr._handles[("proj", "sess-A")] = _running_handle()
-    with pytest.raises(ValueError, match="Slot held by session"):
+    with pytest.raises(_PastGuard):
         await mgr.start_agent("proj", _config(), session_id="sess-B")
 
 
@@ -107,21 +108,25 @@ async def test_slot_free_after_no_holder():
 
 
 @pytest.mark.asyncio
-async def test_session_id_none_does_not_bypass_slot_guard():
-    """session_id=None (now mints a fresh session uuid, 433912a) is still subject to the slot guard."""
+async def test_session_id_none_mints_and_starts_while_another_runs():
+    """session_id=None mints a fresh session uuid (433912a) and starts it."""
     mgr = _manager()
     mgr._handles[("proj", "sess-A")] = _running_handle()
-    with pytest.raises(ValueError, match="Slot held by session"):
+    with pytest.raises(_PastGuard):
         await mgr.start_agent("proj", _config(), session_id=None)
 
 
 @pytest.mark.asyncio
-async def test_dispatcher_path_blocked_by_slot():
-    """The dispatcher's inject_message → start_agent path hits the manager guard."""
+async def test_dispatcher_path_starts_beside_a_running_session(tmp_path):
+    """The dispatcher's inject_message → start_agent path is not blocked by
+    another running session (spec 155; the queue keeps its own serial order)."""
+    from agent_os.daemon_v2.models import AgentConfig
     mgr = _manager()
     mgr._handles[("proj", "sess-A")] = _running_handle()
-    # inject_message Case 3 builds config + checks disk before start_agent.
-    mgr._build_agent_config_from_project = MagicMock(return_value=_config())
+    config = AgentConfig(workspace=str(tmp_path), model="m", api_key="k",
+                         provider="p", sdk="openai", project_name="proj")
+    mgr._build_agent_config_from_project = MagicMock(return_value=config)
     mgr._load_session_from_disk = MagicMock(return_value=None)
-    with pytest.raises(ValueError, match="Slot held by session"):
-        await mgr.inject_message("proj", "do the thing", session_id="sess-B")
+    with pytest.raises(_PastGuard):
+        await mgr.inject_message("proj", "do the thing", session_id="sess-B",
+                                 queue_state="running")

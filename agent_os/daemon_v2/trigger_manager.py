@@ -505,7 +505,10 @@ class TriggerManager:
                     trigger_id, project_id,
                 )
                 continue
-            if self._agent_manager.is_running(project_id):
+            # Spec 155: held only while THIS automation's previous run is
+            # still live; other sessions of the project run beside it.
+            if self._agent_manager.is_running(
+                    project_id, trigger_name=trigger.get("name", trigger_id)):
                 if trigger_id not in self._held:
                     self._held.add(trigger_id)
                     self._broadcast(project_id, {
@@ -678,8 +681,9 @@ class TriggerManager:
         trigger_name = trigger.get("name", trigger_id)
         human_schedule = trigger.get("schedule", {}).get("human", "")
 
-        # Check if agent is already running BEFORE updating state
-        if self._agent_manager.is_running(project_id):
+        # Check if this automation's previous run is still going BEFORE
+        # updating state (spec 155: other sessions never hold a trigger).
+        if self._agent_manager.is_running(project_id, trigger_name=trigger_name):
             logger.info("Trigger %s: agent already running for project %s, skipping", trigger_id, project_id)
             self._broadcast(project_id, {
                 "type": "trigger.skipped",
@@ -774,9 +778,9 @@ class TriggerManager:
                 "timestamp": now_iso,
             })
         except ValueError as e:
-            # Single-slot guard (start_agent): another session holds the
-            # project's active-loop slot, so this trigger is blocked this cycle.
-            # Not an error — skip quietly without broadcasting trigger.fired.
+            # start_agent refused: this trigger's own session is already
+            # running (spec 155: other sessions of the project never block a
+            # trigger). Not an error — skip quietly without trigger.fired.
             logger.info("Trigger %s: not started — %s", trigger_id, e)
         except Exception as e:
             logger.exception("Trigger %s: failed to start agent for project %s", trigger_id, project_id)

@@ -77,6 +77,11 @@ class _JourneyManager:
     def is_onboarding_complete(self, project_id):
         return True
 
+    def session_is_live(self, project_id, session_id):
+        """Spec 155: one session's own liveness — its loop task is alive."""
+        task = self._tasks.get(session_id)
+        return task is not None and not task.done()
+
     def current_holder_session_id(self, project_id):
         """Holder == the session whose loop task is still alive (real-shaped:
         condition 1 of the production accessor)."""

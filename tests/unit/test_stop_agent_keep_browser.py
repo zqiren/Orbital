@@ -1,6 +1,7 @@
 """Spec 078: the idle-eviction sweep must not close the project's browser
 pages — the workspace panel's live view shows them and the user expects the
-page to survive the agent idling out. An explicit stop still closes them."""
+page to survive the agent idling out. An explicit stop still closes them —
+the stopping session's own pages only (spec 155 §5.4)."""
 import time
 from unittest.mock import AsyncMock, MagicMock
 
@@ -28,6 +29,7 @@ def _make_manager():
     )
     mgr._browser_manager = MagicMock()
     mgr._browser_manager.close_project_pages = AsyncMock()
+    mgr._browser_manager.close_session_pages = AsyncMock()
     return mgr
 
 
@@ -51,7 +53,8 @@ async def test_explicit_stop_closes_browser_pages():
     mgr = _make_manager()
     mgr._handles[("proj", SID)] = _make_handle()
     await mgr.stop_agent("proj", session_id=SID)
-    mgr._browser_manager.close_project_pages.assert_awaited_once_with("proj")
+    mgr._browser_manager.close_session_pages.assert_awaited_once_with("proj", SID)
+    mgr._browser_manager.close_project_pages.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -59,6 +62,7 @@ async def test_keep_browser_leaves_pages_open():
     mgr = _make_manager()
     mgr._handles[("proj", SID)] = _make_handle()
     await mgr.stop_agent("proj", session_id=SID, keep_browser=True)
+    mgr._browser_manager.close_session_pages.assert_not_awaited()
     mgr._browser_manager.close_project_pages.assert_not_awaited()
 
 

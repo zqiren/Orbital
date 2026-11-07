@@ -12,7 +12,8 @@ the slot and spending.
 
 Locked model: DELETE IS IDLE-ONLY. The route must REJECT a running item with
 HTTP 409 and perform ZERO mutation (no ``remove_item``, no CANCELLED stamp, no
-session teardown). The liveness gate is ``current_holder_session_id`` — NOT the
+session teardown). The liveness gate is the attempt session's own liveness
+(``session_is_live``, spec 155) — NOT the
 stored ``item.state`` flag (which can be stale).
 
 RED-before evidence: against the pre-fix route this test FAILS — the delete
@@ -48,6 +49,10 @@ def _make_app(store: QueueStore, *, holder_sid: str | None):
     agent_manager = MagicMock()
     agent_manager.get_queue_store = MagicMock(return_value=store)
     agent_manager.current_holder_session_id = MagicMock(return_value=holder_sid)
+    # Spec 155 B13: the gate asks the attempt session's OWN liveness; here the
+    # live session is ``holder_sid`` (other sessions may run beside it).
+    agent_manager.session_is_live = MagicMock(
+        side_effect=lambda _pid, sid: holder_sid is not None and sid == holder_sid)
     agent_manager.delete_session = AsyncMock()
 
     project_store = MagicMock()

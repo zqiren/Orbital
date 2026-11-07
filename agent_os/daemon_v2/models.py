@@ -46,9 +46,10 @@ def resolve_session_id(session_id, *, on_none):
     variation is the None-policy callback ``on_none``:
 
       - read/affect paths pass ``on_none=lambda: current_holder_session_id(pid)``
-        (None → holder, or None again → handle-miss → idle/no-op; never mints);
+        (None → a running session of the project, the legacy default, or None
+        again → handle-miss → idle/no-op; never mints);
       - the inject path passes a policy that resolves the project's persistent
-        chat session (holder if draining, else lazy-mint via the single funnel);
+        chat session (lazy-mint via the single funnel);
       - the sub-agent resolver passes a raising policy (None is a real bug).
 
     Centralizing the common rule here means the call sites differ ONLY in

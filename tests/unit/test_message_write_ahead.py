@@ -327,12 +327,9 @@ async def test_task_cancelled_before_first_slice_keeps_the_message(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_slot_conflict_writes_nothing(tmp_path):
-    """A slot conflict is a REJECTION, not a failure: the inject route turns it
-    into a 202 and enqueues the message as a pending inject, which appends it
-    for real when the slot frees. Writing ahead here too would render it
-    twice — so the write-ahead pre-flights the slot guard and writes nothing.
-    """
+async def test_a_second_session_writes_ahead_while_another_runs(tmp_path):
+    """Spec 155: another session running is no longer a rejection — the
+    message is written ahead and its own session starts, as for any start."""
     ws = str(tmp_path)
     mgr = _manager(ws)
     holder = MagicMock()
@@ -341,18 +338,15 @@ async def test_slot_conflict_writes_nothing(tmp_path):
     holder.task = MagicMock()
     holder.task.done.return_value = False
     mgr._handles[("proj", "someone_else")] = holder
-    mgr.start_agent = _CapturingStart(ws)
+    start = _CapturingStart(ws)
+    mgr.start_agent = start
 
-    with pytest.raises(ValueError, match="Slot held by session"):
-        await mgr.inject_message("proj", "should not be written",
-                                 nonce="n-slot", session_id=SESSION_ID)
+    result = await mgr.inject_message("proj", "runs beside the other",
+                                      nonce="n-par", session_id=SESSION_ID)
 
-    assert _rows(ws, SESSION_ID) == []
-    assert not os.path.exists(
-        os.path.join(_sessions_dir(ws), f"{SESSION_ID}.jsonl"),
-    )
-    # And no start-failure noise for what is a normal queueing outcome.
-    assert mgr.get_last_terminal_event("proj", session_id=SESSION_ID) is None
+    assert result == "started"
+    assert [r["content"] for r in start.rows_at_entry if r.get("role") == "user"] == [
+        "runs beside the other"]
 
 
 # ---------------------------------------------------------------------------

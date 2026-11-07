@@ -105,6 +105,32 @@ def is_running(workspace: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Spec 155: the record lock. Sessions of one project run in parallel; their
+# round-end record turns take this lock before the [MEMORY] row is built, so
+# the second turn's row is the file as the first one left it. In process: one
+# daemon owns a project, and the holder is always a live coroutine whose
+# ``finally`` releases it, so a crash or a quit cannot leave it stuck.
+# ---------------------------------------------------------------------------
+
+_RECORD_LOCKS: dict[str, tuple[asyncio.AbstractEventLoop, asyncio.Lock]] = {}
+
+
+def record_lock(workspace: str) -> asyncio.Lock:
+    """The project's record lock, keyed like ``claim`` by the workspace's
+    realpath (two projects on one folder share it). One per workspace for the
+    daemon's lifetime (the daemon runs one event loop; a lock made on another
+    loop, which only tests do, is replaced)."""
+    key = os.path.realpath(workspace)
+    loop = asyncio.get_running_loop()
+    entry = _RECORD_LOCKS.get(key)
+    if entry is not None and entry[0] is loop:
+        return entry[1]
+    lock = asyncio.Lock()
+    _RECORD_LOCKS[key] = (loop, lock)
+    return lock
+
+
+# ---------------------------------------------------------------------------
 # Watermark + the automatic-run gate
 # ---------------------------------------------------------------------------
 

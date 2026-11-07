@@ -41,6 +41,24 @@ logger = logging.getLogger(__name__)
 # Matches SubAgentManager's fanout handle format "worker:<fanout_id>-<i>".
 WORKER_SCOPE_PREFIX = "worker:"
 
+# Spec 155 §5.4: sessions of one project run in parallel, so a manager
+# session's pages live under their own scope, ``<project_id>::session:<id>``.
+# The persistent profile (cookies, sign-ins) stays shared, as it is across
+# projects. A bare ``project_id`` scope is what callers without a session use.
+SESSION_SCOPE_SEP = "::session:"
+
+
+def page_scope(project_id: str, session_id: str | None = None) -> str:
+    """The page-tracking key for one session of a project (the bare project
+    id when no session is named)."""
+    if not session_id or project_id.startswith(WORKER_SCOPE_PREFIX):
+        return project_id
+    return f"{project_id}{SESSION_SCOPE_SEP}{session_id}"
+
+
+def _scope_project(scope: str) -> str:
+    return scope.split(SESSION_SCOPE_SEP, 1)[0]
+
 # Stealth init script — injected into every browser context to spoof
 # automation-detection signals that Patchright does not cover natively.
 # navigator.languages is filled in per-launch (see _stealth_js): a pinned
@@ -292,8 +310,13 @@ class BrowserManager:
         # internals below must never call ensure_browser()/close_for_handoff().
         self._main_lock = asyncio.Lock()
 
-        # Per-project page tracking: project_id -> list[page]
+        # Per-scope page tracking: scope -> list[page]. A scope is a project
+        # id, a session of a project (``page_scope``) or a worker scope.
         self._project_pages: dict[str, list] = {}
+        # Spec 155: when each scope last got or opened a page, so a viewer
+        # with no session follows the project's most recent page.
+        self._scope_used: dict[str, float] = {}
+        self._scope_clock = 0
 
         # Per-page state: page_id (id(page)) -> _PageState
         self._page_state: dict[int, _PageState] = {}
@@ -774,8 +797,14 @@ class BrowserManager:
     # Per-project page management
     # ------------------------------------------------------------------
 
+    def _touch_scope(self, scope: str) -> None:
+        self._scope_clock += 1
+        self._scope_used[scope] = self._scope_clock
+
     async def get_page(self, project_id: str):
-        """Get or create the active page for a project."""
+        """Get or create the active page for a scope (a project, a session of
+        one — ``page_scope`` — or a worker)."""
+        self._touch_scope(project_id)
         if project_id.startswith(WORKER_SCOPE_PREFIX):
             ctx = await self._get_worker_context(project_id)
         else:
@@ -812,7 +841,8 @@ class BrowserManager:
         return pages
 
     async def new_tab(self, project_id: str, url: str = None):
-        """Open a new tab for a project."""
+        """Open a new tab for a scope."""
+        self._touch_scope(project_id)
         if project_id.startswith(WORKER_SCOPE_PREFIX):
             ctx = await self._get_worker_context(project_id)
         else:
@@ -829,13 +859,45 @@ class BrowserManager:
         self._setup_page_handlers(page, project_id)
         return page
 
-    async def close_project_pages(self, project_id: str):
-        """Close all pages for a project. Called on agent stop."""
-        pages = self._project_pages.pop(project_id, [])
+    async def get_view_pages(self, project_id: str, session_id: str | None = None) -> list:
+        """The pages the live view mirrors (spec 155 §5.4): with a session,
+        that session's pages; without one, the pages of the project's scope
+        that was used most recently (today's "the project's last page")."""
+        if session_id:
+            return await self.get_all_pages(page_scope(project_id, session_id))
+        scopes = [
+            k for k in self._project_pages
+            if not k.startswith(WORKER_SCOPE_PREFIX) and _scope_project(k) == project_id
+        ]
+        scopes.sort(key=lambda k: self._scope_used.get(k, 0))
+        for scope in reversed(scopes):
+            pages = await self.get_all_pages(scope)
+            if pages:
+                return pages
+        return []
+
+    async def _close_scope(self, scope: str) -> None:
+        pages = self._project_pages.pop(scope, [])
+        self._scope_used.pop(scope, None)
         for page in pages:
             self._page_state.pop(id(page), None)
             if not page.is_closed():
                 await page.close()
+
+    async def close_session_pages(self, project_id: str, session_id: str | None) -> None:
+        """Close one session's pages (its Stop). Other sessions of the project
+        keep theirs (spec 155 B6)."""
+        await self._close_scope(page_scope(project_id, session_id))
+
+    async def close_project_pages(self, project_id: str):
+        """Close every page of a scope; for a project id, also every page of
+        its sessions (project teardown, daemon shutdown)."""
+        await self._close_scope(project_id)
+        if project_id.startswith(WORKER_SCOPE_PREFIX):
+            return
+        prefix = project_id + SESSION_SCOPE_SEP
+        for scope in [k for k in self._project_pages if k.startswith(prefix)]:
+            await self._close_scope(scope)
 
     async def _evict_lru_page(self):
         """Close the least recently used page across all projects."""
@@ -922,9 +984,9 @@ class BrowserManager:
     async def shutdown(self):
         """Clean shutdown. Called on daemon stop."""
         logger.info("Browser shutdown starting")
-        for project_id in list(self._project_pages.keys()):
-            logger.debug("Closing pages for project %s", project_id)
-            await self.close_project_pages(project_id)
+        for scope in list(self._project_pages.keys()):
+            logger.debug("Closing pages for scope %s", scope)
+            await self._close_scope(scope)
         # Wait for any in-flight launch/recovery rather than closing under it.
         async with self._main_lock:
             if self._context:

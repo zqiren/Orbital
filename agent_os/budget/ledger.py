@@ -134,40 +134,47 @@ class LedgerEvent:
 # counter already emitted below.
 #
 # Keyed by project workspace so a multi-project daemon routes each append to the
-# right loop; single-slot per project (the newest registration wins), and
-# ``unregister_append_hook`` is identity-checked so a torn-down loop cannot
-# unregister its successor.
+# right loop. Sessions of one project run in parallel (spec 155), so each
+# workspace keeps a STACK of loops' hooks: the newest live registration owns the
+# broadcast (one owner at a time, so no double notification); when it
+# unregisters, ownership returns to the next live loop instead of to nobody.
+# ``unregister_append_hook`` removes only its own entry, so a torn-down loop
+# cannot silence the others.
 # ---------------------------------------------------------------------------
 
-_append_hooks: dict[str, Callable[[str, "LedgerEvent"], None]] = {}
+_append_hooks: dict[str, list[Callable[[str, "LedgerEvent"], None]]] = {}
 
 
 def register_append_hook(
     project_dir: str, hook: Callable[[str, "LedgerEvent"], None],
 ) -> None:
-    """Install THE post-append hook for one project workspace.
+    """Make ``hook`` the owner of one workspace's post-append notification.
 
-    Replaces any previously registered hook for the same ``project_dir``.
+    Re-registering an existing hook (equal: the same loop's bound method)
+    moves it to the top instead of adding a second entry.
     """
-    _append_hooks[project_dir] = hook
+    stack = _append_hooks.setdefault(project_dir, [])
+    stack[:] = [h for h in stack if h != hook]
+    stack.append(hook)
 
 
 def unregister_append_hook(
     project_dir: str, hook: Callable[[str, "LedgerEvent"], None],
 ) -> None:
-    """Remove ``hook`` iff it is STILL the one registered for ``project_dir``.
-
-    The identity check matters on the hand-off between two loops for the same
-    project: the outgoing loop's ``terminate()`` must not silence the incoming
-    loop that already replaced it.
-    """
-    if _append_hooks.get(project_dir) is hook:
+    """Remove ``hook`` from the workspace's stack; the next live registration
+    (if any) owns the notification from now on."""
+    stack = _append_hooks.get(project_dir)
+    if not stack:
+        return
+    stack[:] = [h for h in stack if h != hook]
+    if not stack:
         _append_hooks.pop(project_dir, None)
 
 
 def _fire_append_hook(project_dir: str, event: LedgerEvent) -> None:
-    """Run the registered hook. NEVER raises, never blocks an append."""
-    hook = _append_hooks.get(project_dir)
+    """Run the owning hook. NEVER raises, never blocks an append."""
+    stack = _append_hooks.get(project_dir)
+    hook = stack[-1] if stack else None
     if hook is None:
         return
     try:

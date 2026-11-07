@@ -61,7 +61,10 @@ import { useT } from './i18n/useT';
 import { api, isRelayMode } from './config';
 import {
   SUB_AGENTS_RUNNING_EVENTS,
+  aggregateProjectStatus,
   createSubAgentsRunningSync,
+  sessionStatusOf,
+  type SessionStatusMap,
 } from './utils/projectStatus';
 
 function mapConnectionState(
@@ -119,8 +122,23 @@ export default function App() {
   // so a pinned list shows as the strip meanwhile and comes back after.
   const windowCovered = useWindowCovered();
 
-  const [agentStatuses, setAgentStatuses] = useState<Record<string, AgentRunStatus>>({});
+  // Spec 155: sessions of a project run in parallel. `sessionStatuses` holds
+  // each session's own status (every agent.status carries its session_id);
+  // `lastStatuses` is the newest status per project (also the REST
+  // hydration's aggregate). The project-level `agentStatuses` the dot, the
+  // strip and the triggers read is derived from both (aggregateProjectStatus);
+  // ChatView and the Workbench pane read the viewed session's own entry.
+  const [lastStatuses, setLastStatuses] = useState<Record<string, AgentRunStatus>>({});
+  const [sessionStatuses, setSessionStatuses] = useState<SessionStatusMap>({});
+  const agentStatuses = useMemo(() => {
+    const out: Record<string, AgentRunStatus> = {};
+    for (const pid of new Set([...Object.keys(lastStatuses), ...Object.keys(sessionStatuses)])) {
+      out[pid] = aggregateProjectStatus(lastStatuses[pid], sessionStatuses[pid]);
+    }
+    return out;
+  }, [lastStatuses, sessionStatuses]);
   const [statusTicks, setStatusTicks] = useState<Record<string, number>>({});
+  const [sessionTicks, setSessionTicks] = useState<Record<string, Record<string, number>>>({});
   const [statusSummaries, setStatusSummaries] = useState<Record<string, string>>({});
   const [pendingApprovals, setPendingApprovals] = useState<Record<string, number>>({});
   // Spec 095: a worker has an open turn in the project (run-status
@@ -311,15 +329,26 @@ export default function App() {
     let cancelled = false;
     for (const p of projects) {
       const settleWorkers = subAgentsSync.track(p.project_id);
-      api<{ project_id: string; status: AgentRunStatus; sub_agents_running?: boolean }>(
+      api<{
+        project_id: string;
+        status: AgentRunStatus;
+        session_statuses?: Record<string, AgentRunStatus>;
+        sub_agents_running?: boolean;
+      }>(
         `/api/v2/agents/${encodeURIComponent(p.project_id)}/run-status`,
       )
         .then((result) => {
           if (cancelled) return;
-          setAgentStatuses((prev) => {
+          setLastStatuses((prev) => {
             if (prev[result.project_id] === result.status) return prev;
             return { ...prev, [result.project_id]: result.status };
           });
+          // Every live session with its status; a session not listed is at
+          // rest, so the map is replaced, not merged (spec 155).
+          if (result.session_statuses) {
+            const live = result.session_statuses;
+            setSessionStatuses((prev) => ({ ...prev, [result.project_id]: { ...live } }));
+          }
           settleWorkers(result.sub_agents_running);
         })
         .catch(() => {});
@@ -369,8 +398,19 @@ export default function App() {
   const handleAgentStatus = useCallback((event: WebSocketEvent) => {
     const e = event as AgentStatusEvent;
     noteAgentStatus(e.project_id, e.status);
-    setAgentStatuses((prev) => ({ ...prev, [e.project_id]: e.status }));
+    setLastStatuses((prev) => ({ ...prev, [e.project_id]: e.status }));
     setStatusTicks((prev) => ({ ...prev, [e.project_id]: (prev[e.project_id] ?? 0) + 1 }));
+    const sid = e.session_id;
+    if (sid) {
+      setSessionStatuses((prev) => ({
+        ...prev,
+        [e.project_id]: { ...(prev[e.project_id] ?? {}), [sid]: e.status },
+      }));
+      setSessionTicks((prev) => {
+        const ticks = prev[e.project_id] ?? {};
+        return { ...prev, [e.project_id]: { ...ticks, [sid]: (ticks[sid] ?? 0) + 1 } };
+      });
+    }
   }, []);
 
   const handleStatusSummary = useCallback((event: WebSocketEvent) => {
@@ -442,8 +482,16 @@ export default function App() {
   // Fix 2B: Listen for status poll overrides from ChatView
   useEffect(() => {
     function onStatusOverride(e: Event) {
-      const { project_id, status } = (e as CustomEvent).detail;
-      setAgentStatuses((prev) => ({ ...prev, [project_id]: status }));
+      const { project_id, session_id, status } = (e as CustomEvent).detail;
+      if (session_id) {
+        // ChatView's REST read of the VIEWED session (spec 155).
+        setSessionStatuses((prev) => ({
+          ...prev,
+          [project_id]: { ...(prev[project_id] ?? {}), [session_id]: status },
+        }));
+        return;
+      }
+      setLastStatuses((prev) => ({ ...prev, [project_id]: status }));
     }
     window.addEventListener('agent-status-override', onStatusOverride);
     return () => window.removeEventListener('agent-status-override', onStatusOverride);
@@ -882,8 +930,14 @@ export default function App() {
                   key={selectedProject.project_id}
                   project={selectedProject}
                   projects={projects}
-                  agentStatus={agentStatuses[selectedProject.project_id] ?? 'idle'}
-                  statusTick={statusTicks[selectedProject.project_id] ?? 0}
+                  agentStatus={sessionStatusOf(
+                    selectedProject.project_id, route.sessionId, sessionStatuses, agentStatuses,
+                  )}
+                  statusTick={
+                    route.sessionId !== undefined
+                      ? sessionTicks[selectedProject.project_id]?.[route.sessionId] ?? 0
+                      : statusTicks[selectedProject.project_id] ?? 0
+                  }
                   agents={agentsAvailable ?? []}
                   route={route}
                   setRoute={setRoute}
@@ -915,6 +969,8 @@ export default function App() {
             managerModel={defaultModel}
             agentStatuses={agentStatuses}
             statusTicks={statusTicks}
+            sessionStatuses={sessionStatuses}
+            sessionTicks={sessionTicks}
           />
         )}
 

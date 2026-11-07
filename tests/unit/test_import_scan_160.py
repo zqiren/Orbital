@@ -1481,3 +1481,49 @@ def test_a_round_four_record_still_answers(tmp_path, monkeypatch):
     sent = _spy_inject(monkeypatch, deps["agent_manager"])
     _answer(tc, pid, sid, ask_id, "需要改")
     assert len(sent) == 1 and "<orbital_turn_note>" in sent[0]
+
+
+# ---------------------------------------------------------------------------
+# Spec 155 merge: no project slot any more
+# ---------------------------------------------------------------------------
+
+
+class _BusyRunner(FakeRunner):
+    def __init__(self, store, message, **kw):
+        super().__init__(store, **kw)
+        self.message = message
+
+    async def start(self, pid, who):
+        raise RuntimeError(self.message)
+
+
+def test_a_busy_start_goes_back_to_pending_without_an_attempt(store, tmp_path):
+    """A start refused because its runner is already busy (a keyless worker
+    mid-turn) is not a failure: back to pending for the next trigger."""
+    a, _ = _imported(store, tmp_path, "a")
+
+    async def go():
+        q = ImportScanQueue(store, _BusyRunner(store, "Error: worker is already running a task"))
+        q.kick("card_created")
+        await q.idle()
+
+    _run(go())
+    p = store.get_project(a)
+    assert p[import_scan.STATE_FIELD] == PENDING
+    assert not p.get(import_scan.ATTEMPTS_FIELD)
+
+
+def test_the_retired_slot_refusal_is_an_ordinary_failure(store, tmp_path):
+    """Spec 155 lifted the project slot: the scan mints its own session and
+    runs beside the user's, so no "Slot held by session" refusal exists. If
+    such a text ever came back it must not park the scan in pending forever."""
+    a, _ = _imported(store, tmp_path, "a")
+
+    async def go():
+        q = ImportScanQueue(store, _BusyRunner(store, "Slot held by session s1"))
+        q.kick("card_created")
+        await q.idle()
+
+    _run(go())
+    p = store.get_project(a)
+    assert p[import_scan.STATE_FIELD] == FAILED and p[import_scan.ATTEMPTS_FIELD] == 1

@@ -76,8 +76,9 @@ async def test_retry_edit_wraps_with_attempt_2_header(tmp_path):
         f"  expected: {expected!r}\n  actual:   {mgr.injected_messages!r}"
     )
 
-    # Switched to the parked session, not a fresh one.
-    assert ("sess_A", False) in mgr.switch_calls
+    # Injected into the parked session by id, not a fresh one (spec 155).
+    assert mgr.inject_targets == [("sess_A", "running")]
+    assert mgr.switch_calls == []
     assert mgr._current_sid == "sess_A"
 
     # New attempt sharing sess_A is on the item.
@@ -108,7 +109,7 @@ async def test_retry_edit_header_uses_correct_attempt_number_after_many(
 
     mgr = _RetryAgentManager()
     # Most recent attempt's session is the one retry continues.
-    # (We don't pre-create the session — switch_session creates it lazily.)
+    # (We don't pre-create the session — inject_message hydrates it by id.)
     dispatcher = QueueDispatcher(
         project_id="proj_retry_edit_attempt5",
         store=store,

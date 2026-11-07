@@ -519,6 +519,7 @@ export default function ChatTab({
         browser={
           <BrowserView
             projectId={projectId}
+            sessionId={routeSessionId}
             active={panelOpen && panelView === 'browser'}
             fallback={screenshot ? { path: screenshot.path, title: screenshot.title } : null}
             annotating={annotating}

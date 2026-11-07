@@ -216,11 +216,10 @@ describe('useSessions', () => {
     expect(apiFn.mock.calls.length).toBe(callCountBeforeEvent);
   });
 
-  // Spec 081 — the three pending events are the only signal that a queued
-  // session's row appeared, flipped or vanished; none of them emits an
-  // agent.status.
+  // A running session's queued message dispatching or being recalled emits no
+  // agent.status; these two events refresh the row.
+  // Spec 155 removed `chat.pending_enqueued` (no session waits for another).
   const PENDING_EVENTS = [
-    'chat.pending_enqueued',
     'chat.pending_dispatched',
     'chat.pending_cancelled',
   ] as const;
@@ -230,7 +229,7 @@ describe('useSessions', () => {
       const initial: SessionListEntry[] = [makeSession({ session_id: 's1' })];
       const updated: SessionListEntry[] = [
         makeSession({ session_id: 's1' }),
-        makeSession({ session_id: 's2', status: 'queued' }),
+        makeSession({ session_id: 's2', status: 'running' }),
       ];
       apiFn.mockResolvedValueOnce(initial).mockResolvedValueOnce(updated);
 
@@ -249,7 +248,7 @@ describe('useSessions', () => {
       await waitFor(() => {
         expect(result.current.sessions).toEqual(updated);
       });
-      expect(result.current.sessions[1].status).toBe('queued');
+      expect(result.current.sessions[1].status).toBe('running');
     });
 
     it(`ignores ${type} for a different project`, async () => {

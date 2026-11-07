@@ -482,8 +482,8 @@ class ImportScanQueue:
             try:
                 session_id = await self._runner.start(pid, who)
             except Exception as exc:
-                if _slot_held(exc):
-                    # The user is working in this project right now: not a
+                if _runner_busy(exc):
+                    # The runner is mid-turn (a keyless worker): not a
                     # failure, try again on the next trigger.
                     self._mark(pid, PENDING)
                     return
@@ -518,10 +518,17 @@ class ImportScanQueue:
                 self._slots.release()
 
 
-def _slot_held(exc: BaseException) -> bool:
+def _runner_busy(exc: BaseException) -> bool:
+    """A start refused only because its runner is already mid-turn.
+
+    Spec 155 lifted the project slot: the scan mints its own session and
+    runs beside the user's sessions, so the manager path never refuses for
+    another session. What is left is a keyless worker still busy with a turn
+    ("already running"), which the next trigger retries. Anything else is a
+    failed attempt."""
     detail = getattr(exc, "detail", None)
     text = detail if isinstance(detail, str) else str(exc)
-    return "Slot held by session" in text or "already running" in text
+    return "already running" in text
 
 
 # ---------------------------------------------------------------------------
