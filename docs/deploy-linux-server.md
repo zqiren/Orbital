@@ -3,8 +3,7 @@
 There is no Linux desktop build, but the daemon and web UI run headless on a
 server: `python -m agent_os.server` is the desktop app without its window and
 tray. The Docker image in this repository adds everything the desktop normally
-provides. It has been tested on arm64 (Oracle Linux 9 host) and contains nothing
-architecture-specific.
+provides. It has been tested on arm64 (Oracle Linux 9 host) and amd64.
 
 ## Before you expose it
 
