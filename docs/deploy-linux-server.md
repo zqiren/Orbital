@@ -42,7 +42,7 @@ under `/home/orbital`. Logs are in `data/home/.orbital/logs`.
 | --- | --- |
 | Privileges | Every process runs as uid 10001 with no capabilities and `no-new-privileges`. `NET_ADMIN` and the other added capabilities are used only by the entrypoint, before it drops them. |
 | Network | The entrypoint rejects outbound traffic to private, CGNAT and link-local ranges from the container's own network namespace, so agents can't reach the host, cloud metadata or a VPN. The container exits if the rules can't be applied. Set `ORBITAL_BLOCKED_NETS` to replace the list. |
-| Worker sandboxes | Docker's default seccomp profile denies the user namespaces Codex's own sandbox needs. `AGENT_OS_EXTERNAL_SANDBOX=1` tells Codex that the container is its sandbox, so its commands run without one. |
+| Worker sandboxes | Docker's default seccomp profile denies the user namespaces Codex's own sandbox needs. `AGENT_OS_EXTERNAL_SANDBOX=1` tells Codex that the container is its sandbox, so its commands run without one. `GEMINI_CLI_TRUST_WORKSPACE=true` skips Gemini CLI's folder trust prompt, which nobody can answer here. |
 | Credentials | With no OS keychain available, keys are stored by `keyrings.alt` in an unencrypted `0600` file under `data/home`. |
 | Desktop browser | Xvfb and noVNC provide a virtual desktop at <http://127.0.0.1:6080/vnc.html>. |
 
@@ -53,7 +53,14 @@ the daemon, and their OAuth callbacks go to that machine's `127.0.0.1`. Here tha
 is the container, so **finish these flows in the noVNC desktop**. A link opened on
 your own computer can't complete the callback.
 
-CLI logins also work from a terminal:
+Gemini CLI uses an API key. Set `GEMINI_API_KEY` for the container and select that
+method in `data/home/.gemini/settings.json`:
+
+```json
+{ "security": { "auth": { "selectedType": "gemini-api-key" } } }
+```
+
+Other CLI logins also work from a terminal:
 
 ```bash
 docker exec -it -u 10001 orbital claude auth login
