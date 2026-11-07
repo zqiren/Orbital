@@ -231,9 +231,10 @@ class TestResumeSourcePrecheck:
         assert SDKTransport.resume_source_exists(
             str(workspace), "sid-7", projects_root=str(projects_root))
 
-    async def test_slug_derivation_matches_observed_layout(self):
+    async def test_slug_derivation_matches_observed_layout(self, monkeypatch):
         """Observed: /Users/x/Desktop/orbital-test -> -Users-x-Desktop-orbital-test
         and /tmp/... realpaths to /private/tmp/... on macOS."""
+        monkeypatch.setattr("os.path.realpath", lambda path: path)  # no drive letter
         slug = SDKTransport.claude_project_slug("/Users/x/Desktop/orbital-test")
         assert slug == "-Users-x-Desktop-orbital-test"
 

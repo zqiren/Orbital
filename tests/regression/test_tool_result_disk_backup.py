@@ -167,7 +167,7 @@ class TestToolResultDiskBackup:
         ][0]["content"]
 
         assert "Full result:" in stub
-        assert "tool-results/blobs/" in stub
+        assert "tool-results/blobs/" in stub.replace("\\", "/")
         # The path in the stub actually resolves to the archived content.
         marker = "Full result: "
         disk_path = stub[stub.index(marker) + len(marker):].rstrip("]")

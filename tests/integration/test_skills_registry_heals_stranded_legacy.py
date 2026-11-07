@@ -81,4 +81,4 @@ def test_skills_endpoint_empty_then_healed_for_stranded_legacy_project(
     } <= names
     # And every reported path points at the current orbital/skills location.
     for s in resp.json():
-        assert "/orbital/skills/" in s["path"]
+        assert "/orbital/skills/" in s["path"].replace("\\", "/")

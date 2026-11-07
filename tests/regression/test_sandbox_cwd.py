@@ -200,8 +200,9 @@ class TestCwdIntegration:
              tempfile.TemporaryDirectory(prefix="b_") as ws_b:
             _, out_a = _run_production_style(ws_a, "Get-Location")
             _, out_b = _run_production_style(ws_b, "Get-Location")
-            assert ws_a.lower() in out_a.lower()
-            assert ws_b.lower() in out_b.lower()
+            # realpath expands 8.3 names, which Get-Location prints in full.
+            assert os.path.realpath(ws_a).lower() in out_a.lower()
+            assert os.path.realpath(ws_b).lower() in out_b.lower()
 
     def test_exit_code_propagation(self, workspace):
         rc, _ = _run_production_style(workspace, "exit 42")
