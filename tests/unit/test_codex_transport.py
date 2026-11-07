@@ -31,6 +31,12 @@ def _drain(transport) -> list[TransportEvent]:
     return events
 
 
+@pytest.fixture(autouse=True)
+def _no_external_sandbox_from_the_environment(monkeypatch):
+    # The Docker image sets this; tests that want it set it themselves.
+    monkeypatch.delenv("AGENT_OS_EXTERNAL_SANDBOX", raising=False)
+
+
 def _transport(**kwargs) -> CodexTransport:
     t = CodexTransport(**kwargs)
     t._thread_id = "T1"
