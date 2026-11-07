@@ -26,6 +26,10 @@ class NullProvider(PlatformProvider):
 
     def __init__(self) -> None:
         self._processes: dict[str, tuple[ProcessHandle, subprocess.Popen]] = {}
+        # Keyed by owning workspace realpath, as on macOS and Windows. Nothing
+        # enforces these at the OS level here, but the read tools and the
+        # project settings work from this set.
+        self._portal_paths: dict[str, dict[str, str]] = {}
 
     async def setup(self) -> SetupResult:
         return SetupResult(success=True)
@@ -177,14 +181,21 @@ class NullProvider(PlatformProvider):
         *,
         scope: str,
     ) -> PermissionResult:
-        return PermissionResult(
-            success=False, path=path, error="No platform provider available"
-        )
+        scope_key = os.path.realpath(scope)
+        self._portal_paths.setdefault(scope_key, {})[path] = mode
+        return PermissionResult(success=True, path=path)
+
+    def portal_paths_for_scope(self, scope: str) -> dict[str, str]:
+        return dict(self._portal_paths.get(os.path.realpath(scope), {}))
 
     def revoke_folder_access(self, path: str, *, scope: str) -> PermissionResult:
-        return PermissionResult(
-            success=False, path=path, error="No platform provider available"
-        )
+        scope_key = os.path.realpath(scope)
+        bucket = self._portal_paths.get(scope_key)
+        if bucket is not None:
+            bucket.pop(path, None)
+            if not bucket:
+                self._portal_paths.pop(scope_key, None)
+        return PermissionResult(success=True, path=path)
 
     def get_available_folders(self) -> list[FolderInfo]:
         return []
