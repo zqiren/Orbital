@@ -150,6 +150,23 @@ from agent_os.agent.context import MEMORY_RECORD_KIND, ask_card_row  # noqa: E40
 from agent_os.agent.project_paths import ProjectPaths  # noqa: E402
 MEMORY_RECORD_MAX_LLM_CALLS = 3
 MEMORY_RECORD_MAX_TOOL_CALLS = 6
+# One retry per record turn, after this backoff, when the provider is busy
+# (429 / overload / 5xx / connection). Parallel sessions on one key make a
+# single 429 likelier; without it the round ended unrecorded.
+MEMORY_RECORD_RETRY_DELAY_S = 5.0
+
+
+def _record_call_retryable(exc: BaseException) -> bool:
+    """A record-turn LLM failure worth one more try: rate limit, overload,
+    any 5xx, or a connection/timeout with no status. Never a 4xx refusal or
+    an unclassified error."""
+    if not isinstance(exc, LLMError):
+        return False
+    status = exc.status_code
+    if status is not None:
+        return status == 429 or 500 <= status <= 599
+    text = (exc.message or "").lower()
+    return any(k in text for k in ("connection failed", "timed out", "overloaded"))
 # The four Layer-1 files, by on-disk name (agent_os.agent.context._LAYER1_FILES
 # carries the same list keyed for WorkspaceFileManager).
 _MEMORY_FILE_NAMES = ("PROJECT_STATE.md", "DECISIONS.md", "LESSONS.md", "INDEX.md")
@@ -483,6 +500,8 @@ class AgentLoop:
         # Spec 155: True while this loop's record turn holds the project's
         # record lock (released in that turn's ``finally``).
         self._record_lock_held: bool = False
+        # One busy-provider retry per record turn (``_record_call``).
+        self._record_retried: bool = False
         self._open_asks_seen: dict | None = None
 
         # Spec 124 §3.7 — the Memory session's loop. ``tool_guard(tc)`` is a
@@ -2551,6 +2570,40 @@ class AgentLoop:
             accumulator.add(chunk)
         return accumulator.finalize()
 
+    async def _record_inflight(self, coro, name: str):
+        """Await ``coro`` as the loop's in-flight task, so spec 142's
+        ``yield_memory_record`` and Stop cancel it (the CancelledError
+        reaches the caller)."""
+        task = asyncio.create_task(coro, name=name)
+        self._inflight_stream = task
+        try:
+            return await task
+        finally:
+            if self._inflight_stream is task:
+                self._inflight_stream = None
+
+    async def _record_call(self, provider, context, tool_schemas, call_no: int) -> LLMResponse:
+        """One record-turn LLM call. On a busy provider (``_record_call_retryable``)
+        and only once per record turn: wait ``MEMORY_RECORD_RETRY_DELAY_S`` as
+        the in-flight task, then try the same call again. Any other error, or
+        a second failure, raises as before."""
+        base = f"memory-record-{self._session.session_uuid}-{call_no}"
+        try:
+            return await self._record_inflight(
+                self._stream_quiet(provider, context, tool_schemas), base)
+        except LLMError as e:
+            if (self._record_retried or not _record_call_retryable(e)
+                    or self._session.list_queued()):
+                # A message held for this session must not sit out a backoff.
+                raise
+            self._record_retried = True
+            logger.info("memory record turn: provider busy (%s); retrying once in %.0fs",
+                        e, MEMORY_RECORD_RETRY_DELAY_S)
+        await self._record_inflight(asyncio.sleep(MEMORY_RECORD_RETRY_DELAY_S),
+                                    f"{base}-backoff")
+        return await self._record_inflight(
+            self._stream_quiet(provider, context, tool_schemas), f"{base}-retry")
+
     async def _memory_record_turn(self, provider, iteration: int, *,
                                   trigger: str, rows_at_run_start) -> None:
         """Append the ``[MEMORY]`` row and run the bounded record turn.
@@ -2575,6 +2628,7 @@ class AgentLoop:
         lock = None
         lock_wait_ms = 0
         self._record_lock_held = False
+        self._record_retried = False
         try:
             # Spec 155 §5.1.2: take the project's record lock BEFORE the row
             # is built, so a second session's row is the file as the first
@@ -2618,12 +2672,9 @@ class AgentLoop:
                 llm_calls += 1
                 context = self._context_manager.prepare()
                 tool_schemas = self._tool_registry.schemas()
-                self._inflight_stream = asyncio.create_task(
-                    self._stream_quiet(provider, context, tool_schemas),
-                    name=f"memory-record-{self._session.session_uuid}-{llm_calls}",
-                )
                 try:
-                    response = await self._inflight_stream
+                    response = await self._record_call(
+                        provider, context, tool_schemas, llm_calls)
                 except asyncio.CancelledError:
                     self._inflight_stream = None
                     if self._session.is_stopped():
@@ -2731,7 +2782,7 @@ class AgentLoop:
                 "memory_record", iteration=iteration, trigger=trigger,
                 llm_calls=llm_calls, tool_calls=tool_calls, outcome=outcome,
                 changed_files=len(self._run_changed_files),
-                lock_wait_ms=lock_wait_ms,
+                lock_wait_ms=lock_wait_ms, retried=self._record_retried,
             )
 
     async def _run_refresh(self, trigger_name: str, iteration: int) -> None:
