@@ -543,6 +543,27 @@ class AgentManager:
         exactly ``_path_utils.SECONDARY_MEMORY_FILES`` under these roots."""
         return self._compute_scope_roots(project_id, session_id)[0][1:]
 
+    def _read_roots_with_attached(self, project_id: str, session_id: str | None,
+                                  roots: list[str]) -> list[str]:
+        """``roots`` plus the files the user attached by local path in this
+        project (``attachment_grants``). After a daemon restart the grants
+        are re-read once from this session's own rows."""
+        from agent_os.daemon_v2 import attachment_grants
+        try:
+            handle = self._handles.get(make_session_key(project_id, session_id)) \
+                if session_id is not None else None
+            session = getattr(handle, "session", None)
+            if session is not None and hasattr(session, "get_messages"):
+                attachment_grants.hydrate_from_messages(
+                    project_id, session_id, session.get_messages())
+        except Exception:
+            logger.debug("attachment grant hydrate failed for %s/%s",
+                         project_id, session_id, exc_info=True)
+        extra = sorted(attachment_grants.granted(project_id))
+        if not extra:
+            return roots
+        return [*roots, *extra]
+
     def _portal_paths_for_project(self, workspace: str) -> list[str]:
         """The provider's granted portals under ``workspace``'s scope (D7)."""
         provider = self._platform_provider
@@ -1753,12 +1774,18 @@ class AgentManager:
         safe_mode_cb = lambda: self._project_safe_mode(project_id)
         unsandboxed_cb = lambda: self._project_unsandboxed_executables(project_id)
         cross_project = bool(config.is_scratch)
+        # Files the user attached by local path (desktop app) are readable by
+        # the read tool even in safe mode: each one is an exact-file root.
+        # Read only, and only the read tool — grep/glob would walk them as
+        # search roots on every call.
+        file_read_roots_cb = lambda: self._read_roots_with_attached(
+            project_id, session_id, read_roots_cb())
         try:
             from agent_os.agent.tools.read import ReadTool
             # context_window sizes the read cap to the active model — same
             # model_info.context_window ContextManager uses.
             registry.register(ReadTool(workspace=config.workspace,
-                                       read_roots=read_roots_cb,
+                                       read_roots=file_read_roots_cb,
                                        context_window=context_window,
                                        open_reads=open_reads_cb,
                                        cross_project=cross_project,

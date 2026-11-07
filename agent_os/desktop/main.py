@@ -490,6 +490,115 @@ def _set_window_icon():
         pass
 
 
+def local_file_entries(paths) -> list[dict]:
+    """The composer's path attachments for these picked/dropped paths.
+
+    Desktop app only: a file is attached by its absolute local path, never
+    uploaded. Each entry is ``{path, name, size, mime}``; ``path`` is the
+    realpath, ``name`` the file's own name. Folders, missing paths and
+    anything that is not a regular file are left out.
+    """
+    import mimetypes
+    import stat as _stat
+    out: list[dict] = []
+    for p in paths or ():
+        if not isinstance(p, str) or not p or not os.path.isabs(p):
+            continue
+        real = os.path.realpath(p)
+        try:
+            st = os.stat(real)
+        except OSError:
+            continue
+        if not _stat.S_ISREG(st.st_mode):
+            continue
+        out.append({
+            "path": real,
+            "name": os.path.basename(p),
+            "size": st.st_size,
+            "mime": mimetypes.guess_type(real)[0] or "application/octet-stream",
+        })
+    return out
+
+
+def pick_files_with(open_dialog) -> list[dict]:
+    """Run the native multi-select open dialog and return the picked files
+    as :func:`local_file_entries`. ``open_dialog()`` → paths or None (cancel)."""
+    try:
+        picked = open_dialog()
+    except Exception:
+        return []
+    return local_file_entries(list(picked or ()))
+
+
+def dropped_file_entries(event) -> list[dict]:
+    """The real paths of files dropped on the window, from pywebview's
+    serialized drop event (``dataTransfer.files[i].pywebviewFullPath``)."""
+    try:
+        files = (event or {}).get("dataTransfer", {}).get("files", []) or []
+    except AttributeError:
+        return []
+    paths = [f.get("pywebviewFullPath") for f in files if isinstance(f, dict)]
+    return local_file_entries([p for p in paths if p])
+
+
+# The SPA listens for this event to turn a drop into path attachments.
+NATIVE_DROP_EVENT = "orbital:native-drop"
+
+
+def native_drop_js(entries: list[dict]) -> str:
+    """JS that hands dropped files' real paths to the SPA."""
+    import json
+    return (f"window.dispatchEvent(new CustomEvent({json.dumps(NATIVE_DROP_EVENT)}, "
+            f"{{detail: {json.dumps(entries)}}}))")
+
+
+def pick_files_in(window) -> list[dict]:
+    """The native multi-select open dialog of ``window``, as path entries."""
+    import webview
+    open_kind = getattr(getattr(webview, "FileDialog", None), "OPEN", None)
+    if open_kind is None:
+        open_kind = webview.OPEN_DIALOG
+    return pick_files_with(lambda: window.create_file_dialog(
+        open_kind,
+        directory=os.path.expanduser("~"),
+        allow_multiple=True,
+    ))
+
+
+def install_native_drop(window) -> None:
+    """Drag and drop onto a composer attaches by real path (desktop app).
+
+    A file dropped into the web view arrives as a File with no path. With a
+    Python drop listener registered, pywebview records the pasteboard's file
+    URLs natively and puts each file's real path on the serialized drop event
+    (``pywebviewFullPath``); this handler hands those paths to the SPA.
+    ``__orbitalNativeDrop`` tells the SPA to wait for them; a file that comes
+    back without a path is uploaded as before.
+
+    Runs on every ``loaded``: a reload drops the page's JS listener. After
+    one, pywebview may call more than one Python handler per drop; the SPA
+    takes the first event per drop and ignores the rest.
+    """
+    try:
+        from webview.dom import DOMEventHandler
+    except Exception:
+        return
+
+    def _on_drop(event):
+        entries = dropped_file_entries(event)
+        try:
+            window.evaluate_js(native_drop_js(entries))
+        except Exception:
+            pass
+
+    try:
+        window.dom.document.events.drop += DOMEventHandler(_on_drop, False, False)
+        window.evaluate_js("window.__orbitalNativeDrop = true")
+    except Exception:
+        # Older pywebview / no DOM API: drops keep uploading.
+        pass
+
+
 def _is_foreign_url(url: str | None, port: int) -> bool:
     """Return True iff `url` is an http(s) URL whose origin is not this app's.
 
@@ -1152,6 +1261,11 @@ def open_window(port: int):
             )
             return result[0] if result else None
 
+        def pick_files(self):
+            """Composer attach button (desktop app): pick files, get their
+            absolute paths. Nothing is uploaded and there is no size cap."""
+            return pick_files_in(window)
+
     # Set icon in background thread (needs window to exist first)
     icon_thread = threading.Thread(target=_set_window_icon, daemon=True)
     icon_thread.start()
@@ -1354,6 +1468,7 @@ def open_window(port: int):
     # contentView. Ordered after the origin guard so the guard gets first look;
     # the reload it may trigger re-fires this, which the installer absorbs.
     window.events.loaded += _install_drag_strip
+    window.events.loaded += lambda: install_native_drop(window)
     window.events.before_show += _reveal_traffic_lights
     # macOS fires `maximized` on entering fullscreen and `restored` on leaving
     # it (webview/platforms/cocoa.py). `restored` also fires on un-minimize,

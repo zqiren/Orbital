@@ -13,7 +13,7 @@ from typing import AsyncIterator, Callable
 
 from agent_os.agent.transports.base import AgentTransport, TransportEvent
 from agent_os.agent.prompt_builder import Autonomy
-from agent_os.agent.transports.tool_risk import should_auto_approve
+from agent_os.agent.transports.tool_risk import READ, classify_tool, should_auto_approve
 from agent_os.utils.subprocess_flags import CREATE_NO_WINDOW
 
 try:
@@ -799,6 +799,15 @@ class SDKTransport(AgentTransport):
         task = self._sdk_read_task()
         return task is None or not task.done()
 
+    def _is_attached_file_read(self, tool_name: str, tool_input) -> bool:
+        """A read-category tool (Read/Grep/Glob/LS…) aimed at an attached file."""
+        if classify_tool(tool_name) != READ or not isinstance(tool_input, dict):
+            return False
+        for key in ("file_path", "path", "notebook_path"):
+            if self.read_is_granted(tool_input.get(key)):
+                return True
+        return False
+
     def update_autonomy(self, preset: Autonomy) -> None:
         """Update the autonomy preset for permission filtering (live settings update)."""
         self._autonomy = preset
@@ -820,6 +829,13 @@ class SDKTransport(AgentTransport):
         Emits a permission_request TransportEvent and waits for approval
         via respond_to_permission().
         """
+        # A file the user attached by its local path: Claude Code asks before
+        # reading outside its cwd; the attachment already granted exactly this
+        # file, so the read goes through under every autonomy preset.
+        if self._is_attached_file_read(tool_name, tool_input):
+            logger.debug("SDKTransport: allowed %s of an attached file", tool_name)
+            return PermissionResultAllow()
+
         # Auto-approve if autonomy preset allows this tool
         if self._autonomy is not None and should_auto_approve(tool_name, self._autonomy):
             logger.debug("SDKTransport: auto-approved %s (autonomy=%s)", tool_name, self._autonomy.value)

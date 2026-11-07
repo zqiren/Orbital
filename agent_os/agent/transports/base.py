@@ -48,6 +48,34 @@ class AgentTransport(ABC):
         """Respond to a permission request. No-op for transports that don't support it."""
         pass
 
+    # Files the user attached by local path (desktop app) are a read grant
+    # for every agent. SubAgentManager hands each transport a callable that
+    # returns the project's granted realpaths; a transport whose CLI asks
+    # before reading outside its folder answers "allow" for exactly those
+    # files, through the CLI's own permission mechanism.
+    _read_grants = None
+
+    def set_read_grants(self, grants) -> None:
+        """``grants()`` → the realpaths this worker may read (attached files)."""
+        self._read_grants = grants
+
+    def granted_read_paths(self) -> frozenset:
+        fn = self._read_grants
+        if fn is None:
+            return frozenset()
+        try:
+            return frozenset(fn() or ())
+        except Exception:
+            return frozenset()
+
+    def read_is_granted(self, path) -> bool:
+        """True when ``path`` (absolute) resolves to a granted attached file."""
+        import os
+        if not isinstance(path, str) or not path or not os.path.isabs(path):
+            return False
+        grants = self.granted_read_paths()
+        return bool(grants) and os.path.realpath(path) in grants
+
 
 def transport_event_to_chunk(event: TransportEvent) -> "OutputChunk":
     """Convert a TransportEvent to an OutputChunk for backward compatibility."""

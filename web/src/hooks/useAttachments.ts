@@ -6,6 +6,10 @@ import { useCallback, useRef, useState } from 'react';
 import type { ChangeEvent, ClipboardEvent, DragEvent } from 'react';
 import { BASE_URL, isRelayMode } from '../config';
 import { uploadFile } from '../lib/attachment-upload';
+import {
+  canPickLocalFiles, nativeDropAvailable, pickLocalFiles, splitDrop, waitForNativeDrop,
+} from '../lib/localFiles';
+import type { LocalFileEntry } from '../lib/localFiles';
 import { useT } from '../i18n/useT';
 
 export const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
@@ -13,7 +17,11 @@ export const MAX_ATTACHMENTS = 10;
 
 export interface PendingAttachment {
   id: string;
-  file: File;
+  /** The bytes to upload; absent on a local-path chip. */
+  file?: File;
+  /** Desktop app: the file's absolute path. Nothing is uploaded, no size
+   *  cap; the chip is ready (`done`) the moment it appears. */
+  localPath?: string;
   filename: string;
   mime: string;
   size: number;
@@ -45,12 +53,25 @@ export interface UseAttachmentsOptions {
    * after routing, so it uploads at send time.
    */
   deferUpload?: boolean;
+  /**
+   * Desktop app: the attach button and drag and drop attach files by their
+   * absolute local path instead of uploading (chat and Workbench). Ignored
+   * in any other client, and paste always uploads.
+   */
+  localPaths?: boolean;
 }
 
 export interface UploadedAttachment {
   path: string;
   mime: string;
   size: number;
+  /** A local-path attachment (desktop app): `path` is absolute. */
+  local?: boolean;
+}
+
+/** Over the upload cap? A local-path chip never is: nothing is copied. */
+export function overUploadCap(a: Pick<PendingAttachment, 'size' | 'localPath'>): boolean {
+  return !a.localPath && a.size > MAX_ATTACHMENT_BYTES;
 }
 
 /**
@@ -95,6 +116,7 @@ export function useAttachments(
         ),
       );
       try {
+        if (!att.file) throw new Error(tRef.current('chat.uploadError'));
         const baseUrl = isRelayMode ? window.location.origin : BASE_URL;
         const { path, size } = await uploadFile({
           projectId: pid,
@@ -148,10 +170,15 @@ export function useAttachments(
     async (pid: string, ids?: readonly string[]): Promise<UploadedAttachment[]> => {
       const want = ids ? new Set(ids) : null;
       const list = attachmentsRef.current.filter(
-        (a) => (!want || want.has(a.id)) && a.size <= MAX_ATTACHMENT_BYTES,
+        (a) => (!want || want.has(a.id)) && !overUploadCap(a),
       );
       const out: UploadedAttachment[] = [];
       for (const a of list) {
+        if (a.localPath) {
+          // Local path: passes straight through, whatever the project.
+          out.push({ path: a.localPath, mime: a.mime, size: a.size, local: true });
+          continue;
+        }
         if (a.status === 'done' && a.uploadedPath && a.uploadedProject === pid) {
           out.push({ path: a.uploadedPath, mime: a.mime, size: a.size });
           continue;
@@ -214,6 +241,52 @@ export function useAttachments(
       });
     },
     [uploadAttachment, defer],
+  );
+
+  /** Desktop app: chips for files attached by their local path. Ready at
+   *  once, no upload, no size cap. */
+  const addLocalFiles = useCallback((entries: readonly LocalFileEntry[]) => {
+    if (entries.length === 0) return;
+    setAttachments((prev) => {
+      const room = MAX_ATTACHMENTS - prev.length;
+      if (room <= 0) {
+        onErrorRef.current?.(tRef.current('chat.maxAttachments', { n: MAX_ATTACHMENTS }));
+        return prev;
+      }
+      const usable = entries.slice(0, room);
+      if (entries.length > usable.length) {
+        onErrorRef.current?.(tRef.current('chat.onlyNAllowed', { n: MAX_ATTACHMENTS }));
+      }
+      return [
+        ...prev,
+        ...usable.map((e): PendingAttachment => ({
+          id: genId(),
+          localPath: e.path,
+          filename: e.name,
+          mime: e.mime || 'application/octet-stream',
+          size: e.size,
+          status: 'done',
+        })),
+      ];
+    });
+  }, []);
+
+  const localMode = options?.localPaths === true;
+
+  /**
+   * The attach button. In the desktop app (with `localPaths`) the native
+   * dialog picks files by path; anywhere else `browse()` opens the page's
+   * file input, as before.
+   */
+  const openPicker = useCallback(
+    async (browse: () => void) => {
+      if (!localMode || !canPickLocalFiles()) {
+        browse();
+        return;
+      }
+      addLocalFiles(await pickLocalFiles());
+    },
+    [localMode, addLocalFiles],
   );
 
   const removeAttachment = useCallback((id: string) => {
@@ -291,9 +364,21 @@ export function useAttachments(
     (e: DragEvent<HTMLElement>) => {
       e.preventDefault();
       const files = Array.from(e.dataTransfer?.files ?? []);
-      if (files.length > 0) addAttachments(files);
+      if (files.length === 0) return;
+      if (!localMode || !nativeDropAvailable()) {
+        addAttachments(files);
+        return;
+      }
+      // Desktop app: the shell sends the dropped files' real paths right
+      // after this event. Those become path chips; any file it has no path
+      // for (or all of them, if nothing arrives) is uploaded as before.
+      void waitForNativeDrop().then((entries) => {
+        const { local, upload } = splitDrop(files, entries);
+        addLocalFiles(local);
+        if (upload.length > 0) addAttachments(upload);
+      });
     },
-    [addAttachments],
+    [addAttachments, addLocalFiles, localMode],
   );
 
   const anyUploading = attachments.some((a) => a.status === 'uploading');
@@ -307,6 +392,8 @@ export function useAttachments(
     anyDone,
     allError,
     addAttachments,
+    addLocalFiles,
+    openPicker,
     removeAttachment,
     retryAttachment,
     clearAttachments,

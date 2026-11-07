@@ -9,6 +9,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
+import type React from 'react';
 
 vi.mock('../lib/attachment-upload', async (importOriginal) => {
   const actual =
@@ -217,5 +218,111 @@ describe('useAttachments — deferUpload (the Workbench stages, uploads at send)
     await act(async () => { await result.current.uploadAll('proj-a', [b.id, big.id]); });
     expect(uploadMock).toHaveBeenCalledTimes(1);
     expect(uploadMock.mock.calls[0][0].file.name).toBe('b.txt');
+  });
+});
+
+// Attach by local path (desktop app, 2026-11-07): the native bridge picks
+// files by absolute path; nothing is uploaded and there is no size cap.
+describe('useAttachments — desktop app attach by path', () => {
+  const entry = (name: string, size = 4) => ({
+    path: `/Users/me/files/${name}`, name, size, mime: 'text/plain',
+  });
+  type Win = { pywebview?: unknown; __orbitalNativeDrop?: boolean };
+
+  function desktop(pick = vi.fn(async () => [entry('a.txt'), entry('big.bin', 50 * 1024 * 1024)])) {
+    (window as unknown as Win).pywebview = { api: { pick_folder: vi.fn(), pick_files: pick } };
+    return pick;
+  }
+
+  afterEach(() => {
+    delete (window as unknown as Win).pywebview;
+    delete (window as unknown as Win).__orbitalNativeDrop;
+  });
+
+  it('the picker adds ready path chips, uploads nothing, no size cap', async () => {
+    const pick = desktop();
+    const browse = vi.fn();
+    const { result } = renderHook(() => useAttachments('p1', { localPaths: true }));
+    await act(async () => { await result.current.openPicker(browse); });
+    expect(pick).toHaveBeenCalledTimes(1);
+    expect(browse).not.toHaveBeenCalled();
+    const [a, b] = result.current.attachments;
+    expect(a).toMatchObject({ localPath: '/Users/me/files/a.txt', filename: 'a.txt', status: 'done' });
+    expect(b).toMatchObject({ size: 50 * 1024 * 1024, status: 'done' });
+    expect(result.current.anyDone).toBe(true);
+    await new Promise((r) => setTimeout(r, 5));
+    expect(uploadMock).not.toHaveBeenCalled();
+  });
+
+  it('uploadAll passes path chips straight through, marked local', async () => {
+    desktop();
+    const { result } = renderHook(() => useAttachments('', { localPaths: true, deferUpload: true }));
+    await act(async () => { await result.current.openPicker(vi.fn()); });
+    let out: unknown;
+    await act(async () => { out = await result.current.uploadAll('proj-x'); });
+    expect(out).toEqual([
+      { path: '/Users/me/files/a.txt', mime: 'text/plain', size: 4, local: true },
+      { path: '/Users/me/files/big.bin', mime: 'text/plain', size: 50 * 1024 * 1024, local: true },
+    ]);
+    expect(uploadMock).not.toHaveBeenCalled();
+  });
+
+  it('not the desktop app: the picker opens the page file input', async () => {
+    const browse = vi.fn();
+    const { result } = renderHook(() => useAttachments('p1', { localPaths: true }));
+    await act(async () => { await result.current.openPicker(browse); });
+    expect(browse).toHaveBeenCalledTimes(1);
+    expect(result.current.attachments).toEqual([]);
+  });
+
+  it('a composer without localPaths (queue) keeps the file input even in the desktop app', async () => {
+    const pick = desktop();
+    const browse = vi.fn();
+    const { result } = renderHook(() => useAttachments('p1'));
+    await act(async () => { await result.current.openPicker(browse); });
+    expect(browse).toHaveBeenCalledTimes(1);
+    expect(pick).not.toHaveBeenCalled();
+  });
+
+  function dropEvent(files: File[]) {
+    return {
+      preventDefault: vi.fn(),
+      dataTransfer: { files },
+    } as unknown as React.DragEvent<HTMLElement>;
+  }
+
+  it('drop in the desktop app: files the shell sends a path for become path chips, the rest upload', async () => {
+    desktop();
+    (window as unknown as Win).__orbitalNativeDrop = true;
+    const { result } = renderHook(() => useAttachments('p1', { localPaths: true }));
+    act(() => result.current.handleDrop(dropEvent([textFile('a.txt'), textFile('web.txt')])));
+    act(() => {
+      window.dispatchEvent(new CustomEvent('orbital:native-drop', { detail: [entry('a.txt')] }));
+    });
+    await waitFor(() => expect(result.current.attachments).toHaveLength(2));
+    const local = result.current.attachments.find((x) => x.localPath);
+    expect(local).toMatchObject({ filename: 'a.txt', localPath: '/Users/me/files/a.txt' });
+    await waitFor(() => expect(uploadMock).toHaveBeenCalledTimes(1));
+    expect(uploadMock.mock.calls[0][0].file.name).toBe('web.txt');
+  });
+
+  it('drop with no native drop support uploads as before', async () => {
+    desktop();
+    const { result } = renderHook(() => useAttachments('p1', { localPaths: true }));
+    act(() => result.current.handleDrop(dropEvent([textFile('a.txt')])));
+    await waitFor(() => expect(uploadMock).toHaveBeenCalledTimes(1));
+    expect(result.current.attachments[0].localPath).toBeUndefined();
+  });
+
+  it('paste always uploads, even in the desktop app', async () => {
+    desktop();
+    (window as unknown as Win).__orbitalNativeDrop = true;
+    const { result } = renderHook(() => useAttachments('p1', { localPaths: true }));
+    const file = imageFile();
+    act(() => result.current.handlePaste({
+      preventDefault: vi.fn(),
+      clipboardData: { items: [{ kind: 'file', getAsFile: () => file }] },
+    } as unknown as React.ClipboardEvent<HTMLElement>));
+    await waitFor(() => expect(uploadMock).toHaveBeenCalledTimes(1));
   });
 });

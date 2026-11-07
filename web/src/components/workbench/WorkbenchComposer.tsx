@@ -46,7 +46,7 @@ import {
   modelLineText, workerModelInfo, type SubAgentModelEntry,
 } from '../../hooks/useConversationModels';
 import { restoreComposer, useWorkbenchFeed } from '../../hooks/useWorkbenchFeed';
-import { MAX_ATTACHMENT_BYTES, useAttachments } from '../../hooks/useAttachments';
+import { overUploadCap, useAttachments } from '../../hooks/useAttachments';
 import AttachmentChip from '../AttachmentChip';
 import type { SendChoice, SendDeps } from './sendTask';
 
@@ -113,13 +113,14 @@ export default function WorkbenchComposer({
   const [routeError, setRouteError] = useState(false);
   const {
     attachments, removeAttachment, retryAttachment, uploadAll,
-    handleFilePickerChange, handlePaste, handleDrop,
-  } = useAttachments('', { deferUpload: true, onError: setAttError });
+    handleFilePickerChange, handlePaste, handleDrop, openPicker,
+  } = useAttachments('', { deferUpload: true, localPaths: true, onError: setAttError });
   // Chips of a task still being sent: shown, but not part of the next task.
   const [inFlight, setInFlight] = useState<ReadonlySet<string>>(() => new Set());
   const [dragDepth, setDragDepth] = useState(0);
-  // What the next send takes: staged, not sending, under the size cap.
-  const sendable = attachments.filter((a) => !inFlight.has(a.id) && a.size <= MAX_ATTACHMENT_BYTES);
+  // What the next send takes: staged, not sending, under the size cap (a
+  // local-path chip in the desktop app has none: nothing is uploaded).
+  const sendable = attachments.filter((a) => !inFlight.has(a.id) && !overUploadCap(a));
 
   // A send that could not start puts its text back (§5.6 step 6), and a
   // reload restores an unsent draft — whichever page is open at the time.
@@ -285,8 +286,9 @@ export default function WorkbenchComposer({
                   status={status}
                   thumbnailUrl={a.thumbnailUrl}
                   errorMessage={a.errorMessage}
+                  localPath={a.localPath}
                   onRemove={sending ? undefined : () => removeAttachment(a.id)}
-                  onRetry={a.status === 'error' && !sending && a.size <= MAX_ATTACHMENT_BYTES
+                  onRetry={a.status === 'error' && !sending && !overUploadCap(a)
                     ? () => retryAttachment(a.id) : undefined}
                 />
               );
@@ -309,7 +311,8 @@ export default function WorkbenchComposer({
             aria-label={t('chat.attachFiles')}
             title={t('chat.attachFiles')}
             data-testid="wb-attach"
-            onClick={() => fileInputRef.current?.click()}
+            // Desktop app: the native dialog attaches by local path.
+            onClick={() => { setAttError(null); void openPicker(() => fileInputRef.current?.click()); }}
           >
             <Plus size={16} strokeWidth={2} aria-hidden="true" />
           </button>

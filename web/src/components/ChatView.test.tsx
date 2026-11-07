@@ -1186,6 +1186,39 @@ describe('ChatView composer attachments', () => {
     expect(container.textContent ?? '').toContain('notes.txt');
   });
 
+  it('desktop app: the attach button picks by local path and sends it marked local, no upload', async () => {
+    let uploaded = false;
+    uploadFileMock = async () => { uploaded = true; return { path: 'uploads/x', size: 1 }; };
+    const big = 50 * 1024 * 1024;
+    (window as unknown as { pywebview: unknown }).pywebview = { api: {
+      pick_folder: async () => null,
+      pick_files: async () => [{ path: '/Users/me/big.bin', name: 'big.bin', size: big, mime: 'application/octet-stream' }],
+    } };
+    try {
+      await renderChat({ agentStatus: 'idle', sessionId: 's1' });
+      await flushEffects();
+      const attach = container.querySelector('button[aria-label="Attach files"]') as HTMLButtonElement;
+      await act(async () => { attach.click(); await Promise.resolve(); });
+      await flushEffects();
+      const chip = container.querySelector('[data-testid="chip-strip"] [data-testid="attachment-chip"]');
+      expect(chip?.getAttribute('data-local')).toBe('true');
+      expect(chip?.getAttribute('title')).toBe('/Users/me/big.bin');
+      // Nothing to confirm: no "uploaded" check on a path chip.
+      expect(container.querySelector('[data-testid="chip-strip"] [data-testid="chip-check"]')).toBeNull();
+      await act(async () => { typeInComposer('how big?'); });
+      const send = container.querySelector('button[aria-label="Send"]') as HTMLButtonElement;
+      await act(async () => { send.click(); await Promise.resolve(); });
+      expect(injectCalls.length).toBe(1);
+      expect(injectCalls[0][4]).toEqual([
+        { path: '/Users/me/big.bin', mime: 'application/octet-stream', size: big, local: true },
+      ]);
+      expect(uploaded).toBe(false);
+      expect(container.textContent ?? '').toContain('big.bin');
+    } finally {
+      delete (window as unknown as { pywebview?: unknown }).pywebview;
+    }
+  });
+
   it('disables Send while an upload is in flight', async () => {
     uploadFileMock = () => new Promise(() => {}); // never settles
     await renderChat({ agentStatus: 'idle', sessionId: 's1' });

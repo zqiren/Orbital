@@ -1208,7 +1208,8 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     handleFilePickerChange,
     handlePaste,
     handleDrop: dropAttachments,
-  } = useAttachments(projectId, { onError: setInjectError });
+    openPicker,
+  } = useAttachments(projectId, { onError: setInjectError, localPaths: true });
   // Spec 078 §5.4 — annotation drafts the panel staged for THIS session. The
   // store is module-level so the panel (which lives in ChatTab) and the
   // composer share one list without prop drilling through the shell.
@@ -3520,11 +3521,10 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     localNoncesRef.current.set(nonce, 0);
 
-    const attachmentsPayload = doneAttachments.map((a) => ({
-      path: a.uploadedPath!,
-      mime: a.mime,
-      size: a.size,
-    }));
+    const attachmentsPayload: { path: string; mime: string; size: number; local?: boolean }[] =
+      doneAttachments.map((a) => (a.localPath
+        ? { path: a.localPath, mime: a.mime, size: a.size, local: true }
+        : { path: a.uploadedPath!, mime: a.mime, size: a.size }));
 
     // Spec 078 §5.4 — the annotated PNGs ride the attachments list, the quotes
     // block is appended to the text. Both must be settled BEFORE the optimistic
@@ -4783,6 +4783,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                   status={a.status}
                   thumbnailUrl={a.thumbnailUrl}
                   errorMessage={a.errorMessage}
+                  localPath={a.localPath}
                   onRemove={() => removeAttachment(a.id)}
                   onRetry={a.status === 'error' ? () => retryAttachment(a.id) : undefined}
                 />
@@ -4839,7 +4840,8 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
             />
             {!bareAsk && <button
               type="button"
-              onClick={() => fileInputRef.current?.click()}
+              // Desktop app: the native dialog attaches by local path.
+              onClick={() => void openPicker(() => fileInputRef.current?.click())}
               aria-label={t('chat.attachFiles')}
               className="shrink-0 p-2 text-secondary hover:text-primary rounded max-md:min-h-[44px] max-md:min-w-[44px] max-md:flex max-md:items-center max-md:justify-center"
             >

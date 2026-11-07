@@ -11,14 +11,22 @@ them in order: validate → format → prepend to user content.
 Approach 1 (path-references only, no native multimodal): the agent reads
 the attached file via its existing `read` tool when it needs the contents.
 That keeps the feature uniform across all four sub-agent transports.
+
+Two kinds of attachment share the block: a file uploaded into the
+workspace's ``uploads/`` (browser, phone, paste) and, in the desktop app, a
+file attached by its absolute local path (nothing copied, no size cap),
+whose line ends with ``LOCAL_FILE_MARKER``.
 """
 
 from __future__ import annotations
 
 import mimetypes
 import os
+import stat
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Sequence
+
+from agent_os.daemon_v2.attachment_grants import LOCAL_FILE_MARKER
 
 if TYPE_CHECKING:  # avoid runtime circular import with agents_v2
     from agent_os.api.routes.agents_v2 import InjectAttachment
@@ -38,11 +46,57 @@ def _human_size(bytes_count: int) -> str:
     return f"{bytes_count / (1024 * 1024 * 1024):.1f} GB"
 
 
+@dataclass(frozen=True)
+class ResolvedAttachment:
+    """One validated attachment, as the prefix and the JSONL row show it.
+
+    ``local`` marks a file attached by its absolute path in the desktop app:
+    ``path`` is then its realpath and ``size`` the size on disk.
+    """
+    path: str
+    mime: str
+    size: int
+    local: bool = False
+
+    def as_row(self) -> dict:
+        """The JSONL ``attachments`` entry. An uploaded file keeps today's
+        three keys exactly; only a local file carries ``local``."""
+        row = {"path": self.path, "mime": self.mime, "size": self.size}
+        if self.local:
+            row["local"] = True
+        return row
+
+
+def resolve_local_attachment(path: str) -> str:
+    """Validate a local-file attachment and return its realpath.
+
+    The path must be absolute and resolve (symlinks followed) to an existing
+    regular file. No size cap: nothing is copied.
+    """
+    if not isinstance(path, str) or not path or "\x00" in path:
+        raise ValueError("local file path is empty or invalid")
+    if not os.path.isabs(path):
+        raise ValueError(f"local file path must be absolute: {path}")
+    real = os.path.realpath(path)
+    try:
+        st = os.stat(real)
+    except OSError:
+        raise ValueError(f"file not found: {path}")
+    if not stat.S_ISREG(st.st_mode):
+        raise ValueError(f"not a regular file: {path}")
+    return real
+
+
 def validate_attachments(
     workspace: str,
     attachments: "Sequence[InjectAttachment]",
-) -> None:
-    """Confirm each attachment exists inside the workspace and matches size.
+) -> "list[ResolvedAttachment]":
+    """Validate each attachment and return them as the prefix should show them.
+
+    An uploaded file (the default) must exist inside the workspace and match
+    its declared size. A ``local`` one (desktop app, attached by path) goes
+    through :func:`resolve_local_attachment`; its realpath and on-disk size
+    replace what the client sent.
 
     Stops at the first failure and raises ``ValueError`` with a message
     naming the offending path. Mirrors the realpath confinement check used
@@ -50,7 +104,13 @@ def validate_attachments(
     escapes are rejected.
     """
     workspace_real = os.path.realpath(workspace)
+    out: list[ResolvedAttachment] = []
     for att in attachments:
+        if getattr(att, "local", False):
+            real = resolve_local_attachment(att.path)
+            out.append(ResolvedAttachment(
+                path=real, mime=att.mime, size=os.path.getsize(real), local=True))
+            continue
         resolved = os.path.realpath(os.path.join(workspace, att.path))
         if not (
             resolved == workspace_real
@@ -67,6 +127,8 @@ def validate_attachments(
                 f"size mismatch for {att.path}: "
                 f"declared {att.size}, actual {actual}"
             )
+        out.append(ResolvedAttachment(path=att.path, mime=att.mime, size=att.size))
+    return out
 
 
 def format_prefix(attachments: "Sequence[InjectAttachment]") -> str:
@@ -83,7 +145,13 @@ def format_prefix(attachments: "Sequence[InjectAttachment]") -> str:
 
     lines = ["<attached_files>"]
     for a in attachments:
-        lines.append(f"- {a.path} ({a.mime}, {_human_size(a.size)})")
+        if getattr(a, "local", False):
+            # Desktop app: the user's own file, read in place. The agent
+            # reads it at this absolute path (every agent is granted it).
+            lines.append(f"- {a.path} ({a.mime}, {_human_size(a.size)}, "
+                         f"{LOCAL_FILE_MARKER})")
+        else:
+            lines.append(f"- {a.path} ({a.mime}, {_human_size(a.size)})")
     lines.append("</attached_files>")
     return "\n".join(lines) + "\n\n"
 

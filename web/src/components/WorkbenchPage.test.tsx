@@ -628,6 +628,48 @@ describe('Workbench — attachments (stage in the composer, upload at send)', ()
     expect(injected).toMatchObject({ content: '', attachments: [{ path: 'uploads/only.txt' }] });
   });
 
+  it('desktop app: the attach button picks by local path, nothing uploads, the inject carries the path (no size cap)', async () => {
+    const big = 50 * 1024 * 1024;
+    const pick = vi.fn(async () => [
+      { path: '/Users/me/Downloads/report.pdf', name: 'report.pdf', size: big, mime: 'application/pdf' },
+    ]);
+    (window as unknown as { pywebview: unknown }).pywebview = { api: { pick_folder: vi.fn(), pick_files: pick } };
+    try {
+      let injected: Record<string, unknown> | null = null;
+      await renderPage([], {
+        'POST /api/v2/workbench/route': () => ({ project_id: 'proj-b', by: 'model' }),
+        'POST /api/v2/agents/proj-b/new-session': () => ({ session_id: 'new-7', pinned_target: null }),
+        'POST /api/v2/agents/proj-b/inject': (init) => { injected = JSON.parse(init!.body!); return { status: 'started' }; },
+      });
+      fireEvent.click(screen.getByTestId('wb-attach'));
+      await waitFor(() => expect(screen.getByTestId('wb-chip-strip')).toBeInTheDocument());
+      const chip = within(screen.getByTestId('wb-chip-strip')).getByTestId('attachment-chip');
+      expect(chip).toHaveAttribute('data-local', 'true');
+      expect(chip).toHaveAttribute('title', '/Users/me/Downloads/report.pdf');
+      expect(chip).toHaveTextContent('report.pdf');
+      expect(chip).toHaveTextContent('50.0 MB');
+      fireEvent.change(screen.getByTestId('wb-composer-input'), { target: { value: 'size?' } });
+      fireEvent.click(screen.getByTestId('wb-composer-send'));
+      await waitFor(() => expect(injected).not.toBeNull());
+      expect(uploadMock).not.toHaveBeenCalled();
+      expect(pick).toHaveBeenCalledTimes(1);
+      expect(injected).toMatchObject({
+        content: 'size?',
+        attachments: [{ path: '/Users/me/Downloads/report.pdf', mime: 'application/pdf', size: big, local: true }],
+      });
+    } finally {
+      delete (window as unknown as { pywebview?: unknown }).pywebview;
+    }
+  });
+
+  it('not the desktop app: the attach button opens the file input and uploads at send', async () => {
+    await renderPage([]);
+    const input = screen.getByTestId('wb-attach-input') as HTMLInputElement;
+    const click = vi.spyOn(input, 'click');
+    fireEvent.click(screen.getByTestId('wb-attach'));
+    await waitFor(() => expect(click).toHaveBeenCalled());
+  });
+
   it('a failed upload: no session, the text comes back and the chips stay (the failed one offers retry)', async () => {
     uploadMock.mockRejectedValue(new Error('upload refused'));
     await renderPage([], {

@@ -76,7 +76,9 @@ function attachmentBasename(name: string): string | null {
     const idx = path.indexOf(stop);
     if (idx >= 0) path = path.slice(0, idx);
   }
-  const base = tidy(path.slice(path.lastIndexOf('/') + 1)).replace(UPLOAD_TS_RE, '');
+  // A local-file attachment (desktop app) can be a Windows path.
+  const sep = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
+  const base = tidy(path.slice(sep + 1)).replace(UPLOAD_TS_RE, '');
   return base || null;
 }
 

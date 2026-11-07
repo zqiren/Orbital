@@ -13,7 +13,8 @@
  *      the attached filenames as an `<attached_files>` list after the text;
  *   3. staged attachments upload into that project (`deps.uploadAll`). One
  *      path whatever the chip: uploads are per project, and on 自动 the
- *      project is only known after step 2;
+ *      project is only known after step 2. A desktop-app chip attached by
+ *      its local path uploads nothing: `uploadAll` passes it straight through;
  *   4. `POST /agents/{pid}/new-session` → `{session_id, pinned_target}`;
  *   5. the chat's own send: target = the picked agent (null for Orbital),
  *      else the minted `pinned_target`. The targeted first send stamps the

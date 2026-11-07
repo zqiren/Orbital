@@ -162,6 +162,7 @@ export default function ChatMessage({ message, agentName, workspace, onOpenPath 
                   mime={a.mime}
                   size={inferSize(a.sizeLabel)}
                   status="done"
+                  localPath={a.local ? a.path : undefined}
                 />
               ))}
             </div>

@@ -24,6 +24,9 @@ class PipeTransportConfig:
     resume_flag: str = "--resume"
     session_id_pattern: str = ""
     output_format_args: list[str] = field(default_factory=list)
+    # The CLI's flag that adds a readable directory (Claude Code's
+    # ``--add-dir``). Empty: the CLI has none and attached files get no flag.
+    add_dir_flag: str = ""
 
 
 CLAUDE_CODE_PIPE_CONFIG = PipeTransportConfig(
@@ -31,6 +34,7 @@ CLAUDE_CODE_PIPE_CONFIG = PipeTransportConfig(
     resume_flag="--resume",
     session_id_pattern=r'"session_id":\s*"([^"]+)"',
     output_format_args=["--output-format", "stream-json", "--verbose"],
+    add_dir_flag="--add-dir",
 )
 
 
@@ -66,6 +70,24 @@ class PipeTransport(AgentTransport):
         self._args = list(args)
         self._workspace = workspace
         self._env = env
+
+    def _attached_dir_args(self) -> list[str]:
+        """``--add-dir <folder>`` for each folder holding an attached file.
+
+        ``claude -p`` has no permission prompt to answer, so a read outside
+        its cwd is refused; ``--add-dir`` takes directories only, so the
+        attached file's folder is added. In the default permission mode that
+        grants reads there, not edits. One process per message, so each send
+        carries the grants current at that moment.
+        """
+        flag = self._config.add_dir_flag
+        if not flag:
+            return []
+        dirs = sorted({os.path.dirname(p) for p in self.granted_read_paths()})
+        out: list[str] = []
+        for d in dirs:
+            out.extend([flag, d])
+        return out
 
     def _write_system_prompt_tempfile(self) -> str | None:
         """Write self._system_prompt to a fresh temp file. Return abs path.
@@ -109,6 +131,7 @@ class PipeTransport(AgentTransport):
             args.extend([self._config.prompt_flag, message])
         if self._session_id and self._config.resume_flag:
             args.extend([self._config.resume_flag, self._session_id])
+        args.extend(self._attached_dir_args())
 
         # Inject system prompt via --append-system-prompt-file <abs-path>.
         # Cleaned up after dispatch in the finally block below.
