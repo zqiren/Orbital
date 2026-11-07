@@ -94,16 +94,8 @@ describe('TokenCostSign (spec 160 §5.3)', () => {
 
 
 describe('TokenCostSign kinds (spec 160 round 2)', () => {
-  it('skip names the agent that spends, and needs one', () => {
-    window.localStorage.setItem('orbital.locale', 'zh');
-    const { unmount } = render(<LocaleProvider><TokenCostSign n={3} kind="skip" agent="Claude Code" /></LocaleProvider>);
-    const sign = screen.getByTestId('token-cost-sign');
-    expect(sign.getAttribute('aria-label')).toBe('跳过会做什么');
-    fireEvent.click(sign);
-    expect(screen.getByTestId('token-cost-pop').textContent).toBe(
-      '跳过后，Orbital 会用 Claude Code 把导入的 3 个项目各读一遍，理出目标和现状。仅此一次，会用掉 Claude Code 的额度。');
-    unmount();
-    const { container } = render(<TokenCostSign n={3} kind="skip" agent={null} />);
+  it('importAgent needs an agent to name', () => {
+    const { container } = render(<TokenCostSign n={3} kind="importAgent" agent={null} />);
     expect(container.innerHTML).toBe('');
   });
 

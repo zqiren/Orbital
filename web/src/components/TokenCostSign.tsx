@@ -17,7 +17,7 @@ import { useT } from '../i18n/useT';
  * primary on hover/open; the bubble is a `surface-float-pop`, 280px max,
  * grown leftward from the glyph, above it unless there is no room.
  */
-export type TokenHintKind = 'key' | 'skip' | 'importKey' | 'importAgent';
+export type TokenHintKind = 'key' | 'importKey' | 'importAgent';
 
 /** The one sentence a sign means, and its accessible name. `agent` is the
  *  worker's product name (never a raw id) for the keyless kinds. Plain
@@ -31,8 +31,6 @@ export function tokenHint(
   const plural = n === 1 ? 'one' : 'other';
   const vars = { n, agent: agent ?? '' };
   switch (kind) {
-    case 'skip':
-      return { text: t(`llm.tokenHint.skip.${plural}`, vars), label: t('llm.tokenHint.skip.label') };
     case 'importKey':
       return { text: t(`importProjects.tokenHint.key.${plural}`, vars), label: t('importProjects.tokenHint.label') };
     case 'importAgent':
@@ -50,8 +48,8 @@ export default function TokenCostSign({
   onScanChange,
 }: {
   n: number;
-  /** Which action spends: saving a key (default), skipping it (the user's
-   *  own agent reads), or importing with a key / with the agent. */
+  /** Which action spends: saving a key (default), or importing with a key /
+   *  with the user's own agent. (The wizard's Skip never reads: no sign.) */
   kind?: TokenHintKind;
   agent?: string | null;
   /** Round 2 opt-out: whether the batch behind this button gets read. Lives
@@ -140,7 +138,7 @@ export default function TokenCostSign({
   useEffect(() => clearTimers, []);
 
   if (!(n >= 1)) return null;
-  if ((kind === 'skip' || kind === 'importAgent') && !agent) return null;
+  if (kind === 'importAgent' && !agent) return null;
   const { text, label } = tokenHint(t, kind, n, agent);
 
   return (

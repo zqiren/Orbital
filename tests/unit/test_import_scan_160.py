@@ -753,13 +753,31 @@ def test_settings_get_carries_the_scan_agent(store, tmp_path, monkeypatch):
     assert body["import_scan_agent"] == {"slug": "claude-code", "name": "Claude Code"}
 
 
-def test_wizard_skip_kicks(tmp_path, monkeypatch, kicks):
+def test_wizard_skip_never_scans(tmp_path, monkeypatch, kicks):
+    """Skip means skip (2026-11-07 owner call): the wizard's "Skip for now"
+    on the key step neither starts the deferred wizard import's read with the
+    user's own agent nor fires a trigger. Those projects turn ``off`` (left
+    to the first-use Scan card); a sidebar import still waiting keeps its
+    stamp, since its own import is what the user consented to."""
+    from agent_os.api.routes import settings as settings_routes
+    from agent_os.onboarding.import_scan import DEFERRED, OFF
+
     client = _settings_app(tmp_path, monkeypatch)
+    store = settings_routes._project_store
+    wiz, _ = _imported(store, tmp_path, "wiz", state=DEFERRED)
+    side, _ = _imported(store, tmp_path, "side", state=PENDING)
     client.put("/api/v2/settings", json={"sub_agents_hidden": []})
     assert kicks == []
     r = client.put("/api/v2/settings", json={"setup_api_key_skipped": True})
     assert r.status_code == 200, r.text
-    assert kicks == [("key_skipped", True)]
+    assert kicks == []
+    assert store.get_project(wiz)[import_scan.STATE_FIELD] == OFF
+    assert store.get_project(side)[import_scan.STATE_FIELD] == PENDING
+    # An older client's import_scan:true cannot turn Skip back into a scan.
+    wiz2, _ = _imported(store, tmp_path, "wiz2", state=DEFERRED)
+    client.put("/api/v2/settings", json={"setup_api_key_skipped": True, "import_scan": True})
+    assert kicks == []
+    assert store.get_project(wiz2)[import_scan.STATE_FIELD] == OFF
 
 
 def test_worker_guess_prompt_is_the_manager_text_behind_the_preamble(tmp_path):
@@ -1005,8 +1023,9 @@ def test_card_save_and_skip_with_the_switch_off(tmp_path, monkeypatch, kicks):
     c, _ = _imported(store, tmp_path, "c")
     client.put("/api/v2/settings", json={"setup_api_key_skipped": True, "import_scan": False})
     assert store.get_project(c)[import_scan.STATE_FIELD] == OFF
-    # The action's own trigger still fires; it simply finds nothing.
-    assert [k for k, _ in kicks] == ["card_created", "card_created", "card_updated", "key_skipped"]
+    # The action's own trigger still fires; it simply finds nothing. (Skip
+    # is no trigger at all: skip means skip.)
+    assert [k for k, _ in kicks] == ["card_created", "card_created", "card_updated"]
     # import_scan is never written onto the card.
     for call in settings_routes._settings_store.update_card.call_args_list:
         assert "import_scan" not in call.kwargs

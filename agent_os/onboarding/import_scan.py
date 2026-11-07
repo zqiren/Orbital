@@ -24,7 +24,11 @@ the manager writes its best guess at goals, ``PROJECT_STATE.md`` and
   comes (the user got there first): ``skipped``.
 * **Opt-out** (round 2): the sign's switch, per batch. Off on the sidebar
   import → those projects are never stamped (pre-160 behaviour). Off on a
-  key Save or the wizard's Skip → everything still waiting turns ``off``.
+  key Save → everything still waiting turns ``off``.
+* **Skip means skip** (2026-11-07 owner call, replacing round 2's "the
+  pinned worker reads them now"): the wizard's key-step Skip turns its
+  ``deferred`` imports ``off`` and fires no trigger; each project keeps its
+  first-use Scan card.
 * **Failure** (the run ends without goals, or the start fails): ``failed``,
   retried once on the next trigger, then left to today's first-use
   behaviour. A failed run's session is removed when nothing in it is the
@@ -34,7 +38,7 @@ the manager writes its best guess at goals, ``PROJECT_STATE.md`` and
   existing keyless path; else nobody, and the project stays ``pending``
   until a key or a worker arrives. The wizard imports before its key step,
   so its import is marked ``defer_scan`` and stamps without triggering: the
-  key step's Save or Skip is the trigger there. One queue, the same 2 slots,
+  key step's Save is the trigger there (its Skip reads nothing). One queue, the same 2 slots,
   for both runners.
 * The scan session is titled 项目梳理 / Project overview (the import's UI
   language), set at mint like a rename: the user's first reply does not
@@ -69,8 +73,8 @@ SKIPPED = "skipped"
 # Round 2 opt-out: the user switched the sign off for the batch behind a
 # button. Terminal, like done: the queue never picks it, nothing re-arms it.
 OFF = "off"
-# Round 4: a wizard import (``defer_scan``) waits for the key step's Save or
-# Skip — a daemon restart in between must not start it. Picked by a real
+# Round 4: a wizard import (``defer_scan``) waits for the key step's Save
+# (its Skip turns it ``off``) — a daemon restart in between must not start it. Picked by a real
 # trigger, never by the startup resume.
 DEFERRED = "deferred"
 
@@ -323,6 +327,35 @@ def turn_off_waiting(project_store) -> list[str]:
             logger.warning("import scan: could not turn off %s", pid, exc_info=True)
     if out:
         logger.info("import scan: switched off for %d project(s): %s", len(out), ", ".join(out))
+    return out
+
+
+def turn_off_deferred(project_store) -> list[str]:
+    """The wizard's key-step Skip: skip means skip (2026-11-07 owner call,
+    replacing round 2's "your agent reads them now"). Every wizard import
+    still ``deferred`` becomes ``off``, so nothing reads it until the user
+    presses the project's own first-use Scan. Other waiting projects (a
+    sidebar import) keep their stamp. Returns the ids turned off."""
+    if project_store is None:
+        return []
+    out = []
+    try:
+        projects = list(project_store.list_projects())
+    except Exception:
+        logger.warning("import scan: could not list projects", exc_info=True)
+        return []
+    for p in projects:
+        if not isinstance(p, dict) or p.get(STATE_FIELD) != DEFERRED:
+            continue
+        pid = p.get("project_id")
+        try:
+            project_store.update_project(pid, {STATE_FIELD: OFF, AT_FIELD: _now()})
+            out.append(pid)
+        except Exception:
+            logger.warning("import scan: could not turn off %s", pid, exc_info=True)
+    if out:
+        logger.info("import scan: key step skipped, %d project(s) not read: %s",
+                    len(out), ", ".join(out))
     return out
 
 

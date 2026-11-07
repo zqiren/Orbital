@@ -671,16 +671,15 @@ describe('SetupWizard — skip the key step', () => {
     const sign = await screen.findByTestId('token-cost-sign');
     expect(sign.textContent).toBe('3');
     expect(sign.nextElementSibling?.textContent).toBe('Next →');
-    // No worker ready: nothing beside Skip.
     expect(screen.getAllByTestId('token-cost-sign')).toHaveLength(1);
     cleanup();
+    // Skip means skip: even with a worker ready, nothing beside Skip.
     stubUnscanned.agent = 'Claude Code';
     mockApi({ apiKeySet: false });
     await renderAtKey();
-    const skipSign = (await screen.findAllByTestId('token-cost-sign'))
-      .find((el) => el.getAttribute('data-kind') === 'skip');
-    expect(skipSign?.textContent).toBe('3');
-    expect(skipSign?.nextElementSibling).toBe(screen.getByTestId('wizard-skip-key'));
+    await screen.findByTestId('token-cost-sign');
+    expect(screen.getAllByTestId('token-cost-sign')).toHaveLength(1);
+    expect(screen.getByTestId('wizard-skip-key').previousElementSibling).toBeNull();
     stubUnscanned.n = 0;
     stubUnscanned.agent = null;
   });
@@ -696,18 +695,14 @@ describe('SetupWizard — skip the key step', () => {
     expect(settingsPuts().slice(1)).toEqual([{ setup_api_key_skipped: true }]);
   });
 
-  it('round 2: Skip with the sign switched off sends import_scan:false', async () => {
+  it('Skip means skip: with imports waiting and a worker ready, it sends only the skip flag', async () => {
     stubUnscanned.n = 2;
     stubUnscanned.agent = 'Claude Code';
     mockApi({ apiKeySet: false });
     await renderAtKey();
-    const skipSign = (await screen.findAllByTestId('token-cost-sign'))
-      .find((el) => el.getAttribute('data-kind') === 'skip')!;
-    fireEvent.click(skipSign);
-    fireEvent.click(screen.getByTestId('token-cost-switch'));
     fireEvent.click(screen.getByTestId('wizard-skip-key'));
     await waitFor(() => expect(screen.getByText('Connect Your Accounts')).toBeTruthy());
-    expect(settingsPuts().slice(1)).toEqual([{ setup_api_key_skipped: true, import_scan: false }]);
+    expect(settingsPuts().slice(1)).toEqual([{ setup_api_key_skipped: true }]);
     stubUnscanned.n = 0;
     stubUnscanned.agent = null;
   });
