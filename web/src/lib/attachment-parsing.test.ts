@@ -134,3 +134,25 @@ describe('buildAttachmentsBlock', () => {
     ]);
   });
 });
+
+// Desktop app: a file attached by its local path (2026-11-07). The block line
+// must match the daemon's byte for byte (agent_os/api/routes/_attachment_formatter.py).
+describe('local-path attachments', () => {
+  const line =
+    "- /Users/me/My (draft).pdf (application/pdf, 50.0 MB, the user's local file, not copied)";
+
+  it('builds the same marked line the daemon writes', () => {
+    expect(buildAttachmentsBlock([
+      { path: 'uploads/a.png', mime: 'image/png', size: 2048 },
+      { path: '/Users/me/My (draft).pdf', mime: 'application/pdf', size: 50 * 1024 * 1024, local: true },
+    ])).toBe(`<attached_files>\n- uploads/a.png (image/png, 2.0 KB)\n${line}\n</attached_files>\n\n`);
+  });
+
+  it('parses it back with the size alone and the local flag', () => {
+    const out = parseAttachmentsBlock(`<attached_files>\n${line}\n</attached_files>\n\nhi`);
+    expect(out.strippedContent).toBe('hi');
+    expect(out.attachments).toEqual([
+      { path: '/Users/me/My (draft).pdf', mime: 'application/pdf', sizeLabel: '50.0 MB', local: true },
+    ]);
+  });
+});

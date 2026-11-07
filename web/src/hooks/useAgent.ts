@@ -152,7 +152,8 @@ export function useAgent() {
       content: string,
       target?: string,
       nonce?: string,
-      attachments?: Array<{ path: string; mime: string; size: number }>,
+      // `local` (desktop app): `path` is the user's file by absolute path.
+      attachments?: Array<{ path: string; mime: string; size: number; local?: boolean }>,
       sessionId?: string,
       pinned?: boolean,
       // Spec 132: the skill picked in the `/` menu; the backend re-resolves

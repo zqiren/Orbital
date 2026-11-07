@@ -8,7 +8,15 @@ export interface ParsedAttachment {
   path: string;
   mime: string;
   sizeLabel: string;
+  /** Desktop app: the user's own file, attached by its absolute path. */
+  local?: boolean;
 }
+
+/**
+ * The marker after the size on a local-file line — the daemon writes the
+ * same words (agent_os/daemon_v2/attachment_grants.py LOCAL_FILE_MARKER).
+ */
+export const LOCAL_FILE_MARKER = "the user's local file, not copied";
 
 export interface ParseAttachmentsResult {
   strippedContent: string;
@@ -45,9 +53,11 @@ export function parseAttachmentsBlock(content: string): ParseAttachmentsResult {
     const commaIdx = inside.indexOf(',');
     if (!path || commaIdx < 0) continue;
     const mime = inside.slice(0, commaIdx).trim();
-    const sizeLabel = inside.slice(commaIdx + 1).trim();
+    let sizeLabel = inside.slice(commaIdx + 1).trim();
+    const local = sizeLabel.endsWith(`, ${LOCAL_FILE_MARKER}`);
+    if (local) sizeLabel = sizeLabel.slice(0, -(LOCAL_FILE_MARKER.length + 2)).trim();
     if (!mime || !sizeLabel) continue;
-    attachments.push({ path, mime, sizeLabel });
+    attachments.push(local ? { path, mime, sizeLabel, local } : { path, mime, sizeLabel });
   }
 
   return {
@@ -62,12 +72,14 @@ export function parseAttachmentsBlock(content: string): ParseAttachmentsResult {
  * that will eventually arrive. This avoids any flicker on broadcast.
  */
 export function buildAttachmentsBlock(
-  attachments: Array<{ path: string; mime: string; size: number }>,
+  attachments: Array<{ path: string; mime: string; size: number; local?: boolean }>,
 ): string {
   if (attachments.length === 0) return '';
   const lines = ['<attached_files>'];
   for (const a of attachments) {
-    lines.push(`- ${a.path} (${a.mime}, ${humanSize(a.size)})`);
+    lines.push(a.local
+      ? `- ${a.path} (${a.mime}, ${humanSize(a.size)}, ${LOCAL_FILE_MARKER})`
+      : `- ${a.path} (${a.mime}, ${humanSize(a.size)})`);
   }
   lines.push('</attached_files>');
   return lines.join('\n') + '\n\n';

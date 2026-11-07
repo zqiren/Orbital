@@ -78,7 +78,7 @@ def _strip_machine_prefixes(text: str) -> tuple[str, str | None]:
             paren = path.rfind(" (")
             if paren > 0:
                 path = path[:paren]
-            base = _UPLOAD_TS_RE.sub("", path.rsplit("/", 1)[-1]).strip()
+            base = _UPLOAD_TS_RE.sub("", re.split(r"[\\/]", path)[-1]).strip()
             if base:
                 fallback = base
             break

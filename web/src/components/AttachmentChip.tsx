@@ -13,6 +13,9 @@ export interface AttachmentChipProps {
   status?: 'pending' | 'uploading' | 'done' | 'error';
   thumbnailUrl?: string;
   errorMessage?: string;
+  /** Desktop app: the file's absolute path. Shown on hover; no upload, so
+   *  no uploaded check either. */
+  localPath?: string;
   onRemove?: () => void;
   onRetry?: () => void;
 }
@@ -29,6 +32,7 @@ export default function AttachmentChip({
   status,
   thumbnailUrl,
   errorMessage,
+  localPath,
   onRemove,
   onRetry,
 }: AttachmentChipProps) {
@@ -36,7 +40,7 @@ export default function AttachmentChip({
   const isImage = mime.startsWith('image/');
   const isError = status === 'error';
   const isPendingOrUploading = status === 'pending' || status === 'uploading';
-  const isDone = status === 'done';
+  const isDone = status === 'done' && !localPath;
 
   const baseClass = [
     'inline-flex items-center gap-2 rounded-md border px-2 py-1 text-xs',
@@ -53,7 +57,8 @@ export default function AttachmentChip({
     <div
       className={baseClass}
       data-testid="attachment-chip"
-      title={isError && errorMessage ? errorMessage : filename}
+      data-local={localPath ? 'true' : undefined}
+      title={isError && errorMessage ? errorMessage : (localPath ?? filename)}
     >
       {isImage && thumbnailUrl ? (
         <img
@@ -71,7 +76,7 @@ export default function AttachmentChip({
       <div className="flex flex-col min-w-0">
         <span
           className="truncate max-w-[140px] font-medium"
-          title={filename}
+          title={localPath ?? filename}
         >
           {truncated}
         </span>

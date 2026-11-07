@@ -683,7 +683,9 @@ class ACPSDKTransport(AgentTransport):
         options: list[PermissionOption],
         **kwargs: Any,
     ) -> RequestPermissionResponse:
-        if self._permission_mode == "auto":
+        if self._permission_mode == "auto" or self._is_attached_file_read(tool_call):
+            # An attached file (desktop app, by local path) is the user's
+            # grant: a read of exactly that file is allowed in every mode.
             option = _choose_permission_option(options, approved=True)
             if option is None:
                 return RequestPermissionResponse(outcome=DeniedOutcome(outcome="cancelled"))
@@ -720,6 +722,16 @@ class ACPSDKTransport(AgentTransport):
         finally:
             self._pending_approvals.pop(request_id, None)
             self._pending_approval_data.pop(request_id, None)
+
+    def _is_attached_file_read(self, tool_call: Any) -> bool:
+        """A ``read`` tool call whose every location is an attached file."""
+        if getattr(tool_call, "kind", None) != "read":
+            return False
+        paths = [getattr(loc, "path", None) for loc in (getattr(tool_call, "locations", None) or [])]
+        raw = getattr(tool_call, "raw_input", None)
+        if not paths and isinstance(raw, dict):
+            paths = [raw.get(k) for k in ("path", "file_path", "filePath") if raw.get(k)]
+        return bool(paths) and all(self.read_is_granted(p) for p in paths)
 
     async def respond_to_permission(self, permission_id: str, approved: bool) -> None:
         data = self._pending_approval_data.get(permission_id)

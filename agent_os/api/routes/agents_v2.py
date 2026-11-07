@@ -24,7 +24,7 @@ from fastapi import APIRouter, HTTPException, Query, UploadFile, File
 from fastapi.responses import JSONResponse
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from agent_os.agent.providers.types import (
     AUTH_FAILURE_PHRASES, is_rejected_credential, unwrap_provider_message,
@@ -179,35 +179,37 @@ class StartAgentRequest(BaseModel):
 
 _MIME_PATTERN = re.compile(r"^[\w.+-]+/[\w.+-]+$")
 
+# Uploads into ``uploads/`` are capped (files_v2.MAX_UPLOAD_BYTES); a local
+# file attached by path in the desktop app is never copied, so it has no cap.
+_UPLOAD_ATTACHMENT_MAX = 10 * 1024 * 1024
+
 
 class InjectAttachment(BaseModel):
     """A single attachment reference passed to /inject.
 
-    The path is workspace-relative (the upload endpoint stores files under
-    ``uploads/`` by default). The route validates the path resolves inside
-    the workspace and that the declared size matches the file on disk
+    Uploaded (default): ``path`` is workspace-relative (the upload endpoint
+    stores files under ``uploads/``). The route validates the path resolves
+    inside the workspace and that the declared size matches the file on disk
     before building the ``<attached_files>...</attached_files>`` prefix.
+
+    ``local=True`` (desktop app, attach by path): ``path`` is the absolute path
+    of the user's own file, read in place; the route realpaths it, requires a
+    regular file, and takes the size from disk. No size cap. An old SPA never
+    sends ``local``; an old daemon would refuse the absolute path (422).
     """
 
     path: str
     mime: str
     size: int
+    local: bool = False
 
     @field_validator("path")
     @classmethod
-    def reject_absolute_or_traversal(cls, v: str) -> str:
-        if not v or len(v) > 1024:
+    def reject_empty_or_nul(cls, v: str) -> str:
+        if not v or len(v) > 4096:
             raise ValueError("path empty or too long")
-        if v.startswith("/") or v.startswith("\\"):
-            raise ValueError("path must be relative")
         if "\x00" in v:
             raise ValueError("path contains NUL")
-        # Normalise backslash separators before splitting so a Windows-style
-        # relative path like ``uploads\\foo.png`` is treated the same as
-        # ``uploads/foo.png`` for the purpose of '..' detection.
-        parts = v.replace("\\", "/").split("/")
-        if any(p == ".." for p in parts):
-            raise ValueError("path may not contain '..' segments")
         return v
 
     @field_validator("mime")
@@ -220,57 +222,30 @@ class InjectAttachment(BaseModel):
     @field_validator("size")
     @classmethod
     def validate_size(cls, v: int) -> int:
-        if v < 0 or v > 10 * 1024 * 1024:
-            raise ValueError("size out of range (0..10MB)")
+        if v < 0:
+            raise ValueError("size out of range")
         return v
 
-
-_MIME_PATTERN = re.compile(r"^[\w.+-]+/[\w.+-]+$")
-
-
-class InjectAttachment(BaseModel):
-    """A single attachment reference passed to /inject.
-
-    The path is workspace-relative (the upload endpoint stores files under
-    ``uploads/`` by default). The route validates the path resolves inside
-    the workspace and that the declared size matches the file on disk
-    before building the ``<attached_files>...</attached_files>`` prefix.
-    """
-
-    path: str
-    mime: str
-    size: int
-
-    @field_validator("path")
-    @classmethod
-    def reject_absolute_or_traversal(cls, v: str) -> str:
-        if not v or len(v) > 1024:
+    @model_validator(mode="after")
+    def check_kind(self) -> "InjectAttachment":
+        v = self.path
+        if self.local:
+            if not os.path.isabs(v):
+                raise ValueError("local file path must be absolute")
+            return self
+        if len(v) > 1024:
             raise ValueError("path empty or too long")
         if v.startswith("/") or v.startswith("\\"):
             raise ValueError("path must be relative")
-        if "\x00" in v:
-            raise ValueError("path contains NUL")
         # Normalise backslash separators before splitting so a Windows-style
         # relative path like ``uploads\\foo.png`` is treated the same as
         # ``uploads/foo.png`` for the purpose of '..' detection.
         parts = v.replace("\\", "/").split("/")
         if any(p == ".." for p in parts):
             raise ValueError("path may not contain '..' segments")
-        return v
-
-    @field_validator("mime")
-    @classmethod
-    def validate_mime(cls, v: str) -> str:
-        if not _MIME_PATTERN.match(v):
-            raise ValueError("invalid mime type")
-        return v
-
-    @field_validator("size")
-    @classmethod
-    def validate_size(cls, v: int) -> int:
-        if v < 0 or v > 10 * 1024 * 1024:
+        if self.size > _UPLOAD_ATTACHMENT_MAX:
             raise ValueError("size out of range (0..10MB)")
-        return v
+        return self
 
 
 class InjectSkill(BaseModel):
@@ -1920,13 +1895,20 @@ async def inject_message(project_id: str, req: InjectRequest):
     if req.attachments:
         workspace = project.get("workspace", "")
         try:
-            validate_attachments(workspace, req.attachments)
+            resolved_attachments = validate_attachments(workspace, req.attachments)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=f"Invalid attachment: {e}")
-        attach_prefix = format_prefix(req.attachments)
+        attach_prefix = format_prefix(resolved_attachments)
         attachment_dicts: list[dict] | None = [
-            a.model_dump() for a in req.attachments
+            a.as_row() for a in resolved_attachments
         ]
+        # A file attached by its local path is the user's grant: every agent
+        # of this project may read exactly that file (manager read tool in
+        # safe mode, and each worker's own permission mechanism).
+        local_paths = [a.path for a in resolved_attachments if a.local]
+        if local_paths:
+            from agent_os.daemon_v2 import attachment_grants
+            attachment_grants.grant(project_id, local_paths)
     else:
         attach_prefix = ""
         attachment_dicts = None

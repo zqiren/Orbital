@@ -972,6 +972,13 @@ class ShellTool(Tool):
             command = arguments.get("command", "")
             meta = self._detect_network(command)
             external_paths = self._detect_external_paths(command)
+            if external_paths and self._project_id:
+                # A file the user attached by its local path (desktop app) is
+                # project context by the user's choice: no focus warning.
+                from agent_os.daemon_v2 import attachment_grants
+                external_paths = [
+                    p for p in external_paths
+                    if not attachment_grants.is_granted(self._project_id, p)]
 
             # Spec 117: the project's switch decides first; then the legacy
             # rule — provider path only when a real provider is set up (not

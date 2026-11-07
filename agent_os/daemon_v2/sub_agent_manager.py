@@ -1260,6 +1260,14 @@ class SubAgentManager:
         except ValueError as e:
             return f"Error: unsupported transport in manifest: {e}"
 
+        # Files the user attached by local path are readable by this worker:
+        # the transport answers its CLI's own permission ask for exactly
+        # those files. Read live per ask, so a file attached later counts.
+        if transport is not None and hasattr(transport, "set_read_grants"):
+            from agent_os.daemon_v2 import attachment_grants
+            transport.set_read_grants(
+                lambda _pid=project_id: attachment_grants.granted(_pid))
+
         # Honesty downgrade: a record existed and its source was live, but
         # the resolved transport cannot resume (e.g. pipe fallback when the
         # SDK is unavailable). Never claim "resumed" for a thread the
