@@ -46,6 +46,9 @@ cd "$PROJECT_ROOT"
 # provides the real signal. Export it so uvicorn's child inherits it; a caller
 # that deliberately wants sends can pre-set AGENT_OS_TELEMETRY_DISABLED=0.
 export AGENT_OS_TELEMETRY_DISABLED="${AGENT_OS_TELEMETRY_DISABLED:-1}"
+# Spec 161: the daemon builds its own loopback URL (/mcp, the dispatch tool
+# pinned workers get) from this; the packaged app sets it the same way.
+export AGENT_OS_PORT="$PORT"
 "${PYTHON:-python3}" -m uvicorn agent_os.api.app:create_app --factory --port "$PORT" --host 0.0.0.0 &
 DAEMON_PID=$!
 echo "  Daemon PID: $DAEMON_PID"

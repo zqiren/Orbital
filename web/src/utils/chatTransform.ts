@@ -811,6 +811,22 @@ function isOnboardingInstructionMarker(msg: ChatMessage, prev: ChatMessage | und
 }
 
 /**
+ * True for the dispatch marker that carries a `worker_result` row's text to
+ * the same worker (spec 161): the row directly after it, nothing else. Same
+ * rule as the onboarding instruction marker above.
+ */
+function isWorkerResultMarker(msg: ChatMessage | undefined, delivery: ChatMessage): boolean {
+  if (!msg || msg.role !== 'system' || delivery.role !== 'user') return false;
+  const meta = msg._meta;
+  if (!meta || !meta.dispatch_id) return false;
+  const content = typeof meta.display_content === 'string' ? meta.display_content : (msg.content ?? '');
+  const sent = content.match(/^\[Sub-agent\]\s+Message sent to\s+([\w.-]+):/);
+  if (!sent) return false;
+  const handle = typeof meta.handle === 'string' && meta.handle ? meta.handle : sent[1];
+  return handle === delivery.target;
+}
+
+/**
  * The worker bubble for a `sub_agent_terminal` completed row carrying
  * `_meta.reply`, or null when the row has no reply or the worker's bubble for
  * this turn is already drawn (searching back to the user's last message).
@@ -1150,6 +1166,18 @@ export function transformChatHistory(
         },
       });
       i++;
+      continue;
+    }
+
+    // Spec 161: the daemon's turn handing a dispatched worker's result back
+    // to the worker that dispatched it. Its user row is an instruction to
+    // that worker, not the user's message, and the dispatch marker right
+    // after it only previews the same text. The worker's reply that follows
+    // is an ordinary row and renders as its bubble. Deliberately NOT the
+    // memory_record branch below: that one also swallows sub_agent rows.
+    if (msg._kind === 'worker_result') {
+      i++;
+      if (isWorkerResultMarker(messages[i], msg)) i++;
       continue;
     }
 

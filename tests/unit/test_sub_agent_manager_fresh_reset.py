@@ -56,7 +56,7 @@ def test_fresh_send_stops_live_adapter_then_respawns_fresh():
         return f"Stopped {handle}"
 
     async def fake_start(project_id, handle, depth=0, *, session_id=None,
-                         announce=True, fresh=False, pinned=False):
+                         announce=True, fresh=False, pinned=False, initiator="management_agent"):
         calls["start"].append({"handle": handle, "fresh": fresh, "announce": announce})
         skk = make_session_key(project_id, session_id)
         mgr._adapters.setdefault(skk, {})[handle] = _FakeAdapter(
@@ -154,7 +154,8 @@ def _instrument(mgr, *, determine_returns):
         return determine_returns
 
     def _capture_resolve(manifest, config_dict, autonomy=None,
-                         system_prompt=None, resume_record=None):
+                         system_prompt=None, resume_record=None,
+                         dispatch_mcp=None):
         state["resume_record"] = resume_record
         # Bail out cleanly — the method catches ValueError from transport
         # resolution and returns, so nothing past this point executes.

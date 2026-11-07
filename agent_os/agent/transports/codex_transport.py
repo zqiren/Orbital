@@ -133,6 +133,10 @@ WINDOWS_SANDBOX_NOTE = (
 # non-decision response shape and never fired in the probe — it (and any
 # other unknown surface) gets a JSON-RPC error: fail-visible, never hang
 # (an unanswered server request blocks codex indefinitely).
+# Spec 161: mirrors agent_os.daemon_v2.dispatch_tools.TOKEN_ENV (kept literal
+# so the transport layer does not import the daemon layer).
+_DISPATCH_TOKEN_ENV = "ORBITAL_DISPATCH_TOKEN"
+
 _APPROVAL_METHODS = {
     "item/commandExecution/requestApproval": "commandExecution",
     "item/fileChange/requestApproval": "fileChange",
@@ -153,8 +157,13 @@ class CodexTransport(AgentTransport):
 
     def __init__(self, autonomy: "Autonomy | None" = None,
                  resume_record: dict | None = None,
-                 external_sandbox: bool = False):
+                 external_sandbox: bool = False,
+                 dispatch_url: str | None = None):
         record = resume_record or {}
+        # Spec 161: the daemon's dispatch MCP endpoint when this worker sits
+        # at the top of its session (the token is in the spawn env under
+        # ORBITAL_DISPATCH_TOKEN), else None.
+        self._dispatch_url: str | None = dispatch_url
         # Same attribute name as SDKTransport: the manager's honesty
         # downgrade (sub_agent_manager.py ~731) compares it to the record.
         self._resume_session_id: str | None = record.get("session_id")
@@ -737,8 +746,27 @@ class CodexTransport(AgentTransport):
 
     @staticmethod
     def _orbital_env_of(env: dict | None) -> dict[str, str]:
-        """The spawn env's ORBITAL_* (session, project, agent attribution)."""
-        return {k: str(v) for k, v in (env or {}).items() if k.startswith("ORBITAL_")}
+        """The spawn env's ORBITAL_* (session, project, agent attribution).
+
+        Never the dispatch token (spec 161): codex reads it itself to build
+        the MCP header; in the thread's shell env every command would see it."""
+        return {k: str(v) for k, v in (env or {}).items()
+                if k.startswith("ORBITAL_") and k != _DISPATCH_TOKEN_ENV}
+
+    def _dispatch_argv(self) -> list[str]:
+        """The app-server's own ``-c`` pairs mounting Orbital's dispatch MCP
+        server (spec 161). Scoped to that one server: its url, the env var
+        holding the bearer token, and approval. Codex refuses an MCP call that
+        needs approval under ``approvalPolicy: never`` (probe 2026-11-06), and
+        Orbital's own tool is approved by the user putting this worker in the
+        seat; Codex's policy for every other tool is untouched."""
+        if not self._dispatch_url:
+            return []
+        return [
+            "-c", f"mcp_servers.orbital.url={self._dispatch_url}",
+            "-c", f"mcp_servers.orbital.bearer_token_env_var={_DISPATCH_TOKEN_ENV}",
+            "-c", 'mcp_servers.orbital.default_tools_approval_mode="approve"',
+        ]
 
     @staticmethod
     def _argv_model(args: list[str]) -> str | None:
@@ -879,7 +907,7 @@ class CodexTransport(AgentTransport):
         # the on-disk ChatGPT-OAuth login is the auth path (FINDINGS Q7).
         binary = command or "codex"
         self._popen = await asyncio.create_subprocess_exec(
-            binary, "app-server",
+            binary, "app-server", *self._dispatch_argv(),
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,

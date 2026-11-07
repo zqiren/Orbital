@@ -49,6 +49,13 @@ _TOOL_CATEGORY: dict[str, str] = {
 }
 
 
+# Spec 161: Orbital's own dispatch tool, served to the top-of-session worker
+# over the daemon's MCP endpoint. Approved by NAME under check-in: the user
+# put this worker in the seat, and handing work on is what the seat does.
+# Claude Code's native ``Agent`` (the DELEGATE class) keeps prompting.
+_APPROVED_BY_NAME = frozenset({"mcp__orbital__dispatch"})
+
+
 def classify_tool(tool_name: str) -> str:
     """Return the risk category for *tool_name*.
 
@@ -62,12 +69,14 @@ def should_auto_approve(tool_name: str, autonomy: Autonomy) -> bool:
 
     Policy:
         HANDS_OFF  — auto-approve everything.
-        CHECK_IN   — auto-approve ``read`` tools only.
+        CHECK_IN   — auto-approve ``read`` tools and ``mcp__orbital__dispatch``.
         SUPERVISED — never auto-approve (surface every request).
     """
     if autonomy is Autonomy.HANDS_OFF:
         return True
     if autonomy is Autonomy.SUPERVISED:
         return False
-    # CHECK_IN: only read tools are auto-approved
+    # CHECK_IN: read tools, plus Orbital's own dispatch tool by name
+    if tool_name in _APPROVED_BY_NAME:
+        return True
     return classify_tool(tool_name) == READ

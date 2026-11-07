@@ -179,7 +179,7 @@ class SDKTransport(AgentTransport):
 
     def __init__(self, autonomy: "Autonomy | None" = None, system_prompt: str | None = None,
                  resume_session_id: str | None = None, model: str | None = None,
-                 effort: str | None = None):
+                 effort: str | None = None, dispatch_mcp: dict | None = None):
         if not HAS_SDK:
             raise ImportError("claude-agent-sdk is not installed")
         self._client: "ClaudeSDKClient | None" = None
@@ -244,6 +244,10 @@ class SDKTransport(AgentTransport):
         # Optional system prompt. Forwarded to ClaudeAgentOptions(system_prompt=...)
         # at start() time. Used by sub-agent inheritance flow.
         self._system_prompt: str | None = system_prompt
+        # Spec 161: ``{"url", "token"}`` of the daemon's dispatch MCP endpoint
+        # when this worker sits at the top of its session, else None. The
+        # token travels only as the server's Authorization header.
+        self.dispatch_mcp: dict | None = dispatch_mcp
 
     @staticmethod
     def claude_project_slug(workspace: str) -> str:
@@ -325,6 +329,14 @@ class SDKTransport(AgentTransport):
             }
         if self._resume_session_id is not None:
             options_kwargs["resume"] = self._resume_session_id
+        if self.dispatch_mcp:
+            # Added beside the user's own MCP servers (no strict mode); the
+            # CLI names the tool mcp__orbital__dispatch.
+            options_kwargs["mcp_servers"] = {"orbital": {
+                "type": "http",
+                "url": self.dispatch_mcp["url"],
+                "headers": {"Authorization": f"Bearer {self.dispatch_mcp['token']}"},
+            }}
         if self._model is not None:
             options_kwargs["model"] = self._model
         if self._effort is not None and "effort" in getattr(

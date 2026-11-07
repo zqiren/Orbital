@@ -17,6 +17,16 @@ from agent_os.telemetry.diagnostics import classify_stderr
 
 logger = logging.getLogger(__name__)
 
+# Spec 161: ``initiator`` prefix of a dispatch the top-of-session worker made
+# (mirrors dispatch_tools.WORKER_INITIATOR_PREFIX).
+_WORKER_PREFIX = "worker:"
+
+
+def _did_not_finish(child: str, reason: str) -> str:
+    """What the dispatching worker reads when its child ended without a result."""
+    return (f"Your dispatched worker {child} did not finish: {reason}. "
+            "Decide what to do next.")
+
 
 class LifecycleObserver:
     """Observes sub-agent state transitions and injects trace messages
@@ -62,6 +72,17 @@ class LifecycleObserver:
         # wakes, exactly like a pinned dispatch. False falls through to
         # today's wake (no matching item, or the item asked to be reviewed).
         self.queue_terminal_hook = None
+        # Spec 161: a dispatch made by the worker at the top of the session
+        # (``initiator="worker:<parent>"``) — child key -> parent handle. The
+        # child's marker and terminals then stamp ``suppress_wake`` (the
+        # Orbital loop is not the one waiting) and each terminal is handed to
+        # ``worker_terminal_hook`` so the parent hears it as its next turn.
+        # Like the pinned set, an entry is only replaced by a later dispatch
+        # to the same child, so a straggler terminal still reaches the parent.
+        self._worker_dispatches: dict[tuple[str, str | None, str], str] = {}
+        # ``(project_id, session_id, parent, *, child, kind, content) -> None``,
+        # wired at app assembly to ``AgentManager._deliver_worker_result``.
+        self.worker_terminal_hook = None
 
     def set_dispatch_initiator(self, project_id: str, handle: str,
                                initiator: str, *,
@@ -83,6 +104,55 @@ class LifecycleObserver:
             self._queue_dispatches.add(key)
         else:
             self._queue_dispatches.discard(key)
+        if isinstance(initiator, str) and initiator.startswith(_WORKER_PREFIX):
+            self._worker_dispatches[key] = initiator[len(_WORKER_PREFIX):]
+        else:
+            self._worker_dispatches.pop(key, None)
+
+    def parent_of(self, project_id: str, handle: str,
+                  session_id: str | None) -> str | None:
+        """The worker that dispatched this handle's current turn (spec 161)."""
+        return self._worker_dispatches.get((project_id, session_id, handle))
+
+    def children_of(self, project_id: str, session_id: str | None,
+                    parent: str) -> list[str]:
+        """Handles whose latest dispatch came from ``parent`` (spec 161)."""
+        return [h for (pid, sid, h), p in self._worker_dispatches.items()
+                if pid == project_id and sid == session_id and p == parent]
+
+    def initiator_of(self, project_id: str, handle: str,
+                     session_id: str | None) -> str:
+        """This handle's own last initiator, as far as the registries know:
+        the one a daemon follow-up turn to it should carry (spec 161)."""
+        key = (project_id, session_id, handle)
+        if key in self._queue_dispatches:
+            return "queue_item"
+        if key in self._pinned_dispatches:
+            return "user_pinned"
+        return "management_agent"
+
+    def _parent_for(self, project_id: str, handle: str, session_id: str | None,
+                    initiator: str | None = None) -> str | None:
+        if initiator is not None:
+            if initiator.startswith(_WORKER_PREFIX):
+                return initiator[len(_WORKER_PREFIX):]
+            return None
+        return self.parent_of(project_id, handle, session_id)
+
+    def _fire_worker_terminal_hook(self, project_id: str, session_id: str | None,
+                                   parent: str, *, child: str, kind: str,
+                                   content: str) -> None:
+        """Hand a child's terminal to the worker that dispatched it. Never raises."""
+        if self.worker_terminal_hook is None:
+            return
+        try:
+            self.worker_terminal_hook(project_id, session_id, parent,
+                                      child=child, kind=kind, content=content)
+        except Exception:
+            logger.exception(
+                "worker_terminal_hook raised for %s/%s (%s -> %s)",
+                project_id, session_id, child, parent,
+            )
 
     def _is_pinned_dispatch(self, project_id: str, handle: str,
                             session_id: str | None) -> bool:
@@ -115,6 +185,11 @@ class LifecycleObserver:
             return False
         if (project_id, session_id, handle) not in self._queue_dispatches:
             return False
+        if self._has_running_children(project_id, session_id, handle):
+            # Spec 161 §5.9: this turn only handed the job on. The item
+            # settles on the follow-up turn the child's result triggers
+            # (delivered as ``queue_item``); meanwhile no verdict turn either.
+            return True
         try:
             return bool(self.queue_terminal_hook(
                 project_id, session_id, handle,
@@ -125,6 +200,18 @@ class LifecycleObserver:
                 "queue_terminal_hook raised for %s/%s (%s)",
                 project_id, session_id, handle,
             )
+            return False
+
+    def _has_running_children(self, project_id: str, session_id: str | None,
+                              handle: str) -> bool:
+        check = getattr(self._agent_manager, "has_running_children", None)
+        if not callable(check):
+            return False
+        try:
+            return bool(check(project_id, session_id, handle))
+        except Exception:
+            logger.exception("has_running_children raised for %s/%s (%s)",
+                             project_id, session_id, handle)
             return False
 
     def _absorb_terminal(self, project_id: str, handle: str,
@@ -237,7 +324,10 @@ class LifecycleObserver:
             meta["transcript_path"] = transcript_path
         if content != display_content:
             meta["display_content"] = display_content
-        if initiator in ("user_pinned", "queue_item"):
+        if (initiator in ("user_pinned", "queue_item")
+                or initiator.startswith(_WORKER_PREFIX)):
+            # worker:<parent> (spec 161): the worker at the top of the session
+            # dispatched this; it hears the result, the Orbital loop never wakes.
             # user_pinned (spec 074): while pinned the management LLM takes
             # ZERO turns — not on dispatch either. No supervision guidance:
             # nobody is supervising by design.
@@ -367,6 +457,7 @@ class LifecycleObserver:
             )
         content = llm_content + guidance
         pinned = self._is_pinned_dispatch(project_id, handle, session_id)
+        parent = self._parent_for(project_id, handle, session_id)
         # An assigned queue item closes on its worker's finish, not on a
         # manager verdict turn (2026-09-05). The row below still lands so the
         # session reads honestly; only the wake is spared.
@@ -392,10 +483,22 @@ class LifecycleObserver:
                       "display_content": display_content,
                       "reply": reply_text,
                       **({"suppress_wake": True}
-                         if (pinned or queue_settled) else {})},
+                         if (pinned or queue_settled or parent) else {})},
             )
         if pinned:
             self._fire_pinned_terminal_hook(project_id, session_id)
+        if parent:
+            delivered = (
+                f"Your dispatched worker {handle} finished. Its reply is in the "
+                "conversation above (labelled assistant). The user already sees "
+                "it; do not repeat it. Verify or continue, then reply only with "
+                "what is new."
+                if summary and summary.strip() else
+                f"Your dispatched worker {handle} finished without a reply. "
+                "Check its work, then tell the user the outcome.")
+            self._fire_worker_terminal_hook(
+                project_id, session_id, parent, child=handle, kind="completed",
+                content=delivered)
         self._ws.broadcast(project_id, {
             "type": "sub_agent.completed",
             "project_id": project_id,
@@ -471,6 +574,7 @@ class LifecycleObserver:
                        handle, project_id, session_id, error)
         content = f"[Sub-agent] {handle} stopped with error: {error}. Transcript: {transcript_path}"
         pinned = self._is_pinned_dispatch(project_id, handle, session_id)
+        parent = self._parent_for(project_id, handle, session_id)
         # A worker that errored out IS the assigned item's outcome: the
         # dispatcher blocks the item with this reason rather than spending a
         # manager turn to reach the same conclusion.
@@ -490,10 +594,14 @@ class LifecycleObserver:
                 project_id, content, session_id=session_id,
                 meta={"event": "sub_agent_terminal", "kind": "error",
                       **({"suppress_wake": True}
-                         if (pinned or queue_settled) else {})},
+                         if (pinned or queue_settled or parent) else {})},
             )
         if pinned:
             self._fire_pinned_terminal_hook(project_id, session_id)
+        if parent:
+            self._fire_worker_terminal_hook(
+                project_id, session_id, parent, child=handle, kind="error",
+                content=_did_not_finish(handle, error))
         self._ws.broadcast(project_id, {
             "type": "sub_agent.error",
             "project_id": project_id,
@@ -527,6 +635,7 @@ class LifecycleObserver:
         # (FanoutRegistry.absorb_terminal keeps the existing value when
         # passed a falsy transcript_path).
         pinned = self._is_pinned_dispatch(project_id, handle, session_id)
+        parent = self._parent_for(project_id, handle, session_id)
         queue_settled = self._settle_queue_item(
             project_id, handle, session_id, kind="failed",
             summary=reason, transcript_path="",
@@ -541,10 +650,14 @@ class LifecycleObserver:
                 project_id, content, session_id=session_id,
                 meta={"event": "sub_agent_terminal", "kind": "failed",
                       **({"suppress_wake": True}
-                         if (pinned or queue_settled) else {})},
+                         if (pinned or queue_settled or parent) else {})},
             )
         if pinned:
             self._fire_pinned_terminal_hook(project_id, session_id)
+        if parent:
+            self._fire_worker_terminal_hook(
+                project_id, session_id, parent, child=handle, kind="failed",
+                content=_did_not_finish(handle, reason))
         self._ws.broadcast(project_id, {
             "type": "sub_agent.failed",
             "project_id": project_id,
@@ -588,6 +701,7 @@ class LifecycleObserver:
             pinned = initiator == "user_pinned"
         else:
             pinned = self._is_pinned_dispatch(project_id, handle, session_id)
+        parent = self._parent_for(project_id, handle, session_id, initiator)
         absorbed = self._absorb_terminal(
             project_id, handle, session_id, kind="queue_dropped",
             summary=f"queued message dropped: {why}", transcript_path="",
@@ -603,10 +717,14 @@ class LifecycleObserver:
             await self._inject(
                 project_id, content, session_id=session_id,
                 meta={"event": "sub_agent_terminal", "kind": "queue_dropped",
-                      **({"suppress_wake": True} if pinned else {})},
+                      **({"suppress_wake": True} if (pinned or parent) else {})},
             )
         if pinned:
             self._fire_pinned_terminal_hook(project_id, session_id)
+        if parent:
+            self._fire_worker_terminal_hook(
+                project_id, session_id, parent, child=handle, kind="queue_dropped",
+                content=_did_not_finish(handle, f"queued message dropped: {why}"))
 
     async def on_user_stopped(self, project_id: str, handle: str, *,
                               terminated: list[str] | None = None,
@@ -628,6 +746,7 @@ class LifecycleObserver:
         # No transcript_path parameter on this event either — "" defers to
         # the task's already-recorded transcript path (see on_failed above).
         pinned = self._is_pinned_dispatch(project_id, handle, session_id)
+        parent = self._parent_for(project_id, handle, session_id)
         absorbed = self._absorb_terminal(
             project_id, handle, session_id, kind="stopped",
             summary=content, transcript_path="",
@@ -637,10 +756,14 @@ class LifecycleObserver:
             await self._inject(
                 project_id, content, session_id=session_id,
                 meta={"event": "sub_agent_terminal", "kind": "stopped",
-                      **({"suppress_wake": True} if pinned else {})},
+                      **({"suppress_wake": True} if (pinned or parent) else {})},
             )
         if pinned:
             self._fire_pinned_terminal_hook(project_id, session_id)
+        if parent:
+            self._fire_worker_terminal_hook(
+                project_id, session_id, parent, child=handle, kind="stopped",
+                content=_did_not_finish(handle, "stopped by user"))
         self._ws.broadcast(project_id, {
             "type": "sub_agent.stopped",
             "project_id": project_id,
@@ -669,6 +792,7 @@ class LifecycleObserver:
             f"Transcript: {transcript_path}"
         )
         pinned = self._is_pinned_dispatch(project_id, handle, session_id)
+        parent = self._parent_for(project_id, handle, session_id)
         absorbed = self._absorb_terminal(
             project_id, handle, session_id, kind="interrupted",
             summary="turn interrupted before completion",
@@ -683,10 +807,14 @@ class LifecycleObserver:
             await self._inject(
                 project_id, content, session_id=session_id,
                 meta={"event": "sub_agent_terminal", "kind": "interrupted",
-                      **({"suppress_wake": True} if pinned else {})},
+                      **({"suppress_wake": True} if (pinned or parent) else {})},
             )
         if pinned:
             self._fire_pinned_terminal_hook(project_id, session_id)
+        if parent:
+            self._fire_worker_terminal_hook(
+                project_id, session_id, parent, child=handle, kind="interrupted",
+                content=_did_not_finish(handle, "turn interrupted before completion"))
         self._ws.broadcast(project_id, {
             "type": "sub_agent.turn_interrupted",
             "project_id": project_id,

@@ -22,7 +22,9 @@ from uuid import uuid4
 
 from agent_os.agent.providers.types import is_rejected_credential
 from agent_os.agent import asks as asks_mod
-from agent_os.agent.context import ASK_CARD_KIND, MEMORY_TIDY_KIND, ContextManager, ask_card_row
+from agent_os.agent.context import (
+    ASK_CARD_KIND, MEMORY_TIDY_KIND, WORKER_RESULT_KIND, ContextManager, ask_card_row,
+)
 from agent_os.agent.loop import (
     AgentLoop,
     MEMORY_RECORD_KIND,
@@ -2783,7 +2785,30 @@ class AgentManager:
             transport = getattr(adapter, "_transport", None) if adapter is not None else None
             if getattr(transport, "dispatch_pending", False) is True:
                 return False
+        # Spec 161 §5.4: a worker it dispatched is still running, so the
+        # run is not over — its result comes back as this worker's next turn.
+        if self.has_running_children(project_id, session_id, handle):
+            return False
         return True
+
+    def has_running_children(self, project_id: str, session_id: str | None,
+                             handle: str) -> bool:
+        """True while a worker ``handle`` dispatched (spec 161) has an open
+        turn or live background work. Warm idle children do not count: their
+        routing entry stays until the next dispatch to them."""
+        sam = self._sub_agent_manager
+        observer = getattr(sam, "_lifecycle_observer", None)
+        children_of = getattr(observer, "children_of", None)
+        if not callable(children_of):
+            return False
+        for child in children_of(project_id, session_id, handle):
+            try:
+                status = sam.status(project_id, child, session_id=session_id)
+            except Exception:  # noqa: BLE001 — unknown reads as not running
+                continue
+            if status in ("running", "background-running"):
+                return True
+        return False
 
     def note_worker_asks_baseline(self, project_id: str, session_id: str,
                                   workspace: str) -> None:
@@ -2873,6 +2898,23 @@ class AgentManager:
 
     async def _send_worker_memory_record(self, project_id: str, session_id: str | None,
                                          handle: str, text: str) -> None:
+        await self._send_worker_daemon_turn(
+            project_id, session_id, handle, text,
+            kind=MEMORY_RECORD_KIND, initiator="user_pinned")
+
+    async def _send_worker_daemon_turn(self, project_id: str, session_id: str | None,
+                                       handle: str, text: str, *, kind: str,
+                                       initiator: str) -> None:
+        """A turn the daemon starts on a worker: a hidden ``role: user,
+        source: daemon`` row tagged ``kind``, then ``send``. Best-effort: a
+        failure is one warning, never a retry (spec 129 §7.2).
+
+        ``MEMORY_RECORD_KIND`` (spec 112 A6) also tags the turn's marker and
+        terminal rows through ``_worker_memory_records``; any other kind
+        (spec 161's ``WORKER_RESULT_KIND``) tags only this row, so the turn's
+        reply stays an ordinary, visible, recapped row."""
+        label = "memory reminder" if kind == MEMORY_RECORD_KIND else "worker result"
+        tags_turn = kind == MEMORY_RECORD_KIND
         key = (project_id, session_id, handle)
         try:
             row = {
@@ -2881,30 +2923,62 @@ class AgentManager:
                 "source": "daemon",
                 "target": handle,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
-                "_kind": MEMORY_RECORD_KIND,
+                "_kind": kind,
             }
             resolved = await self.persist_mention_message(project_id, session_id, row)
             key = (project_id, resolved, handle)
-            self._worker_memory_records.add(key)
+            if tags_turn:
+                self._worker_memory_records.add(key)
             dispatch_id = f"{resolved}:{uuid4().hex[:8]}"
             result = await self._sub_agent_manager.send(
                 project_id, handle, text, session_id=resolved,
-                dispatch_id=dispatch_id, initiator="user_pinned",
+                dispatch_id=dispatch_id, initiator=initiator,
             )
             if isinstance(result, str) and result.startswith("Error"):
                 self._worker_memory_records.discard(key)
-                logger.warning("memory reminder to %s not sent: %s", handle, result)
+                logger.warning("%s to %s not sent: %s", label, handle, result)
         except FileLockError as exc:
             # Spec 129 §7.2: best-effort by contract — dropped, no re-queue;
-            # the next quiet terminal asks again. One line naming the
-            # session and the file, not a 12-frame traceback.
+            # the next quiet terminal asks again (a worker result is on disk
+            # as the child's completion row; the next recap carries it). One
+            # line naming the session and the file, not a 12-frame traceback.
             self._worker_memory_records.discard(key)
             logger.warning(
-                "memory reminder to %s dropped: session %s/%s is lock-contended "
-                "past the retry budget (%s)", handle, project_id, session_id, exc)
+                "%s to %s dropped: session %s/%s is lock-contended "
+                "past the retry budget (%s)", label, handle, project_id, session_id, exc)
         except Exception:  # noqa: BLE001
             self._worker_memory_records.discard(key)
-            logger.warning("memory reminder to %s failed", handle, exc_info=True)
+            logger.warning("%s to %s failed", label, handle, exc_info=True)
+
+    def _deliver_worker_result(self, project_id: str, session_id: str | None,
+                               parent: str, *, child: str, kind: str,
+                               content: str) -> None:
+        """Spec 161 §5.3: a worker the top-of-session worker dispatched ended;
+        hand it the result as its next turn. Wired to
+        ``LifecycleObserver.worker_terminal_hook``; never raises.
+
+        The turn carries the parent's OWN last initiator, so a pinned worker
+        stays pinned and an automation's worker settles its item on this
+        follow-up (§5.9). Ordering is the per-handle FIFO's: a turn still
+        open on the parent queues this one behind it."""
+        try:
+            observer = getattr(self._sub_agent_manager, "_lifecycle_observer", None)
+            initiator_of = getattr(observer, "initiator_of", None)
+            initiator = (initiator_of(project_id, parent, session_id)
+                         if callable(initiator_of) else "user_pinned")
+            turn = self._send_worker_daemon_turn(
+                project_id, session_id, parent, content,
+                kind=WORKER_RESULT_KIND, initiator=initiator)
+            try:
+                task = asyncio.ensure_future(turn)
+            except Exception:
+                turn.close()
+                raise
+            self._background_tasks.add(task)
+            task.add_done_callback(self._background_tasks.discard)
+        except Exception:  # noqa: BLE001 — a delivery must never break a terminal
+            logger.warning("worker result for %s (from %s) not scheduled in %s/%s",
+                           parent, child, project_id, session_id, exc_info=True)
 
     async def persist_mention_message(self, project_id: str, session_id: str | None,
                                       user_msg: dict) -> str:
@@ -6782,7 +6856,8 @@ class AgentManager:
             # file as a collapsed activity line; nothing streams or
             # broadcasts while it runs, so the reply the user already has
             # stays the reply.
-            if msg.get("_kind") in ("memory_record", MEMORY_TIDY_KIND, ASK_CARD_KIND):
+            if msg.get("_kind") in ("memory_record", MEMORY_TIDY_KIND, ASK_CARD_KIND,
+                                    WORKER_RESULT_KIND):
                 return
             self._activity_translator.on_message(msg, project_id, session_id=session_id)
         return callback

@@ -167,6 +167,18 @@ def ask_card_row(ask) -> dict:
 # activity feed; the chat renders it as a collapsed capsule.
 MEMORY_TIDY_KIND = "memory_tidy"
 
+# Spec 161: the daemon's turn that hands a dispatched worker's result back to
+# the worker that dispatched it (a pinned or automation-assigned worker). Only
+# that one user row carries it: the instruction is addressed to the worker, so
+# it is never the user's message, never in the recap, and never in the Orbital
+# loop's window after a pin switch. The follow-up reply is an ordinary row.
+WORKER_RESULT_KIND = "worker_result"
+
+# Kinds the sliding window never carries (spec 112: finished record turns
+# leave together; spec 161: the worker-result instruction).
+WINDOW_EXCLUDED_KINDS = frozenset(
+    {MEMORY_RECORD_KIND, MEMORY_TIDY_KIND, ASK_CARD_KIND, WORKER_RESULT_KIND})
+
 # Frame for the per-call runtime block so the model reads it as an injected
 # runtime note rather than something the user typed (backlog #38).
 _RUNTIME_MARKER = "[runtime]"
@@ -679,7 +691,7 @@ class ContextManager:
         # progress is in, so the model is asked once (spec 142).
         sliding_window = self._session.get_recent(
             remaining,
-            exclude_kind={MEMORY_RECORD_KIND, MEMORY_TIDY_KIND, ASK_CARD_KIND},
+            exclude_kind=set(WINDOW_EXCLUDED_KINDS),
             keep_tail_kind=MEMORY_RECORD_KIND if self.include_memory_record_rows else None,
         )
 
