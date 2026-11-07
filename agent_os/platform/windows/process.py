@@ -200,11 +200,18 @@ _DeleteProcThreadAttributeList.argtypes = [ctypes.c_void_p]
 
 
 def _close_process_handles(handle: ProcessHandle) -> None:
-    """Close a launched process's handles (a finished run used to leak them)."""
+    """Close a launched process's handles (a finished run used to leak them).
+
+    The values are forgotten too. Windows reuses them, so one kept after closing
+    can come to name a later process: this ProcessHandle would then report that
+    process as its own, and a second terminate() would kill it.
+    """
     for key in ("process_handle", "thread_handle"):
         native = handle._native_handles.get(key)
         if native:
             _CloseHandle(native)
+        handle._native_handles[key] = None
+    handle._native_handles["is_alive"] = lambda: False
 
 
 # ---- ProcessLauncher ----
@@ -500,8 +507,10 @@ class ProcessLauncher:
 
     def is_running(self, handle: ProcessHandle) -> bool:
         """Check whether the process is still running."""
-        result = _WaitForSingleObject(handle._native_handles["process_handle"], 0)
-        return result == WAIT_TIMEOUT
+        native = handle._native_handles["process_handle"]
+        if native is None:
+            return False
+        return _WaitForSingleObject(native, 0) == WAIT_TIMEOUT
 
     def terminate(self, handle: ProcessHandle, timeout_sec: int = 10) -> bool:
         """Terminate a process, trying graceful shutdown first.
@@ -514,8 +523,7 @@ class ProcessLauncher:
         """
         if not self.is_running(handle):
             logger.info("Process pid=%d already exited, closing handles", handle.pid)
-            _CloseHandle(handle._native_handles["process_handle"])
-            _CloseHandle(handle._native_handles["thread_handle"])
+            _close_process_handles(handle)
             return True
 
         logger.info("Sending CTRL_BREAK_EVENT to pid=%d", handle.pid)
@@ -532,8 +540,7 @@ class ProcessLauncher:
             _TerminateProcess(handle._native_handles["process_handle"], 1)
             _WaitForSingleObject(handle._native_handles["process_handle"], 5000)
 
-        _CloseHandle(handle._native_handles["process_handle"])
-        _CloseHandle(handle._native_handles["thread_handle"])
+        _close_process_handles(handle)
 
         logger.info("Process pid=%d terminated and handles closed", handle.pid)
         return True
