@@ -14,7 +14,7 @@ import logging.handlers
 import os
 import sys
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 
@@ -840,7 +840,12 @@ def _assemble_app(app: FastAPI, data_dir: str | None) -> FastAPI:
         @app.get("/{full_path:path}")
         async def spa_fallback(full_path: str):
             nonlocal _cached_index_html
-            file_path = os.path.join(spa_dir, full_path)
+            # The route's path is URL-decoded, so it can hold ".." segments or
+            # an absolute path. Only files inside the SPA directory are served.
+            spa_root = os.path.realpath(spa_dir)
+            file_path = os.path.realpath(os.path.join(spa_root, full_path))
+            if file_path != spa_root and not file_path.startswith(spa_root + os.sep):
+                raise HTTPException(status_code=404)
             if os.path.isfile(file_path):
                 return FileResponse(file_path)
             # Serve index.html with injected __AGENT_OS_LOCAL__ flag
