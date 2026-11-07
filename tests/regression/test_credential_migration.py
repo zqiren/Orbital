@@ -94,6 +94,7 @@ class TestMigrationDoesNotClearOnKeychainFailure:
     def test_migration_does_not_clear_settings_on_keychain_failure(
         self, mock_kr, tmp_path, caplog
     ):
+        mock_kr.get_password.return_value = None
         mock_kr.set_password.side_effect = RuntimeError("Keychain locked")
 
         ss = _write_settings(tmp_path, api_key="sk-test-123")
@@ -131,9 +132,11 @@ class TestMigrationClearsOnVerifiedSuccess:
         after = ss.get()
         assert after.llm.api_key is None
 
-        # Keychain must have been called with the correct key
+        # Keychain must have been called with the correct key, under the
+        # default card's own item
+        card = ss.stored_default_card()
         mock_kr.set_password.assert_called_once_with(
-            "agent-os", "llm-api-key", "sk-test-456"
+            "agent-os", f"card:{card.id}", "sk-test-456"
         )
 
 
@@ -206,6 +209,7 @@ class TestMigrationSkipsWhenNoKey:
     @patch("agent_os.daemon_v2.credential_store._KEYRING_AVAILABLE", True)
     @patch("agent_os.daemon_v2.credential_store.keyring")
     def test_migration_skips_when_no_key(self, mock_kr, tmp_path):
+        mock_kr.get_password.return_value = None  # no legacy keychain item
         ss = _write_settings(tmp_path, api_key=None)
         cred = ApiKeyStore()
 
