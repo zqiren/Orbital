@@ -77,8 +77,12 @@ import type { BuiltinSkillKey } from '../route';
 import { publishSessionMessages, sessionMessagesKey } from '../utils/sessionMessagesStore';
 import { budgetTimelineText } from '../budget/timelineText';
 import TurnChangedLine from './history/TurnChangedLine';
-import { lastCapsuleOfTurns, stripFileEditCounts } from './history/historyModel';
-import { requestHistoryFocus, useCapsuleTurn, useSeenOnce } from '../hooks/useFileHistory';
+import { isMemoryFile, lastCapsuleOfTurns, stripFileEditCounts } from './history/historyModel';
+import { historyApi, requestHistoryFocus, useCapsuleTurn, useSeenOnce } from '../hooks/useFileHistory';
+import type { TurnRef } from './history/TurnUndoSheet';
+import { classifySessionName } from '../lib/sessionLabel';
+import { parseTriggerHeader } from '../lib/trigger-parsing';
+import { forkSessionName, rebuildEditedContent, splitUserWire, stashForkSend, takeForkSend } from '../utils/editMessage';
 
 type AgentRunItem = Extract<DisplayItem, { type: 'agent_run' }>;
 type CapsuleChild = AgentRunItem['items'][number];
@@ -840,7 +844,7 @@ interface ChatViewProps {
    * it in the docked panel slot, a bottom sheet on the phone). Absent: the
    * changed-files line shows no undo glyph.
    */
-  onUndoTurn?: (turn: { sessionId: string; fromTs: string; toTs: string | null }) => void;
+  onUndoTurn?: (turn: TurnRef | null) => void;
   /**
    * Workbench reading pane (2026-11-04): false = being on screen does not
    * check the session's reply. The pane is a glance, not the desk: the card
@@ -873,6 +877,54 @@ interface PendingInputEntry {
   rawText: string;
   hasAttachments: boolean;
   timestamp: string;
+}
+
+/** One attachment on the /inject wire. `local` (desktop app): `path` is the
+ *  user's own file, by absolute path. */
+type AttachmentPayload = { path: string; mime: string; size: number; local?: boolean };
+
+/**
+ * Spec 156 §5.7 / 164 §2.3 — one message for `postToInject`, already composed.
+ * The composer builds it from its draft; the editor from the rebuilt wire
+ * content (no `attachments` / `skill` fields: the blocks are in `content`);
+ * Retry from the latest input's raw content and its original target.
+ */
+interface InjectSend {
+  /** Where it goes. Explicit: an edit sends into the fork it just opened. */
+  sessionId: string | undefined;
+  /** The /inject `content` field. */
+  content: string;
+  /** What the optimistic bubble carries: the wire string the echo will. */
+  wireContent: string;
+  target?: string;
+  pinned: boolean;
+  attachments?: AttachmentPayload[];
+  skill?: { key: string; path: string };
+  answering?: { id: string; words: string };
+  /** The typed words, recalled by ↑ if the message queues. */
+  rawText: string;
+  /** A queued message with chips cannot be recalled (§12 R4). */
+  hasAttachments: boolean;
+  /** Shown on the error line while sending (else the line is cleared). */
+  notice?: string | null;
+  /** The send failed (the editor puts its text back in the composer). */
+  onFailed?: () => void;
+}
+
+type MessageRow = Extract<DisplayItem, { type: 'user_message' | 'agent_message' | 'sub_agent_message' }>;
+
+const QUEUE_ITEM_RE = /^\[QUEUE ITEM/;
+
+/** Spec 156 §5.1: a row 修改 / 重试 may act on — a human input persisted in
+ *  this session's log. */
+function isPersistedHumanInput(
+  item: Extract<DisplayItem, { type: 'user_message' }>,
+  optimistic: ReadonlySet<string>,
+): boolean {
+  if (item.isHistorical) return false;
+  if (optimistic.has(item.timestamp)) return false;
+  if (QUEUE_ITEM_RE.test(item.content)) return false;
+  return parseTriggerHeader(item.content).trigger === null;
 }
 
 interface PendingApproval {
@@ -1941,6 +1993,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       setTotalMessages(0);
       setLoadedOffset(0);
       setLoading(false);
+      setHistoryFor(undefined);
       return;
     }
 
@@ -1963,6 +2016,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       setTotalMessages(0);
       setLoadedOffset(CHAT_PAGE_SIZE);
       setLoading(false);
+      setHistoryFor(sessionId);
       reconcilePending();
       return;
     }
@@ -2060,7 +2114,10 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         // restores the affordance; the queued message is NOT in JSONL yet).
         if (!cancelled) reconcilePending();
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) {
+          setLoading(false);
+          setHistoryFor(sessionId);
+        }
       }
     }
 
@@ -2072,6 +2129,222 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   }, [projectId, sessionId, project.workspace, reconcilePending]);
 
   const hasMore = totalMessages > loadedOffset;
+
+  // ── Spec 156 / 164: the action row (copy · 重试 · 修改) ───────────────────
+  // Optimistic bubbles by their client timestamp: not a row in the session
+  // log yet (the history refetch replaces them with the persisted row), so
+  // neither 修改 (the fork names the row by its timestamp) nor 重试.
+  const optimisticTsRef = useRef<Set<string>>(new Set());
+  // Which bubble is the inline editor, by session + row timestamp. Not state
+  // inside the bubble: rows are keyed by list index, so a flag there would
+  // follow the index into another session (and a fork's copied rows carry the
+  // parent's timestamps).
+  const [editingRow, setEditingRow] = useState<{ sessionId: string; ts: string } | null>(null);
+  const editingTs = editingRow && editingRow.sessionId === sessionId ? editingRow.ts : null;
+  const [editBusy, setEditBusy] = useState(false);
+  const [actionToast, setActionToast] = useState<string | null>(null);
+  useEffect(() => {
+    if (!actionToast) return;
+    const id = setTimeout(() => setActionToast(null), 4000);
+    return () => clearTimeout(id);
+  }, [actionToast]);
+  // The session a history load last finished for: the edited message waits
+  // for its fork's history before it is sent there (§5.7).
+  const [historyFor, setHistoryFor] = useState<string | undefined>(undefined);
+
+  // 修改 and 重试 hide while this session works: a turn in flight (waiting on
+  // a worker or an approval counts), a worker running, a pinned send not yet
+  // answered, a message queued behind the turn. Copy stays. Another session
+  // running hides nothing.
+  const queuedHere = useMemo(
+    () => sessionId !== undefined && Array.from(pendingInputs.values()).some((e) => e.sessionId === sessionId),
+    [pendingInputs, sessionId],
+  );
+  const sessionBusy = turnInFlight || runningSubAgents.length > 0 || subAgentLoadingTarget !== null || queuedHere;
+  // Edit opens a fork (it navigates) and may offer 065's sheet (the parent
+  // mounts it): both must be wired. The Workbench pane wires neither.
+  const editWired = sessionId !== undefined && onOpenSession !== undefined && onUndoTurn !== undefined;
+
+  // The latest turn: the last user row in the loaded items, when it is a
+  // persisted human input (not optimistic or queued, not an automation run or
+  // a queue item, not another session's history). 重试 sits once, under that
+  // turn's last agent body, or under the input itself when the attempt left
+  // no body (failed, stopped). An input not loaded yet (pagination) has no
+  // row here, so there is no 重试 until it is.
+  const retryPlan = useMemo(() => {
+    let lastUser = -1;
+    for (let i = items.length - 1; i >= 0; i--) {
+      if (items[i].type === 'user_message') {
+        lastUser = i;
+        break;
+      }
+    }
+    if (lastUser < 0) return null;
+    const input = items[lastUser] as Extract<DisplayItem, { type: 'user_message' }>;
+    if (!isPersistedHumanInput(input, optimisticTsRef.current)) return null;
+    let anchor = lastUser;
+    for (let i = items.length - 1; i > lastUser; i--) {
+      const it = items[i];
+      if (
+        (it.type === 'agent_message' && !it.isHeaderOnly && it.content.length > 0) ||
+        (it.type === 'sub_agent_message' && it.content.length > 0)
+      ) {
+        anchor = i;
+        break;
+      }
+    }
+    return { anchor, input };
+  }, [items]);
+
+  // Handlers read the latest render through a ref, so the callbacks handed
+  // to the memoized rows stay stable.
+  const actionStateRef = useRef({ sessionBusy, retryPlan, editBusy });
+  actionStateRef.current = { sessionBusy, retryPlan, editBusy };
+  const actionHandlersRef = useRef<{
+    edit: (m: MessageRow) => void;
+    cancel: () => void;
+    send: (m: MessageRow, body: string) => void;
+    retry: () => Promise<unknown>;
+  } | null>(null);
+  const onEditMessage = useCallback((m: MessageRow) => actionHandlersRef.current?.edit(m), []);
+  const onEditCancel = useCallback(() => actionHandlersRef.current?.cancel(), []);
+  const onEditSend = useCallback((m: MessageRow, body: string) => actionHandlersRef.current?.send(m, body), []);
+  const onRetryMessage = useCallback(() => actionHandlersRef.current?.retry(), []);
+  // An edit whose 065 sheet is open: cancelling the editor closes it too.
+  const editSheetOpenRef = useRef(false);
+
+  /** §5.7: fork at the edited row, open the fork, and leave the message to
+   *  be sent there once its history has loaded (the effect below). */
+  async function forkAndSend(fromSession: string, m: MessageRow, content: string, body: string) {
+    editSheetOpenRef.current = false;
+    setEditBusy(true);
+    const parent = pinSessions.find((s) => s.session_id === fromSession || s.session_uuid === fromSession);
+    const parentName =
+      classifySessionName(parent?.name, parent?.origin).displayName ?? t('sessionHeading.new');
+    const name = forkSessionName(parentName, m.timestamp, t);
+    try {
+      const res = await api<{ session_id: string; session_uuid?: string; target?: string | null }>(
+        `/api/v2/agents/${encodeURIComponent(projectId)}/sessions/${encodeURIComponent(fromSession)}/fork`,
+        { method: 'POST', body: JSON.stringify({ at: m.timestamp, name }) },
+      );
+      const target = res.target ?? null;
+      stashForkSend(projectId, res.session_id, { content, target, body });
+      setEditingRow(null);
+      setLocalPin({ sessionId: res.session_id, slug: target });
+      onOpenSession?.(res.session_id);
+    } catch (err) {
+      // 409 session_running: a turn started since the row was drawn. The
+      // editor stays open with the text; anything else says the send failed.
+      setActionToast(
+        err instanceof ApiError && err.status === 409 ? t('chat.edit.busy') : t('chat.injectError'),
+      );
+    } finally {
+      setEditBusy(false);
+    }
+  }
+
+  actionHandlersRef.current = {
+    edit: (m) => {
+      if (sessionId === undefined) return;
+      setEditingRow({ sessionId, ts: m.timestamp });
+    },
+    cancel: () => {
+      setEditingRow(null);
+      if (editSheetOpenRef.current) {
+        editSheetOpenRef.current = false;
+        onUndoTurn?.(null);
+      }
+    },
+    send: (m, body) => {
+      void (async () => {
+        const fromSession = sessionId;
+        if (fromSession === undefined || actionStateRef.current.editBusy) return;
+        if (actionStateRef.current.sessionBusy) {
+          setActionToast(t('chat.edit.busy'));
+          return;
+        }
+        const content = rebuildEditedContent(m.content, body);
+        const go = () => void forkAndSend(fromSession, m, content, body);
+        // §5.6: what this session changed in the workspace from the edited
+        // message to now. Files to offer → 065's sheet first (restore, then
+        // fork, then send); none, or history unavailable / still building →
+        // straight to the fork. Memory files alone are never offered (the
+        // sheet never pre-checks them, as on a capsule's line).
+        const now = new Date().toISOString();
+        let offer = false;
+        setEditBusy(true);
+        try {
+          const span = await historyApi.turn(projectId, fromSession, m.timestamp, now);
+          offer = span.status === 'watching' && span.files.some((f) => !isMemoryFile(f.path));
+        } catch {
+          offer = false;
+        } finally {
+          setEditBusy(false);
+        }
+        if (sessionIdRef.current !== fromSession) return;
+        if (offer && onUndoTurn) {
+          editSheetOpenRef.current = true;
+          onUndoTurn({
+            sessionId: fromSession,
+            fromTs: m.timestamp,
+            toTs: now,
+            edit: {
+              onProceed: go,
+              onSendOnly: () => {
+                onUndoTurn(null);
+                go();
+              },
+            },
+          });
+          return;
+        }
+        go();
+      })();
+    },
+    retry: async () => {
+      // 164 §2.3: re-checked at click time; the latest input, raw, to its
+      // original target, into this session. No fork, no name, no sheet; the
+      // composer's draft and chips are not touched.
+      const { sessionBusy: busy, retryPlan: plan } = actionStateRef.current;
+      if (busy || !plan || sessionId === undefined) return;
+      const input = plan.input;
+      const parts = splitUserWire(input.content);
+      await postToInject({
+        sessionId,
+        content: input.content,
+        wireContent: input.content,
+        target: input.target,
+        pinned: input.target !== undefined,
+        rawText: parts.body,
+        hasAttachments: parts.prefix !== '' || parts.quotes !== null,
+      });
+    },
+  };
+
+  // §5.7: the fork is open and its history loaded — send the edited message
+  // there through the same path as the composer, with the fork's pin. A
+  // failure lands on this session's error line with the words back in the
+  // composer, so nothing typed is lost.
+  useEffect(() => {
+    if (sessionId === undefined || historyFor !== sessionId) return;
+    const pending = takeForkSend(projectId, sessionId);
+    if (!pending) return;
+    const target = pending.target ?? undefined;
+    setLocalPin({ sessionId, slug: pending.target });
+    const parts = splitUserWire(pending.content);
+    void postToInject({
+      sessionId,
+      content: pending.content,
+      wireContent: pending.content,
+      target,
+      pinned: target !== undefined,
+      rawText: pending.body,
+      hasAttachments: parts.prefix !== '' || parts.quotes !== null,
+      onFailed: () => setInputText(pending.body),
+    });
+    // postToInject is a render-scoped function; this runs once per arrival.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [historyFor, sessionId, projectId]);
 
   // Pending scroll-position compensation for prepend operations.
   // Set BEFORE setItems(...) prepends history; the layout effect below
@@ -3390,14 +3663,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       dismissAsk(cardAsk.id);
     }
 
-    // Generate nonce so we can deduplicate the WS echo of our own message
-    // crypto.randomUUID() requires secure context (HTTPS/localhost) — use fallback for LAN HTTP
-    const nonce = typeof crypto.randomUUID === 'function'
-      ? crypto.randomUUID()
-      : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    localNoncesRef.current.set(nonce, 0);
-
-    const attachmentsPayload: { path: string; mime: string; size: number; local?: boolean }[] =
+    const attachmentsPayload: AttachmentPayload[] =
       doneAttachments.map((a) => (a.localPath
         ? { path: a.localPath, mime: a.mime, size: a.size, local: true }
         : { path: a.uploadedPath!, mime: a.mime, size: a.size }));
@@ -3440,7 +3706,45 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       setAnnotationsOpen(false);
     }
 
+    await postToInject({
+      sessionId,
+      content,
+      wireContent,
+      target,
+      pinned: resolved.pinned,
+      attachments: attachmentsPayload.length > 0 ? attachmentsPayload : undefined,
+      skill: skillPayload,
+      answering,
+      rawText: text,
+      hasAttachments: attachmentsPayload.length > 0 || skill !== null,
+      // An annotated PNG that failed to render/upload still gets sent — the
+      // coordinates + note in the quotes block carry the meaning — but the
+      // user is told the image did not make it.
+      notice: annotationUploadFailed ? t('chat.uploadError') : null,
+    });
+  }
+
+  /**
+   * Spec 156 §5.7 / 164 §2.3 — the post-to-/inject half of every send: the
+   * composer, the message editor (into the fork it just opened) and Retry
+   * (back into this session). It paints the optimistic bubble, posts with a
+   * fresh nonce, and handles the queued / approval-dismissed / error answers.
+   * It never touches the composer's draft or chips: that is the caller's.
+   * Resolves true when the daemon accepted the message.
+   */
+  async function postToInject(send: InjectSend): Promise<boolean> {
+    const { sessionId: sid, content, wireContent, target } = send;
+    // Generate nonce so we can deduplicate the WS echo of our own message
+    // crypto.randomUUID() requires secure context (HTTPS/localhost) — use fallback for LAN HTTP
+    const nonce = typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    localNoncesRef.current.set(nonce, 0);
+
     const optimisticTimestamp = new Date().toISOString();
+    // Not a persisted row until the history refetch replaces it: no edit or
+    // retry on it (its timestamp names no row in the session log).
+    optimisticTsRef.current.add(optimisticTimestamp);
     setItems((prev) => {
       const afterCapsule = finalizeLiveCapsule(prev, 'completed');
       return [
@@ -3472,12 +3776,9 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     // even if they had scrolled up to read history before sending.
     scrollToBottom({ force: true });
 
-    const loading = target ? { sessionId, target } : null;
+    const loading = target ? { sessionId: sid, target } : null;
     if (loading) setSubAgentLoading(loading);
-    // An annotated PNG that failed to render/upload still gets sent — the
-    // coordinates + note in the quotes block carry the meaning — but the user
-    // is told the image did not make it.
-    setInjectError(annotationUploadFailed ? t('chat.uploadError') : null);
+    setInjectError(send.notice ?? null);
     try {
       // Serialize behind a just-fired pin PATCH: it holds the session file's
       // write lock on the backend, and an inject racing that burst gets
@@ -3489,11 +3790,11 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         content,
         target,
         nonce,
-        attachmentsPayload.length > 0 ? attachmentsPayload : undefined,
-        sessionId,
-        resolved.pinned,
-        skillPayload,
-        answering,
+        send.attachments,
+        sid,
+        send.pinned,
+        send.skill,
+        send.answering,
       );
       onUserSend?.();
       // A pinned send materialized the session on the backend — if the pin
@@ -3502,12 +3803,12 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       // optimistic update keeps `backendPin` current on success, so this
       // fires only while the stored value is actually behind.
       if (
-        resolved.pinned &&
-        sessionId !== undefined &&
+        send.pinned &&
+        sid !== undefined &&
         target !== undefined &&
         (recordedPin ?? null) !== target
       ) {
-        persistPin(sessionId, target);
+        persistPin(sid, target);
       }
       // Pending-input queue (spec 006 v3 §11d.4): the same-session 200. The
       // backend ACCEPTED + queued this message behind the VIEWED session's own
@@ -3519,21 +3820,21 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         result &&
         typeof result === 'object' &&
         result.status === 'queued_same_session' &&
-        sessionId !== undefined
+        sid !== undefined
       ) {
         setPendingInputs((prev) => {
           const next = new Map(prev);
           next.set(nonce, {
-            sessionId,
+            sessionId: sid,
             content: wireContent,
-            rawText: text,
-            hasAttachments: attachmentsPayload.length > 0 || skill !== null,
+            rawText: send.rawText,
+            hasAttachments: send.hasAttachments,
             timestamp: optimisticTimestamp,
           });
           return next;
         });
         scrollToBottom();
-        return;
+        return true;
       }
       // If the backend auto-denied a pending approval because we sent this
       // message while paused, immediately mark the approval card as denied
@@ -3572,12 +3873,15 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       // answering 404, and broadcasts `sub_agent.failed` for it. Refetch too,
       // so the row still lands when that event was missed (relay drop).
       if (target) refreshRawMessages();
+      send.onFailed?.();
+      return false;
     } finally {
       // Only this send's bubble — a later send may have replaced it.
       if (loading) setSubAgentLoading((cur) => (cur === loading ? null : cur));
     }
 
     scrollToBottom();
+    return true;
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -3942,9 +4246,35 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
             let rendered: React.ReactNode = null;
 
             if (item.type === 'user_message') {
-              rendered = <MemoChatMessage key={`msg-${index}`} message={item} workspace={project.workspace} onOpenPath={onOpenPath} />;
+              const isEditing = editingTs !== null && editingTs === item.timestamp;
+              rendered = (
+                <MemoChatMessage
+                  key={`msg-${index}`}
+                  message={item}
+                  workspace={project.workspace}
+                  onOpenPath={onOpenPath}
+                  canEdit={editWired && !sessionBusy && isPersistedHumanInput(item, optimisticTsRef.current)}
+                  canRetry={!sessionBusy && retryPlan?.anchor === index}
+                  editing={isEditing}
+                  editBusy={isEditing && editBusy}
+                  onEdit={onEditMessage}
+                  onEditCancel={onEditCancel}
+                  onEditSend={onEditSend}
+                  onRetry={onRetryMessage}
+                />
+              );
             } else if (item.type === 'agent_message' || item.type === 'sub_agent_message') {
-              rendered = <MemoChatMessage key={`msg-${index}`} message={item} agentName={project.agent_name} workspace={project.workspace} onOpenPath={onOpenPath} />;
+              rendered = (
+                <MemoChatMessage
+                  key={`msg-${index}`}
+                  message={item}
+                  agentName={project.agent_name}
+                  workspace={project.workspace}
+                  onOpenPath={onOpenPath}
+                  canRetry={!sessionBusy && retryPlan?.anchor === index}
+                  onRetry={onRetryMessage}
+                />
+              );
             } else if (item.type === 'sub_agent_activity') {
               // FE-A2: compact one-line marker for [Sub-agent] lifecycle.
               // 'error' (backlog #23 D2 — the "stopped with error:" marker)
@@ -4416,6 +4746,19 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
             }
             onDismiss={() => setAgentError(null)}
           />
+        </div>
+      )}
+
+      {/* Spec 156: an edit that could not fork (正在运行，停止后再修改). The
+          editor stays open with the text; this only says why. Above the
+          composer, clear of 065's restore toast at the window's foot. */}
+      {actionToast && (
+        <div
+          role="status"
+          data-testid="chat-action-toast"
+          className="absolute bottom-24 left-1/2 z-40 -translate-x-1/2 whitespace-nowrap rounded-[10px] bg-[#18181B] px-3.5 py-2 text-[12.5px] text-white shadow-[0_10px_30px_rgb(0_0_0/0.25)] dark:bg-[#F4F6F9] dark:text-[#18181B] max-md:fixed max-md:bottom-[112px]"
+        >
+          {actionToast}
         </div>
       )}
 

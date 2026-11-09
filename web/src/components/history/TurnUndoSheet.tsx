@@ -26,6 +26,17 @@ export interface TurnRef {
   sessionId: string;
   fromTs: string;
   toTs: string | null;
+  /**
+   * Spec 156 §5.6: the sheet opened by editing a sent message, for the span
+   * from that message to now. The primary button restores and then sends
+   * (`onProceed`, only once every checked file restored; a conflict keeps the
+   * sheet open and sends nothing); a second button sends without restoring.
+   * Absent: 065's undo sheet, unchanged.
+   */
+  edit?: {
+    onProceed: () => void;
+    onSendOnly: () => void;
+  };
 }
 
 export interface TurnUndoSheetProps {
@@ -142,6 +153,10 @@ export default function TurnUndoSheet({ projectId, turn, onView, onRestored }: T
           bumpFileHistory(projectId, { again: SETTLE_MS });
         }, ok.length === results.length);
       }
+      // Spec 156: restore, then fork, then send — only when nothing is left
+      // to look at. A conflict (or a busy / refused file) keeps the sheet
+      // open with that row amber and sends nothing.
+      if (turn.edit && ok.length === results.length) turn.edit.onProceed();
     } catch {
       setFailed(true);
     } finally {
@@ -233,8 +248,25 @@ export default function TurnUndoSheet({ projectId, turn, onView, onRestored }: T
           data-testid="turn-undo-restore"
           className="block h-9 w-full truncate rounded-[9px] bg-accent px-2.5 text-center text-[13px] font-medium text-white transition-[filter] hover:brightness-105 disabled:cursor-default disabled:opacity-35"
         >
-          {n === 1 ? t('turn.restoreSelected.one', { n }) : t('turn.restoreSelected.other', { n })}
+          {turn.edit
+            ? n === 1
+              ? t('chat.edit.restoreAndSend.one', { n })
+              : t('chat.edit.restoreAndSend.other', { n })
+            : n === 1
+              ? t('turn.restoreSelected.one', { n })
+              : t('turn.restoreSelected.other', { n })}
         </button>
+        {turn.edit && (
+          <button
+            type="button"
+            onClick={turn.edit.onSendOnly}
+            disabled={working}
+            data-testid="turn-undo-send-only"
+            className="mt-2 block h-9 w-full truncate rounded-[9px] bg-soft-button px-2.5 text-center text-[13px] font-medium text-primary transition-colors hover:bg-soft-button-hover disabled:cursor-default disabled:opacity-35"
+          >
+            {t('chat.edit.sendOnly')}
+          </button>
+        )}
       </div>
     </div>
   );

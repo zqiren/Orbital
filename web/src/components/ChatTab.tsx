@@ -347,7 +347,12 @@ export default function ChatTab({
       onRestored={handleUndoRestored}
     />
   );
-  const undoTitle = <span className="text-[15px] font-semibold text-primary">{t('turn.sheetTitle')}</span>;
+  // Spec 156 §5.6: the same sheet, opened by editing a sent message.
+  const undoTitle = (
+    <span className="text-[15px] font-semibold text-primary">
+      {t(undoTurn?.edit ? 'chat.edit.sheetTitle' : 'turn.sheetTitle')}
+    </span>
+  );
 
   const clearPreviewPath = useCallback(() => {
     setRoute((prev) =>

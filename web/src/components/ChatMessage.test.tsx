@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { fireEvent, render, screen } from '@testing-library/react';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import ChatMessage from './ChatMessage';
 import type { DisplayItem } from '../utils/chatTransform';
 import { QUOTES_HEADING } from '../utils/annotations';
@@ -344,5 +344,173 @@ describe('ChatMessage — the agent body leaves room for card shadows', () => {
     expect(body).toBeTruthy();
     const cls = body!.className.split(/\s+/);
     for (const c of ['-mx-4', 'px-4', '-my-1.5', 'py-1.5']) expect(cls).toContain(c);
+  });
+});
+
+// ─── Spec 156 §5.1/§5.2 + 164: the action row under the message ────────────
+
+describe('ChatMessage — action row (spec 156 §5.1, 164)', () => {
+  beforeEach(() => {
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText: async () => undefined },
+      configurable: true,
+      writable: true,
+    });
+  });
+
+  it('copy sits in the row under the message, not on the label line', () => {
+    const { container } = render(<ChatMessage message={userMsg('hello')} />);
+    const row = screen.getByTestId('message-actions');
+    expect(row).toContainElement(screen.getByTestId('user-message-copy'));
+    // The label line keeps "you · HH:MM" and nothing else.
+    const label = container.querySelector('.font-mono') as HTMLElement;
+    expect(label.querySelector('button')).toBeNull();
+    // Out of flow in the gap, so hover moves nothing; always on below md.
+    expect(row.className).toContain('absolute');
+    expect(row.className).toContain('top-full');
+    expect(row.className).toContain('group-hover:opacity-100');
+    expect(row.className).toContain('max-md:opacity-100');
+  });
+
+  it('copy on every message with a body: user, agent, sub-agent', () => {
+    render(
+      <>
+        <ChatMessage message={userMsg('q')} />
+        <ChatMessage message={agentMsg('a')} />
+        <ChatMessage message={{ type: 'sub_agent_message', content: 'w', source: 'codex', timestamp: '2026-04-30T10:23:00Z' }} />
+      </>,
+    );
+    expect(screen.getAllByTestId('user-message-copy')).toHaveLength(1);
+    expect(screen.getAllByTestId('agent-message-copy')).toHaveLength(2);
+  });
+
+  it('an attachment-only message has no copy (no body)', () => {
+    render(<ChatMessage message={userMsg('<attached_files>\n- uploads/x.txt (text/plain, 11 B)\n</attached_files>\n\n')} />);
+    expect(screen.queryByTestId('user-message-copy')).toBeNull();
+    expect(screen.queryByTestId('message-actions')).toBeNull();
+  });
+
+  it('修改 only on the user row, and only when ChatView allows it', () => {
+    const onEdit = vi.fn();
+    const { rerender } = render(<ChatMessage message={userMsg('q')} canEdit onEdit={onEdit} />);
+    fireEvent.click(screen.getByTestId('message-edit'));
+    expect(onEdit).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('message-edit')).toHaveAttribute('aria-label', 'Edit');
+    // Running (or any other gate): ChatView passes canEdit=false; copy stays.
+    rerender(<ChatMessage message={userMsg('q')} canEdit={false} onEdit={onEdit} />);
+    expect(screen.queryByTestId('message-edit')).toBeNull();
+    expect(screen.getByTestId('user-message-copy')).toBeInTheDocument();
+    // An agent row never shows edit, whatever it is passed.
+    rerender(<ChatMessage message={agentMsg('a')} canEdit onEdit={onEdit} />);
+    expect(screen.queryByTestId('message-edit')).toBeNull();
+  });
+
+  it('order is copy · 重试 · 修改', () => {
+    render(<ChatMessage message={userMsg('q')} canEdit onEdit={() => {}} canRetry onRetry={() => {}} />);
+    const ids = Array.from(screen.getByTestId('message-actions').querySelectorAll('button')).map((b) =>
+      b.getAttribute('data-testid'),
+    );
+    expect(ids).toEqual(['user-message-copy', 'message-retry', 'message-edit']);
+  });
+
+  it('a header-only agent row gets no row at all, even as the retry anchor', () => {
+    const headerOnly = { ...agentMsg(''), isHeaderOnly: true } as AgentMessage;
+    render(<ChatMessage message={headerOnly} canRetry onRetry={() => {}} />);
+    expect(screen.queryByTestId('message-actions')).toBeNull();
+  });
+
+  it('重试 waits for its send: a double click sends once', async () => {
+    let release!: () => void;
+    const onRetry = vi.fn(() => new Promise<void>((r) => { release = r; }));
+    render(<ChatMessage message={agentMsg('a')} canRetry onRetry={onRetry} />);
+    const btn = screen.getByTestId('message-retry');
+    fireEvent.click(btn);
+    fireEvent.click(btn);
+    await Promise.resolve();
+    expect(onRetry).toHaveBeenCalledTimes(1);
+    expect(btn).toBeDisabled();
+    release();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(screen.getByTestId('message-retry')).not.toBeDisabled();
+  });
+});
+
+describe('ChatMessage — inline editor (spec 156 §5.2)', () => {
+  const ATT = '<attached_files>\n- uploads/x.txt (text/plain, 11 B)\n</attached_files>\n\n';
+
+  function renderEditor(content: string, extra: Partial<Parameters<typeof ChatMessage>[0]> = {}) {
+    const onEditSend = vi.fn();
+    const onEditCancel = vi.fn();
+    render(
+      <ChatMessage
+        message={userMsg(content)}
+        canEdit
+        editing
+        onEdit={() => {}}
+        onEditSend={onEditSend}
+        onEditCancel={onEditCancel}
+        {...extra}
+      />,
+    );
+    const input = screen.getByTestId('message-editor-input') as HTMLTextAreaElement;
+    return { onEditSend, onEditCancel, input };
+  }
+
+  it('holds the body only, chips above it read-only, and no action row', () => {
+    const { input } = renderEditor(ATT + 'read this');
+    expect(input.value).toBe('read this');
+    expect(screen.getByTestId('message-editor').querySelector('[data-testid="attachment-chip"]')).not.toBeNull();
+    expect(screen.queryByTestId('message-actions')).toBeNull();
+    expect(document.activeElement).toBe(input);
+    expect(input.selectionStart).toBe('read this'.length);
+  });
+
+  it('Enter sends the edited text; Shift+Enter does not', () => {
+    const { input, onEditSend } = renderEditor('old');
+    fireEvent.change(input, { target: { value: 'new words ' } });
+    fireEvent.keyDown(input, { key: 'Enter', shiftKey: true });
+    expect(onEditSend).not.toHaveBeenCalled();
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(onEditSend).toHaveBeenCalledWith(expect.objectContaining({ content: 'old' }), 'new words');
+  });
+
+  it('Enter during IME composition never sends (isComposing or keyCode 229)', () => {
+    const { input, onEditSend } = renderEditor('拼音');
+    fireEvent.keyDown(input, { key: 'Enter', isComposing: true });
+    fireEvent.keyDown(input, { key: 'Enter', keyCode: 229 });
+    expect(onEditSend).not.toHaveBeenCalled();
+  });
+
+  it('Esc and 取消 cancel', () => {
+    const { input, onEditCancel } = renderEditor('old');
+    fireEvent.keyDown(input, { key: 'Escape' });
+    fireEvent.click(screen.getByTestId('message-editor-cancel'));
+    expect(onEditCancel).toHaveBeenCalledTimes(2);
+  });
+
+  it('发送 is disabled on empty text with no chips; unchanged text still sends', () => {
+    const { input, onEditSend } = renderEditor('same');
+    fireEvent.click(screen.getByTestId('message-editor-send'));
+    expect(onEditSend).toHaveBeenCalledWith(expect.anything(), 'same');
+    fireEvent.change(input, { target: { value: '   ' } });
+    expect(screen.getByTestId('message-editor-send')).toBeDisabled();
+  });
+
+  it('empty text with an attachment chip can still send', () => {
+    const { input } = renderEditor(ATT + 'x');
+    fireEvent.change(input, { target: { value: '' } });
+    expect(screen.getByTestId('message-editor-send')).not.toBeDisabled();
+  });
+
+  it('发送 waits while the edit is in flight', () => {
+    renderEditor('x', { editBusy: true });
+    expect(screen.getByTestId('message-editor-send')).toBeDisabled();
+  });
+
+  it('desktop keeps the bubble cap; the phone gets the full column', () => {
+    renderEditor('x');
+    const cls = screen.getByTestId('message-editor').className;
+    expect(cls).toContain('w-[min(70%,680px)]');
+    expect(cls).toContain('max-md:w-full');
   });
 });

@@ -1481,3 +1481,25 @@ describe('ChatTab — the phone undo sheet close label', () => {
     expect(within(sheet).queryByRole('button', { name: 'Close preview' })).toBeNull();
   });
 });
+
+// Spec 156 §5.6: editing a sent message opens the same sheet, retitled.
+describe('ChatTab — the sheet opened by an edit', () => {
+  beforeEach(() => resetMocks());
+
+  it('is titled 恢复之后改过的文件 / Restore files changed after this; the undo sheet keeps its own title', async () => {
+    setViewportWidth(1440);
+    await act(async () => {
+      renderChatTab();
+    });
+    const open = lastChatViewProps.onUndoTurn as (t: unknown) => void;
+    await act(async () => {
+      open({ sessionId: 'sess-x', fromTs: '2026-11-04T10:00:00Z', toTs: '2026-11-04T11:00:00Z', edit: { onProceed: vi.fn(), onSendOnly: vi.fn() } });
+    });
+    expect(screen.getByText('Restore files changed after this')).toBeInTheDocument();
+    await act(async () => {
+      open({ sessionId: 'sess-x', fromTs: '2026-11-04T10:00:00Z', toTs: null });
+    });
+    expect(screen.queryByText('Restore files changed after this')).toBeNull();
+    expect(screen.getByText('Undo this turn')).toBeInTheDocument();
+  });
+});
