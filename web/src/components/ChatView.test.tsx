@@ -77,6 +77,10 @@ let skillCatalogResponse: unknown[] = [];
 // route answers like every unknown path (an empty list), i.e. no history.
 let historyStatusResponse: unknown = null;
 let historyTurnResponse: unknown = null;
+// Spec 156: POST /agents/{pid}/sessions/{sid}/fork — logged with its body;
+// the responder answers (or throws an ApiError) per test.
+const forkCalls: Array<{ path: string; body: { at: string; name: string } }> = [];
+let forkResponder: (path: string) => unknown = () => ({ session_id: 'fork1', session_uuid: 'fork1', target: null });
 
 vi.mock('../config', () => ({
   api: vi.fn(async (path: string, opts?: { method?: string; body?: string }) => {
@@ -93,6 +97,10 @@ vi.mock('../config', () => ({
     if (path === '/api/v2/telemetry/event') {
       telemetryEvents.push(JSON.parse(opts?.body ?? '{}').event);
       return undefined;
+    }
+    if (opts?.method === 'POST' && path.endsWith('/fork')) {
+      forkCalls.push({ path, body: JSON.parse(opts.body ?? '{}') });
+      return forkResponder(path);
     }
     // Session pin PATCH (spec 074) — gated for the lock-race test.
     if (opts?.method === 'PATCH' && path.includes('/sessions/')) {
@@ -321,6 +329,7 @@ import {
 import type { Annotation } from '../utils/annotations';
 import { formatQuotes } from '../utils/annotations';
 import { markFreshSession } from '../utils/freshSession';
+import { __resetForkSendsForTests } from '../utils/editMessage';
 import { useAgent } from '../hooks/useAgent';
 import type { DisplayItem } from '../utils/chatTransform';
 import type { Project } from '../types';
@@ -375,6 +384,9 @@ beforeEach(() => {
   skillCatalogResponse = [];
   historyStatusResponse = null;
   historyTurnResponse = null;
+  forkCalls.length = 0;
+  forkResponder = () => ({ session_id: 'fork1', session_uuid: 'fork1', target: null });
+  __resetForkSendsForTests();
   __resetFileHistoryStores();
   __clearSkillCatalogCacheForTests();
   chatInitialResponse = { data: [], total: 0 };
@@ -5567,5 +5579,266 @@ describe('ChatView: the reply carried by mark_task_complete', () => {
     });
     await flushEffects();
     expect(container.textContent ?? '').toContain(SUMMARY);
+  });
+});
+
+// ─── Spec 156 (edit a sent message → fork) + 164 (Retry) ───────────────────
+describe('ChatView: message actions (spec 156 §5.1/§5.6/§5.7, 164)', () => {
+  const U1 = '2026-11-10T06:30:00.123456+00:00';
+  const A1 = '2026-11-10T06:30:05.000000+00:00';
+  const U2 = '2026-11-10T06:32:00.654321+00:00';
+  const A2 = '2026-11-10T06:32:09.000000+00:00';
+  const ATT = '<attached_files>\n- uploads/x.txt (text/plain, 11 B)\n</attached_files>\n\n';
+
+  function seed(rows: unknown[]) {
+    chatInitialResponse = { data: rows, total: rows.length };
+  }
+  const user = (content: string, timestamp: string, target?: string) => ({
+    role: 'user', content, source: 'user', timestamp, ...(target && { target }),
+  });
+  const reply = (content: string, timestamp: string, source = 'management') => ({
+    role: 'assistant', content, source, timestamp,
+  });
+
+  async function mount(over: Partial<React.ComponentProps<typeof ChatView>> = {}) {
+    const props = {
+      projectId: 'p1',
+      project,
+      agentStatus: 'idle' as never,
+      agents: [],
+      sessionId: 's1',
+      onOpenSession: vi.fn(),
+      onUndoTurn: vi.fn(),
+      ...over,
+    };
+    await act(async () => {
+      root.render(<ChatView {...props} />);
+    });
+    await flushEffects();
+    await flushEffects();
+    return props;
+  }
+  const q = (id: string) => Array.from(container.querySelectorAll(`[data-testid="${id}"]`)) as HTMLElement[];
+
+  it('重试 appears once, under the latest turn’s last agent body', async () => {
+    seed([user('first', U1), reply('one', A1), user('second', U2), reply('two', A2)]);
+    await mount();
+    const retry = q('message-retry');
+    expect(retry).toHaveLength(1);
+    const agents = Array.from(container.querySelectorAll('.chat-agent-name')).map((n) => n.closest('.group')!);
+    expect(agents[1].contains(retry[0])).toBe(true);
+    // 修改 on both user rows, never on agent rows.
+    expect(q('message-edit')).toHaveLength(2);
+    for (const a of agents) expect(a.querySelector('[data-testid="message-edit"]')).toBeNull();
+  });
+
+  it('a latest attempt with no body puts 重试 under the user bubble', async () => {
+    seed([user('first', U1), reply('one', A1), user('second', U2)]);
+    await mount();
+    const retry = q('message-retry');
+    expect(retry).toHaveLength(1);
+    const bubbles = q('user-message');
+    expect(bubbles[1].contains(retry[0])).toBe(true);
+  });
+
+  it('running: 修改 and 重试 are hidden, copy stays', async () => {
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText: async () => undefined }, configurable: true, writable: true });
+    seed([user('first', U1), reply('one', A1)]);
+    await mount({ agentStatus: 'running' as never });
+    expect(q('message-retry')).toHaveLength(0);
+    expect(q('message-edit')).toHaveLength(0);
+    expect(q('user-message-copy')).toHaveLength(1);
+    expect(q('agent-message-copy')).toHaveLength(1);
+  });
+
+  it('automation runs, queue items and the Workbench pane get no 修改', async () => {
+    seed([user("[Triggered by schedule 'Daily' (every day at 9)]\n\nsummarise", U1), reply('ok', A1)]);
+    await mount();
+    expect(q('message-edit')).toHaveLength(0);
+    expect(q('message-retry')).toHaveLength(0);
+
+    seed([user('[QUEUE ITEM | id=q1 | attempt=1]\ndo x', U1), reply('ok', A1)]);
+    __clearChatHistoryCacheForTests();
+    await mount({ sessionId: 's2' });
+    expect(q('message-edit')).toHaveLength(0);
+
+    seed([user('hi', U1), reply('ok', A1)]);
+    __clearChatHistoryCacheForTests();
+    await mount({ sessionId: 's3', onUndoTurn: undefined });
+    expect(q('message-edit')).toHaveLength(0);
+    expect(q('message-retry')).toHaveLength(1);
+  });
+
+  it('重试 resends the latest input raw, to its original target, in this session — no fork, draft kept', async () => {
+    seed([user('first', U1), reply('one', A1), user(`${ATT}check x`, U2, 'codex'), reply('done', A2, 'codex')]);
+    await mount();
+    await act(async () => { typeInComposer('my unsent draft'); });
+    const retry = q('message-retry')[0];
+    await act(async () => {
+      retry.click();
+      retry.click();
+    });
+    await flushEffects();
+    expect(injectCalls).toHaveLength(1);
+    // injectMessage(projectId, content, target, nonce, attachments, sessionId, pinned, skill, answering)
+    const [pid, content, target, nonce, attachments, sid, pinned, skill] = injectCalls[0];
+    expect(pid).toBe('p1');
+    expect(content).toBe(`${ATT}check x`);
+    expect(target).toBe('codex');
+    expect(typeof nonce).toBe('string');
+    expect(attachments).toBeUndefined();
+    expect(sid).toBe('s1');
+    expect(pinned).toBe(true);
+    expect(skill).toBeUndefined();
+    expect(forkCalls).toHaveLength(0);
+    expect((container.querySelector('textarea') as HTMLTextAreaElement).value).toBe('my unsent draft');
+  });
+
+  it('a fresh send’s optimistic bubble gets no 修改 / 重试 until it is persisted', async () => {
+    seed([user('first', U1), reply('one', A1)]);
+    await mount();
+    await act(async () => { typeInComposer('new one'); });
+    const send = container.querySelector('button[aria-label="Send"]') as HTMLButtonElement;
+    await act(async () => { send.click(); });
+    await flushEffects();
+    expect(injectCalls).toHaveLength(1);
+    const bubbles = q('user-message');
+    expect(bubbles).toHaveLength(2);
+    expect(bubbles[1].querySelector('[data-testid="message-edit"]')).toBeNull();
+    expect(q('message-retry')).toHaveLength(0);
+  });
+
+  async function openEditorOn(index: number, text?: string) {
+    const edit = q('message-edit')[index];
+    await act(async () => edit.click());
+    const input = container.querySelector('[data-testid="message-editor-input"]') as HTMLTextAreaElement;
+    if (text !== undefined) {
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!;
+      await act(async () => {
+        setter.call(input, text);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+    }
+    return input;
+  }
+
+  it('editor send: no changed files → fork with {at, name}, open it, send the rebuilt content there with its target', async () => {
+    sessionsListResponse = [{ session_id: 's1', session_uuid: 's1', name: '合同审阅 · 改自 09:00', pinned_target: null }];
+    seed([user('first', U1), reply('one', A1), user(`${ATT}old words`, U2, 'codex'), reply('done', A2, 'codex')]);
+    forkResponder = () => ({ session_id: 'fork1', session_uuid: 'fork1', target: 'codex' });
+    const props = await mount();
+    const input = await openEditorOn(1, 'new words');
+    expect(input.value).toBe('new words');
+    await act(async () => {
+      (container.querySelector('[data-testid="message-editor-send"]') as HTMLButtonElement).click();
+    });
+    await flushEffects();
+    // The 065 turn route was asked for the span from the edited row to now.
+    const turnAsk = apiCalls.find((p) => p.includes('/files/history/turn'))!;
+    expect(turnAsk).toContain('session_id=s1');
+    expect(turnAsk).toContain(`from_ts=${encodeURIComponent(U2)}`);
+    expect(turnAsk).toContain('to_ts=');
+    expect(props.onUndoTurn).not.toHaveBeenCalled();
+    expect(forkCalls).toHaveLength(1);
+    expect(forkCalls[0].path).toBe('/api/v2/agents/p1/sessions/s1/fork');
+    expect(forkCalls[0].body.at).toBe(U2);
+    const hhmm = `${String(new Date(U2).getHours()).padStart(2, '0')}:${String(new Date(U2).getMinutes()).padStart(2, '0')}`;
+    // A fork of a fork keeps one suffix.
+    expect(forkCalls[0].body.name).toBe(`合同审阅 · edited ${hhmm}`);
+    expect(props.onOpenSession).toHaveBeenCalledWith('fork1');
+    expect(injectCalls).toHaveLength(0); // waits for the fork's history
+
+    // The parent moves the route; the fork's history loads; the send goes.
+    await mount({ ...props, sessionId: 'fork1' });
+    expect(injectCalls).toHaveLength(1);
+    const [, content, target, , attachments, sid, pinned, skill] = injectCalls[0];
+    expect(content).toBe(`${ATT}new words`);
+    expect(target).toBe('codex');
+    expect(attachments).toBeUndefined();
+    expect(skill).toBeUndefined();
+    expect(sid).toBe('fork1');
+    expect(pinned).toBe(true);
+  });
+
+  it('fork 409 → the busy toast, the editor stays with the text, nothing is sent', async () => {
+    seed([user('first', U1), reply('one', A1)]);
+    const { ApiError } = await import('../config');
+    forkResponder = () => { throw new ApiError(409, 'session_running'); };
+    const props = await mount();
+    await openEditorOn(0, 'changed');
+    await act(async () => {
+      (container.querySelector('[data-testid="message-editor-send"]') as HTMLButtonElement).click();
+    });
+    await flushEffects();
+    expect(forkCalls).toHaveLength(1);
+    expect(container.querySelector('[data-testid="chat-action-toast"]')?.textContent).toBe('Running. Stop it to edit');
+    const input = container.querySelector('[data-testid="message-editor-input"]') as HTMLTextAreaElement;
+    expect(input.value).toBe('changed');
+    expect(props.onOpenSession).not.toHaveBeenCalled();
+    expect(injectCalls).toHaveLength(0);
+  });
+
+  it('files changed after the message → 065’s sheet first; the fork waits for it (restore → fork → send)', async () => {
+    seed([user('first', U1), reply('one', A1)]);
+    historyTurnResponse = {
+      status: 'watching', session_id: 's1',
+      files: [{ path: 'notes.md', kind: 'modify', clean: true, current_sha: 't', turn_sha: 't', before_sha: 'b' }],
+      no_history: 0,
+    };
+    const props = await mount();
+    await openEditorOn(0, 'again');
+    await act(async () => {
+      (container.querySelector('[data-testid="message-editor-send"]') as HTMLButtonElement).click();
+    });
+    await flushEffects();
+    expect(forkCalls).toHaveLength(0);
+    const onUndoTurn = props.onUndoTurn as ReturnType<typeof vi.fn>;
+    expect(onUndoTurn).toHaveBeenCalledTimes(1);
+    const ref = onUndoTurn.mock.calls[0][0];
+    expect(ref.sessionId).toBe('s1');
+    expect(ref.fromTs).toBe(U1);
+    expect(typeof ref.toTs).toBe('string');
+    // The editor is still there behind the sheet (× returns to it).
+    expect(container.querySelector('[data-testid="message-editor-input"]')).not.toBeNull();
+    // The sheet restored everything checked: now fork, then send.
+    await act(async () => ref.edit.onProceed());
+    await flushEffects();
+    expect(forkCalls).toHaveLength(1);
+    expect(props.onOpenSession).toHaveBeenCalledWith('fork1');
+  });
+
+  it('memory-only changes or unavailable history open no sheet', async () => {
+    seed([user('first', U1), reply('one', A1)]);
+    historyTurnResponse = {
+      status: 'unavailable', session_id: 's1',
+      files: [{ path: 'notes.md', kind: 'modify' }], no_history: 0,
+    };
+    const props = await mount();
+    await openEditorOn(0);
+    await act(async () => {
+      (container.querySelector('[data-testid="message-editor-send"]') as HTMLButtonElement).click();
+    });
+    await flushEffects();
+    expect(props.onUndoTurn).not.toHaveBeenCalled();
+    expect(forkCalls).toHaveLength(1);
+    // Unchanged text still sends.
+    expect(forkCalls[0].body.at).toBe(U1);
+  });
+
+  it('a failed send in the fork puts the edited words back in its composer', async () => {
+    seed([user('first', U1), reply('one', A1)]);
+    injectMessageMock = async () => { throw new Error('boom'); };
+    const props = await mount();
+    await openEditorOn(0, 'edited words');
+    await act(async () => {
+      (container.querySelector('[data-testid="message-editor-send"]') as HTMLButtonElement).click();
+    });
+    await flushEffects();
+    await mount({ ...props, sessionId: 'fork1' });
+    expect(injectCalls).toHaveLength(1);
+    expect(container.textContent).toContain('Failed to send message');
+    // The editor closed with the fork; the one textarea left is the composer.
+    expect(container.querySelectorAll('textarea')).toHaveLength(1);
+    expect((container.querySelector('textarea') as HTMLTextAreaElement).value).toBe('edited words');
   });
 });

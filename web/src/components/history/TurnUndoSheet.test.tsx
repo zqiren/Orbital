@@ -177,3 +177,55 @@ describe('TurnUndoSheet (spec 065 §5.9, §7)', () => {
     expect(onView).toHaveBeenCalledWith('README.md', 3);
   });
 });
+
+describe('TurnUndoSheet — opened by editing a sent message (spec 156 §5.6)', () => {
+  it('without `edit` the sheet is 065’s, unchanged: one button, its own label', async () => {
+    render(<TurnUndoSheet projectId="p1" turn={TURN} onView={vi.fn()} onRestored={vi.fn()} />);
+    await waitFor(() => expect(rows()).toHaveLength(4));
+    expect(screen.getByTestId('turn-undo-restore')).toHaveTextContent('Restore 2 selected files');
+    expect(screen.queryByTestId('turn-undo-send-only')).toBeNull();
+  });
+
+  it('primary restores and then sends; the secondary sends without restoring', async () => {
+    const edit = { onProceed: vi.fn(), onSendOnly: vi.fn() };
+    const onRestored = vi.fn();
+    render(<TurnUndoSheet projectId="p1" turn={{ ...TURN, edit }} onView={vi.fn()} onRestored={onRestored} />);
+    await waitFor(() => expect(rows()).toHaveLength(4));
+    expect(screen.getByTestId('turn-undo-restore')).toHaveTextContent('Restore 2 files and send');
+    expect(screen.getByTestId('turn-undo-send-only')).toHaveTextContent('Send without restoring');
+
+    fireEvent.click(screen.getByTestId('turn-undo-restore'));
+    await waitFor(() => expect(edit.onProceed).toHaveBeenCalledTimes(1));
+    // Restore first (the POST went out and answered), then the send.
+    expect(calls.some((c) => c.path.endsWith('/restore'))).toBe(true);
+    expect(onRestored.mock.invocationCallOrder[0]).toBeLessThan(edit.onProceed.mock.invocationCallOrder[0]);
+    expect(edit.onSendOnly).not.toHaveBeenCalled();
+  });
+
+  it('a conflict keeps the sheet open and sends nothing', async () => {
+    restoreResponse = {
+      results: [
+        { path: 'site/download.html', status: 'ok', current_sha: 'b-site/download.html' },
+        { path: 'README.md', status: 'conflict', current_sha: 'someone-else' },
+      ],
+    };
+    const edit = { onProceed: vi.fn(), onSendOnly: vi.fn() };
+    const onRestored = vi.fn();
+    render(<TurnUndoSheet projectId="p1" turn={{ ...TURN, edit }} onView={vi.fn()} onRestored={onRestored} />);
+    await waitFor(() => expect(rows()).toHaveLength(4));
+    fireEvent.click(screen.getByTestId('turn-undo-restore'));
+    await waitFor(() => expect(onRestored).toHaveBeenCalled());
+    expect(onRestored.mock.calls[0][2]).toBe(false);
+    expect(edit.onProceed).not.toHaveBeenCalled();
+    expect(screen.getByTestId('turn-undo-sheet')).toBeInTheDocument();
+  });
+
+  it('直接发送 sends without a restore call', async () => {
+    const edit = { onProceed: vi.fn(), onSendOnly: vi.fn() };
+    render(<TurnUndoSheet projectId="p1" turn={{ ...TURN, edit }} onView={vi.fn()} onRestored={vi.fn()} />);
+    await waitFor(() => expect(rows()).toHaveLength(4));
+    fireEvent.click(screen.getByTestId('turn-undo-send-only'));
+    expect(edit.onSendOnly).toHaveBeenCalledTimes(1);
+    expect(calls.some((c) => c.path.endsWith('/restore'))).toBe(false);
+  });
+});
