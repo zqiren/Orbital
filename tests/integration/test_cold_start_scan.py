@@ -2,12 +2,13 @@
 # Copyright (C) 2026 Orbital Contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Integration: cold-start workspace scan journey (in-process FastAPI app).
+"""Integration: a project's first screen and start (in-process FastAPI app).
 
 Covers the deterministic, automatable surface:
-  - is_empty_workspace gating on the project payload
-  - POST /cold-start-scan mints + starts the project's first session
-  - the onboarding gates flip once the confirm-time files are written
+  - is_empty_workspace on the project payload
+  - spec 167: no route starts an agent before the user speaks (the scan card's
+    POST /cold-start-scan and the kickoff's POST /start-onboarding are gone)
+  - the dispatcher gate and the prompt directive once the memory files exist
 
 The end-to-end "agent actually writes the files from a real conversation" leg
 is verified by the live-daemon smoke (CLAUDE.md §3), not a scripted LLM stub —
@@ -109,22 +110,18 @@ def test_empty_workspace_has_no_scan_flag(client):
     assert proj["is_empty_workspace"] is True
 
 
-def test_imported_workspace_flag_and_scan_starts_session(client):
+@pytest.mark.parametrize("route", ["cold-start-scan", "start-onboarding"])
+def test_no_route_starts_an_agent_before_the_user_speaks(client, route):
     tc, deps = client
     open(os.path.join(deps["workspace"], "README.md"), "w").write("# Real project")
     pid = _create_project(tc, deps["workspace"])
 
     proj = tc.get(f"/api/v2/projects/{pid}").json()
     assert proj["is_empty_workspace"] is False
+
+    r = tc.post(f"/api/v2/agents/{pid}/{route}")
+    assert r.status_code in (404, 405), r.text
     assert tc.get(f"/api/v2/projects/{pid}/sessions").json()["sessions"] == []
-
-    r = tc.post(f"/api/v2/agents/{pid}/cold-start-scan")
-    assert r.status_code == 201, r.text
-    body = r.json()
-    assert body["status"] == "started" and body["session_id"]
-
-    sessions = tc.get(f"/api/v2/projects/{pid}/sessions").json()["sessions"]
-    assert any(s.get("session_id") == body["session_id"] for s in sessions)
 
 
 def test_confirmation_files_flip_onboarding_gates(client):
@@ -146,20 +143,18 @@ def test_confirmation_files_flip_onboarding_gates(client):
 
     # Dispatcher gate flips on PROJECT_STATE.md.
     assert am.is_onboarding_complete(pid) is True
-    # Prompt off-switch flips on project_goals.md → directive, not onboarding.
+    # project_goals.md → the directive section.
     from agent_os.agent.prompt_builder import Autonomy, PromptBuilder, PromptContext
     section = PromptBuilder()._onboarding_or_directive(PromptContext(
         workspace=ws, model="m", autonomy=Autonomy.HANDS_OFF, enabled_agents=[],
         tool_names=["read"], os_type="macos", datetime_now="2026-06-08T00:00:00",
-        cold_start=True,
     ))
     assert "PROJECT DIRECTIVE" in section
 
 
 # ---------------------------------------------------------------------------
 # Credential-error surfacing (silent-error fix): a project with no API key
-# anywhere must get a structured 400 — never a swallowed 500 — and the scan
-# must NOT mint an orphan session per click (the original bug minted 10).
+# anywhere must get a structured 400 — never a swallowed 500.
 # ---------------------------------------------------------------------------
 
 def _create_keyless_project(tc, workspace, name="Keyless"):
@@ -174,21 +169,6 @@ def _strip_all_keys(deps):
     deps["credential_store"].get_api_key.return_value = None
     store = deps["settings_store"]
     store.keys = {card_id: "" for card_id in store.keys}
-
-
-def test_scan_without_any_api_key_is_structured_400_and_mints_nothing(client):
-    tc, deps = client
-    _strip_all_keys(deps)
-    open(os.path.join(deps["workspace"], "README.md"), "w").write("# Real project")
-    pid = _create_keyless_project(tc, deps["workspace"])
-
-    r = tc.post(f"/api/v2/agents/{pid}/cold-start-scan")
-    assert r.status_code == 400, r.text
-    detail = r.json()["detail"]
-    assert detail["code"] == "missing_api_key"
-    assert detail["message"]
-    # Validate-before-mint: no orphan session left behind.
-    assert tc.get(f"/api/v2/projects/{pid}/sessions").json()["sessions"] == []
 
 
 def test_start_without_any_api_key_is_structured_400(client):
@@ -231,94 +211,3 @@ def test_run_status_exposes_last_terminal_error_for_hydration(client):
     assert ev["type"] == "error"
     assert ev["error_code"] == "missing_api_key"
     assert ev["details"] == "No LLM API key configured"
-
-
-# ---------------------------------------------------------------------------
-# Onboarding kickoff: the agent speaks first, once, on a project that has no
-# goals and no sessions (after creation on an empty folder, or after Skip on
-# the scan card). The backend owns the guard so a stale tab or a retry can
-# never turn this back into "the agent starts whenever a project is opened"
-# (removed in 0722d5fa — it made agents with goals invent their own work).
-# ---------------------------------------------------------------------------
-
-def _sessions(tc, pid):
-    return tc.get(f"/api/v2/projects/{pid}/sessions").json()["sessions"]
-
-
-def test_start_onboarding_mints_and_starts_first_session(client):
-    tc, deps = client
-    pid = _create_project(tc, deps["workspace"])
-    assert _sessions(tc, pid) == []
-
-    r = tc.post(f"/api/v2/agents/{pid}/start-onboarding")
-    assert r.status_code == 201, r.text
-    body = r.json()
-    assert body["status"] == "started" and body["session_id"]
-    assert any(s.get("session_id") == body["session_id"] for s in _sessions(tc, pid))
-
-
-def test_start_onboarding_is_not_a_scan(client):
-    """Skip declined the file scan: the kickoff must not run in cold-start mode."""
-    tc, deps = client
-    open(os.path.join(deps["workspace"], "README.md"), "w").write("# Real project")
-    pid = _create_project(tc, deps["workspace"])
-
-    seen = {}
-    am = deps["agent_manager"]
-
-    async def _fake_start(project_id, config, **kwargs):
-        seen.update(kwargs)
-
-    am.start_agent = _fake_start
-    r = tc.post(f"/api/v2/agents/{pid}/start-onboarding")
-    assert r.status_code == 201, r.text
-    assert seen["initial_message"] is None
-    assert not seen.get("cold_start")
-    assert not seen.get("cold_start_skeleton")
-
-
-def test_start_onboarding_refused_once_goals_exist(client):
-    tc, deps = client
-    pid = _create_project(tc, deps["workspace"])
-    pp = ProjectPaths(deps["workspace"])
-    os.makedirs(pp.instructions_dir, exist_ok=True)
-    open(pp.project_goals, "w").write("Mission: ship the thing")
-
-    r = tc.post(f"/api/v2/agents/{pid}/start-onboarding")
-    assert r.status_code == 409, r.text
-    assert _sessions(tc, pid) == []
-
-
-def test_start_onboarding_refused_when_a_session_exists(client):
-    tc, deps = client
-    pid = _create_project(tc, deps["workspace"])
-    first = tc.post(f"/api/v2/agents/{pid}/start-onboarding")
-    assert first.status_code == 201, first.text
-
-    again = tc.post(f"/api/v2/agents/{pid}/start-onboarding")
-    assert again.status_code == 409, again.text
-    assert len(_sessions(tc, pid)) == 1
-
-
-def test_start_onboarding_refused_for_quick_tasks(client):
-    tc, deps = client
-    resp = tc.post("/api/v2/projects", json={
-        "name": "Quick Tasks", "workspace": deps["workspace"], "is_scratch": True,
-    })
-    assert resp.status_code == 201, resp.text
-    pid = resp.json()["project_id"]
-
-    r = tc.post(f"/api/v2/agents/{pid}/start-onboarding")
-    assert r.status_code == 409, r.text
-    assert _sessions(tc, pid) == []
-
-
-def test_start_onboarding_without_any_api_key_is_structured_400_and_mints_nothing(client):
-    tc, deps = client
-    _strip_all_keys(deps)
-    pid = _create_keyless_project(tc, deps["workspace"])
-
-    r = tc.post(f"/api/v2/agents/{pid}/start-onboarding")
-    assert r.status_code == 400, r.text
-    assert r.json()["detail"]["code"] == "missing_api_key"
-    assert _sessions(tc, pid) == []

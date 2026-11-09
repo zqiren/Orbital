@@ -710,8 +710,8 @@ def test_guess_scan_writes_first_then_asks(tmp_path, en_locale):
     assert "Do not start any work" in flat
     assert op.SHARED_MEMORY_LINE_EN in flat
     assert op.SHARED_MEMORY_LINE_ZH not in flat
-    # The card's propose-first flavour is untouched.
-    assert _section(tmp_path, cold_start=True) == op.cold_start_instruction(str(tmp_path))
+    # Spec 167: the card's propose-first flavour is gone — no goals, no section.
+    assert _section(tmp_path, cold_start=True) is None
 
 
 def test_guess_reply_language_follows_the_system(tmp_path, monkeypatch):
@@ -730,13 +730,10 @@ def test_shared_memory_line_only_with_more_than_one_agent(tmp_path, en_locale):
 
     one = _section(tmp_path, cold_start="guess", enabled_agents=[])
     assert op.SHARED_MEMORY_LINE_EN not in _flat(one)
-    greet_many = _flat(_section(tmp_path))
-    greet_one = _flat(_section(tmp_path, enabled_agents=[]))
-    assert "## ONBOARDING MODE" in greet_many
-    assert op.SHARED_MEMORY_LINE_ZH in greet_many and op.SHARED_MEMORY_LINE_EN in greet_many
-    assert op.SHARED_MEMORY_LINE_EN not in greet_one
-    scratch = _flat(_section(tmp_path, is_scratch=True))
-    assert op.SHARED_MEMORY_LINE_EN not in scratch
+    many = _flat(_section(tmp_path, cold_start="guess:en"))
+    assert op.SHARED_MEMORY_LINE_EN in many
+    # Spec 167: no interview greeting carries it any more (no goals, no section).
+    assert _section(tmp_path) is None
 
 
 def test_guess_run_keeps_its_section_after_the_goals_write(tmp_path, en_locale):
@@ -751,22 +748,9 @@ def test_guess_run_keeps_its_section_after_the_goals_write(tmp_path, en_locale):
     assert not hasattr(op, "guess_first_directive_tail")
     plain = _flat(_section(tmp_path))
     assert plain.startswith("## PROJECT DIRECTIVE")
-    assert "propose the first step and who does it, then wait" in plain
+    # Spec 167: the interview's wait-for-go tail is gone with the interview.
+    assert "propose the first step and who does it, then wait" not in plain
     assert _flat(_section(tmp_path, cold_start=False)) == plain
-
-
-def test_gate_arms_on_the_guess_runs_goals_write(tmp_path):
-    """The existing onboarding gate (onboarding_gate.creates_goals) fires on
-    the scan's goals creation; state/index writes stay allowed after it."""
-    from agent_os.agent import onboarding_gate
-
-    goals = _goals(tmp_path)
-    tc = {"name": "write", "arguments": {"path": goals, "content": "# Mission\n"}}
-    assert onboarding_gate.creates_goals(str(tmp_path), tc) is True
-    for rel in ("orbital/PROJECT_STATE.md", "orbital/INDEX.md"):
-        assert onboarding_gate.allowed(str(tmp_path), {
-            "name": "write", "arguments": {"path": os.path.join(str(tmp_path), rel)}})
-    assert not onboarding_gate.allowed(str(tmp_path), {"name": "shell", "arguments": {}})
 
 
 def test_the_import_language_reaches_the_guess_prompt(tmp_path, monkeypatch):
@@ -917,9 +901,9 @@ def test_worker_guess_prompt_is_the_manager_text_behind_the_preamble(tmp_path):
 
     ws = str(tmp_path)
     skel = "[WORKSPACE SKELETON] 1 files, ~5 bytes shown.\nREADME.md\t5"
-    text = build_instruction("claude-code", {"workspace": ws}, "scan", skel,
+    text = build_instruction("claude-code", {"workspace": ws}, skel,
                              guess_lang="zh", multi_agent=True)
-    assert text.startswith(op.worker_preamble("claude-code", ws, scan=True))
+    assert text.startswith(op.worker_preamble("claude-code", ws))
     assert op.guess_first_instruction(ws, lang="zh", multi_agent=True) in text
     assert text.rstrip().endswith("README.md\t5")
     flat = _flat(text)
@@ -928,12 +912,9 @@ def test_worker_guess_prompt_is_the_manager_text_behind_the_preamble(tmp_path):
     # Round 5: the worker gets the same next-steps rule (it writes the file
     # itself, so the card reads it the same way).
     assert "`## Next steps` heading (exactly that heading" in flat
-    one = build_instruction("claude-code", {"workspace": ws}, "scan", skel,
+    one = build_instruction("claude-code", {"workspace": ws}, skel,
                             guess_lang="en", multi_agent=False)
     assert op.SHARED_MEMORY_LINE_EN not in _flat(one)
-    # No guess language: the card's propose-first worker scan, unchanged.
-    assert build_instruction("claude-code", {"workspace": ws}, "scan", skel) == \
-        op.worker_cold_start_instruction("claude-code", ws, skel)
 
 
 def test_scan_title_follows_the_import_language(monkeypatch):
@@ -992,16 +973,6 @@ def test_every_other_session_still_titles_from_its_first_message(tmp_path):
     assert s.name == "帮我把 README 改短一点"
     assert Session.load(s.filepath).name == "帮我把 README 改短一点"
     assert derive_disk_entry(s.filepath, "s1")["name"] == "帮我把 README 改短一点"
-
-
-def test_the_card_cold_start_scan_is_not_titled(tmp_path, monkeypatch):
-    """Only the import scan names its session; the card's scan (and every
-    other start) passes no title."""
-    import inspect
-
-    from agent_os.api.routes import agents_v2
-    src = inspect.getsource(agents_v2.cold_start_scan)
-    assert "title" not in src
 
 
 def test_import_seeds_the_checked_map_empty_so_the_scan_reply_is_unread(tmp_path, monkeypatch, kicks):
@@ -1301,7 +1272,6 @@ def test_yes_closes_the_ask_records_the_row_and_dispatches_nothing(tmp_path, mon
     monkeypatch.setattr(mgr, "inject_message", spy)
     monkeypatch.setattr(mgr, "start_agent", spy)
     s = Session.load(str(ws / "orbital" / "sessions" / f"{sid}.jsonl"))
-    s.set_onboarding_gate(True)                       # the scan armed it
     r = _answer(tc, pid, sid, ask_id, "对")
     assert r.status_code == 200, r.text
     assert r.json()["status"] == "recorded"
@@ -1312,8 +1282,6 @@ def test_yes_closes_the_ask_records_the_row_and_dispatches_nothing(tmp_path, mon
     rows = [_json.loads(l) for l in open(s.filepath, encoding="utf-8")]
     user = [r for r in rows if r.get("role") == "user"]
     assert user[-1]["content"].endswith("\n对") and "<orbital_turn_note>" not in user[-1]["content"]
-    # The gate stays armed: the user's NEXT real message is the go-ahead.
-    assert Session.load(s.filepath).onboarding_gate is True
 
 
 def test_yes_on_a_worker_session_dispatches_nothing_either(tmp_path):
@@ -1344,8 +1312,7 @@ def test_needs_changes_runs_one_turn_with_the_note_in_that_message_only(tmp_path
 
 def test_a_typed_reply_is_a_normal_message(tmp_path, monkeypatch):
     """Round 5: the daemon cannot tell a typed correction from a typed "做第
-    2 步", so typed text goes through as the user's own message (no note, so
-    the gate opens on it as on any reply)."""
+    2 步", so typed text goes through as the user's own message (no note)."""
     tc, deps, pid, sid, ws, ask_id, _ = _confirm_env(tmp_path, keyed=True)
     sent = []
 
@@ -1375,7 +1342,7 @@ def test_a_worker_needs_changes_sends_the_note_but_stores_only_the_words(tmp_pat
     assert "<orbital_turn_note>" not in user[-1]["content"]
 
 
-def test_the_note_reaches_its_turn_only_and_the_gate_holds_through_it(tmp_path):
+def test_the_note_reaches_its_turn_only(tmp_path):
     from agent_os.agent.context import ContextManager, strip_turn_notes
     from agent_os.agent.prompt_builder import PromptContext
     from agent_os.agent.session import Session
@@ -1391,16 +1358,13 @@ def test_the_note_reaches_its_turn_only_and_the_gate_holds_through_it(tmp_path):
                         project_instructions="", agent_name="p", project_id="x")
     s = Session.new("g1", str(tmp_path), session_id="g1", origin="cold_start")
     s.append({"role": "assistant", "content": "summary"})
-    s.set_onboarding_gate(True)
     note = import_scan.turn_note_block("zh")
     s.append({"role": "user", "source": "user", "content": "不对，改成连载\n\n" + note})
-    assert s.onboarding_gate is True                 # held through the guarded turn
     mgr = ContextManager(s, _B(), ctx, model_context_limit=200_000)
     sent = mgr.prepare()
     assert any("<orbital_turn_note>" in str(m.get("content")) for m in sent)
     s.append({"role": "assistant", "content": "已改好。"})
     s.append({"role": "user", "source": "user", "content": "好，接下来写第三篇"})
-    assert s.onboarding_gate is False                # the next real message opens it
     later = mgr.prepare()
     assert not any("<orbital_turn_note>" in str(m.get("content")) for m in later)
     assert "不对，改成连载" in " ".join(str(m.get("content")) for m in later)
@@ -1547,16 +1511,14 @@ def test_do_step_one_runs_once_with_an_explicit_approval(tmp_path, monkeypatch):
     assert not ask.is_open
 
 
-def test_do_step_one_opens_the_gate_and_the_approval_stays_in_context(tmp_path):
+def test_do_step_one_approval_stays_in_context(tmp_path):
     from agent_os.agent.context import strip_turn_notes
     from agent_os.agent.session import Session
 
     s = Session.new("g2", str(tmp_path), session_id="g2", origin="cold_start")
     s.append({"role": "assistant", "content": "summary\n1. a\n2. b"})
-    s.set_onboarding_gate(True)
     block = import_scan.picked_step_block("zh", "a")
     s.append({"role": "user", "source": "user", "content": "对，做第 1 步\n\n" + block})
-    assert s.onboarding_gate is False                       # the user's go
     later = strip_turn_notes(s.get_messages() + [{"role": "user", "content": "next"}])
     assert block in later[-2]["content"]                    # kept on later turns
 
@@ -1573,21 +1535,18 @@ def test_do_step_one_on_a_worker_sends_the_approval_stores_the_tap(tmp_path):
     assert user[-1]["content"].endswith("\n对，做第 1 步")
 
 
-def test_not_now_is_zero_call_and_keeps_the_gate(tmp_path, monkeypatch):
+def test_not_now_is_zero_call(tmp_path, monkeypatch):
     from agent_os.agent import asks
     from agent_os.agent.session import Session
 
     tc, deps, pid, sid, ws, ask_id, _ = _confirm_env(
         tmp_path, keyed=True, state=_STATE_WITH_STEPS)
     sent = _spy_inject(monkeypatch, deps["agent_manager"])
-    s = Session.load(str(ws / "orbital" / "sessions" / f"{sid}.jsonl"))
-    s.set_onboarding_gate(True)
     r = _answer(tc, pid, sid, ask_id, "对，先不做")
     assert r.status_code == 200 and r.json()["status"] == "recorded"
     assert sent == []
     (ask,) = [a for a in asks.read_asks(str(ws / "orbital")) if a.id == ask_id]
     assert not ask.is_open
-    assert Session.load(s.filepath).onboarding_gate is True
 
 
 @pytest.mark.parametrize("typed", ["对", "对。", " 对！", "对的", "Yes", "yes."])

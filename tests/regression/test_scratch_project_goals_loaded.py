@@ -110,8 +110,9 @@ class TestScratchProjectGoalsLoaded:
         assert "ONBOARDING MODE" not in full_prompt, \
             "ONBOARDING MODE must not appear when project_goals.md exists"
 
-    def test_prompt_builder_onboarding_when_goals_missing(self, tmp_path):
-        """When project_goals.md is absent, prompt must say ONBOARDING MODE."""
+    def test_prompt_builder_has_no_goals_section_when_goals_missing(self, tmp_path):
+        """Spec 167: with project_goals.md absent there is no onboarding (and no
+        directive) section; the first run's record turn drafts the goals."""
         ws = str(tmp_path)
         pp = ProjectPaths(ws)
         os.makedirs(pp.orbital_dir, exist_ok=True)
@@ -122,8 +123,8 @@ class TestScratchProjectGoalsLoaded:
         cached, semi_stable, dynamic = builder.build(context)
         full_prompt = cached + semi_stable + dynamic
 
-        assert "ONBOARDING MODE" in full_prompt, \
-            "ONBOARDING MODE must appear when project_goals.md does not exist"
+        assert "ONBOARDING MODE" not in full_prompt
+        assert "PROJECT DIRECTIVE" not in full_prompt
 
     def test_new_layout_memory_path_in_prompt(self, tmp_path):
         """Prompt must reference new orbital/ paths, not orbital/{slug}/ paths."""

@@ -65,11 +65,10 @@ class PromptContext:
     last_state_update_outcome: str | None = None
     refresh_in_flight: bool = False
     refresh_in_flight_since_turn: int | None = None
-    # First-session import scan mode (Stage 1-3). True = the scan card's
-    # propose → confirm → write; "guess" / "guess:<zh|en>" = spec 160's
+    # The import scan's run (spec 160): "guess" / "guess:<zh|en>" = the
     # background read of an imported project (write the guess → a short
     # summary; the daemon posts the confirm card), in the import's UI
-    # language when it was known.
+    # language when it was known. False otherwise.
     cold_start: bool | str = False
     # Scratch cross-project READ scope (Spec 12 §2a): [{"name","path"}] for
     # each in-scope project (secondary read roots). Empty/None for normal
@@ -81,8 +80,8 @@ class PromptContext:
     # lets the agent act on the user's own requests outside the workspace.
     safe_mode: bool = True
     # 2026-11-07: what Orbital knows of the user's language ({"ui", "device",
-    # "system"}, ``onboarding.user_language``). Only onboarding sections use
-    # it; None leaves them as they were.
+    # "system"}, ``onboarding.user_language``). Only the import scan's
+    # section uses it; None leaves it as it was.
     language_signals: dict | None = None
 
     def __post_init__(self):
@@ -436,22 +435,20 @@ class PromptBuilder:
         # Chat-mode messages carry no header and remain plain conversation.
         return ""
 
-    def _onboarding_or_directive(self, context: PromptContext) -> str:
-        """Return onboarding prompt if project_goals.md missing, else directive.
+    def _onboarding_or_directive(self, context: PromptContext) -> str | None:
+        """The project directive (project_goals.md), or the import scan's
+        section for that scan's run. No goals file: no section (spec 167 —
+        the user speaks first; the run's record turn drafts the goals).
 
-        The interview and scan text live in ``onboarding_prompts`` (shared
-        with a keyless project's worker-run onboarding); the rendered section
-        is byte-identical to the inline text it replaced.
+        The scan text lives in ``onboarding_prompts`` (shared with a keyless
+        project's worker-run scan).
         """
-        from agent_os.agent.onboarding_prompts import (
-            cold_start_instruction, guess_first_instruction, interview_instruction,
-        )
+        from agent_os.agent.onboarding_prompts import guess_first_instruction
         from agent_os.agent.project_paths import ProjectPaths
-        # Spec 160 §5.4: more than one agent here (Orbital's own + a worker).
-        multi_agent = bool(context.enabled_agents) and not context.is_scratch
         flavour = context.cold_start if isinstance(context.cold_start, str) else ""
-        guess = flavour == "guess" or flavour.startswith("guess:")
-        if guess:
+        if flavour == "guess" or flavour.startswith("guess:"):
+            # Spec 160 §5.4: more than one agent here (Orbital's own + a worker).
+            multi_agent = bool(context.enabled_agents) and not context.is_scratch
             # The scan run keeps its section, goals file or not; the queue
             # resets the flavour when the run ends (round 4).
             guess_lang = flavour.partition(":")[2]
@@ -462,37 +459,15 @@ class PromptBuilder:
             return guess_first_instruction(
                 context.workspace, lang=guess_lang, multi_agent=multi_agent,
                 language=self._language_section(context, flavour.partition(":")[2]))
-        goals_path = ProjectPaths(context.workspace).project_goals
-        content = self._read_truncated(goals_path)
-        language = self._language_section(context)
-        tail = f"\n\n{language}" if language else ""
-        if content is None and context.cold_start:
-            return cold_start_instruction(context.workspace) + tail
+        content = self._read_truncated(ProjectPaths(context.workspace).project_goals)
         if content is None:
-            return interview_instruction(
-                context.workspace, is_scratch=context.is_scratch,
-                project_name=context.project_name,
-                project_instructions=context.project_instructions,
-                multi_agent=multi_agent,
-            ) + tail
-        directive = (
+            return None
+        return (
             "## PROJECT DIRECTIVE\n\n"
             f"{content}\n\n"
             "This is your core operating guide. Follow these objectives, rules, and preferences\n"
             "in all your work. If the user asks you to change your approach, update project_goals.md\n"
             "to reflect the change."
-        )
-        if context.is_scratch:
-            # Quick Tasks' goals file is seeded, never written by an interview.
-            return directive
-        # The prompt is rebuilt every call and ONBOARDING MODE ends the moment
-        # project_goals.md exists, so the interview's closing steps (INDEX.md,
-        # propose, wait) would vanish mid-run without this (f5a5c17b). The
-        # daemon's onboarding gate (onboarding_gate.py) holds world-acting
-        # tools until the user replies, so one short line is enough.
-        return directive + (
-            "\nIf you wrote this file earlier in this conversation and the user hasn't replied\n"
-            "since: finish orbital/INDEX.md, propose the first step and who does it, then wait."
         )
 
     # -- Semi-stable sections (placed before history for caching) --

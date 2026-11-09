@@ -31,8 +31,7 @@ import type { DisplayItem, ResultTotals } from '../utils/chatTransform';
 import { isWorkerHandle } from '../utils/subAgentHandle';
 import type { ChatMessage as ChatMessageRow, AgentStatusEvent } from '../types';
 import AgentErrorNotice from './AgentErrorNotice';
-import { parseProviderError, providerErrorKey } from '../utils/providerError';
-import { consumeOnboardingKickoff } from '../utils/onboardingKickoff';
+import { parseProviderError } from '../utils/providerError';
 import { markFreshSession, consumeFreshSession } from '../utils/freshSession';
 import AttachmentChip from './AttachmentChip';
 import SkillChip from './SkillChip';
@@ -777,7 +776,6 @@ import CredentialCard from './CredentialCard';
 import RefreshTurnStatus from './RefreshTurnStatus';
 import ClaudemdWarningBanner, { type ClaudemdWarning } from './ClaudemdWarningBanner';
 import PendingInputNotice from './PendingInputNotice';
-import { ColdStartCard } from './ColdStartCard';
 import SubAgentStatusBar from './SubAgentStatusBar';
 import { useSubAgentStatus } from '../hooks/useSubAgentStatus';
 import FanoutCard, { isTerminal, type FanoutTaskState } from './FanoutCard';
@@ -989,15 +987,6 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [totalMessages, setTotalMessages] = useState(0);
-  // Cold-start consent card (imported non-empty workspace, first session).
-  const [coldStartBusy, setColdStartBusy] = useState(false);
-  const [coldStartDismissed, setColdStartDismissed] = useState(false);
-  // Translated inline error on the cold-start card (scan failed, e.g.
-  // missing API key). Previously the failure was console-only.
-  const [coldStartError, setColdStartError] = useState<string | null>(null);
-  // i18n key of a failed onboarding kickoff's error (e.g. missing API key),
-  // shown in the empty state — the user can still just send a message.
-  const [onboardingError, setOnboardingError] = useState<StringKey | null>(null);
   // Classified agent/provider error for the viewed session (credential-error
   // surfacing): fed by agent.status error broadcasts and run-status
   // last_terminal_event hydration; rendered as AgentErrorNotice.
@@ -1337,30 +1326,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   const localNoncesRef = useRef<Map<string, number>>(new Map());
   const wasRunningRef = useRef(false);
   const { on, off, connectionState } = useWebSocket();
-  const { injectMessage, cancelMessage, newSession, coldStartScan, startOnboarding, cancelPendingInput, getPending } = useAgent();
-  // The agent speaks first on a project with no goals and no sessions. Called
-  // only from a user action — Skip on the scan card, or the project the user
-  // just created (the one-shot below) — never from merely opening a project.
-  // Navigation to the new session is WS-driven, like the scan and /new.
-  const kickoffOnboarding = useCallback(async () => {
-    setOnboardingError(null);
-    try {
-      await startOnboarding(projectId);
-    } catch (err) {
-      // 409 = the backend's guard: the project already has goals or a
-      // session, so there is nothing to start and nothing to tell the user.
-      if (err instanceof ApiError && err.status === 409) return;
-      console.error('[ChatView] onboarding kickoff failed:', err);
-      setOnboardingError(providerErrorKey(parseProviderError(err)?.code));
-    }
-  }, [projectId, startOnboarding]);
-
-  // Create → chat handoff: App marks the project it just created; the mark is
-  // consumed once, so StrictMode's second effect run and later visits are inert.
-  useEffect(() => {
-    if (sessionId !== undefined) return;
-    if (consumeOnboardingKickoff(projectId)) void kickoffOnboarding();
-  }, [projectId, sessionId, kickoffOnboarding]);
+  const { injectMessage, cancelMessage, newSession, cancelPendingInput, getPending } = useAgent();
 
   // Queue-active gating: when the queue is running (actively dispatching a
   // task), the chat composer is replaced by ComposerDisabledPrompt — the user
@@ -1969,8 +1935,6 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   // previous session's error notice (hydration re-fills it if it applies).
   useEffect(() => {
     setAgentError(null);
-    setColdStartError(null);
-    setOnboardingError(null);
   }, [projectId, sessionId]);
 
   // Per-session history load. Re-runs when the viewed sessionId changes so
@@ -4141,44 +4105,6 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         )}
 
         {!loading && items.length === 0 && !stream && (
-          project?.is_empty_workspace === false &&
-          sessionId === undefined &&
-          // Spec 153: an imported project skips the scan offer (the scan is
-          // the briefing the import dropped) and shows the cards instead.
-          !project.imported &&
-          !coldStartDismissed ? (
-            <div className="mt-8">
-              <ColdStartCard
-                folderName={(project.workspace || '').replace(/\\/g, '/').split('/').filter(Boolean).pop() || t('coldStart.folderFallback')}
-                busy={coldStartBusy}
-                error={coldStartError}
-                onScan={async () => {
-                  setColdStartBusy(true);
-                  setColdStartError(null);
-                  try {
-                    // Navigation to the new session is WS-driven, like /new.
-                    await coldStartScan(project.project_id);
-                  } catch (err) {
-                    console.error('[ChatView] cold-start scan failed:', err);
-                    // Classified 400 (e.g. missing_api_key) → actionable
-                    // message on the card; anything else → generic copy.
-                    // Never fail silently (the original bug).
-                    const info = parseProviderError(err);
-                    setColdStartError(t(providerErrorKey(info?.code)));
-                    setColdStartBusy(false);
-                  }
-                }}
-                onSkip={async () => {
-                  // Skip declines the file scan, not the agent: it still
-                  // greets and asks what the project is for (reads no files).
-                  setColdStartBusy(true);
-                  await kickoffOnboarding();
-                  setColdStartBusy(false);
-                  setColdStartDismissed(true);
-                }}
-              />
-            </div>
-          ) : (
             <div className="mx-auto mt-10 flex w-full max-w-[460px] flex-col items-center px-2 text-center">
               {/* The mark, quietly: this is the agent you are about to talk to
                   (the same logo MessageAvatar gives its replies). On Graphite
@@ -4187,11 +4113,6 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                 <OrbitalMark keepColours className="h-14 w-14 opacity-90 dark:h-12 dark:w-12 dark:opacity-100" />
               </div>
               <p className="mt-3 text-sm text-secondary">{t('chat.empty')}</p>
-              {onboardingError && (
-                <p data-testid="onboarding-error" className="mt-2 text-sm text-error" role="alert">
-                  {t(onboardingError)}
-                </p>
-              )}
               {/* Example prompts for a project's empty chat — what to ask is
                   the first thing a new user does not know, and the middle one
                   shows that automations are created by just asking. A click
@@ -4245,7 +4166,6 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
               )}
               />
             </div>
-          )
         )}
 
         {!loading &&

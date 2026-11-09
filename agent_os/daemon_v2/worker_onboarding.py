@@ -2,12 +2,13 @@
 # Copyright (C) 2026 Orbital Contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Worker-run onboarding for a keyless project.
+"""The import scan on a keyless project's worker (spec 160 round 2).
 
 When Orbital's own agent has no key (``AgentManager.manager_ready`` false),
-the first-run onboarding — the interview, or the cold-start workspace scan —
-runs on the project's pinned worker instead of failing with
-``missing_api_key``. The worker gets the same text the management agent
+an imported project's one background read runs on the project's pinned
+worker. (Spec 167 removed the interview and the card-driven scan this
+module also used to run: other projects get their goals from their first
+run's record turn.) The worker gets the same text the management agent
 would (``agent_os.agent.onboarding_prompts``) and answers through the
 ordinary pinned direct-send path, so its reply lands as today's
 ``sub_agent_terminal`` completed row: the first bubble of the session.
@@ -41,36 +42,20 @@ class WorkerDispatchError(RuntimeError):
         self.session_id = session_id
 
 
-def build_instruction(slug: str, project: dict, mode: str,
-                      skeleton_text: str | None = None, *,
-                      guess_lang: str | None = None,
-                      multi_agent: bool = False,
+def build_instruction(slug: str, project: dict, skeleton_text: str | None = None, *,
+                      guess_lang: str = "en", multi_agent: bool = False,
                       language_signals: dict | None = None) -> str:
-    """The onboarding instruction ``slug`` receives for ``mode``.
-    ``guess_lang`` (spec 160): the import scan's guess-first flavour, in that
-    reply language; None keeps the card's propose-first scan.
-    ``language_signals``: the user's language signals; given, the
-    instruction carries the ``## LANGUAGE`` section and the worker picks the
-    language it speaks."""
+    """The import scan's instruction ``slug`` receives, in reply language
+    ``guess_lang``. ``language_signals``: the user's language signals; given,
+    the instruction carries the ``## LANGUAGE`` section and the worker picks
+    the language it speaks."""
     from agent_os.onboarding.user_language import language_section
 
-    workspace = project.get("workspace", "")
-    if mode == "scan" and guess_lang is not None:
-        return onboarding_prompts.worker_guess_first_instruction(
-            slug, workspace, skeleton_text or "", lang=guess_lang,
-            multi_agent=multi_agent,
-            language=(language_section(language_signals, import_lang=guess_lang)
-                      if language_signals else None))
-    tail = f"\n\n{language_section(language_signals)}" if language_signals else ""
-    if mode == "scan":
-        return onboarding_prompts.worker_cold_start_instruction(
-            slug, workspace, skeleton_text or "") + tail
-    return onboarding_prompts.worker_interview_instruction(
-        slug, workspace,
-        project_name=project.get("name", "") or "",
-        project_instructions=project.get("instructions", "") or "",
-        is_scratch=bool(project.get("is_scratch")),
-    ) + tail
+    return onboarding_prompts.worker_guess_first_instruction(
+        slug, project.get("workspace", ""), skeleton_text or "", lang=guess_lang,
+        multi_agent=multi_agent,
+        language=(language_section(language_signals, import_lang=guess_lang)
+                  if language_signals else None))
 
 
 def _language_signals(agent_manager) -> dict | None:
@@ -88,16 +73,15 @@ def _now() -> str:
 
 
 async def start_worker_onboarding(agent_manager, sub_agent_manager,
-                                  project_id: str, slug: str, *, mode: str,
+                                  project_id: str, slug: str, *,
                                   skeleton_text: str | None = None,
-                                  ws_manager=None, guess_lang: str | None = None,
+                                  ws_manager=None, guess_lang: str = "en",
                                   multi_agent: bool = False,
                                   title: str | None = None) -> dict:
-    """Mint a session pinned to ``slug`` and hand it the onboarding.
+    """Mint a session pinned to ``slug`` and hand it the import scan.
 
-    ``mode`` is ``"interview"`` or ``"scan"``; ``guess_lang`` /
-    ``multi_agent`` / ``title`` are the spec 160 import scan's. Returns the
-    route's 201 body.
+    ``guess_lang`` / ``multi_agent`` / ``title`` are the spec 160 import
+    scan's. Returns ``{status, session_id, session_uuid, runner}``.
     Raises ``WorkerDispatchError`` when ``send`` refuses the dispatch (the
     session then holds a ``sub_agent_dispatch_failed`` row, the same row the
     pinned inject route writes), and ``RuntimeError`` when no sub-agent
@@ -108,7 +92,7 @@ async def start_worker_onboarding(agent_manager, sub_agent_manager,
     if sub_agent_manager is None:
         raise RuntimeError(f"no sub-agent manager available to run '{slug}'")
     project = agent_manager._project_store.get_project(project_id) or {}
-    instruction = build_instruction(slug, project, mode, skeleton_text,
+    instruction = build_instruction(slug, project, skeleton_text,
                                     guess_lang=guess_lang, multi_agent=multi_agent,
                                     language_signals=_language_signals(agent_manager))
 
@@ -123,11 +107,11 @@ async def start_worker_onboarding(agent_manager, sub_agent_manager,
         config = None
     if config is not None:
         session = agent_manager._new_session_object(
-            config, session_id, cold_start=(mode == "scan"))
+            config, session_id, cold_start=True)
     else:
         session = Session.new(
             session_id, project.get("workspace", ""), session_id=session_id,
-            origin="cold_start" if mode == "scan" else "chat",
+            origin="cold_start",
         )
     agent_manager._wire_session_observers(session, project_id, session_id)
     if title:
@@ -143,7 +127,7 @@ async def start_worker_onboarding(agent_manager, sub_agent_manager,
         "_meta": {
             "event": "worker_onboarding",
             "handle": slug,
-            "mode": mode,
+            "mode": "scan",
             "suppress_wake": True,
         },
     })
@@ -184,8 +168,8 @@ async def start_worker_onboarding(agent_manager, sub_agent_manager,
             })
         raise WorkerDispatchError(result, session_id)
 
-    logger.info("Onboarding (%s) dispatched directly to '%s' (session=%s)",
-                mode, slug, session_id)
+    logger.info("Import scan dispatched directly to '%s' (session=%s)",
+                slug, session_id)
     return {
         "status": "ok",
         "session_id": session_id,
