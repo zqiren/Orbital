@@ -27,6 +27,14 @@ from agent_os.agent.providers.types import TokenUsage, StreamChunk
 # Content block translation helpers
 # ---------------------------------------------------------------------------
 
+# The only image types the Messages API accepts. Anything else (an SVG/BMP/ICO/
+# TIFF read saved before spec 165 moved those off the image path) would 400 the
+# whole request on every call, so it goes out as the same note the OpenAI path
+# writes when it flattens an image. The session row is never changed.
+_ACCEPTED_IMAGE_TYPES = frozenset({"image/jpeg", "image/png", "image/gif", "image/webp"})
+_IMAGE_OMITTED_TEXT = "[image omitted]"
+
+
 def _translate_content_to_anthropic(content) -> str | list:
     """Translate content (str or list of blocks) from OpenAI format to Anthropic format.
 
@@ -47,12 +55,20 @@ def _translate_content_to_anthropic(content) -> str | list:
             # OpenAI format: {"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}}
             data_url = block.get("image_url", {}).get("url", "")
             media_type, b64_data = _parse_data_url(data_url)
+            if media_type not in _ACCEPTED_IMAGE_TYPES:
+                anthropic_blocks.append({"type": "text", "text": _IMAGE_OMITTED_TEXT})
+                continue
             anthropic_blocks.append({
                 "type": "image",
                 "source": {"type": "base64", "media_type": media_type, "data": b64_data},
             })
         elif block_type == "image":
             # Already in Anthropic format
+            source = block.get("source") or {}
+            if (source.get("type") == "base64"
+                    and source.get("media_type") not in _ACCEPTED_IMAGE_TYPES):
+                anthropic_blocks.append({"type": "text", "text": _IMAGE_OMITTED_TEXT})
+                continue
             anthropic_blocks.append(block)
         else:
             # Unknown block type — pass through
@@ -153,9 +169,15 @@ def translate_messages_to_anthropic(
             i += 1
             continue
 
-        # 4. Assistant messages with tool_calls -> content blocks
+        # 4. Assistant messages with tool_calls -> content blocks. A row left
+        # with no blocks (blank or whitespace-only text, no tool calls, e.g.
+        # the empty-response guard's row) is not sent: the API rejects it as
+        # a text block and as empty content, and the consecutive user turns
+        # that remain are accepted (spec 165).
         if role == "assistant":
-            anthropic_messages.append(_translate_assistant_message(msg))
+            translated = _translate_assistant_message(msg)
+            if translated["content"]:
+                anthropic_messages.append(translated)
             i += 1
             continue
 
@@ -233,7 +255,11 @@ def _translate_assistant_message(msg: dict) -> dict:
     text = msg.get("content")
     tool_calls = msg.get("tool_calls")
 
-    if text:
+    # The API rejects an empty text block anywhere, and a whitespace-only one
+    # when it is the turn's only content; whitespace beside tool_use is
+    # accepted (checked on the wire, 2026-11-09), so it stays and the cached
+    # prefix of those sessions doesn't move. Kept text is never stripped.
+    if text and (tool_calls or not isinstance(text, str) or text.strip()):
         content_blocks.append({"type": "text", "text": text})
 
     if tool_calls:
@@ -250,10 +276,6 @@ def _translate_assistant_message(msg: dict) -> dict:
                 "name": func.get("name", ""),
                 "input": input_dict,
             })
-
-    # If no content and no tool_calls, use empty content blocks
-    if not content_blocks:
-        content_blocks.append({"type": "text", "text": ""})
 
     return {
         "role": "assistant",

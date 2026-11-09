@@ -42,10 +42,9 @@ _NOTICE_RESERVE = 240
 
 _MAX_IMAGE_BYTES = 5 * 1024 * 1024  # 5MB
 
-_IMAGE_EXTENSIONS = {
-    ".png", ".jpg", ".jpeg", ".gif", ".webp",
-    ".bmp", ".ico", ".tiff", ".svg",
-}
+# Only the formats models accept as images (Anthropic and OpenAI vision both
+# take exactly these four). An .svg is XML and reads as text.
+_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 
 _MIME_MAP = {
     ".png": "image/png",
@@ -53,11 +52,11 @@ _MIME_MAP = {
     ".jpeg": "image/jpeg",
     ".gif": "image/gif",
     ".webp": "image/webp",
-    ".bmp": "image/bmp",
-    ".ico": "image/x-icon",
-    ".tiff": "image/tiff",
-    ".svg": "image/svg+xml",
 }
+
+# Images a model can't be sent. Kept recognised so they never fall to the
+# text path as binary noise; the file isn't read at all.
+_UNVIEWABLE_IMAGE_FORMATS = {".bmp": "BMP", ".ico": "ICO", ".tiff": "TIFF"}
 
 
 class ReadTool(Tool):
@@ -201,6 +200,12 @@ class ReadTool(Tool):
                    limit: int | None = None) -> ToolResult:
         """Read file contents. Images are returned as multimodal content blocks."""
         ext = os.path.splitext(filepath)[1].lower()
+
+        if ext in _UNVIEWABLE_IMAGE_FORMATS:
+            return ToolResult(content=(
+                f"{os.path.basename(filepath)}: {_UNVIEWABLE_IMAGE_FORMATS[ext]} "
+                f"images can't be viewed. Convert it to PNG to view it."
+            ))
 
         if ext in _IMAGE_EXTENSIONS:
             # Images are whole-or-nothing — offset/limit are line concepts.
