@@ -624,9 +624,13 @@ class TestPinnedSpawnPrompt:
             ws, None, "codex", ["codex"], pinned=True)
         assert "PINNED MODE" in rendered
         assert "no manager is mediating" in rendered
-        assert "APPEND entries to" in rendered
-        assert "TARGETED EDITS" in rendered
-        assert "NO metadata comment grammar" in rendered
+        # 1109: pinned workers write memory once, at the "[Orbital memory]"
+        # record turn (or when the user asks), not when a decision lands.
+        assert "[Orbital memory]" in rendered
+        assert "not while you work" in rendered
+        assert "when the user asks you to record something" in rendered
+        for gone in ("APPEND entries to", "TARGETED EDITS", "when a decision lands"):
+            assert gone not in rendered, gone
         assert "NEVER reorganize, dedupe, trim, or rewrite" in rendered
         assert "INDEX.md" in rendered
         # The standard ban is REPLACED, not doubled.

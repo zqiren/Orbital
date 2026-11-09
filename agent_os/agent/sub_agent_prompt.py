@@ -141,7 +141,10 @@ def render_sub_agent_prompt(
     lines: list[str] = []
     lines.append(f"You are a sub-agent dispatched within an Orbital project at {workspace}.")
     lines.append("")
-    lines.append("Before responding to any non-trivial request, read these files:")
+    # 1109 W1: a dispatched worker already gets a self-contained brief and
+    # the chat recap; a mandatory read of all six paths cost 4-6 reads per
+    # dispatch before any work.
+    lines.append("Project context lives in these files; read the ones the task needs:")
     lines.append(f"- {paths.project_state}   — current task state")
     lines.append(f"- {paths.decisions}       — project decisions to respect")
     lines.append(f"- {paths.lessons}       — past learnings")
@@ -152,8 +155,8 @@ def render_sub_agent_prompt(
     lines.append(skills_line)
     lines.append("")
     lines.append(
-        "These are authoritative. Do not ignore them. If they conflict with the user's "
-        "immediate request, ask for clarification rather than proceeding."
+        "They are authoritative: if they conflict with the user's immediate request, "
+        "ask for clarification rather than proceeding."
     )
     lines.append("")
     lines.append("You have your own long-term memory at:")
@@ -199,24 +202,24 @@ def render_sub_agent_prompt(
             f"you directly."
         )
         lines.append("")
-        lines.append("Project memory write contract (pinned mode):")
+        # 1109: one write moment, the same as the manager's (spec 112):
+        # when the run ends the daemon sends the "[Orbital memory]" message
+        # (agent_manager._maybe_send_worker_memory_record) carrying the entry
+        # rules (loop.MEMORY_SHAPE_RULES). Writing mid-run as well made two
+        # write paths for the same facts, and a mid-run write suppressed the
+        # record turn.
+        lines.append("Project memory (pinned mode):")
         lines.append(
-            f"- APPEND entries to {paths.decisions} and {paths.lessons} when "
-            "a decision lands or a lesson is learned."
-        )
-        lines.append(
-            f"- APPEND to or make TARGETED EDITS of individual entries in "
-            f"{paths.project_state} to keep current state accurate."
-        )
-        lines.append(
-            "- Write plain markdown bullets — NO metadata comment grammar "
-            "(no ids, no <!--mem--> comments); the system stamps entries "
-            "mechanically."
+            f"- {paths.project_state}, {paths.decisions} and {paths.lessons} "
+            "are yours to keep current, but not while you work: when your "
+            "turn ends, Orbital sends an \"[Orbital memory]\" message asking "
+            "what to record, with the rules for an entry. Write them then, or "
+            "when the user asks you to record something."
         )
         lines.append(
             "- NEVER reorganize, dedupe, trim, or rewrite these files "
             f"wholesale, and NEVER touch {paths.index} — cleanup and project "
-            "chores stay with the system. Workers add, the system tidies."
+            "chores stay with the system."
         )
         asks_file = os.path.join(orbital, "ASKS.md")
         lines.append(

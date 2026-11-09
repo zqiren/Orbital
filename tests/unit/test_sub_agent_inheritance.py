@@ -79,6 +79,15 @@ class TestRenderSubAgentPromptPaths:
         )
         assert own_memory in prompt
 
+    def test_reads_are_the_ones_the_task_needs_not_all_six(self, workspace):
+        """1109 W1: a dispatched worker already has a self-contained brief;
+        the files stay authoritative, but reading all of them is no longer
+        mandatory before every non-trivial request."""
+        prompt = render_sub_agent_prompt(workspace, None, "claude-code", ["claude-code"])
+        assert "read the ones the task needs" in prompt
+        assert "They are authoritative" in prompt
+        assert "Before responding to any non-trivial request" not in prompt
+
     def test_render_sub_agent_prompt_omits_other_agents_section_when_alone(
         self, workspace
     ):

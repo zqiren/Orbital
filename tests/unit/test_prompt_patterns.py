@@ -348,7 +348,11 @@ class TestLessonsInstructionUpdate:
         assert "Do not update the memory files during a run." in semi_stable
         assert "Update them proactively" not in semi_stable
         assert "LESSONS.md" in semi_stable
-        assert "Add a lesson when you" in semi_stable
+        # 1109 R4: what a lesson is stays in the prompt; the trigger to add
+        # one rides the [MEMORY] row, where it is written.
+        assert "rules learned from errors" in semi_stable
+        from agent_os.agent.loop import build_memory_record_text
+        assert "an error recovered from" in build_memory_record_text("/nonexistent", [], [])
 
     def test_old_do_not_write_removed(self):
         """Old contradictory 'do NOT need to read or write' instruction is gone."""

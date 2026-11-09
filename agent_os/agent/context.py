@@ -14,7 +14,7 @@ import json
 import logging
 import os
 import re
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import NamedTuple
 
@@ -83,6 +83,27 @@ _DRIFT_LINE = (
     "on disk already reflect your edits — do not apply them again. Read a "
     "file if you need its current content."
 )
+
+
+# 1109 R6: the same note for the semi-stable system block and the extra
+# instructions/*.md row, which are frozen per run like Layer 1. Tail only.
+_PROMPT_DRIFT_LINE = (
+    "[PROMPT SNAPSHOT] {parts} changed on disk during this run; the system "
+    "prompt above keeps the start-of-run version until the next run. A change "
+    "you made is already in effect, so do not re-read it; read the file only "
+    "if someone else changed it and the task depends on it."
+)
+
+
+@dataclass
+class _SemiSnap:
+    """The semi-stable block and the ``[Project Instructions]`` text as
+    injected for the current run (1109 R6). ``parts`` is the builder's
+    ``(label, text)`` split, used only to name what drifted (None when the
+    builder does not offer it)."""
+    text: str
+    parts: list[tuple[str, str]] | None
+    instructions: str | None
 
 
 def _content_hash(content: str | None) -> str:
@@ -265,6 +286,10 @@ class ContextManager:
         # begun on this manager, which keeps the legacy per-call media
         # pruning for callers that never call begin_run()).
         self._layer1_snapshot: dict[str, _Layer1Snap] | None = None
+        # 1109 R6: the semi-stable block + [Project Instructions] text for
+        # the current run (None until the run's first prepare()).
+        self._semi_snapshot: _SemiSnap | None = None
+        self._semi_drift_memo: tuple[str, list[str]] | None = None
         self._run_start_turn: int | None = None
         # Spec 124 §3.7: Layer-1 rows handed over by another run (the Memory
         # session starts from the triggering run's ``layer1_snapshot()``).
@@ -495,6 +520,8 @@ class ContextManager:
         only the bytes injected into the prompt are frozen between boundaries.
         """
         self._layer1_snapshot = None
+        self._semi_snapshot = None
+        self._semi_drift_memo = None
         if self._adopted_layer1 is not None:
             self._layer1_snapshot = self._install_adopted(self._adopted_layer1)
             self._adopted_layer1 = None
@@ -579,15 +606,35 @@ class ContextManager:
         )
 
         # Build system prompt
-        cached_prefix, semi_stable, truly_dynamic = self._prompt_builder.build(ctx)
+        cached_prefix, semi_fresh, truly_dynamic = self._prompt_builder.build(ctx)
         system_prompt = cached_prefix
-        system_tokens = self._estimate_tokens(system_prompt)
-        semi_stable_tokens = self._estimate_tokens(semi_stable)
-        dynamic_tokens = self._estimate_tokens(truly_dynamic)
 
         # Read Layer 1 files from disk
         workspace = self._base_ctx.workspace
         pp = ProjectPaths(workspace)
+
+        # 1109 R6: the semi-stable block sits ahead of the whole history and
+        # is built from files the agent and the user change mid-run (user
+        # memory, user_directives.md, project_goals.md, skills, deployment
+        # instructions; instructions/*.md for the Layer-3 row). Like Layer 1
+        # (spec 112 A1) it is taken once per run and reused byte-for-byte;
+        # a change takes effect at the next begin_run(), and the tail names
+        # it meanwhile.
+        instructions_fresh = self._read_instructions(pp.instructions_dir)
+        if self._semi_snapshot is None:
+            self._semi_snapshot = _SemiSnap(
+                semi_fresh, self._semi_parts(ctx), instructions_fresh)
+        semi_snap = self._semi_snapshot
+        semi_stable = semi_snap.text
+        prompt_drift: list[str] = []
+        if semi_fresh != semi_snap.text:
+            prompt_drift.extend(self._semi_drift_labels(ctx, semi_fresh))
+        if instructions_fresh != semi_snap.instructions:
+            prompt_drift.append("instructions/")
+
+        system_tokens = self._estimate_tokens(system_prompt)
+        semi_stable_tokens = self._estimate_tokens(semi_stable)
+        dynamic_tokens = self._estimate_tokens(truly_dynamic)
 
         layer_messages: list[dict] = []
 
@@ -655,9 +702,8 @@ class ContextManager:
         # per-call tail cost ~1.5–2k never-cached tokens on every call (the
         # tail moves off the prefix on the next call).
 
-        # Layer 3: instructions/*.md
-        instructions_dir = pp.instructions_dir
-        instructions_content = self._read_instructions(instructions_dir)
+        # Layer 3: instructions/*.md, as frozen for the run (1109 R6).
+        instructions_content = semi_snap.instructions
         if instructions_content:
             layer_messages.append({
                 "role": "system",
@@ -759,6 +805,12 @@ class ContextManager:
                 + _DRIFT_LINE.format(files=", ".join(drifted))
             )
 
+        if prompt_drift:
+            truly_dynamic = (
+                (truly_dynamic + "\n\n" if truly_dynamic else "")
+                + _PROMPT_DRIFT_LINE.format(parts=", ".join(prompt_drift))
+            )
+
         # Truly dynamic runtime context (timestamps, context budget) rides the
         # tail as a POSITIONAL turn — see _attach_runtime_block.
         self._attach_runtime_block(result, truly_dynamic)
@@ -791,6 +843,36 @@ class ContextManager:
         )
 
         return result
+
+    def _semi_parts(self, ctx: PromptContext) -> list[tuple[str, str]] | None:
+        parts_fn = getattr(self._prompt_builder, "semi_stable_parts", None)
+        if not callable(parts_fn):
+            return None
+        try:
+            return list(parts_fn(ctx))
+        except Exception:  # noqa: BLE001 — naming the drift is best-effort
+            logger.debug("semi_stable_parts failed", exc_info=True)
+            return None
+
+    def _semi_drift_labels(self, ctx: PromptContext, semi_fresh: str) -> list[str]:
+        """Labels of the semi-stable sections that differ from the run's
+        snapshot. Memoised on the fresh text, so a file that changed once
+        costs one extra section build, not one per call."""
+        memo = self._semi_drift_memo
+        if memo is not None and memo[0] == semi_fresh:
+            return list(memo[1])
+        old = self._semi_snapshot.parts if self._semi_snapshot else None
+        new = self._semi_parts(ctx)
+        if old is None or new is None:
+            labels = ["the system prompt's project sections"]
+        else:
+            old_by, new_by = dict(old), dict(new)
+            order = [label for label, _ in new] + [l for l, _ in old if l not in new_by]
+            labels = [label for label in order if old_by.get(label) != new_by.get(label)]
+            if not labels:
+                labels = ["the system prompt's project sections"]
+        self._semi_drift_memo = (semi_fresh, labels)
+        return list(labels)
 
     _VALID_LLM_ROLES = {"system", "user", "assistant", "tool"}
 

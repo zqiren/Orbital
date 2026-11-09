@@ -177,8 +177,12 @@ class TestSystemPromptContextInstructions:
         # Spec 112 A6b / 124 §3.8: the daemon asks at the end of every run,
         # with the current file text in hand; INDEX is updated then too.
         assert "at the end of every run" in semi.lower()
-        assert "including index.md whenever the set of" in semi.lower()
         assert "proactively" not in semi.lower()
+        # 1109 R4: when to add an INDEX line is said in the [MEMORY] row,
+        # at the moment it is written.
+        from agent_os.agent.loop import build_memory_record_text
+        row = build_memory_record_text(str(tmp_path), [], [])
+        assert "only if the set of important files changed" in " ".join(row.lower().split())
 
     def test_scratch_project_has_no_index_md_instruction(self, tmp_path):
         _cached, semi, _dyn = PromptBuilder(str(tmp_path)).build(
