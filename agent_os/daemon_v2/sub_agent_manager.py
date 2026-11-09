@@ -587,9 +587,10 @@ class SubAgentManager:
         --append-system-prompt-file injection; the caller is responsible
         for the degraded first-turn injection path.
 
-        ``dispatch_mcp`` (spec 161, ``{"url", "token"}``) reaches the two
+        ``dispatch_mcp`` (spec 161, ``{"url", "token"}``) reaches the
         transports that can mount the daemon's HTTP MCP server: the SDK (as
-        an ``mcp_servers`` entry) and the codex app-server (as ``-c`` argv).
+        an ``mcp_servers`` entry), the codex app-server (as ``-c`` argv), ACP
+        (on session open) and Pi (through Orbital's ``-e`` extension).
         """
         transport_hint = getattr(manifest.runtime, 'transport', 'auto')
         mode = manifest.runtime.mode
@@ -689,6 +690,7 @@ class SubAgentManager:
                 system_prompt=system_prompt,
                 resume_record=resume_record,
                 session_dir=session_dir,
+                dispatch_mcp=dispatch_mcp,
             )
         else:
             # Fallback: no transport, use legacy CLIAdapter path
@@ -1314,12 +1316,12 @@ class SubAgentManager:
             return f"Error: unsupported transport in manifest: {e}"
         if dispatch_token is not None:
             if getattr(transport, "dispatch_mcp", None) is not None:
-                pass  # claude-code: the token rides the SDK's MCP header
+                pass  # claude-code, ACP, pi: the transport carries the token
             elif getattr(transport, "_dispatch_url", None):
                 # codex reads it from the app-server's env by name.
                 config.env = {**(config.env or {}), DISPATCH_TOKEN_ENV: dispatch_token}
             else:
-                # Transports without an HTTP MCP route (pipe, PTY, ACP, pi).
+                # Transports without an HTTP MCP route (pipe, PTY).
                 self._dispatch_tokens.pop(dispatch_token, None)
                 dispatch_token = None
 
@@ -1387,7 +1389,10 @@ class SubAgentManager:
         # Codex and ACP workers take no Orbital system prompt: the launcher
         # paragraph (spec 134 Part B, Codex) and, for the seat-holder, the
         # dispatch line (spec 161) ride on the first dispatch of this process.
-        takes_first_turn_note = transport_kind in ("codex-appserver", "acp-sdk")
+        # Pi takes the system prompt, but its seat-holder gets the same line
+        # so every worker learns about the tool the same way.
+        takes_first_turn_note = transport_kind in (
+            "codex-appserver", "acp-sdk", "pi-rpc")
         adapter._orbital_first_turn_note = (
             jobs_hint if transport_kind == "codex-appserver" else None)
         adapter._dispatch_token = dispatch_token
@@ -1413,7 +1418,8 @@ class SubAgentManager:
             self._adapters[sk][handle] = adapter
 
         # Only now is it known whether the agent took the dispatch endpoint
-        # (an ACP agent must advertise HTTP MCP); a token nobody mounted is
+        # (an ACP agent must advertise HTTP MCP; Pi's extension must report
+        # "mounted"); a token nobody mounted is
         # revoked and the worker is not told about a tool it lacks.
         if dispatch_token is not None and getattr(transport, "dispatch_mounted", True) is False:
             self._revoke_dispatch_token(adapter)

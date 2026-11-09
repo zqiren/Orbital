@@ -36,6 +36,7 @@ def _mgr(tmp_path, *, url=URL):
     registry.register(ManifestLoader.load(os.path.join(_MANIFESTS, "claude_code.yaml")))
     registry.register(ManifestLoader.load(os.path.join(_MANIFESTS, "codex.yaml")))
     registry.register(ManifestLoader.load(os.path.join(_MANIFESTS, "minimax-code.yaml")))
+    registry.register(ManifestLoader.load(os.path.join(_MANIFESTS, "pi.yaml")))
     ws = tmp_path / "ws"
     ws.mkdir(exist_ok=True)
     setup_engine = MagicMock()
@@ -63,7 +64,7 @@ async def _spawn(mgr, handle, initiator, *, acp_mounts=True):
     async def start(config):
         # The real ACP handshake sets this; the mocked adapter never runs it.
         t = holder.get("transport")
-        if type(t).__name__ == "ACPSDKTransport" and t.dispatch_mcp:
+        if type(t).__name__ in ("ACPSDKTransport", "PiRPCTransport") and t.dispatch_mcp:
             t.dispatch_mounted = acp_mounts
 
     with patch("agent_os.daemon_v2.sub_agent_manager.CLIAdapter") as adapter_cls, \
@@ -307,6 +308,47 @@ async def test_acp_agent_without_http_mcp_loses_the_token_and_the_line(tmp_path)
     mgr = _mgr(tmp_path)
     adapter, transport, _ = await _spawn(mgr, "minimax-code", "user_pinned",
                                          acp_mounts=False)
+    assert mgr._dispatch_tokens == {}
+    assert adapter._dispatch_token is None
+    assert not adapter._orbital_first_turn_note
+
+
+# Pi (pi-rpc) mounts the endpoint through its own MCP client, via Orbital's
+# one-file extension passed only to the seat-holder (the transport's half is
+# pinned in test_pi_dispatch_extension.py). Pi takes Orbital's system prompt,
+# but the seat-holder still gets the same first-turn line as Codex and ACP.
+@pytest.mark.asyncio
+@pytest.mark.parametrize("initiator", ["user_pinned", "queue_item"])
+async def test_top_of_session_pi_gets_the_http_config_and_the_line(tmp_path, initiator):
+    mgr = _mgr(tmp_path)
+    adapter, transport, config = await _spawn(mgr, "pi", initiator)
+    assert type(transport).__name__ == "PiRPCTransport"
+    cfg = transport.dispatch_mcp
+    assert cfg["url"] == URL
+    assert mgr.dispatch_context(cfg["token"]).handle == "pi"
+    # The transport puts the token in pi's env itself; the adapter config
+    # (the shared spawn env) never carries it.
+    assert TOKEN_ENV not in (config.env or {})
+    note = adapter._orbital_first_turn_note
+    assert "`dispatch` tool of the `orbital` MCP server" in note
+    assert "claude-code" in note
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("initiator", ["management_agent", "worker:codex"])
+async def test_a_dispatched_pi_gets_nothing(tmp_path, initiator):
+    mgr = _mgr(tmp_path)
+    adapter, transport, _ = await _spawn(mgr, "pi", initiator)
+    assert transport.dispatch_mcp is None
+    assert mgr._dispatch_tokens == {}
+    assert not getattr(adapter, "_orbital_first_turn_note", None)
+
+
+@pytest.mark.asyncio
+async def test_pi_without_the_mount_loses_the_token_and_the_line(tmp_path):
+    # pi older than 0.99, its built-in MCP disabled, or the extension failed.
+    mgr = _mgr(tmp_path)
+    adapter, _, _ = await _spawn(mgr, "pi", "user_pinned", acp_mounts=False)
     assert mgr._dispatch_tokens == {}
     assert adapter._dispatch_token is None
     assert not adapter._orbital_first_turn_note
