@@ -41,6 +41,7 @@ from acp.schema import (
     CancelElicitationResponse,
     ClientCapabilities,
     ClientSessionCapabilities,
+    AvailableCommandsUpdate,
     ConfigOptionUpdate,
     DeniedOutcome,
     ElicitationCapabilities,
@@ -580,6 +581,14 @@ class ACPSDKTransport(AgentTransport):
 
     async def session_update(self, session_id: str, update: Any, **kwargs: Any) -> None:
         try:
+            if isinstance(update, AvailableCommandsUpdate):
+                # Spec 166: the agent's command list for the `/` picker. Kept
+                # whenever it arrives — before session/new has returned, idle,
+                # or re-announced mid-turn — and never an event. The process
+                # serves one workspace, so the session it names doesn't matter.
+                from agent_os.daemon_v2.worker_commands import acp_commands
+                self._publish_commands(acp_commands(update.available_commands))
+                return
             if session_id != self._session_id:
                 logger.debug("ACPSDKTransport: update for inactive session %s", session_id)
                 return

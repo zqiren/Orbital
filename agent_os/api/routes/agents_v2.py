@@ -4433,17 +4433,30 @@ async def list_skills(project_id: str):
 
 
 @router.get("/projects/{project_id}/skill-catalog")
-async def get_skill_catalog(project_id: str):
+async def get_skill_catalog(project_id: str, worker: str | None = None):
     """Every skill this project can use, for the composer's ``/`` picker.
 
     Spec 132: the project's ``orbital/skills`` plus workspace-native and
     user-global CLI skills, deduped (``SkillCatalog``). Read-only on purpose:
     ``/skills`` above stays project-only because Settings deletes through it.
+
+    Spec 166: ``worker`` (the composer's pin) folds in that worker's own
+    commands, as it reported them (or a cold probe, where one is free of
+    side effects); entries carry ``invoke``, the text a pick prefills.
     """
+    from agent_os.daemon_v2 import worker_commands
     project = _project_store.get_project(project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
-    return await asyncio.to_thread(SkillCatalog(project.get("workspace", "")).scan)
+    workspace = project.get("workspace", "")
+    entries = await asyncio.to_thread(SkillCatalog(workspace).scan)
+    store = worker_commands.get_store()
+    if not worker or store is None:
+        return entries
+    probe_fn = getattr(_sub_agent_manager, "probe_worker_commands", None)
+    probe = (lambda: probe_fn(worker, workspace)) if probe_fn else None
+    commands = await store.commands_for(worker, workspace, probe)
+    return worker_commands.merge_catalog(entries, commands)
 
 
 @router.delete("/projects/{project_id}/skills/{skill_name}")

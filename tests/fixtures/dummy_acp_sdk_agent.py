@@ -10,6 +10,8 @@ from acp import PROTOCOL_VERSION, run_agent, text_block
 from acp.schema import (
     AgentCapabilities,
     AgentMessageChunk,
+    AvailableCommand,
+    AvailableCommandsUpdate,
     Implementation,
     InitializeResponse,
     LoadSessionResponse,
@@ -79,7 +81,25 @@ class DummyAgent:
             agent_info=Implementation(name="dummy-acp", version="1.0"),
         )
 
+    async def _announce_commands(self, session_id, *names) -> None:
+        # Spec 166: real agents (cursor, kimi) push their command list right
+        # after session/new; this one sends it before the response, the
+        # earliest a client can see it.
+        await self.connection.session_update(
+            session_id=session_id,
+            update=AvailableCommandsUpdate(
+                session_update="available_commands_update",
+                available_commands=[
+                    AvailableCommand.model_validate(
+                        {"name": n, "description": f"{n} command",
+                         **({"input": {"hint": "instructions"}} if n == "compact" else {})})
+                    for n in names
+                ],
+            ),
+        )
+
     async def new_session(self, cwd, **kwargs) -> NewSessionResponse:
+        await self._announce_commands("dummy-session", "compact", "status")
         return NewSessionResponse(
             session_id="dummy-session",
             config_options=_config_options(self.model, self.mode),
@@ -155,6 +175,9 @@ class DummyAgent:
                 {"toolCallId": "plan-1", "name": "Implementation", "plan": "Do it"},
             )
             text = json.dumps(answer)
+        elif text == "commands":
+            await self._announce_commands(session_id, "compact", "status", "review")
+            text = "announced"
         elif text == "wait":
             await self.cancelled.wait()
             return PromptResponse(stop_reason="cancelled")

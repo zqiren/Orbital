@@ -73,6 +73,8 @@ let chatLatestResponse: unknown[] = [];
 const projectPutCalls: Array<{ path: string; body: unknown }> = [];
 // Spec 132: GET /projects/{pid}/skill-catalog (the `/` skill picker).
 let skillCatalogResponse: unknown[] = [];
+// Spec 166: per-path answer (the `?worker=` pin), when a test sets one.
+let skillCatalogResponder: ((path: string) => unknown[]) | null = null;
 // Spec 065: GET /files/history/status and /files/history/turn. null = the
 // route answers like every unknown path (an empty list), i.e. no history.
 let historyStatusResponse: unknown = null;
@@ -109,7 +111,7 @@ vi.mock('../config', () => ({
       return {};
     }
     if (!opts?.method && path.includes('/skill-catalog')) {
-      return skillCatalogResponse;
+      return skillCatalogResponder ? skillCatalogResponder(path) : skillCatalogResponse;
     }
     if (path.includes('/files/history/status') && historyStatusResponse) return historyStatusResponse;
     if (path.includes('/files/history/turn') && historyTurnResponse) return historyTurnResponse;
@@ -364,6 +366,7 @@ beforeEach(() => {
   chatLatestResponse = [];
   projectPutCalls.length = 0;
   skillCatalogResponse = [];
+  skillCatalogResponder = null;
   historyStatusResponse = null;
   historyTurnResponse = null;
   forkCalls.length = 0;
@@ -5728,5 +5731,142 @@ describe('ChatView: message actions (spec 156 §5.1/§5.6/§5.7, 164)', () => {
     // The editor closed with the fork; the one textarea left is the composer.
     expect(container.querySelectorAll('textarea')).toHaveLength(1);
     expect((container.querySelector('textarea') as HTMLTextAreaElement).value).toBe('edited words');
+  });
+});
+
+
+// --------------------------------------------------------------------------
+// Spec 166: the pinned worker's own commands in the `/` picker
+// --------------------------------------------------------------------------
+describe("Spec 166: the / picker offers the pinned worker's own commands", () => {
+  const TASK = {
+    key: 'task planning', name: 'Task Planning', description: 'Plan.',
+    source: 'project', path: '/ws/orbital/skills/task-planning/SKILL.md', dir_name: 'task-planning',
+  };
+  const REVIEW = {
+    key: 'review', name: 'review', description: 'Review a PR (project)', source: 'worker',
+    path: '', dir_name: '', invoke: '/review ', hint: '<pr>',
+  };
+  const IMAGEGEN = {
+    key: 'imagegen', name: 'imagegen', description: 'Make images', source: 'worker',
+    path: '', dir_name: '', invoke: '$imagegen ', hint: '',
+  };
+  const WORKERS = [{ slug: 'claude-code', name: 'Claude Code' }, { slug: 'codex', name: 'Codex' }];
+  const pinnedTo = (slug: string | null): Project => ({ ...project, effective_pinned_target: slug });
+
+  const optionNames = () =>
+    Array.from(container.querySelectorAll('[data-testid="skill-option"]')).map(
+      (el) => el.getAttribute('data-skill-name'),
+    );
+  const composerChip = () => container.querySelector('[data-testid="composer-skill-chip"]');
+  const textarea = () => container.querySelector('textarea') as HTMLTextAreaElement;
+  const catalogCalls = () => apiCalls.filter((p) => p.includes('/skill-catalog'));
+  async function type(text: string) {
+    await act(async () => { typeInComposer(text); });
+    await flushEffects();
+  }
+  async function press(key: string) {
+    const ev = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true });
+    await act(async () => { textarea().dispatchEvent(ev); });
+    await flushEffects();
+  }
+  async function frame() {
+    await act(async () => { await new Promise((r) => requestAnimationFrame(() => r(null))); });
+  }
+
+  beforeEach(() => {
+    skillCatalogResponder = (path) => {
+      const worker = new URL(path, 'http://x').searchParams.get('worker');
+      if (worker === 'claude-code') return [REVIEW, TASK];
+      if (worker === 'codex') return [IMAGEGEN, TASK];
+      return [TASK];
+    };
+  });
+
+  it('a worker pin loads its list before the first /, with ?worker=', async () => {
+    await renderChat({ sessionId: 's1', agents: WORKERS, project: pinnedTo('claude-code') });
+    await flushEffects();
+    expect(catalogCalls()).toEqual(['/api/v2/projects/p1/skill-catalog?worker=claude-code']);
+    await type('/');
+    expect(optionNames()).toContain('review');
+    expect(optionNames()).toContain('Task Planning');
+  });
+
+  it('unpinned (Orbital): no prefetch, the plain catalog on /', async () => {
+    await renderChat({ sessionId: 's1', agents: WORKERS, project: pinnedTo(null) });
+    await flushEffects();
+    expect(catalogCalls()).toEqual([]);
+    await type('/');
+    expect(catalogCalls()).toEqual(['/api/v2/projects/p1/skill-catalog']);
+    expect(optionNames()).not.toContain('review');
+  });
+
+  it('the row shows the argument hint', async () => {
+    await renderChat({ sessionId: 's1', agents: WORKERS, project: pinnedTo('claude-code') });
+    await flushEffects();
+    await type('/rev');
+    const row = container.querySelector('[data-skill-name="review"]');
+    expect(row?.querySelector('[data-testid="skill-option-hint"]')?.textContent).toBe('<pr>');
+  });
+
+  it('a pick prefills the invocation with the caret at the end, no chip, nothing sent', async () => {
+    await renderChat({ sessionId: 's1', agents: WORKERS, project: pinnedTo('claude-code') });
+    await flushEffects();
+    await type('/rev');
+    expect(optionNames()).toEqual(['review']);
+    await press('Enter');
+    await frame();
+    expect(injectCalls).toHaveLength(0);
+    expect(composerChip()).toBeNull();
+    expect(textarea().value).toBe('/review ');
+    expect(textarea().selectionStart).toBe(8);
+    expect(textarea().selectionEnd).toBe(8);
+    expect(container.querySelector('[data-testid="skill-menu"]')).toBeNull();
+  });
+
+  it('Enter sends the text verbatim through the pin, with no skill payload', async () => {
+    await renderChat({ sessionId: 's1', agents: WORKERS, project: pinnedTo('claude-code') });
+    await flushEffects();
+    await type('/rev');
+    await press('Enter');
+    await type('/review 42');
+    await press('Enter');
+    expect(injectCalls).toHaveLength(1);
+    // injectMessage(projectId, content, target, nonce, attachments, sessionId, pinned, skill)
+    expect(injectCalls[0][1]).toBe('/review 42');
+    expect(injectCalls[0][2]).toBe('claude-code');
+    expect(injectCalls[0][6]).toBe(true);
+    expect(injectCalls[0][7]).toBeUndefined();
+  });
+
+  it('picking a worker command clears a chip picked earlier', async () => {
+    await renderChat({ sessionId: 's1', agents: WORKERS, project: pinnedTo('claude-code') });
+    await flushEffects();
+    await type('/tas');
+    await press('Enter');
+    expect(composerChip()?.textContent).toContain('Task Planning');
+    await type('/rev');
+    await press('Enter');
+    expect(composerChip()).toBeNull();
+    await type('/review x');
+    await press('Enter');
+    expect(injectCalls[0][7]).toBeUndefined();
+  });
+
+  it("a Codex pick prefills $name; the Codex pin shows Codex's list, not Claude's", async () => {
+    await renderChat({ sessionId: 's1', agents: WORKERS, project: pinnedTo('claude-code') });
+    await flushEffects();
+    await type('/');
+    expect(optionNames()).toContain('review');
+    // The pin moves to Codex while the menu is open.
+    await renderChat({ sessionId: 's1', agents: WORKERS, project: pinnedTo('codex') });
+    await flushEffects();
+    expect(optionNames()).toContain('imagegen');
+    expect(optionNames()).not.toContain('review');
+    await type('/ima');
+    await press('Enter');
+    await frame();
+    expect(textarea().value).toBe('$imagegen ');
+    expect(composerChip()).toBeNull();
   });
 });

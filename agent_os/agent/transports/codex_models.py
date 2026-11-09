@@ -54,6 +54,20 @@ async def read_model_ids(reader, writer, *, timeout: float = _DEFAULT_TIMEOUT
     notifications, stray output) are skipped, mirroring the transport's
     read loop.
     """
+    # Same includeHidden=False the transport's startup resolution uses.
+    result = await _handshake_then(reader, writer, "model/list",
+                                   {"includeHidden": False}, timeout=timeout)
+    data = result.get("data")
+    if not isinstance(data, list):
+        raise RuntimeError(f"model/list returned no data list: {result}")
+    return [m["id"] for m in data
+            if isinstance(m, dict) and isinstance(m.get("id"), str)]
+
+
+async def _handshake_then(reader, writer, method: str, params: dict, *,
+                          timeout: float) -> dict:
+    """initialize → initialized → one request; its ``result`` (raises on an
+    error response, EOF or timeout)."""
 
     def send(obj: dict) -> None:
         writer.write((json.dumps(obj) + "\n").encode("utf-8"))
@@ -78,16 +92,43 @@ async def read_model_ids(reader, writer, *, timeout: float = _DEFAULT_TIMEOUT
     await writer.drain()
     await read_response(1)
     send({"jsonrpc": "2.0", "method": "initialized"})
-    # Same includeHidden=False the transport's startup resolution uses.
-    send({"jsonrpc": "2.0", "id": 2, "method": "model/list",
-          "params": {"includeHidden": False}})
+    send({"jsonrpc": "2.0", "id": 2, "method": method, "params": params})
     await writer.drain()
-    result = (await read_response(2)).get("result") or {}
-    data = result.get("data")
-    if not isinstance(data, list):
-        raise RuntimeError(f"model/list returned no data list: {result}")
-    return [m["id"] for m in data
-            if isinstance(m, dict) and isinstance(m.get("id"), str)]
+    msg = await read_response(2)
+    if "error" in msg:
+        raise RuntimeError(f"{method} failed: {msg['error']}")
+    result = msg.get("result")
+    return result if isinstance(result, dict) else {}
+
+
+async def fetch_codex_skills(binary: str, workspace: str, *,
+                             env: dict | None = None,
+                             timeout: float = _DEFAULT_TIMEOUT
+                             ) -> list[dict] | None:
+    """Spec 166 cold probe: ``skills/list`` from an app-server spawned in the
+    project's workspace (repo-scope skills come from its cwd). Returns the
+    worker-commands normal form, or None on ANY failure. Uncached: the
+    worker-commands store owns freshness."""
+    from agent_os.daemon_v2.worker_commands import codex_commands
+    proc = None
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            binary, "app-server",
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+            cwd=workspace, env=env,
+            limit=1024 * 1024,
+            creationflags=win_no_window_flags(),
+        )
+        return codex_commands(await _handshake_then(
+            proc.stdout, proc.stdin, "skills/list", {}, timeout=timeout))
+    except Exception as exc:  # noqa: BLE001 — display data, never raise
+        logger.info("codex skills/list unavailable (%s: %s)",
+                    type(exc).__name__, exc)
+        return None
+    finally:
+        await kill_spawned_tree(proc, label="codex skills probe")
 
 
 async def fetch_codex_models(binary: str = "codex", *,

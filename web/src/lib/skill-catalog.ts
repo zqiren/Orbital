@@ -33,6 +33,14 @@ export interface SkillCatalogEntry {
     /** Always to the manager: only it has the trigger tools. */
     managerOnly: boolean;
   };
+  /**
+   * Spec 166: a command the pinned worker itself reported. A pick puts
+   * exactly this in the composer (`/review ` or Codex's `$name `), with no
+   * chip and no payload: the worker reads its own invocation.
+   */
+  invoke?: string;
+  /** The worker's argument hint (`<pr>`), shown muted after the name. */
+  hint?: string;
 }
 
 /** The path a built-in carries in its block; never a file. */
@@ -120,25 +128,40 @@ export function __clearSkillCatalogCacheForTests(): void {
   cache.clear();
 }
 
-/** The cached list for `projectId`, or null before the first fetch lands. */
-export function cachedSkillCatalog(projectId: string): SkillCatalogEntry[] | null {
-  return cache.get(projectId)?.entries ?? null;
+/** Spec 166: one slot per project and pin (`null` = Orbital, no worker). */
+function cacheKey(projectId: string, worker: string | null | undefined): string {
+  return worker ? `${projectId}\u0000${worker}` : projectId;
+}
+
+/** The cached list for `projectId` under this pin, or null before the first fetch lands. */
+export function cachedSkillCatalog(
+  projectId: string,
+  worker?: string | null,
+): SkillCatalogEntry[] | null {
+  return cache.get(cacheKey(projectId, worker))?.entries ?? null;
 }
 
 /**
  * Fetch the catalog unless a fresh copy is cached. Resolves with the list
  * (the cached one when no fetch was needed). A failed fetch keeps whatever
- * was cached and resolves with it, or with `[]`.
+ * was cached and resolves with it, or with `[]`. With a worker pin the
+ * daemon folds that worker's own commands in (spec 166).
  */
-export function loadSkillCatalog(projectId: string, now = Date.now()): Promise<SkillCatalogEntry[]> {
-  const hit = cache.get(projectId);
+export function loadSkillCatalog(
+  projectId: string,
+  worker?: string | null,
+  now = Date.now(),
+): Promise<SkillCatalogEntry[]> {
+  const key = cacheKey(projectId, worker);
+  const hit = cache.get(key);
   if (hit?.inflight) return hit.inflight;
   if (hit?.entries && now - hit.fetchedAt < SKILL_CATALOG_REFRESH_MS) {
     return Promise.resolve(hit.entries);
   }
   const slot: CacheEntry = hit ?? { entries: null, fetchedAt: 0, inflight: null };
+  const query = worker ? `?worker=${encodeURIComponent(worker)}` : '';
   slot.inflight = api<SkillCatalogEntry[]>(
-    `/api/v2/projects/${encodeURIComponent(projectId)}/skill-catalog`,
+    `/api/v2/projects/${encodeURIComponent(projectId)}/skill-catalog${query}`,
   )
     .then((data) => {
       slot.entries = Array.isArray(data) ? data : [];
@@ -149,7 +172,7 @@ export function loadSkillCatalog(projectId: string, now = Date.now()): Promise<S
     .finally(() => {
       slot.inflight = null;
     });
-  cache.set(projectId, slot);
+  cache.set(key, slot);
   return slot.inflight;
 }
 

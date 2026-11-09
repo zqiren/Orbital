@@ -58,6 +58,26 @@ async def read_models(reader, writer, *, timeout: float = _DEFAULT_TIMEOUT
     order, deduplicated by value. ``label`` is the CLI's own ``displayName``
     ("Opus 5.5"), falling back to the value. Raises on EOF, timeout or an
     error response."""
+    models = (await read_initialize(reader, writer, timeout=timeout)).get("models")
+    if not isinstance(models, list):
+        raise RuntimeError("claude initialize returned no models list")
+    out: list[dict] = []
+    seen: set[str] = set()
+    for entry in models:
+        value = entry.get("value") if isinstance(entry, dict) else None
+        if (not isinstance(value, str) or not value
+                or value in _SKIP_VALUES or value in seen):
+            continue
+        seen.add(value)
+        out.append({"value": value, "label": _label_for(entry, value)})
+    return out
+
+
+async def read_initialize(reader, writer, *, timeout: float = _DEFAULT_TIMEOUT
+                          ) -> dict:
+    """Send ``initialize`` and return the CLI's response payload (``models``,
+    ``commands``, ``agents`` ...). Raises on EOF, timeout or an error
+    response."""
     writer.write((json.dumps({
         "type": "control_request",
         "request_id": _REQUEST_ID,
@@ -77,19 +97,8 @@ async def read_models(reader, writer, *, timeout: float = _DEFAULT_TIMEOUT
         response = msg.get("response") or {}
         if response.get("subtype") != "success":
             raise RuntimeError(f"claude initialize failed: {response}")
-        models = (response.get("response") or {}).get("models")
-        if not isinstance(models, list):
-            raise RuntimeError("claude initialize returned no models list")
-        out: list[dict] = []
-        seen: set[str] = set()
-        for entry in models:
-            value = entry.get("value") if isinstance(entry, dict) else None
-            if (not isinstance(value, str) or not value
-                    or value in _SKIP_VALUES or value in seen):
-                continue
-            seen.add(value)
-            out.append({"value": value, "label": _label_for(entry, value)})
-        return out
+        payload = response.get("response")
+        return payload if isinstance(payload, dict) else {}
 
 
 _MAX_LABEL = 40
@@ -149,6 +158,38 @@ async def fetch_claude_models(binary: str = "claude", *,
         return None
     finally:
         await kill_spawned_tree(proc, label="claude model probe")
+
+
+async def fetch_claude_commands(binary: str, workspace: str, *,
+                                env: dict | None = None,
+                                timeout: float = _DEFAULT_TIMEOUT
+                                ) -> list[dict] | None:
+    """Spec 166 cold probe: the same ``initialize`` handshake, spawned in the
+    project's workspace so project commands are listed, reading
+    ``commands``. No prompt is sent, so no session is written. Returns the
+    worker-commands normal form, or None on ANY failure. Uncached: the
+    worker-commands store owns freshness."""
+    from agent_os.daemon_v2.worker_commands import claude_commands
+    proc = None
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            binary, "--output-format", "stream-json", "--verbose",
+            "--input-format", "stream-json",
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+            cwd=workspace, env=env,
+            limit=1024 * 1024,
+            creationflags=win_no_window_flags(),
+        )
+        return claude_commands(
+            await read_initialize(proc.stdout, proc.stdin, timeout=timeout))
+    except Exception as exc:  # noqa: BLE001 — display data, never raise
+        logger.info("claude command list unavailable (%s: %s)",
+                    type(exc).__name__, exc)
+        return None
+    finally:
+        await kill_spawned_tree(proc, label="claude commands probe")
 
 
 async def get_claude_models_cached(binary: str = "claude", *,
