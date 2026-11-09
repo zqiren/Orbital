@@ -32,6 +32,10 @@ os.chdir(root)
 sys.path.insert(0, str(root))
 os.environ.setdefault("AGENT_OS_TELEMETRY_DISABLED", "1")
 os.environ.setdefault("AGENT_OS_DATA_DIR", str(data))
+# The dispatch MCP endpoint (pinned workers' `dispatch` tool) is attached only
+# when the daemon knows its own port — the desktop app and restart-daemon.sh
+# set this; without it every pinned worker on this daemon runs seat-less.
+os.environ.setdefault("AGENT_OS_PORT", str(args.port))
 
 import keyring  # noqa: E402
 from keyring.backend import KeyringBackend  # noqa: E402
