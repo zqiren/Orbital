@@ -89,6 +89,10 @@ def test_manager_row_leads_with_the_goals_bullet_only_while_goals_are_missing(tm
     # Live (§8): deepseek-v4.1-flash took "nothing to record" over the draft
     # in 2 of 7 runs until the bullet said the draft is not optional (7/7).
     assert "even if nothing else in this run is worth recording" in flat
+    # Live (§8): Codex copied its seat rules (orbital/bin/bg, MCP dispatch)
+    # into the first goals; the bullet rules that out.
+    assert ("never Orbital's or your own operating rules (background jobs, "
+            "dispatch, seat rules)") in flat
     # First: before the state instruction.
     assert text.index("no goals yet") < text.index("update orbital/PROJECT_STATE.md")
     _write_goals(tmp_path)
@@ -102,6 +106,7 @@ def test_worker_text_carries_the_same_bullet_only_when_asked():
     assert asked.index("no goals yet") < asked.index("update orbital/PROJECT_STATE.md")
     assert asked.endswith("If nothing durable happened, reply exactly: nothing to record")
     assert "INDEX" not in asked  # workers never touch INDEX
+    assert "never Orbital's or your own operating rules" in " ".join(asked.split())
 
 
 def test_shape_rules_carry_the_one_supersedes_line():

@@ -196,8 +196,10 @@ _GOALS_DRAFT_TEXT = (
     "This project has no goals yet. First, draft " + _GOALS_REL + " from the\n"
     "folder and this conversation: what the project is for, what done looks like\n"
     "if visible, how the user works (language, preferences seen). One paragraph\n"
-    "plus `- ` bullets, headed 'First draft'. Do this even if nothing else in\n"
-    "this run is worth recording. Then record state against it.\n"
+    "plus `- ` bullets, headed 'First draft'. The goals describe the user's\n"
+    "project, never Orbital's or your own operating rules (background jobs,\n"
+    "dispatch, seat rules). Do this even if nothing else in this run is worth\n"
+    "recording. Then record state against it.\n"
 )
 
 
