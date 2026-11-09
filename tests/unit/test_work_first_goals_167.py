@@ -86,6 +86,9 @@ def test_manager_row_leads_with_the_goals_bullet_only_while_goals_are_missing(tm
     assert "no goals yet" in text and GOALS_REL in text
     flat = " ".join(text.split())
     assert "draft" in flat.lower() and "this conversation" in flat
+    # Live (§8): deepseek-v4.1-flash took "nothing to record" over the draft
+    # in 2 of 7 runs until the bullet said the draft is not optional (7/7).
+    assert "even if nothing else in this run is worth recording" in flat
     # First: before the state instruction.
     assert text.index("no goals yet") < text.index("update orbital/PROJECT_STATE.md")
     _write_goals(tmp_path)
