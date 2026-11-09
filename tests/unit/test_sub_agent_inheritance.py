@@ -224,7 +224,8 @@ class TestRenderSubAgentPromptPaths:
         assert "; (" not in prompt and "for; " not in prompt
         for line in prompt.split("\n"):
             stripped = line.strip()
-            if not stripped or stripped.startswith(("-", "/", "Available skills")):
+            if (not stripped or stripped.startswith(("-", "Available skills"))
+                    or os.path.isabs(stripped)):  # a path line (POSIX or C:\…)
                 continue
             # Every prose line is a whole sentence or ends in a colon.
             assert stripped[-1] in ".:", line
