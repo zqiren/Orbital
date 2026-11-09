@@ -203,6 +203,25 @@ def test_catalog_endpoint_cold_worker_is_probed_once(env, home, monkeypatch):
     assert calls == [("codex", ws)]
 
 
+def test_catalog_endpoint_disabled_worker_is_never_probed(env, home, monkeypatch):
+    """A worker the project keeps off (``disabled_sub_agents``) cannot be
+    pinned here, so ``?worker=`` must not spawn its CLI for a cold probe."""
+    client, pid, ws, _stem, sub, _ = env
+    calls = []
+
+    async def probe(slug, workspace):
+        calls.append((slug, workspace))
+        return [{"name": "imagegen", "description": "", "invoke": "$imagegen ",
+                 "hint": "", "enabled": True}]
+    monkeypatch.setattr(sub, "probe_worker_commands", probe, raising=False)
+    assert client.put(f"/api/v2/projects/{pid}",
+                      json={"disabled_sub_agents": ["codex"]}).status_code == 200
+    plain = client.get(f"/api/v2/projects/{pid}/skill-catalog").json()
+    merged = client.get(f"/api/v2/projects/{pid}/skill-catalog?worker=codex").json()
+    assert merged == plain
+    assert calls == []
+
+
 def test_catalog_endpoint_unknown_project_404(client):
     assert client.get("/api/v2/projects/nope/skill-catalog").status_code == 404
 

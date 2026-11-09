@@ -4453,6 +4453,10 @@ async def get_skill_catalog(project_id: str, worker: str | None = None):
     store = worker_commands.get_store()
     if not worker or store is None:
         return entries
+    if worker in (project.get("disabled_sub_agents") or []):
+        # A worker this project keeps off cannot be pinned here, so nothing
+        # is folded in and, above all, no CLI is spawned for it.
+        return entries
     probe_fn = getattr(_sub_agent_manager, "probe_worker_commands", None)
     probe = (lambda: probe_fn(worker, workspace)) if probe_fn else None
     commands = await store.commands_for(worker, workspace, probe)
