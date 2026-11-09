@@ -2728,6 +2728,52 @@ async def patch_session_sub_agent_params(project_id: str, session_id: str,
             "persisted": bool(persisted)}
 
 
+class ForkSessionRequest(BaseModel):
+    """Spec 156 §5.3: ``at`` is the edited user row's ``timestamp`` exactly
+    as the chat history returned it; ``name`` is the display name the
+    client built (``{name} · 改自 HH:MM``)."""
+    at: str
+    name: str | None = None
+
+
+@router.post("/agents/{project_id}/sessions/{session_id}/fork")
+async def fork_session(project_id: str, session_id: str, req: ForkSessionRequest):
+    """Spec 156: edit a sent message → a new session with the history before
+    it. The parent session is read, never written. The edited message is not
+    sent here: the client sends it into the returned session with the
+    ordinary send, so the optimistic bubble, queueing, pinned dispatch and
+    recap are the ones every send uses. (Retry, spec 164 §2.3, is a plain
+    same-session send and never comes here.)
+
+    - 404 ``Project not found`` / ``Session not found`` / ``message_not_found``
+    - 409 ``session_running`` while the manager or a worker turn is running
+    - 400 ``message_not_editable`` for an automation's or a queue item's row
+    - 503 while the session file stays locked
+    - 200 ``{session_id, session_uuid, target, name}``
+    """
+    from agent_os.agent.session import (
+        ForkError, ForkMessageNotFound, ForkSessionRunning,
+    )
+    if _project_store is not None and _project_store.get_project(project_id) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    await _materialize_if_imported(project_id, session_id)
+    try:
+        return await _agent_manager.fork_session(
+            project_id, session_id, at=req.at,
+            name=(req.name or "").strip() or None)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Session not found")
+    except ForkSessionRunning as exc:
+        raise HTTPException(status_code=409, detail=exc.code)
+    except ForkMessageNotFound as exc:
+        raise HTTPException(status_code=404, detail=exc.code)
+    except ForkError as exc:
+        raise HTTPException(status_code=400, detail=exc.code)
+    except FileLockError:
+        raise HTTPException(
+            status_code=503, detail="Chat session is busy — please retry")
+
+
 @router.delete("/agents/{project_id}/sessions/{session_id}")
 async def delete_session(project_id: str, session_id: str):
     """Delete a single session (removes its JSONL from disk).

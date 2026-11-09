@@ -108,6 +108,9 @@ def build_ping(
         "app_starts": 0,
         "projects_created": 0,
         "sessions": 0,
+        # Spec 156: sent messages edited (each one forks the conversation into
+        # a new session, which ``sessions`` also counts).
+        "messages_edited": 0,
         "turns": 0,
         "errors": {},
         # Same failures as ``errors``, keyed by provider instead of by code
@@ -173,6 +176,8 @@ def build_ping(
             counters["projects_created"] += 1
         elif event == "session_created":
             counters["sessions"] += 1
+        elif event == "message_edited":
+            counters["messages_edited"] += 1
         elif event == "turn_completed":
             # "turns" counts management-loop responses only (the error-rate
             # denominator); sub-agent responses still contribute tokens.

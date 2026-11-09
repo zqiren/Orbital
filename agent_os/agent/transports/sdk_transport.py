@@ -4,6 +4,7 @@
 
 """SDK transport: uses claude-agent-sdk to communicate with Claude Code."""
 import asyncio
+import json
 import logging
 import os
 import shutil
@@ -113,8 +114,33 @@ def install_sdk_no_window_spawn(*, windows: bool | None = None) -> None:
     subprocess_cli.anyio = _NoWindowAnyio(current)
 
 
+async def _one_prompt(message: str, prompt_uuid: str):
+    """One streamed user prompt with a caller-chosen native uuid: the wire
+    shape the SDK writes for a string prompt, plus ``uuid`` (spec 156)."""
+    yield {
+        "type": "user",
+        "message": {"role": "user", "content": message},
+        "parent_tool_use_id": None,
+        "uuid": prompt_uuid,
+    }
+
+
 def _is_batch_file(path: str) -> bool:
     return path.lower().endswith((".cmd", ".bat"))
+
+
+# Spec 156 §5.4: every prompt Orbital dispatches to Claude Code carries a
+# caller-chosen native uuid, ``uuid5(ORBITAL_PROMPT_NS, dispatch_id)``. The
+# dispatch marker already records ``dispatch_id``, so an Orbital dispatch
+# maps to its native prompt entry by construction (no content matching), and
+# a fork can name the native cut point: the ``parentUuid`` of the first
+# discarded prompt. Fixed forever: changing it orphans every stamped prompt.
+ORBITAL_PROMPT_NS = uuid.UUID("5b1e6f0c-9a3d-4c2e-8f71-0b17a1f00156")
+
+
+def prompt_uuid_for(dispatch_id: str) -> str:
+    """The native prompt uuid Orbital stamps on ``dispatch_id``'s prompt."""
+    return str(uuid.uuid5(ORBITAL_PROMPT_NS, dispatch_id))
 
 
 # claude-agent-sdk's own message when handed a .cmd/.bat as cli_path
@@ -179,7 +205,8 @@ class SDKTransport(AgentTransport):
 
     def __init__(self, autonomy: "Autonomy | None" = None, system_prompt: str | None = None,
                  resume_session_id: str | None = None, model: str | None = None,
-                 effort: str | None = None, dispatch_mcp: dict | None = None):
+                 effort: str | None = None, dispatch_mcp: dict | None = None,
+                 fork_session: bool = False, resume_session_at: str | None = None):
         if not HAS_SDK:
             raise ImportError("claude-agent-sdk is not installed")
         self._client: "ClaudeSDKClient | None" = None
@@ -191,6 +218,13 @@ class SDKTransport(AgentTransport):
         # (CLI serves the session's last-used model when omitted;
         # mid-thread switch wire-verified coherent; AMENDS piece 2).
         self._resume_session_id: str | None = resume_session_id
+        # Spec 156 §5.4: an edited message's fork resumes the PARENT's native
+        # session with ``--fork-session`` (the CLI mints a new id and leaves
+        # the parent's file untouched) cut at ``resume_session_at`` (None =
+        # keep the whole thread). Only meaningful with a resume id.
+        self._fork_session: bool = bool(fork_session and resume_session_id)
+        self._resume_session_at: str | None = (
+            resume_session_at if self._fork_session else None)
         self._model: str | None = model
         # Thinking level (spec 149): Settings' claude-code effort, or this
         # conversation's override. Config like the model; None = CLI default.
@@ -299,6 +333,34 @@ class SDKTransport(AgentTransport):
         return SDKTransport.resume_source_path(
             workspace, session_id, projects_root=projects_root) is not None
 
+    @staticmethod
+    def fork_point(native_path: str, prompt_uuid: str) -> tuple[bool, str | None]:
+        """Spec 156 §5.4: where a native session must be cut so that the
+        prompt stamped ``prompt_uuid`` and everything after it are dropped.
+
+        Returns ``(found, parent_uuid)``: the prompt entry's ``parentUuid``
+        (the last entry of the turn being kept; None when the prompt opened
+        the session). ``found`` is False when no entry carries that uuid (a
+        prompt sent before stamping, or a pruned log). Read-only, line by
+        line; never raises.
+        """
+        needle = f'"{prompt_uuid}"'
+        try:
+            with open(native_path, encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    if needle not in line:
+                        continue
+                    try:
+                        entry = json.loads(line)
+                    except ValueError:
+                        continue
+                    if isinstance(entry, dict) and entry.get("uuid") == prompt_uuid:
+                        parent = entry.get("parentUuid")
+                        return True, parent if isinstance(parent, str) and parent else None
+        except OSError:
+            pass
+        return False, None
+
     async def start(self, command: str, args: list[str], workspace: str, env: dict | None = None) -> None:
         self._workspace = workspace
         # Build env for SDK subprocess: override CLAUDECODE to prevent nested session detection
@@ -329,6 +391,23 @@ class SDKTransport(AgentTransport):
             }
         if self._resume_session_id is not None:
             options_kwargs["resume"] = self._resume_session_id
+        if self._fork_session:
+            # An SDK without the fork options would silently RESUME the
+            # parent's own id: two Orbital sessions on one native session
+            # (spec 156 invariant). Refuse instead; the spawn path's one
+            # fresh retry carries the conversation over with the recap.
+            fields = getattr(ClaudeAgentOptions, "__dataclass_fields__", {})
+            if "fork_session" not in fields or (
+                    self._resume_session_at and "resume_session_at" not in fields):
+                raise RuntimeError(
+                    "claude-agent-sdk has no fork_session/resume_session_at "
+                    "option; cannot fork the native session")
+            options_kwargs["fork_session"] = True
+            if self._resume_session_at:
+                options_kwargs["resume_session_at"] = self._resume_session_at
+            logger.info("SDKTransport.start: resume=%s fork_session "
+                        "resume_session_at=%s", self._resume_session_id,
+                        self._resume_session_at)
         if self.dispatch_mcp:
             # Added beside the user's own MCP servers (no strict mode); the
             # CLI names the tool mcp__orbital__dispatch.
@@ -421,8 +500,13 @@ class SDKTransport(AgentTransport):
             return "(no response)"
         return "\n".join(parts)
 
-    async def dispatch(self, message: str) -> None:
+    async def dispatch(self, message: str, *, prompt_uuid: str | None = None) -> None:
         """Send query without waiting for response. Events flow via read_stream().
+
+        ``prompt_uuid`` (spec 156 §5.4) is the native uuid the CLI stores on
+        this prompt's transcript entry: the prompt goes out as one streamed
+        user message carrying it instead of a bare string. Every daemon
+        dispatch passes ``prompt_uuid_for(dispatch_id)``.
 
         Marks a dispatch pending; the reader's next ``ResultMessage`` closes
         it (``turn_complete`` with ``origin="dispatch"``). A dispatch issued
@@ -438,7 +522,10 @@ class SDKTransport(AgentTransport):
                            "prior boundary as stopped")
             self._close_dispatch("stopped")
 
-        await self._client.query(message)
+        if prompt_uuid:
+            await self._client.query(_one_prompt(message, prompt_uuid))
+        else:
+            await self._client.query(message)
 
         self._pending_dispatch = True
         self._outstanding = set()

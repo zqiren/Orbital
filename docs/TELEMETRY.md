@@ -45,6 +45,7 @@ machine. The exact outbound JSON is also inspectable in-app, verbatim, under
     "app_starts": 2,
     "projects_created": 1,
     "sessions": 3,
+    "messages_edited": 1,
     "turns": 41,
     "errors": { "provider_unreachable": 2 },
     "errors_by_provider": { "deepseek": 2 },
@@ -123,6 +124,7 @@ machine. The exact outbound JSON is also inspectable in-app, verbatim, under
 | `counters.app_starts` | int | Daemon starts that day. |
 | `counters.projects_created` | int | Projects created (the auto-created scratch workspace is not counted). |
 | `counters.sessions` | int | Chat sessions created. |
+| `counters.messages_edited` | int | Sent messages the user edited. Each edit continues the conversation in a new session, so it is also counted in `sessions`. A count only, never the text. |
 | `counters.turns` | int | Management-agent LLM responses. |
 | `counters.errors` | map | LLM failures by stable error code (`missing_api_key`, `invalid_api_key`, `model_not_found`, `provider_unreachable`, `provider_error`). Codes only — never messages. |
 | `counters.errors_by_provider` | map | The **same** failures as `errors`, counted by provider name (`deepseek`, `minimax`, `custom`, …) instead of by code. `unknown` when the failure happened before the provider was resolved. Both maps are published: `errors` is the series with history, `errors_by_provider` is what makes a failure attributable. |

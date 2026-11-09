@@ -49,10 +49,12 @@ from agent_os.daemon_v2.autonomy import (
 )
 from agent_os.daemon_v2.sub_agent_visibility import resolve_visible_sub_agent_slugs
 from agent_os.daemon_v2.session_index import read_session_f1, resolve_session_uuid
+from agent_os.utils.text_io import read_text_lenient_raising
 from agent_os.utils.file_lock import (
     FileLockError,
     retry_session_lock,
     retry_session_lock_sync,
+    session_lock,
 )
 from agent_os.daemon_v2.provider_errors import (
     ProviderConfigError,
@@ -5143,6 +5145,102 @@ class AgentManager:
             project_id, session_id, session_uuid,
         )
         return {"status": "deleted", "session_id": session_id}
+
+    def _session_busy_for_fork(self, project_id: str, ids: set[str]) -> bool:
+        """Spec 156 §5.3 step 2, per session (spec 155): the manager is live
+        (running, paused on an approval, or waiting on its workers), or a
+        worker has a turn open (``running``; a ``background-running`` worker
+        has ended its turn and does not block an edit)."""
+        for sid in ids:
+            if self._session_live_status(project_id, sid) is not None:
+                return True
+        sam = self._sub_agent_manager
+        if sam is not None:
+            for sid in ids:
+                try:
+                    active = sam.list_active(project_id, session_id=sid)
+                except Exception:
+                    continue
+                if any(a.get("status") == "running" for a in active):
+                    return True
+        return False
+
+    async def fork_session(self, project_id: str, session_id: str, *,
+                           at: str, name: str | None = None) -> dict:
+        """Spec 156 §5.3: a new session holding ``session_id``'s conversation
+        up to (not including) its user message stamped ``at``.
+
+        The parent's log is read under its file lock and never written. The
+        fork is a new file written whole (temp file + ``os.replace``): a
+        fresh session_start (``name``, ``pinned_target`` = the edited row's
+        target, ``forked_from``), the kept rows re-stamped with the fork's
+        identity, and — for Claude Code threads whose cut can be found — the
+        ``sub_agent_fork`` rows (§5.4). No resume record is copied. The
+        edited message itself is NOT sent: the client sends it into the
+        returned session through the ordinary send path.
+
+        Raises ``FileNotFoundError`` (unknown session → 404),
+        ``ForkSessionRunning`` (→ 409), ``ForkMessageNotFound`` (→ 404),
+        ``ForkMessageNotEditable`` (→ 400), ``FileLockError`` (→ 503).
+        """
+        from agent_os.agent.session import ForkSessionRunning, cut_for_fork
+
+        resolved = self._resolve_session_uuid_on_disk(project_id, session_id)
+        if resolved is None:
+            raise FileNotFoundError(
+                f"No session '{session_id}' for project '{project_id}'")
+        parent_uuid, parent_path = resolved
+        if self._session_busy_for_fork(project_id, {session_id, parent_uuid}):
+            raise ForkSessionRunning("session_running")
+        project = self._project_store.get_project(project_id) if self._project_store else None
+        workspace = (project or {}).get("workspace", "") or ""
+
+        def _read_locked() -> str:
+            # The same lenient decode Session.load uses (spec 141), so the
+            # fork reads exactly the rows a reload of the parent would.
+            with session_lock(parent_path):
+                return read_text_lenient_raising(parent_path)
+
+        def _read_and_cut():
+            cut = cut_for_fork(retry_session_lock_sync(_read_locked), at)
+            fork_rows: list[dict] = []
+            sam = self._sub_agent_manager
+            if workspace and cut.threads and sam is not None and hasattr(
+                    sam, "claude_fork_rows"):
+                try:
+                    fork_rows = sam.claude_fork_rows(workspace, cut.threads, cut.after)
+                except Exception:
+                    logger.warning("fork: native fork points for %s/%s could "
+                                   "not be read — workers start fresh with "
+                                   "the recap", project_id, session_id,
+                                   exc_info=True)
+            return cut, fork_rows
+
+        cut, fork_rows = await asyncio.to_thread(_read_and_cut)
+        new_uuid = self._mint_session_uuid(project_id)
+        parent_sid = (cut.start_meta or {}).get("session_id") or parent_uuid
+
+        def _write():
+            from agent_os.agent.session import (
+                fork_session_lines, write_new_session_file,
+            )
+            lines = fork_session_lines(
+                cut, session_uuid=new_uuid, name=name,
+                parent_session_id=parent_sid, at=at, fork_rows=fork_rows)
+            return write_new_session_file(
+                os.path.dirname(parent_path), new_uuid, lines)
+
+        await asyncio.to_thread(_write)
+        from agent_os import telemetry
+        telemetry.emit("message_edited")
+        target = cut.edited.get("target")
+        target = target if isinstance(target, str) and target else None
+        logger.info(
+            "fork_session(%s): %s at %s -> %s (%d rows kept, native forks: %s)",
+            project_id, parent_uuid, at, new_uuid, len(cut.kept),
+            [r["handle"] for r in fork_rows] or "none")
+        return {"session_id": new_uuid, "session_uuid": new_uuid,
+                "target": target, "name": name}
 
     def rename_session(self, project_id: str, session_id: str, name: str) -> dict:
         """Rename a session: update its display name in memory + on disk.

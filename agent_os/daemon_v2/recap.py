@@ -218,6 +218,7 @@ def source_log_entries(
     thread_history: dict[str, list[dict]],
     chat_log_path: str | None,
     native_path_for: Callable[[str, dict], str | None],
+    fork_cut: str | None = None,
 ) -> list[tuple[str, str | None]]:
     """``(label, path)`` entries for the dispatch to ``handle``; ``path`` is
     None for a known source that could not be resolved (rendered as
@@ -233,7 +234,15 @@ def source_log_entries(
     one — and its own transcript — are left out; its older records are
     prior logs like any other agent's. A fresh spawn gets everything,
     including its own lost threads.
+
+    ``fork_cut`` (spec 156 §5.5): in a session forked from an edited message,
+    the edited row's timestamp. The Orbital worker transcripts its copied
+    dispatch markers name are per handle and kept growing in the parent past
+    that point, so their labels say which entries belong here. The fork's
+    own thread records are its own native sessions and need no label.
     """
+    cut_suffix = (f" (only entries before {fork_cut} belong to this conversation)"
+                  if fork_cut else "")
     entries: list[tuple[str, str | None]] = []
     seen: set[str] = set()
 
@@ -276,7 +285,8 @@ def source_log_entries(
         fallback = marker_paths.get(other) or []
         if fallback:
             for path in fallback:
-                add(f"Orbital worker transcript ({other}, partial capture)", path)
+                add(f"Orbital worker transcript ({other}, partial capture)"
+                    f"{cut_suffix}", path)
         elif records:
             add(f"Original agent session log ({other})", None)
 
