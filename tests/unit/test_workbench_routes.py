@@ -365,14 +365,19 @@ async def test_reopen_unknown_is_404_and_open_is_a_no_op(tmp_path):
 # asks instead of flagging lines in place.
 # --------------------------------------------------------------------------
 
-async def test_migrate_refreshes_header_and_spawns_an_asks_review(tmp_path):
+async def test_migrate_refreshes_header_and_spawns_an_asks_review(tmp_path, monkeypatch):
     from agent_os.agent.memory_entries import FORMAT_HEADERS
+    from agent_os.api.routes import agents_v2
     project = _seed_project(tmp_path)
     state_path = os.path.join(_orbital(project), "PROJECT_STATE.md")
     with open(state_path, "w", encoding="utf-8") as f:
         f.write("<!--format legacy header placeholder-->\n## Focus\n- A fact.\n")
     am = FakeAgentManager()
-    client, *_ = _make_client(tmp_path, [project], agent_manager=am)
+    client, store, *_ = _make_client(tmp_path, [project], agent_manager=am)
+    # The seed goes through the new-session + inject route handlers (spec
+    # 162: one send path for the composer, migrate and /workbench/tasks).
+    monkeypatch.setattr(agents_v2, "_project_store", store)
+    monkeypatch.setattr(agents_v2, "_agent_manager", am)
     async with client:
         r = await client.post("/api/v2/workbench/proj_a/migrate")
         assert r.status_code == 200, r.text

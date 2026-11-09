@@ -15,8 +15,10 @@ frontend build); "Recently closed" — closes by the agent or the memory editor
 in the last 7 days, each reopenable — is opt-in via ``?recently_closed=1``.
 
 The empty-state CTA (``/migrate``) spawns a seeded project session through the
-same dispatch seam the chat/queue uses (``agent_manager.new_session`` +
-``inject_message``) that reviews PROJECT_STATE into asks.
+same dispatch seam the chat/queue uses (the ``new-session`` and ``inject``
+route handlers) that reviews PROJECT_STATE into asks. ``POST /tasks`` (spec
+162) is the Workbench composer for scripts: route → mint → inject, the same
+helpers (``pick_project``, ``_spawn_seeded``).
 
 Injected via ``configure`` (app factory): the project store, the agent manager
 (session spawn), and the CalendarHub (``refresh()`` after every write so its
@@ -34,10 +36,11 @@ from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from agent_os.agent import asks, memory_entries, workbench_cards
 from agent_os.agent.project_paths import ProjectPaths
+from agent_os.api.routes.agents_v2 import InjectAttachment as _InjectAttachment
 
 logger = logging.getLogger(__name__)
 
@@ -371,15 +374,36 @@ _MIGRATION_MESSAGE = (
 )
 
 
-async def _spawn_seeded(project_id: str, content: str) -> str:
-    """Mint a fresh session and inject the seed through the normal dispatch
-    seam (the same path chat/queue use); return the new session id."""
+async def _spawn_seeded(project_id: str, content: str, *, agent: str | None = "orbital",
+                        attachments: list | None = None) -> dict:
+    """Mint a fresh session and send ``content`` into it through the same two
+    route handlers the chat and the Workbench composer call
+    (``POST /agents/{pid}/new-session`` then ``POST /agents/{pid}/inject``),
+    so seeding, attachments, pinned dispatch and queueing behave exactly as
+    they do for a typed message.
+
+    ``agent``: ``"orbital"`` (the manager), a worker slug (a pinned send), or
+    ``None`` for the composer's 自动: the minted ``pinned_target``. A pinned
+    send stamps the session's pin; the project's pin is never PATCHed.
+
+    Returns ``{"session_id", "agent", "inject"}`` (``agent`` = the target the
+    send used, ``"orbital"`` for the manager; ``inject`` = the inject route's
+    body). An inject error propagates after the mint, as in the composer, and
+    the session keeps whatever the inject route wrote: nothing for a refused
+    send (no card), the user row and a failure row for a worker that could
+    not start (a failed card)."""
     if _agent_manager is None:
         raise HTTPException(status_code=503, detail="Agent manager not available")
-    minted = await _agent_manager.new_session(project_id)
+    from agent_os.api.routes import agents_v2
+    minted = await agents_v2.new_session(project_id)
     session_id = minted["session_id"] if isinstance(minted, dict) else minted
-    await _agent_manager.inject_message(project_id, content, session_id=session_id)
-    return session_id
+    if agent is None:
+        agent = (minted.get("pinned_target") if isinstance(minted, dict) else None) or "orbital"
+    target = None if agent == "orbital" else agent
+    req = agents_v2.InjectRequest(content=content, target=target, pinned=target is not None,
+                                  attachments=attachments, session_id=session_id)
+    body = await agents_v2.inject_message(project_id, req)
+    return {"session_id": session_id, "agent": agent, "inject": body}
 
 
 @router.post("/{project_id}/migrate")
@@ -394,8 +418,8 @@ async def migrate_project(project_id: str):
         refreshed = memory_entries.force_format_header(content, "state")
         if refreshed != content:
             _write_state(path, refreshed)
-    session_id = await _spawn_seeded(project_id, _MIGRATION_MESSAGE)
-    return {"session_id": session_id}
+    spawned = await _spawn_seeded(project_id, _MIGRATION_MESSAGE)
+    return {"session_id": spawned["session_id"]}
 
 
 
@@ -779,7 +803,13 @@ class RouteRequest(BaseModel):
 @router.post("/route")
 async def route_task(req: RouteRequest):
     """Pick the project for a task typed on the Workbench (project chip on
-    自动).
+    自动). The body is ``pick_project``, which ``POST /workbench/tasks``
+    (spec 162) calls too: one routing path for the composer and scripts."""
+    return await pick_project(req.text)
+
+
+async def pick_project(text: str | None) -> dict:
+    """Route a task's text to a project. Never raises.
 
     Answers (HTTP 200 always):
       * ``{"project_id", "by": "model"}`` — the model's pick;
@@ -800,7 +830,7 @@ async def route_task(req: RouteRequest):
         logger.info("workbench route: Quick Tasks (%s)", reason)
         return {"project_id": fallback_pid, "by": "fallback", "reason": reason}
 
-    text = (req.text or "").strip()
+    text = (text or "").strip()
     if not text:
         return fallback("empty task")
     candidates = route_candidates(_project_store.list_projects() if _project_store else [])
@@ -878,4 +908,107 @@ def _routed(pid: str, response, elapsed: float) -> dict:
         body["input_tokens"] = input_tokens
     if isinstance(output_tokens, int):
         body["output_tokens"] = output_tokens
+    return body
+
+
+# --------------------------------------------------------------------------
+# Spec 162 — POST /workbench/tasks: the composer for scripts
+# --------------------------------------------------------------------------
+
+def _route_text(text: str, attachments) -> str:
+    """The task as routing sees it, as the composer builds it
+    (``routeText`` in ``web/src/components/workbench/sendTask.ts``): the
+    attached filenames listed after the text."""
+    if not attachments:
+        return text
+    names = "\n".join(f"- {os.path.basename(a.path.replace(chr(92), '/'))}" for a in attachments)
+    return f"{text}\n\n<attached_files>\n{names}\n</attached_files>"
+
+
+async def _available_workers(project_id: str, project: dict) -> list[str]:
+    """The workers a pinned send in this project could reach: the pin
+    switcher's list (``available_workers`` on the project row, spec 153
+    §4.4), the same test the dispatch gate applies. Stale-ok, off the loop."""
+    try:
+        return list(await asyncio.to_thread(
+            _agent_manager.available_worker_slugs, project_id, project=project) or [])
+    except Exception:
+        logger.warning("available workers failed for %s", project_id, exc_info=True)
+        return []
+
+
+class TaskRequest(BaseModel):
+    text: str
+    project_id: str | None = None
+    agent: str | None = None
+    attachments: list[_InjectAttachment] | None = None
+
+    @field_validator("text")
+    @classmethod
+    def text_not_blank(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("text is empty")
+        if "\ufffd" in v:
+            # The inject route's own check, before anything is minted.
+            raise ValueError("text contains invalid UTF-8 characters (U+FFFD); "
+                             "send it as UTF-8")
+        return v
+
+    @field_validator("attachments")
+    @classmethod
+    def cap_attachments(cls, v):
+        if v is not None and len(v) > 10:
+            raise ValueError("too many attachments (max 10)")
+        return v
+
+
+@router.post("/tasks")
+async def create_task(req: TaskRequest):
+    """Spec 162: put a task on the Workbench from a script, exactly as the
+    composer does — route (no ``project_id``), mint a session, send the text
+    through the inject route. No new auth: the same reach as every local
+    route (this machine, or a registered device through the relay).
+
+    200 ``{project_id, session_id, agent, by, inject}``, plus what
+    ``/route`` adds: ``reason`` on a Quick Tasks fallback, ``input_tokens`` /
+    ``output_tokens`` when the model routed it. ``by``: ``"given"`` | ``"model"`` |
+    ``"fallback"``. Every refusal comes before the mint, so it leaves no
+    session: 422 empty text, 404 unknown or Workbench-excluded project (or
+    nowhere to route), 400 an agent that is not available or an invalid
+    attachment, 502 routing failed after its retry (nothing sent — pass a
+    ``project_id``). An error from the inject itself (after the mint) is
+    returned as the inject route answered it."""
+    text = req.text.strip()
+    extra: dict = {}
+    if req.project_id:
+        project = _require_project(req.project_id)
+        if project.get("workbench_exclude_global"):
+            raise HTTPException(status_code=404, detail="Project is not on the Workbench")
+        pid, by = req.project_id, "given"
+    else:
+        picked = await pick_project(_route_text(text, req.attachments))
+        pid, by = picked.get("project_id"), picked.get("by")
+        if pid is None and by == "failed":
+            raise HTTPException(status_code=502, detail=picked)
+        if pid is None:
+            raise HTTPException(status_code=404,
+                                detail=f"No project to send to ({picked.get('reason')})")
+        project = _require_project(pid)
+        # The route's own additive words: why it fell back, its token use.
+        extra = {k: picked[k] for k in ("reason", "input_tokens", "output_tokens")
+                 if picked.get(k) is not None}
+    if req.agent and req.agent != "orbital" and req.agent not in await _available_workers(pid, project):
+        raise HTTPException(status_code=400,
+                            detail=f"Agent {req.agent!r} is not available in this project")
+    if req.attachments:
+        from agent_os.api.routes._attachment_formatter import validate_attachments
+        try:
+            validate_attachments(project.get("workspace", ""), req.attachments)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=f"Invalid attachment: {e}")
+    logger.info("workbench task: %s (by %s), agent %s", pid, by, req.agent or "pin")
+    spawned = await _spawn_seeded(pid, text, agent=req.agent, attachments=req.attachments)
+    body = {"project_id": pid, "session_id": spawned["session_id"],
+            "agent": spawned["agent"], "by": by, "inject": spawned["inject"]}
+    body.update(extra)
     return body
