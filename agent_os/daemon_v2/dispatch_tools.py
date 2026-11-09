@@ -91,10 +91,11 @@ def tool_description(ctx: DispatchContext | None) -> str:
 
 
 def seat_note(ctx: DispatchContext) -> str | None:
-    """The first-turn line for a seat-holder that gets no Orbital system
-    prompt (Codex, ACP workers). Codex's code mode also lists MCP tools only
-    inside ``ALL_TOOLS``, so without this line it never learns the tool
-    exists. None when there is no one to hand work to."""
+    """The first-turn line for every seat-holder with dispatch available,
+    whatever its transport. Codex's code mode lists MCP tools only inside
+    ``ALL_TOOLS`` and Claude Code may defer them behind ToolSearch, so a
+    tool's own description is not enough for the model to reach for it.
+    None when there is no one to hand work to."""
     others = [a for a in ctx.agents if a != ctx.handle]
     if not others:
         return None
