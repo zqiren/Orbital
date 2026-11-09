@@ -619,6 +619,10 @@ class SubAgentManager:
                     return SDKTransport(
                         autonomy=autonomy, system_prompt=system_prompt,
                         resume_session_id=(resume_record or {}).get("session_id"),
+                        # Spec 156 §5.4: a fork record resumes the parent's
+                        # native session as a native fork cut at fork_at.
+                        fork_session=bool((resume_record or {}).get("fork")),
+                        resume_session_at=(resume_record or {}).get("fork_at"),
                         # Model is CONFIG (AMENDS piece 2): resolved live from
                         # the current config-store override — never from the
                         # record. No override -> None -> the CLI serves the
@@ -717,7 +721,24 @@ class SubAgentManager:
         getter = getattr(session, "get_sub_agent_thread", None)
         record = getter(handle) if getter else None
         if not record or not record.get("session_id"):
-            return None, "fresh", "first_spawn"
+            # Spec 156 §5.4: a session forked from an edited message has no
+            # thread of its own yet; its fork row names the parent's Claude
+            # Code session and the cut. The record carries no proc_pid, so
+            # Part F below never touches the parent's live process.
+            forks = getattr(session, "sub_agent_forks", None)
+            fork = forks.get(handle) if isinstance(forks, dict) else None
+            if not isinstance(fork, dict) or not fork.get("from_session_id"):
+                return None, "fresh", "first_spawn"
+            record = {"session_id": fork["from_session_id"], "fork": True,
+                      "fork_at": fork.get("at_uuid") or None}
+            try:
+                from agent_os.agent.transports.sdk_transport import SDKTransport
+                if SDKTransport.resume_source_exists(workspace, record["session_id"]):
+                    return record, "resumed", None
+            except Exception:
+                logger.exception("fork source check failed for %s/%s",
+                                 project_id, handle)
+            return None, "fresh", "resume_failed"
         # Piece 3 Part F (minimal resume backstop): if a LIVE process is
         # still attached to this claude session id (the rare force-drop/
         # OS-refused-kill leftover that survives Part E), do NOT
@@ -764,6 +785,57 @@ class SubAgentManager:
                 "resume_failed", project_id, handle,
             )
         return None, "fresh", "resume_failed"
+
+    def claude_fork_rows(self, workspace: str, threads: dict[str, dict],
+                         after: list[dict]) -> list[dict]:
+        """Spec 156 §5.4: the ``sub_agent_fork`` meta rows a fork carries.
+
+        One per handle whose transport is the Claude Code SDK and whose
+        parent thread record still resolves to a native log: the first
+        dispatch marker for that handle after the edited row names the first
+        discarded prompt (``prompt_uuid_for(dispatch_id)``), and its
+        ``parentUuid`` is the cut. No marker after the edit keeps the whole
+        native thread (``at_uuid`` null). A prompt not found in the log (sent
+        before stamping, or a pruned log) or one that opened the native
+        session gives no row: that worker starts fresh with the recap
+        (§5.5). Read-only; never a ``proc_pid``. Runs off the loop.
+        """
+        from agent_os.agent.transports.sdk_transport import (
+            SDKTransport, prompt_uuid_for,
+        )
+
+        rows: list[dict] = []
+        for handle, record in (threads or {}).items():
+            native_id = (record or {}).get("session_id")
+            if not native_id:
+                continue
+            manifest = self._registry.get(handle) if self._registry else None
+            if getattr(getattr(manifest, "runtime", None), "transport", None) != "sdk":
+                continue
+            native_path = SDKTransport.resume_source_path(workspace, native_id)
+            if native_path is None:
+                continue
+            marker = next((
+                r for r in after
+                if r.get("role") == "system" and isinstance(r.get("_meta"), dict)
+                and r["_meta"].get("handle") == handle
+                and r["_meta"].get("dispatch_id")
+            ), None)
+            at_uuid = None
+            if marker is not None:
+                found, at_uuid = SDKTransport.fork_point(
+                    native_path, prompt_uuid_for(marker["_meta"]["dispatch_id"]))
+                if not found or at_uuid is None:
+                    logger.info(
+                        "fork: no native cut for %s (prompt %s %s) — the "
+                        "fork starts it fresh with the recap", handle,
+                        marker["_meta"]["dispatch_id"],
+                        "not in its log" if not found else "opened its session")
+                    continue
+            rows.append({"role": "meta", "event": "sub_agent_fork",
+                         "handle": handle, "from_session_id": native_id,
+                         "at_uuid": at_uuid})
+        return rows
 
     @staticmethod
     def _provider_confirmed_resume_outcome(
@@ -1082,7 +1154,8 @@ class SubAgentManager:
                                    announce: bool = True,
                                    fresh: bool = False,
                                    pinned: bool = False,
-                                   initiator: str = "management_agent") -> str:
+                                   initiator: str = "management_agent",
+                                   _fork_failed: bool = False) -> str:
         """Start a sub-agent using the manifest registry and setup engine.
 
         ``fresh=True`` (BACKLOG 005 §4d) forces a reset: skip resume and mint a
@@ -1286,6 +1359,12 @@ class SubAgentManager:
         if fresh:
             resume_record, resume_status, resume_reason = (
                 None, "fresh", "explicit_reset")
+        elif _fork_failed:
+            # Spec 156 §5.4: the native fork did not start (an older CLI or
+            # SDK, or the CLI refusing the cut) — this one retry starts the
+            # worker fresh and says so; the recap re-briefs it (§5.5).
+            resume_record, resume_status, resume_reason = (
+                None, "fresh", "resume_failed")
         else:
             resume_record, resume_status, resume_reason = await asyncio.to_thread(
                 self._determine_resume, workspace, project_id, handle, session_id,
@@ -1398,6 +1477,7 @@ class SubAgentManager:
         adapter._dispatch_token = dispatch_token
 
         lock = self._get_lock(project_id, session_id=session_id)
+        fork_start_error: Exception | None = None
         async with lock:
             try:
                 await adapter.start(config)
@@ -1409,13 +1489,30 @@ class SubAgentManager:
                 from agent_os.agents.composition import unlink_rendered
                 unlink_rendered(rendered_config)
                 self._revoke_dispatch_token(adapter)
-                self._note_start_failure(project_id, handle, "spawn", exc=e,
-                                         binary=config_dict.get("command"),
-                                         started=started)
-                return f"Error: adapter start failed: {e}"
-            if sk not in self._adapters:
-                self._adapters[sk] = {}
-            self._adapters[sk][handle] = adapter
+                if (resume_record or {}).get("fork"):
+                    fork_start_error = e
+                else:
+                    self._note_start_failure(project_id, handle, "spawn", exc=e,
+                                             binary=config_dict.get("command"),
+                                             started=started)
+                    return f"Error: adapter start failed: {e}"
+            else:
+                if sk not in self._adapters:
+                    self._adapters[sk] = {}
+                self._adapters[sk][handle] = adapter
+        if fork_start_error is not None:
+            # Spec 156 §5.4 fallback: the native fork could not start. Log
+            # the CLI's words and start once more without it (outside the
+            # lifecycle lock, which the retry takes itself).
+            logger.warning(
+                "fork of claude session %s at %s for %s/%s failed to start "
+                "(%s) — retrying fresh with the recap",
+                resume_record.get("session_id"), resume_record.get("fork_at"),
+                project_id, handle, fork_start_error)
+            return await self._start_from_registry(
+                project_id, handle, depth, session_id=session_id,
+                announce=announce, fresh=False, pinned=pinned,
+                initiator=initiator, _fork_failed=True)
 
         # Only now is it known whether the agent took the dispatch endpoint
         # (an ACP agent must advertise HTTP MCP; Pi's extension must report
@@ -1873,9 +1970,12 @@ class SubAgentManager:
             threads = getattr(session, "sub_agent_threads", None)
             history = ({h: [r] for h, r in threads.items() if r}
                        if isinstance(threads, dict) else {})
+        forked_from = getattr(session, "forked_from", None)
         entries = source_log_entries(
             messages, handle, fresh=fresh, thread_history=history,
             chat_log_path=chat_log_path,
+            fork_cut=(forked_from.get("at") if isinstance(forked_from, dict)
+                      else None),
             native_path_for=lambda h, record: self._native_log_path(
                 project_id, h, record, chat_log_path=chat_log_path),
         )
@@ -2467,7 +2567,15 @@ class SubAgentManager:
 
         if transport is not None and hasattr(transport, 'dispatch'):
             adapter._idle = False  # Reset idle on new task
-            await transport.dispatch(message)
+            from agent_os.agent.transports.sdk_transport import prompt_uuid_for
+            if dispatch_id and _is_sdk_transport(transport):
+                # Spec 156 §5.4: the native prompt carries a uuid derived
+                # from the dispatch id the marker records, so a fork can
+                # find the cut in Claude Code's log by construction.
+                await transport.dispatch(
+                    message, prompt_uuid=prompt_uuid_for(dispatch_id))
+            else:
+                await transport.dispatch(message)
             return
 
         # Fallback: wrap send() in background task (covers PTY, Pipe, ACP)
@@ -3445,6 +3553,12 @@ class SubAgentManager:
             return SubAgentTranscript.read(filepath)
         except (OSError, json.JSONDecodeError):
             return None
+
+
+def _is_sdk_transport(transport) -> bool:
+    """The Claude Code SDK transport (the one that takes a stamped prompt)."""
+    from agent_os.agent.transports.sdk_transport import SDKTransport
+    return isinstance(transport, SDKTransport)
 
 
 def _same_model(adapters) -> bool:

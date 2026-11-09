@@ -378,6 +378,16 @@ class Session:
         # native logs stay known so a dispatch can point the next agent at
         # them. Metadata only, never conversation.
         self.sub_agent_thread_history: dict[str, list[dict]] = {}
+        # Spec 156: a session forked from an edited message records where it
+        # came from (``{"session_id": <parent>, "at": <edited row's
+        # timestamp>}``) on its session_start meta. Display and the spec 128
+        # path labels only; None for every other session.
+        self.forked_from: dict | None = None
+        # Spec 156 §5.4: handle -> ``{"from_session_id", "at_uuid"}`` from
+        # ``event: sub_agent_fork`` meta rows (last row wins): the parent's
+        # Claude Code session this fork's first spawn forks natively. Never a
+        # resume record; a thread record for the handle supersedes it.
+        self.sub_agent_forks: dict[str, dict] = {}
 
     @property
     def filepath(self) -> str:
@@ -501,6 +511,8 @@ class Session:
                                 session.trigger_type = msg["trigger_type"]
                             if msg.get("onboarding_gate") is not None:
                                 session.onboarding_gate = bool(msg["onboarding_gate"])
+                            if isinstance(msg.get("forked_from"), dict):
+                                session.forked_from = dict(msg["forked_from"])
                         elif msg.get("event") == "sub_agent_thread":
                             # Resume identity rows: append-only, last row per
                             # handle wins (TASK-resume-persistence).
@@ -511,6 +523,12 @@ class Session:
                                 )
                                 session.sub_agent_thread_history.setdefault(
                                     msg["handle"], []).append(dict(msg["thread"]))
+                        elif msg.get("event") == "sub_agent_fork":
+                            if msg.get("handle") and msg.get("from_session_id"):
+                                session.sub_agent_forks[msg["handle"]] = {
+                                    "from_session_id": msg["from_session_id"],
+                                    "at_uuid": msg.get("at_uuid") or None,
+                                }
                         continue
                     session._messages.append(msg)
 
@@ -1343,6 +1361,157 @@ class Session:
                                         if i < len(view) and view[i] < keep_from
                                         and not self._messages[view[i]].get("_compaction")]
         self.append(marker)
+
+
+# ---------------------------------------------------------------------------
+# Spec 156: fork a session at an edited user message
+# ---------------------------------------------------------------------------
+
+
+class ForkError(Exception):
+    """The fork cannot be cut; ``code`` is the route's error detail."""
+
+    code = "fork_failed"
+
+
+class ForkMessageNotFound(ForkError):
+    code = "message_not_found"
+
+
+class ForkMessageNotEditable(ForkError):
+    code = "message_not_editable"
+
+
+class ForkSessionRunning(ForkError):
+    """The parent's manager or a worker turn is running (spec 156 §5.3)."""
+
+    code = "session_running"
+
+
+class ForkCut:
+    """A parent log split at the edited user row (file order).
+
+    ``start_meta``: the parent's session_start (None for a legacy log);
+    ``threads``: its latest ``sub_agent_thread`` record per handle (the
+    native session that holds every prompt, before and after the cut); ``kept``:
+    every conversation row before the edited row, as stored on disk;
+    ``edited``: that row; ``after``: the conversation rows after it."""
+
+    def __init__(self, start_meta, threads, kept, edited, after):
+        self.start_meta: dict | None = start_meta
+        self.threads: dict[str, dict] = threads
+        self.kept: list[dict] = kept
+        self.edited: dict = edited
+        self.after: list[dict] = after
+
+
+def cut_for_fork(text: str, at: str) -> ForkCut:
+    """Split a parent JSONL at its first user row stamped ``at``.
+
+    Raises ``ForkMessageNotFound`` when no user row carries that timestamp
+    and ``ForkMessageNotEditable`` for an automation's trigger row or a queue
+    item. Rows are parsed from the on-disk form (image blob references stay
+    references); corrupted lines are skipped as ``Session.load`` skips them.
+    """
+    start_meta: dict | None = None
+    threads: dict[str, dict] = {}
+    kept: list[dict] = []
+    after: list[dict] = []
+    edited: dict | None = None
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(row, dict):
+            continue
+        if row.get("role") == "meta":
+            if row.get("event") == "session_start" and start_meta is None:
+                start_meta = row
+            elif (row.get("event") == "sub_agent_thread"
+                    and row.get("handle") and isinstance(row.get("thread"), dict)):
+                threads[row["handle"]] = dict(row["thread"])
+            continue
+        if edited is not None:
+            after.append(row)
+        elif row.get("role") == "user" and row.get("timestamp") == at:
+            edited = row
+        else:
+            kept.append(row)
+    if edited is None:
+        raise ForkMessageNotFound(f"no user message at {at!r}")
+    content = edited.get("content")
+    if trigger_type_of(content) is not None or (
+            isinstance(content, str) and content.startswith("[QUEUE ITEM")):
+        raise ForkMessageNotEditable("an automation or queue message cannot be edited")
+    return ForkCut(start_meta, threads, kept, edited, after)
+
+
+def fork_session_lines(cut: ForkCut, *, session_uuid: str, name: str | None,
+                       parent_session_id: str, at: str,
+                       fork_rows: list[dict] | None = None) -> list[str]:
+    """The fork's JSONL lines: a fresh session_start, the kept rows re-stamped
+    with the fork's identity (every other field unchanged, so ``_meta``,
+    ``_kind``, compaction offsets, blob references, timestamps and nonces
+    survive), then the ``sub_agent_fork`` rows. No parent meta row is ever
+    copied: two sessions must never resume one native worker session."""
+    parent = cut.start_meta or {}
+    meta: dict = {
+        "role": "meta",
+        "event": "session_start",
+        "session_id": session_uuid,
+        "session_uuid": session_uuid,
+        "origin": "chat",
+        "provider": parent.get("provider", "unknown"),
+        "model": parent.get("model", "unknown"),
+        "sdk": parent.get("sdk", "unknown"),
+        "fallback_models": list(parent.get("fallback_models") or []),
+        "timestamp": _now(),
+    }
+    if name:
+        meta["name"] = name
+    target = cut.edited.get("target")
+    meta["pinned_target"] = target if isinstance(target, str) and target else None
+    if isinstance(parent.get("sub_agent_params"), dict) and parent["sub_agent_params"]:
+        meta["sub_agent_params"] = parent["sub_agent_params"]
+    meta["forked_from"] = {"session_id": parent_session_id, "at": at}
+    lines = [json.dumps(meta, ensure_ascii=False) + "\n"]
+    for row in cut.kept:
+        lines.append(json.dumps(
+            {**row, "session_id": session_uuid, "session_uuid": session_uuid},
+            ensure_ascii=False) + "\n")
+    for row in fork_rows or ():
+        lines.append(json.dumps(row, ensure_ascii=False) + "\n")
+    return lines
+
+
+def write_new_session_file(sessions_dir: str, session_uuid: str,
+                           lines: list[str]) -> str:
+    """Write a whole new session log atomically: a temp file in the sessions
+    dir (its name does not end in ``.jsonl``, so a leftover is never listed),
+    fsynced, then ``os.replace`` onto ``{session_uuid}.jsonl``. The log
+    appears whole or not at all. Refuses to replace an existing log."""
+    os.makedirs(sessions_dir, exist_ok=True)
+    final = os.path.join(sessions_dir, f"{session_uuid}.jsonl")
+    if os.path.exists(final):
+        raise FileExistsError(final)
+    tmp = os.path.join(sessions_dir, f".{session_uuid}.jsonl.fork-tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8", newline="") as fh:
+            fh.writelines(lines)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, final)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+    return final
 
 
 def persist_user_row(session: Session, content: str,
