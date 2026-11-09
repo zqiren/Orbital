@@ -44,5 +44,5 @@ def test_safety_block_states_path_convention():
     )
     safety = builder._safety(ctx)
     assert "PATH CONVENTION" in safety
-    assert "Do NOT pass absolute paths" in safety or "do NOT pass absolute paths" in safety
+    assert "workspace-relative paths" in safety and "never absolute ones" in safety
     assert "Your workspace is" in safety  # must still orient the model

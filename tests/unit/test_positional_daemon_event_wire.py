@@ -641,8 +641,8 @@ class TestChurnTrim:
                 datetime_now="2026-08-03T09:29", context_usage_pct=value,
             ))
 
-        assert "Consider updating PROJECT_STATE.md" in budget(0.71)
-        assert "Consider updating PROJECT_STATE.md" not in budget(0.70)
+        assert "worth saving as a skill" in budget(0.71)
+        assert "worth saving as a skill" not in budget(0.70)
         assert "URGENT" in budget(0.86)
         assert "URGENT" not in budget(0.85)
 
@@ -655,7 +655,8 @@ class TestChurnTrim:
                 last_state_update_turn=14,
                 last_state_update_ts="2026-08-03T09:21:01+00:00",
                 turns_since_last_update=turns_since,
-                last_state_update_outcome="llm_merged",
+                # 1109 R16: only an actionable state renders a line.
+                last_state_update_outcome="failed",
             ))
 
         assert status(2) == status(9), (
@@ -673,13 +674,13 @@ class TestChurnTrim:
                 last_state_update_turn=14,
                 last_state_update_ts="2026-08-03T09:21:01+00:00",
                 turns_since_last_update=2,
-                last_state_update_outcome="llm_merged",
+                last_state_update_outcome="failed",
             )
             base.update(over)
             return PromptBuilder()._state_checkpoint_status(PromptContext(**base))
 
         assert status() != status(last_state_update_turn=21)
-        assert status() != status(last_state_update_outcome="failed")
+        assert status() != status(last_state_update_outcome="llm_merged")
         assert status() != status(refresh_in_flight=True, refresh_in_flight_since_turn=22)
 
 
@@ -696,9 +697,9 @@ class TestPromptWording:
             tool_names=[], os_type="macos",
             datetime_now="2026-08-03T09:29",
         )
-        section = PromptBuilder()._sub_agent_awareness(ctx)
+        section = PromptBuilder()._sub_agents(ctx)
         assert "[Sub-agent] system message" not in section, (
             "the wake row is no longer a system turn; mislabeling it teaches "
             "the model to look in the wrong place"
         )
-        assert "[Sub-agent] message" in section
+        assert "[Sub-agent] row" in section

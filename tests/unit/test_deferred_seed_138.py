@@ -38,7 +38,9 @@ def test_ensure_seeds_once_and_clears_the_flag(store, tmp_path):
     assert not (ws / "AGENTS.md").exists()
     assert ensure_project_seeded(store, pid) is True
     assert (ws / "AGENTS.md").is_file()
-    assert (ws / "orbital" / "skills").is_dir()
+    # 1109 Task B: the skills step ran (reconciled) but bundles nothing.
+    assert store.get_project(pid)["default_skills_reconciled"] is True
+    assert not (ws / "orbital" / "skills").exists()
     assert store.get_project(pid)["deferred_seed"] is False
     (ws / "AGENTS.md").unlink()
     assert ensure_project_seeded(store, pid) is False  # never again

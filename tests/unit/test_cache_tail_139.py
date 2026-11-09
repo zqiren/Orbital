@@ -126,7 +126,7 @@ class TestSubAgentStateStaysOutOfTheSystemRegion:
     def test_coordination_rules_are_present_from_the_first_call(self, tmp_path):
         none, _, _ = self._three_calls(tmp_path)
         system = "\n".join(_system_rows(none))
-        assert "## Sub-Agent Coordination" in system
+        assert "### Dispatching" in system  # 1109 R5
         assert "Current Sub-Agent States" not in system
 
 
@@ -192,8 +192,7 @@ class TestAsksStayOutOfThePrompt:
 
     def test_asks_section_tells_the_agent_to_read_the_file_itself(self, tmp_path):
         text = " ".join(PromptBuilder()._asks(_ctx(str(tmp_path))).split())
-        assert ("Before opening an ask, read ASKS.md: don't duplicate an open one, "
-                "and never re-open what the user dropped.") in text
-        assert ("When the user's message looks like an answer to something you raised "
-                "earlier, check ASKS.md for an open ask to close.") in text
+        assert "Before opening one, read ASKS.md: don't duplicate an open ask." in text
+        assert ("When a user message answers something you raised, check for an "
+                "open ask to close.") in text
         assert "runtime note" not in text

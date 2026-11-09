@@ -27,12 +27,11 @@ class MarkTaskCompleteTool(Tool):
     def __init__(self):
         self.name = "mark_task_complete"
         self.description = (
-            "Call this tool to mark the current queued task as complete. "
-            "After calling this, the loop will exit and the dispatcher will "
-            "advance to the next queued item. Any other tools you emit in "
-            "the same response are executed FIRST, then the loop exits — "
-            "still, prefer finishing your work and calling this signal on "
-            "its own as the final action."
+            # 1109 R8: the queue contract travels in the per-item header
+            # (QueueDispatcher.HEADER_CONTRACT). Sibling calls running first
+            # is the 3de3a3ea contract, kept.
+            "Finish the current queued task (other tool calls in this "
+            "message run first)."
         )
         self.parameters = {
             "type": "object",
@@ -69,12 +68,8 @@ class MarkTaskBlockedTool(Tool):
     def __init__(self):
         self.name = "mark_task_blocked"
         self.description = (
-            "Call this tool when the current queued task cannot be completed "
-            "(missing credentials, ambiguous requirements, blocked by another "
-            "task, etc.). The loop will exit and the dispatcher will bypass "
-            "this item and move on. Any other tools you emit in the same "
-            "response are executed first, then the loop exits — write the "
-            "reason CLEARLY."
+            "Set the current queued task aside because it cannot proceed "
+            "(other tool calls in this message run first)."
         )
         self.parameters = {
             "type": "object",

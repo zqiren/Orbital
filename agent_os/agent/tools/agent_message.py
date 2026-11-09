@@ -68,13 +68,9 @@ class AgentMessageTool(Tool):
                 "fresh": {
                     "type": "boolean",
                     "description": (
-                        "Only for action=send. Default false: the send "
-                        "continues the sub-agent's prior conversation in this "
-                        "chat session (its earlier context is still there). "
-                        "Set true ONLY when delegating a genuinely unrelated "
-                        "task, or to reset a sub-agent thread that has grown "
-                        "too long; this starts a clean session and drops the "
-                        "prior context. Otherwise omit it."
+                        "action=send only: start the agent's thread fresh, "
+                        "dropping its prior context in this chat. Only for an "
+                        "unrelated task or an over-long thread."
                     ),
                 },
             },

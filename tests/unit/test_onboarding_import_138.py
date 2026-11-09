@@ -146,7 +146,8 @@ def test_import_creates_deferred_projects_with_members_and_hidden_agents(app_env
         # Spec 160 §5.1: orbital/ is written at import; the root AGENTS.md
         # (the only write outside orbital/) still waits for first use.
         assert not os.path.exists(os.path.join(c["workspace"], "AGENTS.md"))
-        assert os.path.isdir(os.path.join(c["workspace"], "orbital", "skills"))
+        # 1109 Task B: the skills step runs at import but bundles nothing.
+        assert p["default_skills_reconciled"] is True
         assert p["orbital_seeded"] is True
         assert p["import_scan"] == "pending"
     group_project = app_env.store.get_project(out["created"][1]["project_id"])

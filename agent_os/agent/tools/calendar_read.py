@@ -48,8 +48,8 @@ class CalendarReadTool(Tool):
             "events, plus any linked external calendar events) for THIS "
             "project only, within an ISO 8601 date range (max 90 days). "
             "Read-only — there is no calendar write tool: a dated "
-            "commitment is a PROJECT_STATE entry with due:, a recurring job "
-            "is a trigger; both appear here automatically."
+            "commitment is an open ask with due: or a PROJECT_STATE [due:] "
+            "line, a recurring job is a trigger; all appear here automatically."
         )
         self.parameters = {
             "type": "object",

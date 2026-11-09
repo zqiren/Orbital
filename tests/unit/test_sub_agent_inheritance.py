@@ -171,8 +171,11 @@ class TestRenderSubAgentPromptPaths:
         )
         assert "Available skills: (none)" in prompt
 
-    def test_render_sub_agent_prompt_contains_no_newlines(self, workspace):
+    def test_render_sub_agent_prompt_contains_no_newlines(self, workspace, monkeypatch):
         """Regression guard against the Windows claude.exe argv-newline hang.
+
+        1109 W2: the flattening applies on Windows only (where the hang is);
+        see test_render_sub_agent_prompt_keeps_whole_sentences for POSIX.
 
         Any `\\n` in the string passed via ClaudeAgentOptions.system_prompt
         (preset/append dict) is forwarded to claude.exe's
@@ -188,6 +191,8 @@ class TestRenderSubAgentPromptPaths:
         with open(os.path.join(paths.skills_dir, "alpha.md"), "w") as f:
             f.write("# alpha")
         ensure_memory_md(workspace, "codex")  # peer w/ MEMORY.md
+        import agent_os.agent.sub_agent_prompt as sap
+        monkeypatch.setattr(sap, "_single_line_prompt", lambda: True)
 
         prompt = render_sub_agent_prompt(
             workspace=workspace,
@@ -195,12 +200,34 @@ class TestRenderSubAgentPromptPaths:
             agent_slug="claude-code",
             enabled_sub_agents=["claude-code", "codex"],
         )
+        # Whole sentences joined by a space, never "; " mid-sentence.
+        assert "concise (target: under 2KB total)" in prompt
         assert "\n" not in prompt, (
             f"render_sub_agent_prompt produced a newline-containing string "
             f"(len={len(prompt)}, first newline at "
             f"{prompt.find(chr(10))}); see "
             f"docs/investigations/TRIGGER-orbital-prompt-content.md"
         )
+
+    @pytest.mark.parametrize("pinned", [False, True])
+    def test_render_sub_agent_prompt_keeps_whole_sentences(self, workspace, monkeypatch, pinned):
+        """1109 W2: off Windows the prompt keeps its line breaks, and no
+        sentence is cut by the old "; " join ("concise; (target: …")."""
+        import agent_os.agent.sub_agent_prompt as sap
+        monkeypatch.setattr(sap, "_single_line_prompt", lambda: False)
+        ensure_memory_md(workspace, "codex")
+        prompt = render_sub_agent_prompt(
+            workspace=workspace, namespace=None, agent_slug="claude-code",
+            enabled_sub_agents=["claude-code", "codex"], pinned=pinned,
+        )
+        assert "\n" in prompt
+        assert "; (" not in prompt and "for; " not in prompt
+        for line in prompt.split("\n"):
+            stripped = line.strip()
+            if not stripped or stripped.startswith(("-", "/", "Available skills")):
+                continue
+            # Every prose line is a whole sentence or ends in a colon.
+            assert stripped[-1] in ".:", line
 
 
 # ---------------------------------------------------------------------------

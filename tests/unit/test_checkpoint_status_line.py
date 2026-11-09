@@ -25,10 +25,9 @@ def _ctx(**overrides) -> PromptContext:
     return PromptContext(**base)
 
 
-def test_status_line_no_checkpoint_yet():
-    line = PromptBuilder()._state_checkpoint_status(_ctx())
-    assert "no memory editor pass yet" in line
-    assert "automatically" in line
+def test_status_line_no_checkpoint_yet_is_omitted():
+    # 1109 R16: nothing to act on, so nothing rides the tail.
+    assert PromptBuilder()._state_checkpoint_status(_ctx()) is None
 
 
 def test_status_line_in_flight_overrides_last_update():
@@ -70,14 +69,12 @@ def test_status_line_reports_failed_outcome():
     assert "could not run its memory editor" in line
 
 
-def test_status_line_successful_pass_stays_plain():
-    """A successful editor pass needs no caveats — keep the metadata line as-is."""
+def test_status_line_successful_pass_is_omitted():
+    """A successful editor pass asks for nothing, so no line (1109 R16)."""
     line = PromptBuilder()._state_checkpoint_status(_ctx(
         last_state_update_turn=14,
         last_state_update_ts="2026-07-09T11:21:01+00:00",
         turns_since_last_update=2,
         last_state_update_outcome="edited",
     ))
-    assert "turn 14" in line
-    assert "backstop" not in line.lower()
-    assert "edit the file directly" not in line
+    assert line is None

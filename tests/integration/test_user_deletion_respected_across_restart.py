@@ -4,13 +4,13 @@
 
 """Integration: user skill deletions survive daemon restarts.
 
-1. Create a project — 4 skills are installed, ``default_skills_reconciled``
-   flips to True.
+1. Create a project holding the user's skills — ``default_skills_reconciled``
+   flips to True (no skill is bundled since 1109 Task B).
 2. Delete one skill via the API.
 3. Simulate a daemon restart by constructing a fresh ProjectStore against
    the same data dir.
 4. Run the installer again (as ``AgentManager.start_agent`` does).
-5. Assert the deleted skill does NOT reappear and the remaining 3 still
+5. Assert the deleted skill does NOT reappear and the remaining ones still
    exist — the persistent flag short-circuits the reconcile, respecting the
    user deletion."""
 
@@ -38,6 +38,10 @@ def test_deleted_skill_stays_deleted_across_restart(client_and_data, tmp_path):
     client, data_dir = client_and_data
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    skills_dir = workspace / "orbital" / "skills"
+    for name in ("learning-capture", "weekly-report", "triage"):
+        (skills_dir / name).mkdir(parents=True)
+        (skills_dir / name / "SKILL.md").write_text(f"# {name}\nSteps.\n", encoding="utf-8")
 
     resp = client.post("/api/v2/projects", json={
         "name": "RespectDeletion",
@@ -48,7 +52,6 @@ def test_deleted_skill_stays_deleted_across_restart(client_and_data, tmp_path):
     assert resp.status_code == 201
     pid = resp.json()["project_id"]
 
-    skills_dir = workspace / "orbital" / "skills"
     assert (skills_dir / "learning-capture").is_dir()
 
     # Delete one skill via the API. Use the actual skills delete endpoint.
@@ -69,6 +72,6 @@ def test_deleted_skill_stays_deleted_across_restart(client_and_data, tmp_path):
 
     # Deleted skill does NOT reappear.
     assert not (skills_dir / "learning-capture").exists()
-    # Remaining 3 are still there.
-    for name in ("efficient-execution", "process-capture", "task-planning"):
+    # The others are still there.
+    for name in ("weekly-report", "triage"):
         assert (skills_dir / name / "SKILL.md").is_file()

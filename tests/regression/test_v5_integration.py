@@ -185,7 +185,7 @@ async def test_chat_composite_merges_session_and_transcripts():
 def test_prompt_awareness_reflects_active_agents():
     """Integration: PromptBuilder reports active sub-agent states in the tail.
 
-    Spec 139 B: the Sub-Agent Coordination rules sit in the system region
+    Spec 139 B: the dispatch rules (1109 R5: "### Dispatching") sit in the system region
     whenever an agent is enabled; the live states are one line in the
     per-call runtime block, never in the system region.
     """
@@ -210,8 +210,8 @@ def test_prompt_awareness_reflects_active_agents():
 
     # The static sub-agents listing and the coordination rules: system region.
     assert "Sub-Agents Available" in semi_stable
-    assert "Sub-Agent Coordination" in semi_stable
-    assert "returns IMMEDIATELY" in semi_stable
+    assert "### Dispatching" in semi_stable
+    assert "It ends your turn" in semi_stable
     assert "Current Sub-Agent States" not in semi_stable
 
     # The live states: one tail line, handle + status.

@@ -192,17 +192,22 @@ class TestSystemPromptContextInstructions:
 # ---------------------------------------------------------------------------
 
 class TestTokenPressureNudge:
-    def test_moderate_pressure_mentions_index_md(self, tmp_path):
+    # 1109 R10: the nudges used to say "update PROJECT_STATE.md / INDEX.md
+    # now", contradicting "do not update the memory files during a run" (spec
+    # 112). The loop runs the [MEMORY] record turn before every compaction.
+    def test_moderate_pressure_asks_for_no_mid_run_memory_write(self, tmp_path):
         _c, _s, dyn = PromptBuilder(str(tmp_path)).build(
             _base_ctx(str(tmp_path), context_usage_pct=0.75)
         )
-        assert "INDEX.md" in dyn
+        assert "INDEX.md" not in dyn and "PROJECT_STATE" not in dyn
+        assert "worth saving as a skill" in dyn
 
-    def test_high_pressure_mentions_index_md(self, tmp_path):
+    def test_high_pressure_says_orbital_asks_what_to_record(self, tmp_path):
         _c, _s, dyn = PromptBuilder(str(tmp_path)).build(
             _base_ctx(str(tmp_path), context_usage_pct=0.90)
         )
-        assert "INDEX.md" in dyn
+        assert "INDEX.md" not in dyn and "PROJECT_STATE" not in dyn
+        assert "URGENT" in dyn and "ask you what to record" in dyn
 
 
 # ---------------------------------------------------------------------------
@@ -232,7 +237,7 @@ class TestWorkspacePersistenceDirectives:
     def test_persistence_directive_in_cached_prefix(self, tmp_path):
         cached, _s, _d = PromptBuilder(str(tmp_path)).build(_base_ctx(str(tmp_path)))
         assert "persistent worker" in cached.lower()
-        assert "persistent workspace" in cached.lower()
+        assert "workspace files persist" in cached.lower()
 
     def test_artifact_writing_directive_in_cached_prefix(self, tmp_path):
         cached, _s, _d = PromptBuilder(str(tmp_path)).build(_base_ctx(str(tmp_path)))

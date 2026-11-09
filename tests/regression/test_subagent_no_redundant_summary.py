@@ -122,22 +122,26 @@ def test_coordination_section_forbids_re_summarizing():
     low = semi_stable.lower()
     assert "re-summarize" in low
     assert "already" in low
-    # Existing non-blocking-model contract must still hold.
-    assert "AUTOMATICALLY RESUMED" in semi_stable
+    # Existing non-blocking-model contract must still hold (1109 R5: one
+    # sentence; the daemon enforces the turn end via yield_turn).
+    assert "ends your turn" in low
+    assert "resumed automatically" in low
 
 
 def test_verification_subsection_is_framed_as_internal_not_a_summary():
-    """The 'Verifying Sub-Agent Output' subsection reframes verification as an
-    internal check, decoupled from writing a user-facing summary."""
+    """Verification is a silent check, decoupled from writing a user-facing
+    summary (1109 R5 folded the 'Verifying Sub-Agent Output' subsection into
+    the Dispatching block)."""
     ctx = _ctx(enabled_agents=[
         {"handle": "claudecode", "display_name": "Claude Code", "type": "cli"},
     ])
     _, semi_stable, _ = PromptBuilder().build(ctx)
 
-    tail = semi_stable.split("Verifying Sub-Agent Output")[1]
+    tail = semi_stable.split("### Dispatching")[1]
     low = tail.lower()
-    assert "internal" in low
-    assert "already see" in low  # matches "already sees" / "already see"
+    assert "verify the work silently" in low
+    assert "already seen" in low
+    assert "reply only with what is new" in low
     # Existing verification guidance (read/shell) must survive.
     assert "read" in low
     assert "shell" in low

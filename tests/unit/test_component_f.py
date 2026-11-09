@@ -2380,7 +2380,7 @@ class TestSkillsCopyOnProjectCreation:
         app = create_app(data_dir=str(tmp_path))
         return TestClient(app)
 
-    def test_create_project_copies_default_skills(self, app_client, tmp_path):
+    def test_create_project_installs_no_bundled_skills(self, app_client, tmp_path):
         workspace = tmp_path / "workspace"
         workspace.mkdir()
         resp = app_client.post("/api/v2/projects", json={
@@ -2391,14 +2391,10 @@ class TestSkillsCopyOnProjectCreation:
         })
         assert resp.status_code == 201
         pid = resp.json()["project_id"]
+        # 1109 Task B: Orbital bundles no skills any more.
         skills_dir = workspace / "orbital" / "skills"
-        assert skills_dir.is_dir()
-        # Should have the 4 seed skills
-        subdirs = [d.name for d in skills_dir.iterdir() if d.is_dir()]
-        assert "learning-capture" in subdirs
-        assert "efficient-execution" in subdirs
-        assert "process-capture" in subdirs
-        assert "task-planning" in subdirs
+        subdirs = [d.name for d in skills_dir.iterdir()] if skills_dir.exists() else []
+        assert subdirs == []
         # Persistent flag marks the project as reconciled so the installer
         # short-circuits on the next agent start.
         get_resp = app_client.get(f"/api/v2/projects/{pid}")
@@ -2423,12 +2419,10 @@ class TestSkillsCopyOnProjectCreation:
         })
         assert resp.status_code == 201
         pid = resp.json()["project_id"]
-        # The custom skill is preserved; the 4 bundled defaults are added
-        # alongside it because they did not previously exist.
+        # The custom skill is preserved and nothing is added beside it.
         subdirs = {d.name for d in skills_dir.iterdir() if d.is_dir()}
-        assert "my-custom" in subdirs
-        assert {"efficient-execution", "learning-capture",
-                "process-capture", "task-planning"}.issubset(subdirs)
+        assert subdirs == {"my-custom"}
+        assert (custom_skill / "SKILL.md").read_text() == "# My Custom\nCustom skill."
         # Reconciled flag is set on success.
         get_resp = app_client.get(f"/api/v2/projects/{pid}")
         assert get_resp.json().get("default_skills_reconciled") is True
@@ -2464,7 +2458,12 @@ class TestSkillsAPIEndpoints:
         return TestClient(app)
 
     def _create_project_with_skills(self, app_client, workspace):
-        """Helper: create a project and return its ID."""
+        """Helper: create a project holding two user skills; return its ID."""
+        for name, title in (("learning-capture", "Learning Capture"),
+                            ("weekly-report", "Weekly Report")):
+            d = workspace / "orbital" / "skills" / name
+            d.mkdir(parents=True)
+            (d / "SKILL.md").write_text(f"# {title}\nDo the thing.\n")
         resp = app_client.post("/api/v2/projects", json={
             "name": "SkillAPITest",
             "workspace": str(workspace),
@@ -2474,15 +2473,15 @@ class TestSkillsAPIEndpoints:
         assert resp.status_code == 201
         return resp.json()["project_id"]
 
-    def test_list_skills_returns_seeded_skills(self, app_client, tmp_path):
+    def test_list_skills_returns_the_projects_skills(self, app_client, tmp_path):
         workspace = tmp_path / "ws"
         workspace.mkdir()
         pid = self._create_project_with_skills(app_client, workspace)
         resp = app_client.get(f"/api/v2/projects/{pid}/skills")
         assert resp.status_code == 200
         skills = resp.json()
-        names = [s["name"] for s in skills]
-        assert len(names) >= 4
+        names = sorted(s["name"] for s in skills)
+        assert names == ["Learning Capture", "Weekly Report"]
 
     def test_list_skills_project_not_found(self, app_client):
         resp = app_client.get("/api/v2/projects/nonexistent/skills")
@@ -2492,7 +2491,7 @@ class TestSkillsAPIEndpoints:
         workspace = tmp_path / "ws2"
         workspace.mkdir()
         pid = self._create_project_with_skills(app_client, workspace)
-        # Delete one of the seeded skills
+        # Delete one of the project's skills
         resp = app_client.delete(f"/api/v2/projects/{pid}/skills/learning-capture")
         assert resp.status_code == 200
         assert resp.json()["deleted"] == "learning-capture"

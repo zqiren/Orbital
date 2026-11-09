@@ -214,9 +214,10 @@ class TestSubAgentVerification:
             {"handle": "claudecode", "display_name": "Claude Code", "type": "cli"}
         ])
         _, semi_stable, _ = builder.build(ctx)
-        assert "Verifying Sub-Agent Output" in semi_stable
-        assert "read" in semi_stable.split("Verifying")[1]
-        assert "shell" in semi_stable.split("Verifying")[1]
+        # 1109 R5: folded into the Dispatching block.
+        tail = semi_stable.split("### Dispatching")[1]
+        assert "verify the work silently" in tail
+        assert "files exist, code builds" in tail
 
     def test_verification_multiple_sub_agents(self):
         builder = PromptBuilder()
@@ -225,13 +226,13 @@ class TestSubAgentVerification:
             {"handle": "aider", "display_name": "Aider", "type": "cli"},
         ])
         _, semi_stable, _ = builder.build(ctx)
-        assert semi_stable.count("Verifying Sub-Agent Output") == 1
+        assert semi_stable.count("verify the work silently") == 1
 
     def test_no_verification_without_sub_agents(self):
         builder = PromptBuilder()
         ctx = make_context(enabled_agents=[])
         _, semi_stable, _ = builder.build(ctx)
-        assert "Verifying Sub-Agent Output" not in semi_stable
+        assert "verify the work silently" not in semi_stable
 
 
 # ===========================================================================
@@ -263,8 +264,9 @@ class TestSkillCreationTrigger:
 
 class TestSkillConsultationStrength:
 
-    def test_must_read_when_skills_exist(self, tmp_path):
-        """When skills exist, prompt uses mandatory 'MUST read' language."""
+    def test_read_rule_when_skills_exist(self, tmp_path):
+        """When skills exist, a matching skill is read before starting (1109
+        R14: plain wording instead of 'MUST read')."""
         # Skills live at {workspace}/orbital/skills/ in the new layout (TASK-02).
         skills_dir = tmp_path / "orbital" / "skills" / "deploy"
         skills_dir.mkdir(parents=True)
@@ -272,7 +274,7 @@ class TestSkillConsultationStrength:
         builder = PromptBuilder(workspace=str(tmp_path))
         ctx = make_context(workspace=str(tmp_path))
         _, semi_stable, _ = builder.build(ctx)
-        assert "you MUST read" in semi_stable
+        assert "matches your task, read its SKILL.md before you start" in semi_stable
 
     def test_planning_discipline_fallback_when_no_skills(self, tmp_path):
         """When no skills exist, fallback to Planning Discipline (unchanged)."""
