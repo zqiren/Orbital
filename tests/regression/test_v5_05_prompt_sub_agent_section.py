@@ -42,7 +42,7 @@ class TestSubAgentAwarenessSection:
         ctx = _make_context(enabled_agents=ENABLED, active_sub_agents=[])
         _, semi_stable, _ = PromptBuilder().build(ctx)
 
-        assert "Sub-Agent Coordination" in semi_stable
+        assert "### Dispatching" in semi_stable
 
     def test_section_omitted_when_no_sub_agents_enabled(self):
         """No enabled agents → no section, whatever happens to be running."""
@@ -51,7 +51,7 @@ class TestSubAgentAwarenessSection:
         ])
         _, semi_stable, _ = PromptBuilder().build(ctx)
 
-        assert "Sub-Agent Coordination" not in semi_stable
+        assert "### Dispatching" not in semi_stable
 
     def test_section_bytes_do_not_follow_live_state(self):
         """Dispatch and report-back must not rewrite the system region."""
@@ -74,9 +74,10 @@ class TestSubAgentAwarenessSection:
         # sub-agent resume): "does NOT wait" became "ENDS YOUR TURN" /
         # "AUTOMATICALLY RESUMED" — the non-blocking model is now described as
         # turn-ending dispatch with push-based resume, not polling-free waiting.
-        assert "returns IMMEDIATELY" in semi_stable
-        assert "ENDS YOUR TURN" in semi_stable
-        assert "AUTOMATICALLY RESUMED" in semi_stable
+        # 1109 R5: one sentence; agent_message send sets yield_turn and the
+        # loop ends the turn, so the prompt no longer shouts it.
+        assert "It ends your turn" in semi_stable
+        assert "resumed automatically" in semi_stable
 
     def test_state_line_in_the_tail_shows_multiple_agents(self):
         """Live states ride the tail as one line: handle + status."""

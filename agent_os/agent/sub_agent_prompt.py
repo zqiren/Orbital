@@ -32,6 +32,11 @@ MEMORY_MD_HEADER = (
 )
 
 
+def _single_line_prompt() -> bool:
+    """True where the rendered prompt must not contain a newline (Windows)."""
+    return os.name == "nt"
+
+
 def _memory_md_path(workspace: str, agent_slug: str) -> str:
     """Path to a sub-agent's MEMORY.md file."""
     return os.path.join(
@@ -147,26 +152,22 @@ def render_sub_agent_prompt(
     lines.append(skills_line)
     lines.append("")
     lines.append(
-        "These are authoritative. Do not ignore them. If they conflict with the user's"
+        "These are authoritative. Do not ignore them. If they conflict with the user's "
+        "immediate request, ask for clarification rather than proceeding."
     )
-    lines.append("immediate request, ask for clarification rather than proceeding.")
     lines.append("")
     lines.append("You have your own long-term memory at:")
     lines.append(f"  {own_memory}")
     lines.append("")
     lines.append(
-        "Append to this file when you discover something worth remembering across"
-    )
-    lines.append(
+        "Append to this file when you discover something worth remembering across "
         "dispatches — working approaches, things to avoid, recurring patterns."
     )
     lines.append(
-        "This is your CLAUDE.md-equivalent for this project. Keep entries concise"
+        "This is your CLAUDE.md-equivalent for this project. Keep entries concise "
+        "(target: under 2KB total). It is NOT for storing work artifacts; it is for "
+        "your own curated memory."
     )
-    lines.append(
-        "(target: under 2KB total). It is NOT for storing work artifacts; it is for"
-    )
-    lines.append("your own curated memory.")
 
     # "Other sub-agents" section is rendered ONLY when at least one peer
     # has an existing MEMORY.md. Per dispatcher disambiguation #1:
@@ -175,9 +176,9 @@ def render_sub_agent_prompt(
     if peers_with_memory:
         lines.append("")
         lines.append(
-            "Other sub-agents in this project also have memory files. Read them when"
+            "Other sub-agents in this project also have memory files. Read them when "
+            "relevant context may live there:"
         )
-        lines.append("relevant context may live there:")
         for peer_path in peers_with_memory:
             lines.append(f"- {peer_path}")
 
@@ -241,22 +242,18 @@ def render_sub_agent_prompt(
         lines.append("")
     else:
         lines.append("")
-        lines.append("Do NOT modify these orbital-managed files:")
         lines.append(
-            "PROJECT_STATE.md, DECISIONS.md, LESSONS.md, INDEX.md, ASKS.md,"
+            "Do NOT modify these orbital-managed files: PROJECT_STATE.md, "
+            "DECISIONS.md, LESSONS.md, INDEX.md, ASKS.md, instructions/, "
+            "sub_agents/ (other than your own MEMORY.md). You can read them; "
+            "do not write to them."
         )
-        lines.append(
-            "instructions/, sub_agents/ (other than your own MEMORY.md)."
-        )
-        lines.append("You can read them; do not write to them.")
         lines.append("")
     lines.append(
-        "For your work artifacts (reports, generated files, screenshots, etc.),"
+        "For your work artifacts (reports, generated files, screenshots, etc.), "
+        "place them in appropriate paths within the workspace based on the "
+        "artifact's nature. Use your judgment."
     )
-    lines.append(
-        "place them in appropriate paths within the workspace based on the"
-    )
-    lines.append("artifact's nature. Use your judgment.")
     if background_jobs:
         lines.append("")
         lines.append(background_jobs)
@@ -265,15 +262,17 @@ def render_sub_agent_prompt(
     # `namespace` is reserved for future per-namespace overrides.
     _ = namespace
 
-    rendered = "\n".join(lines)
-
-    # Windows workaround: claude.exe v2.1.138 hangs when --append-system-prompt
-    # (or --system-prompt) receives an argv value containing \n. Flatten to a
-    # single-line string before passing to the SDK. See:
-    #   docs/investigations/TRIGGER-orbital-prompt-content.md
-    #   docs/investigations/BOUNDARY-claude-exe-hang.md
-    # Remove when claude-code addresses the Windows newline-in-argv bug.
-    return rendered.replace("\n", "; ")
+    # Every line is a whole sentence or list item, so either join reads
+    # correctly. Windows workaround (b57bf839): claude.exe v2.1.138 hangs when
+    # --append-system-prompt (or --system-prompt) receives an argv value
+    # containing \n, so there the prompt is one line. The old code replaced
+    # every \n with "; " on EVERY OS, and the lines were hard-wrapped
+    # mid-sentence, so models read "Keep entries concise; (target: …" (1109
+    # W2). POSIX argv carries newlines fine; pipe and Pi read a file.
+    # Remove the Windows branch when claude-code fixes newline-in-argv.
+    if _single_line_prompt():
+        return " ".join(line for line in lines if line.strip())
+    return "\n".join(lines)
 
 
 def ensure_memory_md(workspace: str, agent_slug: str) -> str:

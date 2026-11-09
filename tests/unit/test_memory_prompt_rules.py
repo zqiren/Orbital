@@ -11,7 +11,7 @@ do with a pointer — to a source of truth, or to an archived entry.
 """
 
 from agent_os.agent.prompt_builder import (
-    _TOOL_DESCRIPTIONS as TOOL_DESCRIPTIONS, Autonomy, PromptBuilder, PromptContext,
+    Autonomy, PromptBuilder, PromptContext,
 )
 from agent_os.agent.tools.checkpoint_state import CheckpointStateTool
 
@@ -65,7 +65,9 @@ def test_scratch_projects_get_none_of_it():
 
 
 def test_checkpoint_state_descriptions_say_it_is_automatic_and_records_nothing():
-    for desc in (TOOL_DESCRIPTIONS["checkpoint_state"], CheckpointStateTool(lambda: None).description):
+    # 1109 R1: the prompt's tool roster is gone; the schema description is
+    # the only copy.
+    for desc in (CheckpointStateTool(lambda: None).description,):
         assert "automatically" in desc
         assert "never records new facts" in desc.lower() or "does not record new facts" in desc.lower()
 

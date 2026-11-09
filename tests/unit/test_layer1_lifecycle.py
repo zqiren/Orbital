@@ -344,11 +344,9 @@ def test_snapshot_header_is_the_static_run_start_text(tmp_path):
     rows = _layer1_rows(mgr.prepare(), "DECISIONS.md")
     assert len(rows) == 1
     header = rows[0].splitlines()[0]
-    assert header == (
-        "[DECISIONS.md — snapshot taken when this run started. Do not edit "
-        "memory files during the run; at the end of the run you will be asked "
-        "what to record, with the current file text in hand.]"
-    )
+    # 1109 R12: the "do not edit during the run" rule lives once, in the
+    # memory section, not in each of the four headers.
+    assert header == "[DECISIONS.md — snapshot taken when this run started]"
 
 
 def test_layer1_snapshot_accessor_exposes_the_injected_rows(tmp_path):

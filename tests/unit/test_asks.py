@@ -694,10 +694,11 @@ class TestPromptRules:
         assert "you are parking" not in semi
         assert "Never re-propose a dropped ask" in semi
         # Spec 139 A: the agent reads ASKS.md itself; nothing is listed per turn.
-        assert ("Before opening an ask, read ASKS.md: don't duplicate an open one, "
-                "and never re-open what the user dropped.") in semi
-        assert ("When the user's message looks like an answer to something you "
-                "raised earlier, check ASKS.md for an open ask to close.") in semi
+        # 1109 R11: the duplicate "never re-open what the user dropped" is
+        # merged into the line above.
+        assert ("Before opening one, read ASKS.md: don't duplicate an open ask. "
+                "When a user message answers something you raised, check for an "
+                "open ask to close.") in semi
         assert "runtime note" not in semi
         assert "[user]" not in semi
 

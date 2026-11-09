@@ -310,7 +310,13 @@ class TestStartActionRemoved:
         section = PromptBuilder()._sub_agents(ctx)
         assert 'action="start"' not in section
         assert 'action="send"' in section
-        assert "spawns the agent automatically" in section
+        # 1109 R5: "spawns the agent automatically" lives in the tool's own
+        # description (sent with every request); the prompt keeps the one
+        # send call and no start step.
+        from unittest.mock import MagicMock
+        from agent_os.agent.tools.agent_message import AgentMessageTool
+        tool = AgentMessageTool(sub_agent_manager=MagicMock(), project_id="p")
+        assert "spawns the agent automatically" in tool.description
 
 
 class TestH1DispatchBudget:

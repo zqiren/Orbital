@@ -676,7 +676,7 @@ class TestPromptBuilderSubAgentsSection:
             "</sub_agent_deployment_instructions>"
         )
         assert block in semi_stable
-        assert semi_stable.index(block) < semi_stable.index("To interact with sub-agents")
+        assert semi_stable.index(block) < semi_stable.index("### Dispatching")
         assert "disabled, unavailable, or unsafe agent" in semi_stable
 
     def test_empty_project_deployment_instructions_change_no_prompt_tokens(

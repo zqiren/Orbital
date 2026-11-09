@@ -48,12 +48,14 @@ def test_skills_endpoint_empty_then_healed_for_stranded_legacy_project(
     assert resp.status_code == 201
     pid = resp.json()["project_id"]
 
-    # Reproduce the live broken state: move the skills the installer just placed
-    # at orbital/skills/ down to the legacy {workspace}/skills/ path, and add a
-    # user-authored skill there. The reconciled flag stays True.
-    new_skills = workspace / "orbital" / "skills"
+    # Reproduce the live broken state: skills stranded at the legacy
+    # {workspace}/skills/ path (a formerly bundled copy and a user-authored
+    # one). The reconciled flag stays True.
     legacy = workspace / "skills"
-    new_skills.rename(legacy)
+    (legacy / "learning-capture").mkdir(parents=True)
+    (legacy / "learning-capture" / "SKILL.md").write_text(
+        "# Learning Capture\n\nCapture lessons.", encoding="utf-8"
+    )
     user_skill = legacy / "humanizer"
     user_skill.mkdir()
     (user_skill / "SKILL.md").write_text(
@@ -75,10 +77,7 @@ def test_skills_endpoint_empty_then_healed_for_stranded_legacy_project(
     resp = client.get(f"/api/v2/projects/{pid}/skills")
     assert resp.status_code == 200
     names = {s["dir_name"] for s in resp.json()}
-    assert {
-        "efficient-execution", "learning-capture", "process-capture",
-        "task-planning", "humanizer",
-    } <= names
+    assert names == {"learning-capture", "humanizer"}
     # And every reported path points at the current orbital/skills location.
     for s in resp.json():
         assert "/orbital/skills/" in s["path"]

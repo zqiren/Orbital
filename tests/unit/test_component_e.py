@@ -96,11 +96,15 @@ class TestToolOmission:
         cached, _, _ = builder.build(ctx)
         assert "agent_message" not in cached
 
-    def test_cached_prefix_includes_agent_message_when_present(self):
+    def test_cached_prefix_does_not_restate_the_tool_list(self):
+        # 1109 R1: no tool roster — the JSON schemas carry names and
+        # descriptions, and a tool (a connector, say) that has no prompt
+        # section of its own no longer changes the cached bytes.
         builder = PromptBuilder()
-        ctx = make_context(tool_names=["read", "write", "agent_message"])
-        cached, _, _ = builder.build(ctx)
-        assert "agent_message" in cached
+        with_tool, _, _ = builder.build(make_context(tool_names=["read", "write", "agent_message"]))
+        without, _, _ = builder.build(make_context(tool_names=["read", "write"]))
+        assert with_tool == without
+        assert "following tools available" not in with_tool
 
 
 # ===========================================================================
@@ -109,11 +113,13 @@ class TestToolOmission:
 
 class TestDynamicSuffixContent:
 
-    def test_dynamic_suffix_contains_workspace(self):
+    def test_workspace_is_stated_once_in_the_cached_prefix(self):
+        # 1109 R16: the runtime tail no longer repeats it.
         builder = PromptBuilder()
         ctx = make_context(workspace="/projects/my-app")
-        _, _, dynamic = builder.build(ctx)
-        assert "/projects/my-app" in dynamic
+        cached, _, dynamic = builder.build(ctx)
+        assert "Your workspace is: /projects/my-app" in cached
+        assert "/projects/my-app" not in dynamic
 
     def test_dynamic_suffix_contains_datetime(self):
         builder = PromptBuilder()
@@ -151,13 +157,12 @@ class TestSubAgentsSection:
 class TestContextBudgetWarning:
 
     def test_75_pct_context_warning(self):
+        # 1109 R10: no mid-run memory write; a skill reflection only.
         builder = PromptBuilder()
         ctx = make_context(context_usage_pct=0.75)
         _, _, dynamic = builder.build(ctx)
-        assert "PROJECT_STATE.md" in dynamic
-        # Should mention updating / saving state
-        lower = dynamic.lower()
-        assert "consider" in lower or "update" in lower or "save" in lower
+        assert "PROJECT_STATE.md" not in dynamic
+        assert "worth saving as a skill" in dynamic
 
 
 # ===========================================================================
@@ -172,7 +177,9 @@ class TestContextBudgetUrgent:
         _, _, dynamic = builder.build(ctx)
         upper = dynamic.upper()
         assert "URGENT" in upper
-        assert "PROJECT_STATE.md" in dynamic
+        # 1109 R10: the record turn runs before compaction; no "save now".
+        assert "PROJECT_STATE.md" not in dynamic
+        assert "ask you what to record" in dynamic
 
 
 # ===========================================================================
@@ -419,8 +426,9 @@ class TestPromptBuilderWithWorkspace:
 
 class TestSkillsDisciplineInjection:
 
-    def test_skills_present_includes_must_read_instruction(self, tmp_path):
-        """When skills exist, output contains mandatory read instruction."""
+    def test_skills_present_includes_read_instruction(self, tmp_path):
+        """When skills exist, a matching skill's SKILL.md is read first (1109
+        R14 softened the MUST; the rule stays)."""
         from agent_os.agent.project_paths import ProjectPaths
         from pathlib import Path
         skills_dir = Path(ProjectPaths(str(tmp_path)).skills_dir) / "my-skill"
@@ -429,7 +437,8 @@ class TestSkillsDisciplineInjection:
         builder = PromptBuilder(workspace=str(tmp_path))
         ctx = make_context(workspace=str(tmp_path))
         _, semi_stable, _ = builder.build(ctx)
-        assert "you MUST read" in semi_stable
+        assert "If a skill below matches your task, read its SKILL.md before you start" in semi_stable
+        assert "(at orbital/skills/my-skill/SKILL.md)" in semi_stable
 
     def test_no_skills_includes_planning_discipline(self, tmp_path):
         """When no skills exist, output contains 'Planning Discipline'."""

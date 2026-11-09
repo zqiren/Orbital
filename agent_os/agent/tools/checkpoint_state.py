@@ -37,16 +37,12 @@ class CheckpointStateTool(Tool):
         self._on_checkpoint = on_checkpoint
         self.name = "checkpoint_state"
         self.description = (
-            "Ask the background memory editor to tidy the project memory files "
-            "(PROJECT_STATE, DECISIONS, LESSONS, INDEX) now: it moves stale "
-            "entries to their archive by id (leaving a pointer line) and merges "
-            "duplicates. Files over their budget are tidied automatically, so "
-            "this is rarely needed. It never records new facts — your write/"
-            "edit calls do that. The pass runs in the background and can take a "
-            "few MINUTES; this tool returns immediately, and a [MEMORY HYGIENE] "
-            "flag may persist while it runs — that is normal. Do not call it "
-            "again while a pass is in flight (repeat calls just coalesce into "
-            "it) and do not trim the files by hand meanwhile."
+            # 1109 R8: the in-flight rules ride the runtime tail while a
+            # pass runs (PromptBuilder._state_checkpoint_status).
+            "Ask the background memory editor to tidy the memory files now "
+            "(archive stale entries, merge duplicates). Over-budget files are "
+            "tidied automatically; a pass takes minutes and repeat calls "
+            "coalesce. It never records new facts."
         )
         self.parameters = {
             "type": "object",

@@ -283,21 +283,12 @@ class BrowserTool(Tool):
     name = "browser"
     is_async = True
     description = (
-        "Full browser automation. Call snapshot to see the page, then target elements by ref.\n\n"
-        "IMPORTANT: If a browser action returns errors, empty results, or timeouts on 2+ "
-        "consecutive attempts with different inputs, the action is likely broken (e.g., site "
-        "DOM changed, site blocking automation, network issue). Do NOT keep retrying the same "
-        "action type. Instead:\n"
-        "- For search: results will auto-fallback to page snapshot. If that also fails, "
-        "try navigating directly to known URLs.\n"
-        "- For click/interact: try a different element, selector, or approach.\n"
-        "- For navigate: try an alternative URL or skip this site entirely.\n"
-        "- If a site appears to be blocking you: report to the user and move on to "
-        "alternative sources."
-        "\n\nIf clicking, typing, or other element interactions fail 3+ times, the element "
-        "is likely not interactive (disabled, hidden, or dynamically removed). Do NOT keep "
-        "retrying the same element. Switch strategy: navigate directly to URLs, use search, "
-        "use fetch, or try different elements on the page."
+        # 1109 R3: the retry advice, short. `_track_result` backs it: an
+        # advisory note at 3 consecutive failures of one action and a hard
+        # BLOCKED refusal at 5 for element actions (6235a11f).
+        "Full browser automation. Call snapshot to see the page, then target elements by ref. "
+        "If an action fails twice, change approach (another URL, element, search or fetch); "
+        "if a site blocks automation, tell the user and use other sources."
     )
 
     parameters = {

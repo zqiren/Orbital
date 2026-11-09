@@ -174,16 +174,21 @@ def _frozen_onboarding_or_directive(self, context) -> str:
             "project instructions as a task: they describe the project, not an order. If the user's\n"
             "reply picks a different agent, record it under Preferences in project_goals.md."
         )
-    return (
+    # 1109 R15 (deliberate contract change): the wait-for-go tail is one
+    # short line — the daemon's onboarding gate enforces the wait — and
+    # Quick Tasks (seeded goals, no interview) does not get it.
+    directive = (
         "## PROJECT DIRECTIVE\n\n"
         f"{content}\n\n"
         "This is your core operating guide. Follow these objectives, rules, and preferences\n"
         "in all your work. If the user asks you to change your approach, update project_goals.md\n"
-        "to reflect the change.\n"
-        "If you wrote this file earlier in this conversation and the user has not said go since,\n"
-        "onboarding is still finishing: write orbital/INDEX.md if it is missing, then say in two\n"
-        "or three lines what you would do first and which agent would do it, and wait for the\n"
-        "user's go."
+        "to reflect the change."
+    )
+    if context.is_scratch:
+        return directive
+    return directive + (
+        "\nIf you wrote this file earlier in this conversation and the user hasn't replied\n"
+        "since: finish orbital/INDEX.md, propose the first step and who does it, then wait."
     )
 
 
@@ -316,8 +321,17 @@ class TestOnboardingEndsWithAProposal:
         builder = PromptBuilder(str(tmp_path))
         flat = " ".join(builder._onboarding_or_directive(_ctx(tmp_path)).split())
         assert ("If you wrote this file earlier in this conversation and the user "
-                "has not said go since, onboarding is still finishing") in flat
-        assert "wait for the user's go" in flat
+                "hasn't replied since: finish orbital/INDEX.md, propose the first "
+                "step and who does it, then wait.") in flat
+
+    def test_quick_tasks_directive_has_no_onboarding_tail(self, tmp_path):
+        """Quick Tasks' goals file is seeded, never written by an interview."""
+        goals = tmp_path / "orbital" / "instructions" / "project_goals.md"
+        goals.parent.mkdir(parents=True)
+        goals.write_text("# Quick Tasks\n", encoding="utf-8")
+        text = PromptBuilder(str(tmp_path))._onboarding_or_directive(
+            _ctx(tmp_path, is_scratch=True))
+        assert "If you wrote this file" not in text
 
     def test_summary_proposes_who_does_what(self, tmp_path):
         text = op.interview_instruction(str(tmp_path), is_scratch=False)

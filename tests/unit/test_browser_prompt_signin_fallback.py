@@ -13,7 +13,6 @@ site blocks automated sign-in and point them to Settings → Browser Sign-In.
 import pytest
 
 from agent_os.agent.prompt_builder import (
-    _BROWSER_USAGE_PROMPT,
     _BROWSER_USAGE_PROMPT_TEXT_ONLY,
     _BROWSER_USAGE_PROMPT_VISION,
     Autonomy,
@@ -22,7 +21,6 @@ from agent_os.agent.prompt_builder import (
 )
 
 _VARIANTS = {
-    "plain": _BROWSER_USAGE_PROMPT,
     "vision": _BROWSER_USAGE_PROMPT_VISION,
     "text_only": _BROWSER_USAGE_PROMPT_TEXT_ONLY,
 }

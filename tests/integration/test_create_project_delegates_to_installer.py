@@ -2,8 +2,8 @@
 # Copyright (C) 2026 Orbital Contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Integration: POST /api/v2/projects delegates to the shared default-skills
-installer. Verifies that skills land on disk AND
+"""Integration: POST /api/v2/projects delegates to the shared skills
+reconciler. Since 1109 Task B no bundled skill lands on disk, and
 ``default_skills_reconciled=true`` is persisted in the project record."""
 
 from unittest.mock import patch
@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 from agent_os.api.app import create_app
 
 
-EXPECTED_SKILLS = {
+FORMER_BUNDLED_SKILLS = {
     "efficient-execution",
     "learning-capture",
     "process-capture",
@@ -32,7 +32,7 @@ def client(tmp_path):
     return TestClient(app)
 
 
-def test_create_project_installs_default_skills_and_sets_flag(client, tmp_path):
+def test_create_project_installs_no_bundled_skills_and_sets_flag(client, tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
 
@@ -45,13 +45,10 @@ def test_create_project_installs_default_skills_and_sets_flag(client, tmp_path):
     assert resp.status_code == 201, resp.text
     pid = resp.json()["project_id"]
 
-    # All 4 bundled skills materialized on disk.
+    # None of the formerly bundled skills materialized on disk.
     skills_dir = workspace / "orbital" / "skills"
-    assert skills_dir.is_dir()
-    subdirs = {d.name for d in skills_dir.iterdir() if d.is_dir()}
-    assert subdirs == EXPECTED_SKILLS
-    for name in EXPECTED_SKILLS:
-        assert (skills_dir / name / "SKILL.md").is_file()
+    subdirs = {d.name for d in skills_dir.iterdir()} if skills_dir.exists() else set()
+    assert not subdirs & FORMER_BUNDLED_SKILLS
 
     # Reconciled flag surfaces through GET /projects/{pid}.
     get_resp = client.get(f"/api/v2/projects/{pid}")

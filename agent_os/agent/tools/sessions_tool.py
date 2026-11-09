@@ -77,9 +77,7 @@ class ListSessionsTool(Tool):
         self.name = "list_sessions"
         self.description = (
             "List management-agent sessions in the current project. The calling "
-            "session is excluded unless include_self is true. Prior sessions may "
-            "contain sensitive user-provided text; use their identifiers only for "
-            "the user's requested task."
+            "session is excluded unless include_self is true."
         )
         self.parameters = {
             "type": "object",
@@ -230,8 +228,7 @@ class ReadSessionTool(Tool):
         self.description = (
             "Read parsed messages from a management-agent session in the current "
             "project, using a session_uuid returned by list_sessions. Meta records "
-            "are excluded. Prior sessions may contain sensitive user-provided text; "
-            "read them only for the user's requested task."
+            "are excluded."
         )
         self.parameters = {
             "type": "object",

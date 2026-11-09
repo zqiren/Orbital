@@ -24,7 +24,6 @@ import re
 import pytest
 
 from agent_os.agent.prompt_builder import (
-    _BROWSER_USAGE_PROMPT,
     _BROWSER_USAGE_PROMPT_TEXT_ONLY,
     _BROWSER_USAGE_PROMPT_VISION,
     Autonomy,
@@ -36,7 +35,6 @@ _DOTTED_EXAMPLE = re.compile(r"<secret:[A-Za-z0-9_]+\.[A-Za-z0-9_]+>")
 _ANY_TOKEN = re.compile(r"<secret:([^>]+)>")
 
 _VARIANTS = {
-    "plain": _BROWSER_USAGE_PROMPT,
     "vision": _BROWSER_USAGE_PROMPT_VISION,
     "text_only": _BROWSER_USAGE_PROMPT_TEXT_ONLY,
 }

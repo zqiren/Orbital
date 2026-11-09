@@ -73,7 +73,9 @@ def _imported(store, tmp_path, name, *, activity=None, state=PENDING, attempts=N
 def test_orbital_part_writes_skills_but_not_agents_md(store, tmp_path):
     pid, ws = _imported(store, tmp_path, "a")
     assert seed_orbital_folder(store, pid) is True
-    assert (ws / "orbital" / "skills").is_dir()
+    # 1109 Task B: the skills step runs but bundles nothing.
+    assert not (ws / "orbital" / "skills").exists()
+    assert store.get_project(pid)["default_skills_reconciled"] is True
     assert not (ws / "AGENTS.md").exists()
     p = store.get_project(pid)
     assert p["deferred_seed"] is True  # the root file is still to come
@@ -430,7 +432,7 @@ def test_import_stamps_pending_writes_orbital_and_kicks(tmp_path, monkeypatch, k
     assert p[import_scan.AT_FIELD]
     assert p[import_scan.LANG_FIELD] == "zh"
     assert p["deferred_seed"] is True
-    assert (ws / "orbital" / "skills").is_dir()
+    assert p["default_skills_reconciled"] is True  # 1109: no bundled skills
     assert not (ws / "AGENTS.md").exists()
     assert kicks == [("import", True)]
     onboarding_routes.configure()
@@ -620,7 +622,7 @@ def test_guess_run_keeps_its_section_after_the_goals_write(tmp_path, en_locale):
     assert not hasattr(op, "guess_first_directive_tail")
     plain = _flat(_section(tmp_path))
     assert plain.startswith("## PROJECT DIRECTIVE")
-    assert "what you would do first and which agent would do it" in plain
+    assert "propose the first step and who does it, then wait" in plain
     assert _flat(_section(tmp_path, cold_start=False)) == plain
 
 

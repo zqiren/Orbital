@@ -406,10 +406,10 @@ class TestWhoDoesWhat:
         _, semi_stable, _ = builder.build(ctx)
         deploy = semi_stable.index("</sub_agent_deployment_instructions>")
         rule = semi_stable.index("### Who does what")
-        dispatch = semi_stable.index("To interact with sub-agents")
+        dispatch = semi_stable.index("### Dispatching")
         assert deploy < rule < dispatch
-        # The verify-output text is kept as is.
-        assert "### Verifying Sub-Agent Output" in semi_stable
+        # The verify-output rule rides the Dispatching block (1109 R5).
+        assert "verify the work silently" in semi_stable
 
     def test_rule_bytes_do_not_move_between_turns(self, tmp_path):
         builder = PromptBuilder(workspace=str(tmp_path))

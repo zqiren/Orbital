@@ -70,6 +70,13 @@ def _routes_mod():
 def _make_project(client, tmp_path, name, **extra):
     ws = str(tmp_path / f"ws_{name}")
     os.makedirs(ws, exist_ok=True)
+    # The project's own skill. Orbital used to seed "Task Planning" as a
+    # bundled default; since 1109 Task B it bundles none, so the fixture
+    # writes the skill the user would have.
+    tp = os.path.join(ws, "orbital", "skills", "task-planning")
+    os.makedirs(tp, exist_ok=True)
+    with open(os.path.join(tp, "SKILL.md"), "w", encoding="utf-8") as fh:
+        fh.write("# Task Planning\nPlan a multi-step task before starting.\n")
     resp = client.post("/api/v2/projects", json={
         "name": name, "workspace": ws, "model": "gpt-4", "api_key": "test-key",
         **extra,

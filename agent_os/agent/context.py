@@ -70,11 +70,9 @@ class _Layer1Snap(NamedTuple):
 
 # Spec 112 A2: static per-file header on every injected Layer-1 row. The
 # text never changes, so it costs one prefix miss at deploy and then nothing.
-_SNAPSHOT_HEADER = (
-    "[{filename} — snapshot taken when this run started. Do not edit memory "
-    "files during the run; at the end of the run you will be asked what to "
-    "record, with the current file text in hand.]"
-)
+# 1109 R12: the "do not edit during the run" rule is stated once, in the
+# memory section, instead of four times here.
+_SNAPSHOT_HEADER = "[{filename} — snapshot taken when this run started]"
 
 # Spec 112 A3: the drift note appended to the per-call runtime block (the
 # tail, never the prefix) when a file's bytes on disk no longer match the
