@@ -97,23 +97,29 @@ Orbital row shows "API key required" and clicking it opens Global Settings at th
 
 **A2 Wizard import keyless (W4).** Pass: each imported scratch folder has `orbital/` on disk
 right after the wizard; no session titled 项目梳理 / Project overview exists in any of
-them; each project's empty chat shows the first-use Scan card; the daemon log has no
-"import scan" start line.
+them; the daemon log has no "import scan" start line. Record what the project's empty
+chat shows (the Mac run found NO Scan card on imported projects, so a keyless wizard
+import never gets project goals; this is an open product question, not a Windows fail).
 
 **A3 New empty project ×3.** Create a project on an empty scratch folder with the pin
 set to the agent under test (set the project's sticky pin first, or disable the others).
 Pass: start-onboarding returns 201 with `runner: "worker"`; the session is pinned to that
 agent; the empty chat shows the keyless hint naming it; the worker's first reply is the
 interview questions and it **stops** (no files written yet, no shell). Answer in two lines.
-Pass: it writes `project_goals.md` at the absolute path it was given (not under its cwd
-guess), then ends with a proposed first step and waits. Your next message resumes the
-same native thread (one worker process per session in the log, `resume` present).
+Pass: it restates the goals and asks you to confirm (still no files); after your "ok" it
+writes `project_goals.md` at the absolute path it was given (not under its cwd guess),
+then ends with a proposed first step and waits. Your next message resumes the same
+native thread (one worker process per session in the log, `resume` present). (Mac run:
+the write happens after the confirm, not after the answer; that is the designed flow.)
 
-**A4 First-use Scan card ×3.** On an imported scratch project, click Scan. Pass: the scan
-runs on the pinned worker (log: worker spawn, no manager loop); `project_goals.md`,
-`PROJECT_STATE.md`, `INDEX.md` written; the reply ends with a question or proposal, and
-the worker does **not** start editing project files on its own. Note: this path has no
-daemon confirm card; that is expected.
+**A4 First-use Scan card ×3.** On a project created on a scratch folder that already has
+files (NOT an imported one: this build hides the Scan card on imported projects, see the
+Mac results A2), click Scan. Pass: the scan runs on the pinned worker (log: worker spawn,
+no manager loop); the reply summarises the folder, drafts the goals and asks you to
+confirm, and **nothing is written** until you say "ok" (the card's own copy promises
+that); after "ok" `project_goals.md`, `PROJECT_STATE.md`, `INDEX.md` exist and the worker
+does **not** start editing project files on its own. Note: this path has no daemon
+confirm card; that is expected.
 
 **A5 Sidebar Import keyless ×3.** After the wizard, import another scratch folder (with
 history) from the sidebar's Import entry. Pass: the token sign beside Import names the
@@ -241,10 +247,11 @@ Any outcome is useful; this has never been observed.
 **D4 Dispatch to Orbital.** From a worker seat: "Hand this to Orbital: say hi." Pass: the
 tool returns an error string the worker relays; nothing hangs; no manager run.
 
-**D5 Child has no tool; stop the parent.** While D1's child runs, press Stop on the parent.
-Pass: the child keeps running to its end (log), the child's own session never shows a
-dispatch tool, and record where its result lands (expected: a `worker_result` row in the
-parent's session, no wake).
+**D5 Child has no tool; result lands in the parent.** Make D1's child slow (`sleep 40`
+then PONG). Pass: the parent's turn ends as soon as the dispatch returns (so there is no
+parent run to stop; the Mac run confirmed this), the child's own session never shows a
+dispatch tool, the child runs to its end, and its result lands as a `worker_result` row
+in the parent's session followed by one parent turn that reports it. No manager wake.
 
 ## E. Transitions
 
@@ -254,9 +261,11 @@ switcher; an existing project with a sticky worker pin still starts new sessions
 worker until the user re-pins; the wizard's imported projects are **not** scanned now
 (`import_scan` is `off`); a new sidebar import is scanned by Orbital.
 
-**E2 Remove the key.** Delete the default card. Pass: back to keyless everywhere (no
-greeting, chip on the last project, Orbital row with the pill); an in-flight manager
-session ends with a readable provider error, not a hang.
+**E2 Remove the key.** The only default card cannot be deleted (400 `card_is_default`), so
+remove its key instead (`DELETE /api/v2/settings/api-key`, or clear it in the card form).
+Pass: back to keyless everywhere (no greeting, chip on the last project, Orbital row with
+the pill); a manager turn already in flight finishes or ends with a readable provider
+error, never a hang; the next Orbital send is refused.
 
 **E3 Daemon restart mid-run.** Start a worker run and restart the daemon. Pass: the session
 reopens with its rows intact; a new send resumes the native thread; an import scan that
