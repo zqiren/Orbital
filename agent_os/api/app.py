@@ -306,6 +306,12 @@ def _assemble_app(app: FastAPI, data_dir: str | None) -> FastAPI:
             "snapshot": snapshot}),
     ))
 
+    # 2c. The pinned worker's own commands (spec 166): fed by the transports,
+    # read by the `/` picker's catalog route, persisted in the data dir.
+    from agent_os.daemon_v2 import worker_commands
+    worker_commands.install(worker_commands.WorkerCommandStore(
+        os.path.join(store_dir, "worker-commands.json")))
+
     # 3. Activity translator
     activity_translator = ActivityTranslator(ws_manager)
 

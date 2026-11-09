@@ -245,6 +245,7 @@ class CodexTransport(AgentTransport):
         self._codex_last_usage: dict[tuple[str, str], dict] = {}
         # Spec 099: strong ref to the post-start quota read.
         self._rate_limit_task: asyncio.Task | None = None
+        self._skills_task: asyncio.Task | None = None
         self._repick_task: asyncio.Task | None = None
 
     # ------------------------------------------------------------------
@@ -734,6 +735,15 @@ class CodexTransport(AgentTransport):
             return
         publish_codex_snapshot(pick_codex_snapshot(result))
 
+    async def _publish_skills(self) -> None:
+        from agent_os.daemon_v2.worker_commands import codex_commands
+        try:
+            result = await self._request("skills/list", {})
+        except Exception as exc:  # noqa: BLE001 — display data only
+            logger.info("CodexTransport: skills/list failed (%s)", exc)
+            return
+        self._publish_commands(codex_commands(result))
+
     async def _notify(self, method: str, params: dict | None = None) -> None:
         msg: dict = {"jsonrpc": "2.0", "method": method}
         if params is not None:
@@ -941,6 +951,10 @@ class CodexTransport(AgentTransport):
         # slow answer never delays the thread open.
         self._rate_limit_task = asyncio.create_task(
             self._publish_rate_limits(), name=f"codex-ratelimits-{id(self)}")
+        # Spec 166: the skills Codex offers in this cwd, for the `/` picker.
+        # Background too: optional discovery never delays or fails startup.
+        self._skills_task = asyncio.create_task(
+            self._publish_skills(), name=f"codex-skills-{id(self)}")
 
         await self._open_thread(workspace)
 

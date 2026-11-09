@@ -163,6 +163,46 @@ def test_catalog_endpoint_aggregates_sources(env, home):
     assert names["wecomcli-msg"]["source"] == "agents"
 
 
+def test_catalog_endpoint_with_worker_merges_its_commands(env, home):
+    """Spec 166: ``?worker=`` folds the pinned worker's own commands in; a
+    worker command replaces the catalog entry with its key."""
+    from agent_os.daemon_v2 import worker_commands
+    client, pid, ws, *_ = env
+    _skill(home / ".agents" / "skills", "wecomcli-msg",
+           "---\nname: wecomcli-msg\ndescription: Messages\n---\n")
+    plain = client.get(f"/api/v2/projects/{pid}/skill-catalog").json()
+    worker_commands.get_store().publish("claude-code", ws, [
+        {"name": "wecomcli-msg", "description": "Messages (user)",
+         "invoke": "/wecomcli-msg ", "hint": "", "enabled": True},
+        {"name": "review", "description": "Review", "invoke": "/review ",
+         "hint": "<pr>", "enabled": True},
+    ])
+    merged = client.get(f"/api/v2/projects/{pid}/skill-catalog?worker=claude-code").json()
+    by_name = {e["name"]: e for e in merged}
+    assert by_name["Task Planning"]["source"] == "project"
+    assert by_name["wecomcli-msg"]["source"] == "worker"
+    assert by_name["wecomcli-msg"]["invoke"] == "/wecomcli-msg "
+    assert by_name["review"]["hint"] == "<pr>"
+    # Without the parameter nothing changed.
+    assert client.get(f"/api/v2/projects/{pid}/skill-catalog").json() == plain
+
+
+def test_catalog_endpoint_cold_worker_is_probed_once(env, home, monkeypatch):
+    client, pid, ws, _stem, sub, _ = env
+    calls = []
+
+    async def probe(slug, workspace):
+        calls.append((slug, workspace))
+        return [{"name": "imagegen", "description": "", "invoke": "$imagegen ",
+                 "hint": "", "enabled": True}]
+    monkeypatch.setattr(sub, "probe_worker_commands", probe, raising=False)
+    for _ in range(2):
+        names = [e["name"] for e in client.get(
+            f"/api/v2/projects/{pid}/skill-catalog?worker=codex").json()]
+        assert "imagegen" in names
+    assert calls == [("codex", ws)]
+
+
 def test_catalog_endpoint_unknown_project_404(client):
     assert client.get("/api/v2/projects/nope/skill-catalog").status_code == 404
 

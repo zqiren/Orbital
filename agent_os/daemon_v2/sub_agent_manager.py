@@ -577,6 +577,42 @@ class SubAgentManager:
             persistence_root=os.path.join(out_dir, f"{manifest.slug}-sessions"),
         )
 
+    @staticmethod
+    def _attach_commands_sink(transport, slug: str, workspace: str) -> None:
+        if hasattr(transport, "set_commands_sink"):
+            from agent_os.daemon_v2 import worker_commands
+            transport.set_commands_sink(
+                lambda cmds, _s=slug, _w=workspace: worker_commands.publish(_s, _w, cmds))
+
+    async def probe_worker_commands(self, slug: str, workspace: str) -> list[dict] | None:
+        """Spec 166 cold probe for the `/` picker: ask the worker's CLI for
+        its commands without opening a session. Only Claude Code
+        (``initialize``) and Codex (``skills/list``) can answer that way; an
+        ACP agent's ``session/new`` would create a session in the user's
+        tool, so it (and every other transport) returns None unspawned."""
+        manifest = self._registry.get(slug) if self._registry else None
+        kind = getattr(getattr(manifest, "runtime", None), "transport", None)
+        if kind not in ("sdk", "codex-appserver") or self._setup_engine is None:
+            return None
+        try:
+            config = self._setup_engine.get_adapter_config(
+                slug=slug, project_workspace=workspace)
+        except Exception as exc:  # noqa: BLE001 — not configured: nothing to probe
+            logger.info("worker commands: no config for %s (%s)", slug, exc)
+            return None
+        command = config.get("command")
+        if not command:
+            return None
+        env = {**os.environ, **(config.get("env") or {})}
+        env.pop("CLAUDECODE", None)
+        if kind == "sdk":
+            from agent_os.agent.transports import claude_models
+            from agent_os.agent.transports.sdk_transport import native_claude_cli
+            return await claude_models.fetch_claude_commands(
+                native_claude_cli(command) or command, workspace, env=env)
+        from agent_os.agent.transports import codex_models
+        return await codex_models.fetch_codex_skills(command, workspace, env=env)
+
     def _resolve_transport(self, manifest, config_dict, autonomy=None, system_prompt: str | None = None,
                            resume_record: dict | None = None,
                            dispatch_mcp: dict | None = None):
@@ -1406,6 +1442,11 @@ class SubAgentManager:
                 # Transports without an HTTP MCP route (pipe, PTY).
                 self._dispatch_tokens.pop(dispatch_token, None)
                 dispatch_token = None
+
+        # Spec 166: whatever the worker reports as its own commands goes to
+        # the `/` picker's store under (slug, workspace).
+        if transport is not None:
+            self._attach_commands_sink(transport, manifest.slug, workspace)
 
         # Files the user attached by local path are readable by this worker:
         # the transport answers its CLI's own permission ask for exactly

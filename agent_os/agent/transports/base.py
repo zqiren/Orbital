@@ -68,6 +68,28 @@ class AgentTransport(ABC):
         except Exception:
             return frozenset()
 
+    # Spec 166: the worker's own command list (Claude's initialize commands,
+    # Codex's skills/list, an ACP available_commands_update), handed to the
+    # daemon's worker-commands store whenever the worker reports it.
+    # SubAgentManager sets the sink right after constructing the transport.
+    _commands_sink = None
+
+    def set_commands_sink(self, sink) -> None:
+        """``sink(commands)`` receives each report in the normal form."""
+        self._commands_sink = sink
+
+    def _publish_commands(self, commands) -> None:
+        """Hand a parsed report on; None (malformed) is dropped. Never raises."""
+        sink = self._commands_sink
+        if sink is None or commands is None:
+            return
+        try:
+            sink(commands)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).warning(
+                "worker commands sink failed", exc_info=True)
+
     def read_is_granted(self, path) -> bool:
         """True when ``path`` (absolute) resolves to a granted attached file."""
         import os

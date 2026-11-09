@@ -446,6 +446,18 @@ class SDKTransport(AgentTransport):
         self._alive = True
         self._capture_process_handle()
         self._ensure_reader()
+        await self._publish_server_commands()
+
+    async def _publish_server_commands(self) -> None:
+        """Spec 166: the CLI's ``initialize`` response (stored by the SDK at
+        connect, no round trip) lists its slash commands."""
+        from agent_os.daemon_v2.worker_commands import claude_commands
+        try:
+            info = await self._client.get_server_info()
+        except Exception as exc:  # noqa: BLE001 — an older SDK; display data only
+            logger.info("SDKTransport: no server info (%s)", exc)
+            return
+        self._publish_commands(claude_commands(info))
 
     def _capture_process_handle(self) -> None:
         """Capture the claude subprocess handle for own-the-kill teardown.
