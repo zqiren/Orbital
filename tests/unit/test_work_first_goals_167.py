@@ -335,3 +335,34 @@ async def test_worker_memory_turn_on_a_project_with_goals_posts_nothing(tmp_path
     await wmr._settle()
     await _finish_memory_turn(mgr, sub)
     mgr._confirm_goals.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# The card's language on a project that was not imported
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("ui,expect", [("zh-CN", "这样理解对吗？"), ("en-US", "Did I get this right?"),
+                                       ("ja", None)])
+def test_a_new_projects_card_follows_the_ui_language(tmp_path, monkeypatch, ui, expect):
+    """Spec 160's card took the import's UI language. A project created by
+    hand has none, so its card follows the language the app reports
+    (``PUT /settings/ui-language``), else the system's."""
+    import asyncio as _asyncio
+
+    from agent_os.agent import asks
+    from agent_os.api.routes import agents_v2
+    from agent_os.agent.session import Session
+    from agent_os.onboarding import deferred_seed
+    from tests.unit.keyless_harness import build_client, create_project
+
+    monkeypatch.setattr(deferred_seed, "default_lang", lambda: "en")
+    tc, deps = build_client(tmp_path, keyed=False)
+    ws = tmp_path / "ws"; ws.mkdir()
+    pid = create_project(tc, ws)["project_id"]
+    deps["settings_store"].get().ui_language = ui  # what PUT /settings/ui-language stores
+    _write_goals(ws)
+    Session.new("s1", str(ws), session_id="s1").append({"role": "assistant", "content": "ok"})
+    ask_id = _asyncio.run(agents_v2.post_goals_confirm(pid, "s1"))
+    (ask,) = [a for a in asks.read_asks(str(ws / "orbital")) if a.id == ask_id]
+    assert ask.text == (expect or "Did I get this right?")

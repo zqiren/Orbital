@@ -1628,6 +1628,23 @@ async def _start_manager_scan(project_id: str, skeleton: str, *,
             "runner": "orbital"}
 
 
+def _card_lang(project: dict) -> str:
+    """The confirm card's language: the import's UI language (spec 160);
+    for a project with none (spec 167: one created by hand), the interface
+    language the app last reported, when it is zh or en; else the system's."""
+    from agent_os.onboarding.import_scan import LANG_FIELD, LANGS, guess_lang
+    if project.get(LANG_FIELD) not in LANGS:
+        store = getattr(_agent_manager, "_settings_store", None)
+        try:
+            ui = (getattr(store.get(), "ui_language", None) or "") if store is not None else ""
+        except Exception:
+            ui = ""
+        ui = ui.split("-")[0].split("_")[0].lower()
+        if ui in LANGS:
+            return ui
+    return guess_lang(project)
+
+
 async def post_goals_confirm(project_id: str, session_id: str) -> str | None:
     """Spec 160 round 4: the goals were drafted; the DAEMON asks whether they
     are right — an ask card (这样理解对吗？ · 对 | 需要改) through the asks write
@@ -1651,7 +1668,7 @@ async def post_goals_confirm(project_id: str, session_id: str) -> str | None:
     project = _project_store.get_project(project_id)
     if not project:
         return None
-    lang = guess_lang(project)
+    lang = _card_lang(project)
     workspace = project.get("workspace", "")
     steps = await asyncio.to_thread(next_steps, workspace)
     if steps:
