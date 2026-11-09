@@ -2728,12 +2728,9 @@ class AgentManager:
             return None
         from agent_os.daemon_v2.sub_agent_transcript import read_sub_agent_summary
         try:
-            turns = read_sub_agent_summary(path)
+            turns = read_sub_agent_summary(path, include_in_flight=True)
         except Exception:
             logger.warning("memory reminder: cannot read %s", path, exc_info=True)
-            return None
-        completed = [t for t in (turns or []) if not t.get("in_flight")]
-        if not completed:
             return None
 
         record_id: str | None = None
@@ -2753,6 +2750,17 @@ class AgentManager:
             else:
                 session_ids.append(meta["dispatch_id"])
 
+        # Two sessions of one worker share a transcript file. The turn whose
+        # terminal row just landed may still lack its boundary row (the
+        # transport writes it a moment later), so a turn of THIS session
+        # counts even while the reader calls it in flight; another session's
+        # trailing turn never does.
+        own = set(session_ids) | ({record_id} if record_id else set())
+        completed = [t for t in (turns or [])
+                     if not t.get("in_flight") or t.get("dispatch_id") in own]
+        if not completed:
+            return None
+
         start: int | None = None
         if record_id is not None:
             for idx in range(len(completed) - 1, -1, -1):
@@ -2766,6 +2774,11 @@ class AgentManager:
                     start = idx
                     break
         if start is None:
+            if session_ids:
+                # This session dispatched to the worker but none of its turns
+                # is in the file: whatever is there belongs to another
+                # session, and its files must not be reported as this run's.
+                return None
             start = len(completed) - 1
         rows_out: list[dict] = []
         for turn in completed[start:]:

@@ -458,6 +458,73 @@ async def test_continued_terminal_with_an_empty_registry_sends_one_reminder_span
 
 
 @pytest.mark.asyncio
+async def test_a_shared_transcript_never_lends_another_sessions_turn_to_the_reminder(tmp_path):
+    """Two sessions of one worker write one transcript file. When this
+    session's turn has no boundary row yet (the terminal landed first), the
+    reminder must still list ITS files, not the other session's last turn;
+    and when nothing of this session is in the file, it must say none."""
+    mgr, sub = _manager(tmp_path, transport_cls=SDKTransport)
+    session = _plant_session(mgr, tmp_path)
+    transcript_path = sub._transcripts[(PROJECT, SID, HANDLE)].filepath
+
+    def tool(name, path, dispatch_id, ts):
+        return {"source": HANDLE, "content": f"[Tool: {name}]", "timestamp": ts,
+                "chunk_type": "tool_activity",
+                "metadata": {"tool_call_id": f"t-{ts}", "tool_name": name,
+                             "arguments": {"file_path": path}},
+                "dispatch_id": dispatch_id}
+
+    def boundary(dispatch_id, ts):
+        return {"source": HANDLE, "content": "", "timestamp": ts, "chunk_type": "turn_complete",
+                "dispatch_id": dispatch_id}
+
+    def write(rows):
+        with open(transcript_path, "w", encoding="utf-8") as fh:
+            for r in rows:
+                fh.write(json.dumps(r) + "\n")
+
+    # Another session's completed turn, then this session's turn still
+    # without its boundary row.
+    write([
+        tool("Edit", "other/x.py", "dX", "2026-10-22T10:00:00+00:00"),
+        boundary("dX", "2026-10-22T10:00:01+00:00"),
+        tool("Edit", "calc.py", "d1", "2026-10-22T10:01:00+00:00"),
+        {"source": HANDLE, "content": "fixed", "timestamp": "2026-10-22T10:01:01+00:00",
+         "chunk_type": "response", "dispatch_id": "d1"},
+    ])
+    session.append({"role": "system", "source": "daemon",
+                    "content": '[Sub-agent] Message sent to codex: "fix calc.py"',
+                    "_meta": {"dispatch_id": "d1", "handle": HANDLE, "transcript_path": transcript_path,
+                              "suppress_wake": True}})
+    await mgr.inject_system_message(PROJECT, "[Sub-agent] codex completed. Summary: fixed.",
+                                    session_id=SID, meta=_completed_meta())
+    await _settle()
+    sub.send.assert_awaited_once()
+    text = sub.send.call_args.args[2]
+    assert "Files this turn changed: calc.py\n" in text
+    assert "other/x.py" not in text
+
+    # Nothing of this session in the file at all: none, never the other turn.
+    sub.send.reset_mock()
+    mgr._worker_memory_records.clear()
+    write([
+        tool("Edit", "other/x.py", "dX", "2026-10-22T10:00:00+00:00"),
+        boundary("dX", "2026-10-22T10:00:01+00:00"),
+    ])
+    session.append({"role": "system", "source": "daemon",
+                    "content": '[Sub-agent] Message sent to codex: "again"',
+                    "_meta": {"dispatch_id": "d2", "handle": HANDLE, "transcript_path": transcript_path,
+                              "suppress_wake": True}})
+    await mgr.inject_system_message(PROJECT, "[Sub-agent] codex completed. Summary: ok.",
+                                    session_id=SID, meta=_completed_meta())
+    await _settle()
+    sub.send.assert_awaited_once()
+    text = sub.send.call_args.args[2]
+    assert "Files this turn changed: none\n" in text
+    assert "other/x.py" not in text
+
+
+@pytest.mark.asyncio
 async def test_continued_terminal_with_a_queued_prompt_waits_for_the_next_terminal(tmp_path):
     """A user prompt is queued behind the turn that just ended: the reminder
     would ask about the wrong turn. The next terminal re-evaluates."""
