@@ -225,3 +225,164 @@ class TestSleepPrevention:
 
         mgr._allow_sleep_if_idle()
         assert mgr._sleep_handle is None
+
+
+# ===========================================================================
+# 1109 keyless smoke F4.2: no worker process outlives the daemon
+# ===========================================================================
+
+class _FakeWorker:
+    """A live sub-agent adapter; ``proc`` (a Popen) stands in for its CLI."""
+
+    def __init__(self, proc=None, hang=None, clears_proc=False):
+        self.stopped = False
+        self.display_name = "Claude Code"
+        self._process = proc
+        self._hang = hang
+        self._clears_proc = clears_proc
+
+    async def stop(self):
+        if self._clears_proc:
+            self._process = None  # what a real transport does before its kill
+        if self._hang is not None:
+            await self._hang.wait()  # a graceful stop that overruns the wait
+        self.stopped = True
+
+    def is_alive(self):
+        return not self.stopped
+
+
+def _sam():
+    from agent_os.daemon_v2.sub_agent_manager import SubAgentManager
+    sam = SubAgentManager(process_manager=MagicMock(stop=AsyncMock()))
+    sam.STOP_CONFIRM_GRACE = 0.5
+    return sam
+
+
+def _sleeper():
+    import subprocess
+    import sys
+    return subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+
+
+def _cleanup(proc, release):
+    release.set()
+    if proc.poll() is None:
+        proc.kill()
+    proc.wait(timeout=5)
+
+
+class TestSubAgentManagerShutdown:
+
+    @pytest.mark.asyncio
+    async def test_every_registered_worker_is_stopped(self):
+        """A keyless pinned send / worker onboarding / import scan registers
+        its adapter with no manager handle; it is still stopped."""
+        from agent_os.daemon_v2.models import make_session_key
+
+        sam = _sam()
+        scan, pinned = _FakeWorker(), _FakeWorker()
+        sam._adapters[make_session_key("p1", "p1_scan")] = {"claude-code": scan}
+        sam._adapters[make_session_key("p2", "p2_pin")] = {"codex": pinned}
+
+        await sam.shutdown(5.0)
+
+        assert scan.stopped and pinned.stopped
+        assert sam._adapters == {}
+
+    @pytest.mark.asyncio
+    async def test_a_worker_whose_stop_overruns_the_timeout_is_still_killed(self):
+        """1109 smoke, F4.2 attempt 1: a mid-turn Claude Code's graceful stop
+        outlasted the timeout, its shielded kill died with the event loop and
+        the CLI survived with parent 1. Shutdown confirms the process dead."""
+        from agent_os.daemon_v2.models import make_session_key
+
+        proc, release = _sleeper(), asyncio.Event()
+        try:
+            sam = _sam()
+            sam._adapters[make_session_key("p1", "p1_scan")] = {
+                "claude-code": _FakeWorker(proc, hang=release)}
+
+            await sam.shutdown(0.5)
+
+            assert proc.poll() is not None, "worker process outlived shutdown"
+        finally:
+            _cleanup(proc, release)
+            await asyncio.sleep(0)
+
+    @pytest.mark.asyncio
+    async def test_an_earlier_snapshot_reaches_a_process_a_stop_already_forgot(self):
+        """``procs`` taken before any stop still covers a worker whose stop
+        cleared its process reference and left the process running."""
+        from agent_os.daemon_v2.models import make_session_key
+
+        proc, release = _sleeper(), asyncio.Event()
+        try:
+            sam = _sam()
+            worker = _FakeWorker(proc, hang=release, clears_proc=True)
+            sam._adapters[make_session_key("p1", "s1")] = {"codex": worker}
+            procs = sam.snapshot_worker_procs()
+            assert [p.pid for p in procs] == [proc.pid]
+            worker._process = None
+
+            await sam.shutdown(0.5, procs=procs)
+
+            assert proc.poll() is not None
+        finally:
+            _cleanup(proc, release)
+            await asyncio.sleep(0)
+
+
+class TestAgentManagerShutdownStopsWorkers:
+
+    @pytest.mark.asyncio
+    async def test_sub_agent_shutdown_is_called_with_the_early_snapshot(self, tmp_path):
+        mgr = _make_manager(tmp_path)
+        sam = mgr._sub_agent_manager
+        sam.snapshot_worker_procs = MagicMock(return_value=["snap"])
+        sam.shutdown = AsyncMock()
+
+        await mgr.shutdown(timeout=3.0)
+
+        sam.shutdown.assert_awaited_once_with(3.0, procs=["snap"])
+
+    @pytest.mark.asyncio
+    async def test_snapshot_is_taken_before_the_handle_loop_stops(self, tmp_path):
+        """A handled session's stop clears the transport's process reference
+        and leaves the CLI alive (its wait ran out): the snapshot from before
+        the handle loop still kills it."""
+        from agent_os.daemon_v2.models import make_session_key
+
+        proc, release = _sleeper(), asyncio.Event()
+        try:
+            sam = _sam()
+            mgr = _make_manager(tmp_path)
+            mgr._sub_agent_manager = sam
+            mgr._handles[make_session_key("p1", "s1")] = _make_handle()
+            worker = _FakeWorker(proc, hang=release, clears_proc=True)
+            sam._adapters[make_session_key("p1", "s1")] = {"codex": worker}
+
+            async def stop_agent(pid, *, session_id=None, keep_browser=False):
+                await sam.stop_all(pid, session_id=session_id)
+
+            mgr.stop_agent = stop_agent
+
+            await mgr.shutdown(timeout=0.5)
+
+            assert proc.poll() is not None, "worker process outlived shutdown"
+        finally:
+            _cleanup(proc, release)
+            await asyncio.sleep(0)
+
+    @pytest.mark.asyncio
+    async def test_a_failing_sub_agent_shutdown_still_tears_down_dispatchers(self, tmp_path):
+        mgr = _make_manager(tmp_path)
+        mgr._sub_agent_manager.snapshot_worker_procs = MagicMock(return_value=[])
+        mgr._sub_agent_manager.shutdown = AsyncMock(side_effect=RuntimeError("boom"))
+        dispatcher = MagicMock(shutdown=AsyncMock())
+        mgr._dispatchers["p1"] = dispatcher
+
+        await mgr.shutdown(timeout=1.0)
+
+        dispatcher.shutdown.assert_awaited_once()
+        assert mgr._dispatchers == {}

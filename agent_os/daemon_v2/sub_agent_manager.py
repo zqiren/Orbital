@@ -3125,6 +3125,66 @@ class SubAgentManager:
             self._stopping.discard(sk)
             self._lifecycle_locks.pop(sk, None)
 
+    def snapshot_worker_procs(self) -> list:
+        """psutil handles for the process trees of every registered adapter.
+        Take it before any stop: ``adapter.stop()`` clears the transports'
+        process references."""
+        procs: list = []
+        for slate in list(self._adapters.values()):
+            for adapter in list(slate.values()):
+                try:
+                    procs.extend(self._snapshot_kill_targets(adapter))
+                except Exception:
+                    logger.warning("shutdown: could not snapshot a worker's processes",
+                                   exc_info=True)
+        return procs
+
+    async def shutdown(self, timeout: float, *, procs: list | None = None) -> None:
+        """Daemon exit: stop every registered worker, then confirm no process
+        of theirs is left. ``procs`` is a snapshot taken earlier (before the
+        caller's own stops); None takes one now.
+
+        The graceful stops run under ``timeout``. Their shielded kills die
+        with the event loop once the daemon returns, so a mid-turn CLI whose
+        graceful stop overran would outlive the daemon with parent 1 (1109
+        keyless smoke): whatever in the snapshot is still alive is then
+        terminated, killed and confirmed here."""
+        if procs is None:
+            procs = self.snapshot_worker_procs()
+        sessions = list(self._adapters)
+        if sessions:
+            logger.info("SubAgentManager shutdown: stopping workers in %d session(s)",
+                        len(sessions))
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*(self.stop_all(pid, session_id=sid)
+                                     for pid, sid in sessions),
+                                   return_exceptions=True),
+                    timeout=timeout,
+                )
+            except asyncio.TimeoutError:
+                logger.warning("SubAgentManager shutdown: worker stop timed out after "
+                               "%.1fs; killing what is left", timeout)
+        alive = []
+        for p in procs:
+            try:
+                if p.is_running():
+                    alive.append(p)
+            except Exception:
+                pass
+        if not alive:
+            return
+        logger.warning("SubAgentManager shutdown: %d worker process(es) still alive; "
+                       "killing", len(alive))
+        try:
+            dead = await asyncio.to_thread(self._reap_stragglers, alive,
+                                           self.STOP_CONFIRM_GRACE)
+        except Exception:
+            logger.exception("SubAgentManager shutdown: worker kill raised")
+            return
+        if not dead:
+            logger.error("SubAgentManager shutdown: a worker process survived the kill")
+
     def list_active(self, project_id: str, *,
                     session_id: str | None = None) -> list[dict]:
         """Return [{'handle', 'display_name', 'status'}, ...] for a session.

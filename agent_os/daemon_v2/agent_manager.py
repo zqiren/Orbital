@@ -738,6 +738,16 @@ class AgentManager:
         No state is persisted — the session JSONLs on disk are the only source
         of truth, and the daemon never auto-resumes anything on next start."""
         logger.info("AgentManager shutdown: stopping %d agent(s)", len(self._handles))
+        # Every live worker's process tree, captured before the handle loop's
+        # stops clear the transports' process references, so the sub-agent
+        # shutdown below can confirm none of them outlives the daemon.
+        sam = self._sub_agent_manager
+        worker_procs = None
+        if sam is not None:
+            try:
+                worker_procs = sam.snapshot_worker_procs()
+            except Exception:
+                logger.warning("AgentManager shutdown: worker snapshot failed", exc_info=True)
 
         # Stop the idle-eviction sweep so it doesn't race the teardown below.
         if self._eviction_task is not None and not self._eviction_task.done():
@@ -775,6 +785,16 @@ class AgentManager:
                 )
             except asyncio.TimeoutError:
                 logger.warning("AgentManager shutdown timed out after %.1fs", timeout)
+
+        # Workers in sessions that never had a manager handle (keyless pinned
+        # sends, worker onboarding, import scans) and anything the loop above
+        # left alive: SubAgentManager stops and confirms them.
+        if sam is not None:
+            try:
+                await sam.shutdown(timeout, procs=worker_procs)
+            except Exception:
+                logger.warning("AgentManager shutdown: sub-agent shutdown failed",
+                               exc_info=True)
 
         # Shut down all project dispatchers. They are project-scoped and outlive
         # individual agents, so the handle-based teardown above does not reach

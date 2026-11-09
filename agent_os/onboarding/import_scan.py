@@ -63,6 +63,10 @@ ATTEMPTS_FIELD = "import_scan_attempts"
 ACTIVITY_FIELD = "import_scan_activity"
 # The UI language at import (``zh`` | ``en``), for the guess reply.
 LANG_FIELD = "import_scan_lang"
+# The session the current run started in. A restart finds a ``running`` scan
+# by it and hands it to ``discard`` before minting the next one, so a crash
+# never leaves a second, empty "Project overview" (1109 keyless smoke, F4.1).
+SESSION_FIELD = "import_scan_session"
 LANGS = ("zh", "en")
 
 PENDING = "pending"
@@ -502,6 +506,9 @@ class ImportScanQueue:
             project = self._store.get_project(pid)
             if not wants_scan(project):
                 return
+            # A run a restart cut off: its session, if this run recorded one.
+            abandoned = (project.get(SESSION_FIELD)
+                         if project.get(STATE_FIELD) == RUNNING else None)
             workspace = project.get("workspace") or ""
             if not workspace or not os.path.isdir(workspace):
                 return
@@ -511,7 +518,13 @@ class ImportScanQueue:
             who = await asyncio.to_thread(self._runner.pick, pid)
             if who is None:
                 return  # nobody can read it yet: stays as it is
-            self._mark(pid, RUNNING)
+            if isinstance(abandoned, str) and abandoned:
+                try:
+                    await self._runner.discard(pid, abandoned)
+                except Exception:
+                    logger.warning("import scan: could not discard %s/%s", pid, abandoned,
+                                   exc_info=True)
+            self._mark(pid, RUNNING, **{SESSION_FIELD: None})
             try:
                 session_id = await self._runner.start(pid, who)
             except Exception as exc:
@@ -523,6 +536,7 @@ class ImportScanQueue:
                 logger.warning("import scan: could not start %s: %s", pid, exc)
                 self._fail(pid)
                 return
+            self._mark(pid, RUNNING, **{SESSION_FIELD: session_id})
             logger.info("import scan: reading %s with %s (session %s)", pid, who, session_id)
             try:
                 await self._runner.wait(pid, session_id, who)
@@ -698,6 +712,12 @@ def _only_noise(rows: list[dict]) -> bool:
             content = row.get("content")
             if content.strip() if isinstance(content, str) else content:
                 return False
+        meta = row.get("_meta")
+        if (role == "system" and isinstance(meta, dict)
+                and meta.get("event") == "sub_agent_terminal"):
+            reply = meta.get("reply")
+            if isinstance(reply, str) and reply.strip():
+                return False  # a pinned worker's answer lives here
     return True
 
 

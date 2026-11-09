@@ -213,9 +213,18 @@ def _read_orbital(path: str) -> OrbitalSession | None:
                     probe.ended_at = ts or probe.ended_at
                     kind = meta.get("kind")
                     worker_reply = meta.get("reply")
+                    # A self-initiated turn whose worker died (spec 129: a
+                    # kill between dispatched turns) is written ``continued``
+                    # with ``cause: error``; its reply is the SDK's error text,
+                    # so it ends the turn like ``kind: error``.
+                    dead_self_turn = kind == "continued" and meta.get("cause") == "error"
                     reply_text = (worker_reply if kind in _REPLY_TERMINAL_KINDS
+                                  and not dead_self_turn
                                   and isinstance(worker_reply, str) else None)
-                    if kind == "error":
+                    if dead_self_turn:
+                        turn.error(worker_reply if isinstance(worker_reply, str)
+                                   and worker_reply else content, ts)
+                    elif kind == "error":
                         turn.error(content, ts)
                     elif kind == "stopped":
                         turn.interrupted("stopped")
