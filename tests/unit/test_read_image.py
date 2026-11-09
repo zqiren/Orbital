@@ -162,7 +162,11 @@ class TestTextFileUnchanged:
 
 
 class TestSVG:
-    def test_svg_returns_multimodal(self, workspace, tool):
+    """Spec 165: an SVG is XML. The Messages API (and OpenAI vision) reject
+    image/svg+xml, so it is read as text, which is also what an agent editing
+    a logo or icon needs."""
+
+    def test_svg_returns_its_markup_as_text(self, workspace, tool):
         path = os.path.join(workspace, "icon.svg")
         svg = '<svg xmlns="http://www.w3.org/2000/svg"><rect width="10" height="10"/></svg>'
         with open(path, "w") as f:
@@ -170,8 +174,64 @@ class TestSVG:
 
         result = tool.execute(path="icon.svg")
 
-        assert isinstance(result.content, list), "SVG should return list content"
-        assert result.meta["mime"] == "image/svg+xml"
+        assert result.content == svg
+        assert not (result.meta or {}).get("mime")
+
+    def test_svg_pages_by_line_like_any_text_file(self, workspace, tool):
+        path = os.path.join(workspace, "logo.svg")
+        lines = ['<svg xmlns="http://www.w3.org/2000/svg">\n']
+        lines += [f'  <rect x="{i}" width="1" height="1"/>\n' for i in range(5)]
+        lines += ["</svg>\n"]
+        with open(path, "w") as f:
+            f.writelines(lines)
+
+        result = tool.execute(path="logo.svg", offset=1, limit=2)
+
+        assert isinstance(result.content, str)
+        assert result.content.startswith(lines[1] + lines[2])
+        assert "offset=3" in result.content
+
+    def test_an_oversized_svg_is_truncated_with_a_continue_hint(self, workspace, tool):
+        path = os.path.join(workspace, "big.svg")
+        row = '  <path d="M0 0 L10 10 L20 0 Z" fill="#123456"/>\n'
+        with open(path, "w") as f:
+            f.write("<svg>\n" + row * 5000 + "</svg>\n")
+
+        result = tool.execute(path="big.svg")
+
+        assert isinstance(result.content, str)
+        assert "TRUNCATED" in result.content
+        assert "offset=" in result.content
+
+
+class TestUnviewableImageFormats:
+    """Spec 165: BMP/ICO/TIFF can't be sent to the model as images (only
+    JPEG/PNG/GIF/WebP are accepted). They stay recognised, so they never fall
+    to the text path as binary noise, and return a plain hint without the
+    file being read at all."""
+
+    @pytest.mark.parametrize("name,fmt", [
+        ("favicon.ico", "ICO"), ("scan.bmp", "BMP"), ("photo.tiff", "TIFF"),
+        ("UPPER.ICO", "ICO"),
+    ])
+    def test_returns_a_convert_hint_without_opening_the_file(
+            self, workspace, tool, monkeypatch, name, fmt):
+        path = os.path.join(workspace, name)
+        with open(path, "wb") as f:
+            f.write(b"\x00\x01\x02 not really an image")
+
+        def _no_open(*a, **k):
+            raise AssertionError("the file must not be opened")
+        monkeypatch.setattr("agent_os.agent.tools.read.open", _no_open, raising=False)
+
+        result = tool.execute(path=name)
+
+        assert isinstance(result.content, str)
+        assert name in result.content
+        assert fmt in result.content
+        assert "PNG" in result.content
+        assert "image_url" not in result.content
+        assert not result.meta
 
 
 # ---------------------------------------------------------------------------
