@@ -54,6 +54,12 @@ def _parent_path(ws: str) -> str:
     return os.path.join(_sessions_dir(ws), f"{PARENT}.jsonl")
 
 
+def _session_files(ws: str) -> list[str]:
+    # Session JSONLs only: on Windows the session lock leaves a sibling
+    # ``*.jsonl.lock`` sentinel (agent_os/utils/file_lock.py), not a session.
+    return sorted(f for f in os.listdir(_sessions_dir(ws)) if f.endswith(".jsonl"))
+
+
 def _sha(path: str) -> str:
     with open(path, "rb") as fh:
         return hashlib.sha256(fh.read()).hexdigest()
@@ -255,7 +261,7 @@ async def test_unknown_session_and_unknown_message(tmp_path, emitted):
     with pytest.raises(ForkMessageNotFound):
         await mgr.fork_session(PID, PARENT, at="2026-11-09T10:01:30.000001+00:00")
     assert "message_edited" not in emitted and "session_created" not in emitted
-    assert sorted(os.listdir(_sessions_dir(ws))) == [f"{PARENT}.jsonl"]
+    assert _session_files(ws) == [f"{PARENT}.jsonl"]
 
 
 @pytest.mark.parametrize("content", [
@@ -292,7 +298,7 @@ async def test_refused_while_the_manager_is_live(tmp_path, emitted, state):
             task.cancel()
         for t in mgr._idle_poll_tasks.values():
             t.cancel()
-    assert sorted(os.listdir(_sessions_dir(ws))) == [f"{PARENT}.jsonl"]
+    assert _session_files(ws) == [f"{PARENT}.jsonl"]
 
 
 @pytest.mark.asyncio
