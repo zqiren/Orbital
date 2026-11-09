@@ -625,8 +625,9 @@ class TestPromptBuilderSubAgentsSection:
         assert "debugging" in semi_stable
         # Routing hint
         assert "Use for coding tasks" in semi_stable
-        # Prohibition against shell
-        assert "Do NOT" in semi_stable
+        # Prohibition against shell (1109 R5 wording; the old "Do NOT"
+        # probe only passed by matching an unrelated skill-creation line)
+        assert "Never drive worker CLIs through shell" in semi_stable
 
     def test_sub_agents_section_absent_when_no_agents(self, tmp_path):
         from agent_os.agent.prompt_builder import PromptBuilder, PromptContext, Autonomy
@@ -730,4 +731,4 @@ class TestPromptBuilderSubAgentsSection:
         assert "Sub-Agents Available" in semi_stable
         assert "my-agent" in semi_stable
         assert "agent_message" in semi_stable
-        assert "Do NOT" in semi_stable
+        assert "Never drive worker CLIs through shell" in semi_stable

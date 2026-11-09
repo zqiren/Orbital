@@ -270,6 +270,35 @@ def test_worker_text_is_the_fixed_worker_variant():
     assert "Files this turn changed: none" in build_worker_memory_record_text([])
 
 
+def test_both_record_texts_carry_the_same_entry_shape_rules(tmp_path):
+    """1109 R4: the shape contract moved out of the per-call memory section;
+    both writers get it at the moment they write."""
+    from agent_os.agent.loop import MEMORY_SHAPE_RULES
+    manager = build_memory_record_text(str(tmp_path), [], [])
+    worker = build_worker_memory_record_text([])
+    for text in (manager, worker):
+        assert MEMORY_SHAPE_RULES in text
+    assert "one `- ` bullet line that stands on its own" in MEMORY_SHAPE_RULES
+    assert "`## ` topic headings" in MEMORY_SHAPE_RULES
+    assert "<!--mem--> id comments" in MEMORY_SHAPE_RULES
+    # INDEX is the manager's alone (pinned workers never touch it).
+    flat = " ".join(manager.split())
+    assert "'path — what it is'" in flat and "never a decision, status or lesson there" in flat
+    assert "INDEX" not in worker
+
+
+def test_per_call_memory_section_no_longer_carries_the_shape_rules(tmp_path):
+    from agent_os.agent.prompt_builder import Autonomy, PromptBuilder, PromptContext
+    _, semi, _ = PromptBuilder(str(tmp_path)).build(PromptContext(
+        workspace=str(tmp_path), model="m", autonomy=Autonomy.HANDS_OFF,
+        enabled_agents=[], tool_names=["read"], os_type="macos",
+        datetime_now="2026-11-09T00:00"))
+    assert "Do not update the memory files during a run." in semi
+    assert "NAVIGATION MAP" in semi and "Never read an archive file whole" in semi
+    for gone in ("stands on its own", "<!--format-->", "hidden id", "Max 30"):
+        assert gone not in semi, gone
+
+
 @pytest.mark.parametrize("path,expected", [
     ("orbital/PROJECT_STATE.md", "memory"),
     ("./orbital/DECISIONS.md", "memory"),

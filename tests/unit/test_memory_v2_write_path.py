@@ -76,8 +76,10 @@ def test_prompt_memory_section_carries_the_new_contract():
     ))
     assert "Do not update the memory files during a run." in semi
     assert "the daemon asks you what to record and hands" in semi
-    assert "One entry = one bullet line that stands on its own" in semi
-    assert "a Memory\nsession tidies it" in semi or "a Memory session tidies it" in " ".join(semi.split())
+    # 1109 R4: the entry-shape rules travel in the record-turn rows, where
+    # the files are written (test_memory_record_turn), not on every call.
+    assert "stands on its own" not in semi and "<!--format-->" not in semi
+    assert "tidied by a Memory session" in " ".join(semi.split())
     assert "nothing is lost" in semi
     assert "contents table at the top" in semi and "grep it for `id:<id>`" in semi
     for gone in ("leaving a pointer line", "[archived DATE id:X]", "Update them proactively",

@@ -174,20 +174,7 @@ class PromptBuilder:
             self._error_recovery(),
             self._queue_signals(),
         ]))
-        semi_stable = _SEP.join(filter(None, [
-            self._global_preferences(context),
-            self._user_memory(context),
-            self._cross_project_scope(context),
-            self._onboarding_or_directive(context),
-            self._standing_rules(context),
-            self._memory(context),
-            self._asks(context),
-            self._sub_agents(context),
-            self._browser_section(context),
-            self._network_access_section(context),
-            self._skills(context),
-            self._os_instructions(context),
-        ]))
+        semi_stable = _SEP.join(text for _label, text in self.semi_stable_parts(context))
         truly_dynamic = _SEP.join(filter(None, [
             self._runtime(context),
             self._sub_agent_states(context),
@@ -195,6 +182,27 @@ class PromptBuilder:
             self._state_checkpoint_status(context),
         ]))
         return (cached, semi_stable, truly_dynamic)
+
+    def semi_stable_parts(self, context: PromptContext) -> list[tuple[str, str]]:
+        """The semi-stable block's non-empty sections as ``(label, text)``,
+        in order; ``build()`` joins the texts. The label names what a reader
+        would edit to change the section; ContextManager uses it to say which
+        part changed on disk after the run's snapshot (1109 R6)."""
+        parts = [
+            ("global preferences", self._global_preferences(context)),
+            ("About the User", self._user_memory(context)),
+            ("cross-project scope", self._cross_project_scope(context)),
+            ("project_goals.md", self._onboarding_or_directive(context)),
+            ("user_directives.md", self._standing_rules(context)),
+            ("memory section", self._memory(context)),
+            ("asks section", self._asks(context)),
+            ("sub-agents and deployment instructions", self._sub_agents(context)),
+            ("browser section", self._browser_section(context)),
+            ("network section", self._network_access_section(context)),
+            ("skills", self._skills(context)),
+            ("OS section", self._os_instructions(context)),
+        ]
+        return [(label, text) for label, text in parts if text]
 
     # -- Cached prefix sections (1-5) --
 
@@ -619,39 +627,23 @@ class PromptBuilder:
                 "describing what you could do."
             )
         orbital = f"{context.workspace}/orbital"
+        # 1109 R4: the entry-shape rules are used once per run, when the
+        # memory files are written, so they travel in the record-turn rows
+        # (loop.MEMORY_SHAPE_RULES, shared by the manager's [MEMORY] row and
+        # the pinned worker's [Orbital memory] message). This section keeps
+        # what a run needs while it works.
         return (
-            f"You maintain your own long-term memory as files in {orbital}/. They are "
-            "injected every turn — keep them clean, current, and non-contradictory so a "
-            "future session (and a smaller model) inherits one clear project identity:\n"
-            "- PROJECT_STATE.md: what is true NOW — current focus, in-progress work,\n"
-            "  blockers, next steps. OVERWRITE it to reflect reality; it is NOT a changelog:\n"
-            "  replace stale status, do not append a dated history.\n"
-            "- DECISIONS.md: durable decisions — what was chosen and why. When a new decision\n"
-            "  changes an old one, write the new entry; the superseded one is archived by a\n"
-            "  Memory session. Never leave two contradicting decisions side by side.\n"
-            "- LESSONS.md: durable heuristics and playbooks. Add a lesson when you recover\n"
-            "  from an error or find a non-obvious workaround; playbook steps are the\n"
-            "  indented detail under the rule.\n"
-            "- INDEX.md: a NAVIGATION MAP only — folders and topics, ONE sentence each\n"
-            "  ('path — what it is'). A single file gets its own line only when it is the\n"
-            "  source of truth for a kind of output. It is how a future session finds things;\n"
-            "  it is NOT where decisions, status, or lessons go.\n"
-            "One entry = one bullet line that stands on its own: a decision is what was\n"
-            "chosen and why in one sentence, a lesson is the rule itself, a state line is\n"
-            "what is true now. Indented lines under a bullet are optional detail — the\n"
-            "exception, not the norm. Group entries by topic under `## ` headings. The\n"
-            "system stamps a hidden id under every bullet; never write or edit those\n"
-            "comments. Do not update the memory files during a run. At the end of every run\n"
-            "(and before a long run compacts) the daemon asks you what to record and hands\n"
-            "you the current file text; write then — including INDEX.md whenever the set of\n"
-            "important files changed (a new artifact, a key file, a renamed path). Never\n"
-            "trim a memory file to save space: when one grows past its budget a Memory\n"
-            "session tidies it (finished or superseded entries move to its archive);\n"
-            "nothing is lost.\n"
-            "Each file begins with a <!--format--> header stating its contract — follow it\n"
-            "(the system restores it if removed). If you catch yourself writing a\n"
-            "date, status, or decision into INDEX.md, stop — it belongs in\n"
-            "PROJECT_STATE.md or DECISIONS.md.\n\n"
+            f"Your long-term memory is four files in {orbital}/, injected every turn:\n"
+            "- PROJECT_STATE.md: what is true NOW (focus, in-progress work, blockers, next\n"
+            "  steps). It is overwritten to match reality, never a changelog.\n"
+            "- DECISIONS.md: what was chosen and why. A newer decision supersedes an old one.\n"
+            "- LESSONS.md: rules learned from errors and non-obvious workarounds.\n"
+            "- INDEX.md: a NAVIGATION MAP only ('path — what it is', one line per folder or\n"
+            "  topic). It is how a future session finds things.\n"
+            "Do not update the memory files during a run. At the end of every run (and before\n"
+            "a long run compacts) the daemon asks you what to record and hands you the current\n"
+            "text and the rules; write then. Never trim a memory file: one past its budget is\n"
+            "tidied by a Memory session, and nothing is lost.\n\n"
             "Sources and archives:\n"
             "- Follow the pointer. When memory names a file as the source of truth for a kind\n"
             "  of output, open that file before producing that output; a derivative described\n"
@@ -663,13 +655,11 @@ class PromptBuilder:
             "  the archive, then grep it for `id:<id>` and read only that entry (read with\n"
             "  offset/limit around the match). For a topic, grep the archive for it.\n"
             "  Never read an archive file whole.\n\n"
-            "When you produce deliverables the user will want to keep (reports, generated code,\n"
-            "exports, summaries, documentation), place them in the workspace at a path that\n"
-            "fits the project — e.g., docs/, src/, output/, or wherever the user already\n"
-            "organizes files. DO NOT place user-facing deliverables under orbital/ — that\n"
-            "directory is system state and is wiped on project reset. Your tools write tool\n"
-            "outputs (screenshots, PDFs, shell-command captures) automatically under\n"
-            f"{orbital}/output/; you don't write deliverables there manually.\n\n"
+            "Deliverables the user will keep (reports, code, exports, docs) go in the workspace\n"
+            "where they fit (docs/, src/, output/, or wherever the user already organizes files).\n"
+            "DO NOT place user-facing deliverables under orbital/: it is system state, wiped on\n"
+            f"project reset. Tool captures (screenshots, PDFs, shell output) land in {orbital}/output/\n"
+            "automatically.\n\n"
             'When the user says "remember X", "always do X", or "don\'t do X":\n'
             f"- If it's a rule for this project → append to {orbital}/instructions/user_directives.md\n"
             # Spec 073: write/edit resolve against the workspace and the
@@ -688,14 +678,11 @@ class PromptBuilder:
             '- If unclear → ask: "Should this apply to just this project or all your projects?"\n\n'
             'When the user says "forget X" or "stop doing X":\n'
             "- Remove the matching line from the appropriate file.\n\n"
-            "Keep each directive to one line. Max 30 directives per file.\n\n"
-            "Skill creation:\n"
-            "- After completing a task with 3+ distinct tool-call steps that is likely to recur,\n"
-            "  offer to save it as a reusable skill in orbital/skills/{task-name}/SKILL.md.\n"
-            "  In hands-off autonomy, create automatically without asking.\n"
-            "- Before creating, check orbital/skills/ for existing coverage. Update rather than duplicate.\n"
-            "- Keep skills under 80 lines. Use {placeholder} for variable inputs.\n"
-            "- Do NOT create skills for trivial or one-off tasks."
+            "Keep each directive to one line.\n\n"
+            "Skill creation: after a task of 3+ distinct tool-call steps that is likely to recur,\n"
+            "offer to save it as orbital/skills/{task-name}/SKILL.md (in hands-off autonomy, just\n"
+            "create it). Check orbital/skills/ first and update rather than duplicate; keep it\n"
+            "under 80 lines with {placeholder} inputs; skip trivial or one-off tasks."
         )
 
     def _sub_agents(self, context: PromptContext) -> str | None:

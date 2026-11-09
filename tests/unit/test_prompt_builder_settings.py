@@ -351,21 +351,25 @@ class TestChatReplyPathLinks:
 
 
 class TestMemoryFormatHeaderPointer:
-    """Layer-1 format contracts: the prompt points at the in-file headers
-    (which carry the detail) and adds the INDEX tripwire."""
+    """Layer-1 format contracts: the in-file headers carry the detail. Since
+    1109 R4 the header rule and the INDEX tripwire ride the record-turn row,
+    where the files are written, not every call of the run."""
 
-    def test_memory_section_references_format_headers(self, tmp_path):
+    def test_record_row_references_format_headers(self, tmp_path):
+        from agent_os.agent.loop import build_memory_record_text
         builder = PromptBuilder(workspace=str(tmp_path))
-        ctx = _make_context(tmp_path)
-        _, semi_stable, _ = builder.build(ctx)
-        assert "<!--format" in semi_stable
-        assert "restores it if removed" in semi_stable
+        _, semi_stable, _ = builder.build(_make_context(tmp_path))
+        assert "<!--format" not in semi_stable
+        assert "<!--format--> header" in build_memory_record_text(str(tmp_path), [], [])
 
-    def test_memory_section_has_index_tripwire(self, tmp_path):
-        builder = PromptBuilder(workspace=str(tmp_path))
-        ctx = _make_context(tmp_path)
-        _, semi_stable, _ = builder.build(ctx)
-        assert "date, status, or decision into INDEX.md" in semi_stable
+    def test_record_row_has_index_tripwire(self, tmp_path):
+        from agent_os.agent.loop import build_memory_record_text
+        flat = " ".join(build_memory_record_text(str(tmp_path), [], []).split())
+        assert "INDEX.md: 'path — what it is'" in flat
+        assert "never a decision, status or lesson there" in flat
+        # The per-call prompt still says what INDEX is for.
+        _, semi_stable, _ = PromptBuilder(workspace=str(tmp_path)).build(_make_context(tmp_path))
+        assert "NAVIGATION MAP only" in semi_stable
 
 
 _CODEX = [{"handle": "codex", "display_name": "Codex", "type": "cli"}]

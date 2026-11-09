@@ -175,18 +175,35 @@ _MEMORY_FILE_NAMES = ("PROJECT_STATE.md", "DECISIONS.md", "LESSONS.md", "INDEX.m
 # the precedent set by the (since removed) pre-compaction flush turn.
 _MEMORY_RECORD_TOOLS = frozenset({"read", "edit", "write"})
 
+# 1109 R4: the entry-shape rules, given to whoever writes the memory files at
+# the moment they write (the manager's [MEMORY] row and the pinned worker's
+# [Orbital memory] message), instead of on every call of the run. The files'
+# own <!--format--> headers (memory_entries.FORMAT_HEADERS) say the same.
+MEMORY_SHAPE_RULES = (
+    "How to write an entry: one `- ` bullet line that stands on its own, grouped\n"
+    "under `## ` topic headings. A decision is what was chosen and why, in one\n"
+    "sentence; a lesson is the rule itself; a state line is what is true now.\n"
+    "Detail goes on indented lines under the bullet, only when needed. Never write\n"
+    "or edit the <!--format--> header or the hidden <!--mem--> id comments; the\n"
+    "system stamps those.\n"
+)
+
 _MEMORY_RECORD_BODY = (
     "If so, update orbital/PROJECT_STATE.md so the next session starts from what is\n"
     "true after this run: current focus, what just finished, what is next, blockers.\n"
     "Overwrite stale lines in place; one fact per line; no dated history.\n"
-    "Only if this run settled a decision, add one line to DECISIONS.md. Only if it\n"
-    "taught a non-obvious lesson, one line to LESSONS.md. Only if a new file matters\n"
-    "later, one line to INDEX.md.\n"
+    "Only if this run settled a decision, add it to DECISIONS.md. Only if it taught\n"
+    "a non-obvious lesson (an error recovered from, a workaround), add it to\n"
+    "LESSONS.md. Only if the set of important files changed (a new artifact, a key\n"
+    "file, a renamed path), add a line to INDEX.md: 'path — what it is', for a\n"
+    "folder or topic; never a decision, status or lesson there.\n"
     "\n"
-    "Write only what you already know from this run. Do not read sessions, do not\n"
-    "tidy or trim anything, do not reply to the user. Edit with the exact text\n"
-    "below as old_text; to add a line to DECISIONS / LESSONS / INDEX, anchor on the\n"
-    "last line shown. One or two edits, then stop.\n"
+    + MEMORY_SHAPE_RULES +
+    "\n"
+    "Write only what you already know from this run. Do not tidy or trim anything,\n"
+    "do not reply to the user. Edit with the exact text below as old_text; to add\n"
+    "an entry to DECISIONS / LESSONS / INDEX, anchor on the last line shown. One or\n"
+    "two edits, then stop.\n"
     "If nothing durable happened, reply exactly: nothing to record\n"
 )
 
@@ -203,9 +220,11 @@ _WORKER_MEMORY_RECORD_TEXT = (
     "happened in it. Files this turn changed: {files}\n"
     "If so, update orbital/PROJECT_STATE.md so the next session starts from what is\n"
     "true after your work: overwrite stale lines in place, one fact per line, no\n"
-    "dated history. Add one line to orbital/DECISIONS.md or orbital/LESSONS.md only\n"
-    "if this turn settled a decision or taught a non-obvious lesson. Edit only those\n"
-    "files, write only what you already know, then stop without further reply.\n"
+    "dated history. Add an entry to orbital/DECISIONS.md or orbital/LESSONS.md only\n"
+    "if this turn settled a decision or taught a non-obvious lesson.\n"
+    + MEMORY_SHAPE_RULES.replace("{", "{{").replace("}", "}}") +
+    "Edit only those files and write only what you already know,\n"
+    "then stop without further reply.\n"
     "If nothing durable happened, reply exactly: nothing to record"
 )
 
