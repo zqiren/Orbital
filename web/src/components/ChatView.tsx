@@ -1154,7 +1154,10 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   // The catalog lives in the per-project module cache (skill-catalog.ts);
   // this counter re-renders when a fetch lands.
   const [, setSkillCatalogVersion] = useState(0);
-  const installedSkills = cachedSkillCatalog(projectId);
+  // Spec 166: with a worker pinned the list also holds that worker's own
+  // commands, so the cache is read (and fetched) per pin; null = Orbital.
+  const catalogWorker = pinnedTarget ?? null;
+  const installedSkills = cachedSkillCatalog(projectId, catalogWorker);
   // Spec 137: built-in entries (`/automate`) sit in the same flat list.
   // Bound to `locale` (their description and prefill are translated), not
   // to the unstable `t`.
@@ -1180,6 +1183,19 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     [locale, managerMissing],
   );
   const skillCatalog = withBuiltinSkills(installedSkills, builtins);
+  // Spec 166: warm the pinned worker's list as soon as the pin is known, so
+  // the first `/` doesn't wait on its cold probe and a pin switch re-renders
+  // the open menu with the new worker's list.
+  useEffect(() => {
+    if (!catalogWorker) return;
+    let live = true;
+    void loadSkillCatalog(projectId, catalogWorker).then(() => {
+      if (live) setSkillCatalogVersion((v) => v + 1);
+    });
+    return () => {
+      live = false;
+    };
+  }, [projectId, catalogWorker]);
   // The pin menu offers only the workers this project keeps on.
   const pinAgents = useMemo(() => projectAgents(agents, project), [agents, project]);
   const [slashDismissed, setSlashDismissed] = useState(false);
@@ -3450,7 +3466,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     if (slashQuery(value) !== null && !slashDismissed) {
       // Answers from the cache while it is fresh; re-render only on new data.
       const before = skillCatalog;
-      void loadSkillCatalog(projectId).then((list) => {
+      void loadSkillCatalog(projectId, catalogWorker).then((list) => {
         if (list !== before) setSkillCatalogVersion((v) => v + 1);
       });
     }
@@ -3471,8 +3487,25 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
 
   /** Pick a skill: the `/query` text goes, the chip replaces any earlier pick. */
   function pickSkill(entry: SkillCatalogEntry) {
-    setPickedSkillState({ sessionId, skill: entry });
     setSelectedSkillIndex(0);
+    if (entry.invoke) {
+      // Spec 166: the pinned worker's own command. Its invocation goes in the
+      // composer, caret after it for arguments, and travels as plain text:
+      // no chip, and any earlier chip goes (it would add a block, or route
+      // the message to the manager).
+      const invoke = entry.invoke;
+      setPickedSkillState(null);
+      setInputText(invoke);
+      requestAnimationFrame(() => {
+        const ta = textareaRef.current;
+        if (!ta) return;
+        adjustTextareaHeight();
+        ta.focus({ preventScroll: true });
+        ta.setSelectionRange(invoke.length, invoke.length);
+      });
+      return;
+    }
+    setPickedSkillState({ sessionId, skill: entry });
     if (entry.builtin) {
       // Spec 137: a built-in prefills its phrasing, selected, so typing
       // replaces the example and Enter sends it as is.
@@ -4826,7 +4859,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
             >
               {filteredSkills.map((skill, i) => (
                 <button
-                  key={skill.path}
+                  key={skill.path || `worker:${skill.key}`}
                   type="button"
                   role="option"
                   aria-selected={i === selectedSkillIndex}
@@ -4844,6 +4877,9 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                   {/* Row centred vertically; name and description share a baseline. */}
                   <span className="flex items-baseline gap-2 min-w-0 w-full">
                     <span className="shrink-0 max-w-[45%] truncate font-medium text-primary">{skill.name}</span>
+                    {skill.hint && (
+                      <span data-testid="skill-option-hint" className="shrink-0 max-w-[25%] truncate text-xs text-muted">{skill.hint}</span>
+                    )}
                     {skill.description && (
                       <span className="min-w-0 flex-1 truncate text-xs text-muted">{skill.description}</span>
                     )}
