@@ -1662,15 +1662,21 @@ async def _start_manager_scan(project_id: str, skeleton: str, *,
             "runner": "orbital"}
 
 
-async def post_scan_confirm(project_id: str, session_id: str) -> str | None:
-    """Spec 160 round 4: the scan wrote its guess; the DAEMON asks whether it
-    is right — an ask card (这样理解对吗？ · 对 | 需要改) through the asks write
+async def post_goals_confirm(project_id: str, session_id: str) -> str | None:
+    """Spec 160 round 4: the goals were drafted; the DAEMON asks whether they
+    are right — an ask card (这样理解对吗？ · 对 | 需要改) through the asks write
     path, plus the ``ask_opened`` row an agent-opened ask gets, so the
     composer and the Workbench show it. Returns the ask id.
 
     Round 5: when the scan recorded next steps (PROJECT_STATE's ``## Next
     steps``), the card lists them as its detail and offers step 1
-    (对，做第 1 步 | 对，先不做 | 需要改)."""
+    (对，做第 1 步 | 对，先不做 | 需要改).
+
+    Spec 167: one card, whoever created the goals file — the import scan
+    (``_run_one``), or the record turn of a project's first real run (the
+    manager loop's ``on_goals_created``, a pinned worker's memory turn). The
+    creator posts; a second post finds the same question open and returns
+    None."""
     from agent_os.agent import asks
     from agent_os.agent.context import ask_card_row
     from agent_os.onboarding.import_scan import (

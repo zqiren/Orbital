@@ -193,6 +193,11 @@ def _seed_memory(workspace: str) -> None:
     for name, text in files.items():
         with open(os.path.join(orb, name), "w", encoding="utf-8") as fh:
             fh.write(text)
+    # Spec 167: a seeded project has goals, so its record turn is the
+    # ordinary one (a goal-less project drafts them first).
+    os.makedirs(os.path.join(orb, "instructions"), exist_ok=True)
+    with open(os.path.join(orb, "instructions", "project_goals.md"), "w", encoding="utf-8") as fh:
+        fh.write("# Goals\nShip the launch page.\n")
 
 
 def _rig(tmp_path, llm, *, seed=True, origin="chat", enabled=True,

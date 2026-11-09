@@ -270,6 +270,11 @@ async def test_sdk_and_acp_transports_are_asked(tmp_path, transport_cls):
 
 @pytest.mark.asyncio
 async def test_worker_turn_that_wrote_a_memory_file_is_not_asked(tmp_path):
+    # A project with goals (spec 167: a goal-less one is still asked, to draft them).
+    goals = os.path.join(str(tmp_path), "orbital", "instructions", "project_goals.md")
+    os.makedirs(os.path.dirname(goals), exist_ok=True)
+    with open(goals, "w", encoding="utf-8") as fh:
+        fh.write("# Goals\n- ship\n")
     mgr, sub = _manager(tmp_path, tool_rows=[
         {"tool_name": "Edit", "arguments": {"file_path": "orbital/PROJECT_STATE.md"}},
         {"tool_name": "Write", "arguments": {"file_path": "src/x.py"}},

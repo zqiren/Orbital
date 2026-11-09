@@ -628,7 +628,7 @@ class ScanRunner:
 
     async def confirm(self, pid: str, session_id: str) -> None:
         from agent_os.api.routes import agents_v2
-        await agents_v2.post_scan_confirm(pid, session_id)
+        await agents_v2.post_goals_confirm(pid, session_id)
 
     async def discard(self, pid: str, session_id: str) -> None:
         rows = await asyncio.to_thread(_session_rows, self._mgr, pid, session_id)

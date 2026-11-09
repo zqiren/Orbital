@@ -1256,7 +1256,7 @@ def _confirm_env(tmp_path, *, keyed, state=None, lang="zh"):
     from agent_os.agent.session import Session
     s = Session.new(sid, str(ws), session_id=sid, origin="cold_start")
     s.append({"role": "assistant", "content": "这是一个解析库。"})
-    ask_id = _asyncio.run(agents_v2.post_scan_confirm(pid, sid))
+    ask_id = _asyncio.run(agents_v2.post_goals_confirm(pid, sid))
     wb.configure(deps["project_store"], deps["agent_manager"], MagicMock(),
                  ws_manager=deps["ws_manager"])
     rows = [_json.loads(l) for l in open(s.filepath, encoding="utf-8")]

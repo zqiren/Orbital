@@ -31,6 +31,7 @@ from agent_os.agent.loop import (
     build_worker_memory_record_text,
     classify_written_path,
     maybe_raise_unsandboxed_run,
+    project_goals_missing,
 )
 from agent_os.agent.prompt_builder import PromptBuilder, PromptContext
 from agent_os.agent.providers.openai_compat import LLMProvider
@@ -297,6 +298,10 @@ class AgentManager:
         # marker and its terminal row get ``_kind: memory_record`` and the
         # terminal clears the key, so the reminder never asks again.
         self._worker_memory_records: set[tuple[str, str | None, str]] = set()
+        # Spec 167: the subset of those reminders sent while the project had
+        # no goals (they ask for the draft). When such a reminder's terminal
+        # lands and the goals file exists, the daemon posts the confirm card.
+        self._worker_goals_drafts: set[tuple[str, str | None, str]] = set()
         # Spec 129 §5E: one asyncio.Lock per session key around every
         # daemon-internal hydrate of a disk-only session, so the daemon
         # never contends with itself on the session file's advisory lock
@@ -1626,6 +1631,8 @@ class AgentManager:
         # interactive (user) sessions unchanged — they reach this via inject.
         if hasattr(loop, "_queue_state"):
             loop._queue_state = queue_state
+        # Spec 167: the record turn that creates the goals file gets the card.
+        loop.on_goals_created = self._goals_confirm_hook(project_id, session_id)
 
         # 12a. Register checkpoint_state tool now that the loop exists.
         # The tool calls loop.trigger_checkpoint() (agent-decided trigger).
@@ -2855,7 +2862,8 @@ class AgentManager:
         worker the manager dispatched is not asked — the manager records on
         its wake run. Only on transports that report tool names and paths.
         Not for the reminder's own completion, not for error/stop terminals,
-        and not when the run itself already wrote a memory file. Never
+        and not when the run itself already wrote a memory file (unless the
+        project has no goals yet: spec 167 asks it to draft them). Never
         raises: the completion row is already persisted.
 
         Spec 129 §5D: the trigger is the first ``completed`` OR ``continued``
@@ -2869,6 +2877,7 @@ class AgentManager:
         try:
             self._note_worker_ask_changes(project_id, session_id, session, row)
             meta = row.get("_meta") or {}
+            self._maybe_confirm_worker_goals(project_id, session_id, row)
             if (not isinstance(meta, dict)
                     or meta.get("event") != "sub_agent_terminal"
                     or meta.get("kind") not in ("completed", "continued")
@@ -2887,11 +2896,13 @@ class AgentManager:
             workspace = (project or {}).get("workspace", "") if isinstance(project, dict) else ""
             tool_rows = self._worker_run_tool_rows(project_id, session_id, handle, session)
             changed, wrote_memory = worker_turn_changed_files(tool_rows or [], workspace)
-            if wrote_memory:
+            # Spec 167: missing goals override "this turn already recorded".
+            goals_missing = project_goals_missing(workspace)
+            if wrote_memory and not goals_missing:
                 return
-            text = build_worker_memory_record_text(changed)
+            text = build_worker_memory_record_text(changed, goals_missing=goals_missing)
             task = asyncio.ensure_future(self._send_worker_memory_record(
-                project_id, session_id, handle, text))
+                project_id, session_id, handle, text, goals_draft=goals_missing))
             self._background_tasks.add(task)
             task.add_done_callback(self._background_tasks.discard)
         except Exception:  # noqa: BLE001 — a reminder must never break a completion
@@ -2899,14 +2910,57 @@ class AgentManager:
                            project_id, session_id, exc_info=True)
 
     async def _send_worker_memory_record(self, project_id: str, session_id: str | None,
-                                         handle: str, text: str) -> None:
+                                         handle: str, text: str, *,
+                                         goals_draft: bool = False) -> None:
         await self._send_worker_daemon_turn(
             project_id, session_id, handle, text,
-            kind=MEMORY_RECORD_KIND, initiator="user_pinned")
+            kind=MEMORY_RECORD_KIND, initiator="user_pinned", goals_draft=goals_draft)
+
+    def _maybe_confirm_worker_goals(self, project_id: str, session_id: str | None,
+                                    row: dict) -> None:
+        """Spec 167: a goals-drafting reminder's terminal row just landed. If
+        the goals file exists now, the worker created it: post the confirm
+        card (one owner, ``post_goals_confirm``). Fire-and-forget."""
+        meta = row.get("_meta") or {}
+        if (row.get("_kind") != MEMORY_RECORD_KIND or not isinstance(meta, dict)
+                or meta.get("event") != "sub_agent_terminal"):
+            return
+        handle = _terminal_handle(meta, row.get("content"))
+        key = (project_id, session_id, handle)
+        if not handle or key not in self._worker_goals_drafts:
+            return
+        self._worker_goals_drafts.discard(key)
+        project = self._project_store.get_project(project_id) if self._project_store else None
+        workspace = (project or {}).get("workspace", "") if isinstance(project, dict) else ""
+        if not workspace or project_goals_missing(workspace):
+            return
+        task = asyncio.ensure_future(self._confirm_goals(project_id, session_id))
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+
+    async def _confirm_goals(self, project_id: str, session_id: str | None) -> None:
+        """Post the goals confirm card (spec 160's 这样理解对吗？) in this
+        session. Never raises. The ask it opens is the daemon's, so the
+        worker's ask baseline takes it in (no second card row later)."""
+        try:
+            from agent_os.api.routes import agents_v2
+            ask_id = await agents_v2.post_goals_confirm(project_id, session_id)
+            seen = self._worker_asks_seen.get((project_id, session_id or ""))
+            if ask_id and seen is not None:
+                seen.add(ask_id)
+        except Exception:  # noqa: BLE001
+            logger.warning("goals confirm card failed for %s/%s", project_id, session_id,
+                           exc_info=True)
+
+    def _goals_confirm_hook(self, project_id: str, session_id: str | None):
+        """The manager loop's ``on_goals_created`` for this session."""
+        async def hook() -> None:
+            await self._confirm_goals(project_id, session_id)
+        return hook
 
     async def _send_worker_daemon_turn(self, project_id: str, session_id: str | None,
                                        handle: str, text: str, *, kind: str,
-                                       initiator: str) -> None:
+                                       initiator: str, goals_draft: bool = False) -> None:
         """A turn the daemon starts on a worker: a hidden ``role: user,
         source: daemon`` row tagged ``kind``, then ``send``. Best-effort: a
         failure is one warning, never a retry (spec 129 §7.2).
@@ -2931,6 +2985,8 @@ class AgentManager:
             key = (project_id, resolved, handle)
             if tags_turn:
                 self._worker_memory_records.add(key)
+                if goals_draft:
+                    self._worker_goals_drafts.add(key)
             dispatch_id = f"{resolved}:{uuid4().hex[:8]}"
             result = await self._sub_agent_manager.send(
                 project_id, handle, text, session_id=resolved,
@@ -2938,6 +2994,7 @@ class AgentManager:
             )
             if isinstance(result, str) and result.startswith("Error"):
                 self._worker_memory_records.discard(key)
+                self._worker_goals_drafts.discard(key)
                 logger.warning("%s to %s not sent: %s", label, handle, result)
         except FileLockError as exc:
             # Spec 129 §7.2: best-effort by contract — dropped, no re-queue;
@@ -2945,11 +3002,13 @@ class AgentManager:
             # as the child's completion row; the next recap carries it). One
             # line naming the session and the file, not a 12-frame traceback.
             self._worker_memory_records.discard(key)
+            self._worker_goals_drafts.discard(key)
             logger.warning(
                 "%s to %s dropped: session %s/%s is lock-contended "
                 "past the retry budget (%s)", label, handle, project_id, session_id, exc)
         except Exception:  # noqa: BLE001
             self._worker_memory_records.discard(key)
+            self._worker_goals_drafts.discard(key)
             logger.warning("%s to %s failed", label, handle, exc_info=True)
 
     def _deliver_worker_result(self, project_id: str, session_id: str | None,
