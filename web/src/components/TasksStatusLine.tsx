@@ -27,6 +27,10 @@ interface TasksStatusLineProps {
   variant?: 'row' | 'band';
   /** The Tasks page is open (row variant): the line shows as the chosen row. */
   selected?: boolean;
+  /** Show the `/automate` hint when nothing is scheduled. False on a
+   *  keyless project (2026-11-09): `/automate` needs Orbital's own agent, so
+   *  the empty state keeps only its title. */
+  teach?: boolean;
 }
 
 /** Stand-in for the `/automate` chip inside the translated teaching line. */
@@ -54,6 +58,7 @@ export default function TasksStatusLine({
   onOpen,
   variant = 'row',
   selected = false,
+  teach = true,
 }: TasksStatusLineProps) {
   const row = variant === 'row';
   const t = useT();
@@ -117,7 +122,7 @@ export default function TasksStatusLine({
     // automations read as their own group on the tinted column without a
     // line; hover lifts it; while Tasks is open an accent ring marks it chosen.
     const title = empty
-      ? `${t('statusLine.teach.title')} · ${before}/automate${after}`
+      ? (teach ? `${t('statusLine.teach.title')} · ${before}/automate${after}` : t('statusLine.teach.title'))
       : facts.map((f) => (f.off ? `${f.text} ${f.off}` : f.text)).join(' · ');
     return (
       <button
@@ -142,11 +147,13 @@ export default function TasksStatusLine({
                 </span>
                 <ChevronRight size={13} aria-hidden="true" className="shrink-0 text-muted" />
               </span>
-              <span className="text-[11px] text-muted" data-testid="status-line-teach-hint">
-                {before}
-                {keyToken('font-sans text-[10px]')}
-                {after}
-              </span>
+              {teach && (
+                <span className="text-[11px] text-muted" data-testid="status-line-teach-hint">
+                  {before}
+                  {keyToken('font-sans text-[10px]')}
+                  {after}
+                </span>
+              )}
             </span>
           </>
         ) : (
@@ -163,9 +170,13 @@ export default function TasksStatusLine({
     <>
       <Clock size={13} aria-hidden="true" className="shrink-0 text-muted" />
       <span className="min-w-0 truncate text-muted" data-testid="status-line-teach">
-        {before}
-        {keyToken('font-mono text-[11px]')}
-        {after}
+        {teach ? (
+          <>
+            {before}
+            {keyToken('font-mono text-[11px]')}
+            {after}
+          </>
+        ) : t('statusLine.teach.title')}
       </span>
     </>
   ) : (

@@ -306,6 +306,19 @@ def _row(i, **fields):
       "_meta": {"event": "job_checkin"}}, False),
     ({"role": "system", "source": "daemon", "content": "Background job job_1 was stopped",
       "_meta": {"event": "job_note", "suppress_wake": True}}, False),
+    # A send whose agent could not start (2026-11-09): the manager's
+    # start-failure row and a pinned worker's dispatch failure answer the
+    # user, so the session counts as unread and gets a Workbench card.
+    ({"role": "system", "source": "daemon",
+      "content": "[The agent could not be started for this message — ...]",
+      "_meta": {"event": "start_failed"}}, True),
+    ({"role": "system", "source": "daemon",
+      "content": "[Sub-agent] codebuddy could not start: Error: not signed in",
+      "_meta": {"event": "sub_agent_dispatch_failed", "handle": "codebuddy",
+                "dispatch_id": "d1", "suppress_wake": True}}, True),
+    # The same text with no event (rows written before) is still not a reply.
+    ({"role": "system", "source": "daemon",
+      "content": "[The agent could not be started for this message — ...]"}, False),
     # The dispatch ack / started rows carry no event: not a reply.
     ({"role": "system", "source": "daemon", "content": "[Sub-agent] Message sent to codex",
       "_meta": {"dispatch_id": "d1"}}, False),

@@ -100,6 +100,18 @@ export function useInstalledAgents(): InstalledAgent[] | null {
   return useSyncExternalStore(subscribe, get, get);
 }
 
+/** The installed agents this project offers: minus the ones unchecked for it
+ *  (`disabled_sub_agents`). Not-ready workers stay, so the pin menu can show
+ *  what they need. No project (自动): the full list. */
+export function projectAgents<A extends { slug: string }>(
+  agents: A[],
+  project: { disabled_sub_agents?: string[] } | null | undefined,
+): A[] {
+  const off = project?.disabled_sub_agents;
+  if (!off || off.length === 0) return agents;
+  return agents.filter((a) => !off.includes(a.slug));
+}
+
 /** A first load that failed settles on empty; a failed refetch keeps the list. */
 export function settleInstalledAgents(): void {
   if (installedAgents !== null) return;

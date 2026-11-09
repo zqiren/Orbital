@@ -71,8 +71,14 @@ def ask_card_id(rec: dict) -> str | None:
 # ("Message sent to …") and "… started" rows carry no ``event`` and are not
 # replies. Keep in step with ``lifecycle_observer.py``.
 # Spec 134 Part B: a background job group's join (``job_terminal``) too.
+# A send whose agent could not start (2026-11-09): the manager's start-failure
+# row (``start_failed``, agent_manager._record_start_failure) and a pinned
+# worker's (``sub_agent_dispatch_failed``) are the session's answer — the
+# failure the user has to see — so the Workbench, the badge and left-off show
+# it instead of a "Starting…" card that never resolves.
 REPLY_META_EVENTS = frozenset({"sub_agent_terminal", "interaction_required",
-                               "job_terminal"})
+                               "job_terminal", "start_failed",
+                               "sub_agent_dispatch_failed"})
 
 
 def index_path(sessions_dir: str) -> str:

@@ -39,7 +39,6 @@ from agent_os.agent.tools.registry import ToolRegistry
 from agent_os.agent.project_paths import ProjectPaths
 from agent_os.agent.workspace_files import WorkspaceFileManager, run_session_end_routine
 from agent_os.agents.setup_engine import StaleOkView
-from agent_os.agents.setup_types import handshake_failed
 from agent_os.config.provider_registry import ProviderRegistry
 from agent_os.daemon_v2.default_skills_installer import install_default_skills
 from agent_os.daemon_v2.autonomy import (
@@ -47,7 +46,9 @@ from agent_os.daemon_v2.autonomy import (
     UNSANDBOXED_RUN_KIND,
     AutonomyInterceptor,
 )
-from agent_os.daemon_v2.sub_agent_visibility import resolve_visible_sub_agent_slugs
+from agent_os.daemon_v2.sub_agent_visibility import (
+    resolve_visible_sub_agent_slugs, worker_ready,
+)
 from agent_os.daemon_v2.session_index import read_session_f1, resolve_session_uuid
 from agent_os.utils.text_io import read_text_lenient_raising
 from agent_os.utils.file_lock import (
@@ -740,6 +741,16 @@ class AgentManager:
         No state is persisted — the session JSONLs on disk are the only source
         of truth, and the daemon never auto-resumes anything on next start."""
         logger.info("AgentManager shutdown: stopping %d agent(s)", len(self._handles))
+        # Every live worker's process tree, captured before the handle loop's
+        # stops clear the transports' process references, so the sub-agent
+        # shutdown below can confirm none of them outlives the daemon.
+        sam = self._sub_agent_manager
+        worker_procs = None
+        if sam is not None:
+            try:
+                worker_procs = sam.snapshot_worker_procs()
+            except Exception:
+                logger.warning("AgentManager shutdown: worker snapshot failed", exc_info=True)
 
         # Stop the idle-eviction sweep so it doesn't race the teardown below.
         if self._eviction_task is not None and not self._eviction_task.done():
@@ -777,6 +788,16 @@ class AgentManager:
                 )
             except asyncio.TimeoutError:
                 logger.warning("AgentManager shutdown timed out after %.1fs", timeout)
+
+        # Workers in sessions that never had a manager handle (keyless pinned
+        # sends, worker onboarding, import scans) and anything the loop above
+        # left alive: SubAgentManager stops and confirms them.
+        if sam is not None:
+            try:
+                await sam.shutdown(timeout, procs=worker_procs)
+            except Exception:
+                logger.warning("AgentManager shutdown: sub-agent shutdown failed",
+                               exc_info=True)
 
         # Shut down all project dispatchers. They are project-scoped and outlive
         # individual agents, so the handle-based teardown above does not reach
@@ -2129,21 +2150,8 @@ class AgentManager:
         out: list[str] = []
         try:
             for status in engine.check_all(allow_stale=True):
-                slug = getattr(status, "slug", None)
-                if (not isinstance(slug, str) or not slug
-                        or slug == "built-in" or slug in disabled):
-                    continue
-                if getattr(status, "installed", False) is not True:
-                    continue
-                if getattr(status, "dependencies_met", True) is False:
-                    continue
-                if getattr(status, "credentials_configured", True) is False:
-                    continue
-                if getattr(status, "update_needed", False) is True:
-                    continue
-                if handshake_failed(status):
-                    continue
-                out.append(slug)
+                if worker_ready(status) and status.slug not in disabled:
+                    out.append(status.slug)
         except Exception:
             logger.warning("available_worker_slugs(%s): setup check failed",
                            project_id, exc_info=True)
@@ -3157,6 +3165,9 @@ class AgentManager:
                     f"retry once the problem is fixed.]"
                 ),
                 "source": "daemon",
+                # The session's answer (session_index.REPLY_META_EVENTS): it
+                # counts as unread, so the Workbench shows a card for it.
+                "_meta": {"event": "start_failed"},
             })
         except Exception:
             logger.exception(

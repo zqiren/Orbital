@@ -16,6 +16,7 @@ import { api, apiWithTotal, ApiError } from '../config';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { useAgent } from '../hooks/useAgent';
 import { useQueue } from '../hooks/useQueue';
+import { projectAgents } from '../hooks/useAgentAvailability';
 import { useAutoScroll } from '../hooks/useAutoScroll';
 import {
   transformChatHistory,
@@ -1157,9 +1158,13 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   // Spec 137: built-in entries (`/automate`) sit in the same flat list.
   // Bound to `locale` (their description and prefill are translated), not
   // to the unstable `t`.
+  // Keyless (2026-11-09): `/automate` needs the manager's trigger tools, and
+  // there is no manager to run it, so it is not offered. Typed text still
+  // goes to the pinned worker verbatim.
+  const managerMissing = project?.manager_ready === false;
   const builtins = useMemo(
     () =>
-      builtinSkills(
+      managerMissing ? [] : builtinSkills(
         {
           description: translate(locale, 'chat.skill.automate.description'),
           prefill: translate(locale, 'automations.example.schedule'),
@@ -1172,9 +1177,11 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
           }
         })(),
       ),
-    [locale],
+    [locale, managerMissing],
   );
   const skillCatalog = withBuiltinSkills(installedSkills, builtins);
+  // The pin menu offers only the workers this project keeps on.
+  const pinAgents = useMemo(() => projectAgents(agents, project), [agents, project]);
   const [slashDismissed, setSlashDismissed] = useState(false);
   const [selectedSkillIndex, setSelectedSkillIndex] = useState(0);
   // One skill per message, scoped to the session it was picked in (a chip
@@ -3458,7 +3465,8 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     currentSlashQuery !== null && skillCatalog ? matchSkills(skillCatalog, currentSlashQuery) : [];
   const skillMenuOpen = filteredSkills.length > 0;
   // Spec 137: the built-ins keep the list from ever being empty, so the old
-  // "no skills installed" hint is gone — a bare `/` always lists `/automate`.
+  // "no skills installed" hint is gone — a bare `/` lists `/automate` (keyed;
+  // keyless with no skills installed, `/` opens nothing).
 
 
   /** Pick a skill: the `/query` text goes, the chip replaces any earlier pick. */
@@ -4877,7 +4885,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                 the first successful pinned send materializes a brand-new
                 session. */}
             {!bareAsk && <PinTargetSelect
-              agents={agents}
+              agents={pinAgents}
               value={pinnedTarget}
               runningSlugs={runningSubAgents}
               managerReady={managerReady}

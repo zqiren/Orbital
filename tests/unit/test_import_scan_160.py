@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -322,6 +323,134 @@ def test_resume_after_restart_picks_pending_and_crashed_running_but_not_failed(s
     assert sorted(runner.started) == sorted([pend, crashed])
     assert store2.get_project(failed)[import_scan.STATE_FIELD] == FAILED
     assert store2.get_project(done)[import_scan.STATE_FIELD] == DONE
+
+
+def test_a_scan_records_its_session_on_the_project(store, tmp_path):
+    """F4.1 (1109 keyless smoke): the session a scan runs in is stored next to
+    its state, so a restart can find the run it abandoned."""
+    a, _ = _imported(store, tmp_path, "a")
+
+    async def go():
+        runner = FakeRunner(store, hold=True)
+        q = ImportScanQueue(store, runner)
+        q.kick("import")
+        for _ in range(50):
+            await asyncio.sleep(0)
+        p = store.get_project(a)
+        assert p[import_scan.STATE_FIELD] == RUNNING
+        assert p[import_scan.SESSION_FIELD] == "sess-%s-1" % a
+        runner.release.set()
+        await q.idle()
+
+    _run(go())
+
+
+def test_resume_discards_the_session_a_crashed_scan_left_before_starting_again(store, tmp_path):
+    """F4.1: a ``running`` scan that names its session hands that session to
+    ``discard`` (which deletes only noise) before the fresh run starts."""
+    crashed, _ = _imported(store, tmp_path, "crashed", state=RUNNING)
+    store.update_project(crashed, {import_scan.SESSION_FIELD: "sess-old"})
+    old_record, _ = _imported(store, tmp_path, "old", state=RUNNING)  # no session field
+    store2 = ProjectStore(str(tmp_path / "data"))
+    order: list[tuple[str, str]] = []
+
+    class Ordered(FakeRunner):
+        async def start(self, pid, who):
+            sid = await super().start(pid, who)
+            order.append(("start", pid))
+            return sid
+
+        async def discard(self, pid, sid):
+            order.append(("discard", sid))
+            await super().discard(pid, sid)
+
+    async def go():
+        runner = Ordered(store2)
+        q = ImportScanQueue(store2, runner)
+        q.resume()
+        await q.idle()
+        return runner
+
+    runner = _run(go())
+    assert runner.discarded == ["sess-old"]
+    assert order.index(("discard", "sess-old")) < order.index(("start", crashed))
+    assert sorted(runner.started) == sorted([crashed, old_record])
+    assert store2.get_project(crashed)[import_scan.SESSION_FIELD] == "sess-%s-1" % crashed
+    assert all(store2.get_project(p)[import_scan.STATE_FIELD] == DONE
+               for p in (crashed, old_record))
+
+
+def test_a_pending_scan_never_discards_a_stored_session(store, tmp_path):
+    """Only a crashed ``running`` run is abandoned; a retried ``failed`` or a
+    ``pending`` one already went through its own discard."""
+    a, _ = _imported(store, tmp_path, "a", state=FAILED, attempts=1)
+    store.update_project(a, {import_scan.SESSION_FIELD: "sess-kept"})
+
+    async def go():
+        runner = FakeRunner(store)
+        q = ImportScanQueue(store, runner)
+        q.kick("card_created")
+        await q.idle()
+        return runner
+
+    assert _run(go()).discarded == []
+
+
+class _DiskMgr:
+    """The bits of the agent manager ``ScanRunner.discard`` reads: a session
+    JSONL on disk and ``delete_session``."""
+
+    def __init__(self, path):
+        self._handles = {}
+        self.path = path
+        self.deleted: list[str] = []
+
+    def _resolve_session_uuid_on_disk(self, pid, sid):
+        return (sid, self.path) if os.path.exists(self.path) else None
+
+    async def delete_session(self, pid, sid):
+        self.deleted.append(sid)
+
+
+def _scan_session(tmp_path, extra=()):
+    rows = [
+        {"role": "meta", "event": "session_start", "session_id": "s"},
+        {"role": "system", "source": "daemon", "content": "[Onboarding] claude-code is setting up this project",
+         "_meta": {"event": "worker_onboarding"}},
+        {"role": "system", "source": "daemon",
+         "content": '[Sub-agent] Message sent to claude-code: "You are claude-code…"'},
+        {"role": "meta", "event": "sub_agent_thread"},
+        *extra,
+    ]
+    path = tmp_path / "s.jsonl"
+    path.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    return str(path)
+
+
+def test_discard_deletes_an_abandoned_scan_session_of_only_daemon_rows(tmp_path):
+    """The run/1109-keyless ws-m_d238187e shape: onboarding row, the
+    "Message sent" row and thread meta, nothing anyone wrote."""
+    from agent_os.onboarding.import_scan import ScanRunner
+
+    mgr = _DiskMgr(_scan_session(tmp_path))
+    asyncio.run(ScanRunner(mgr).discard("p", "s"))
+    assert mgr.deleted == ["s"]
+
+
+def test_discard_keeps_a_scan_session_that_holds_a_worker_answer(tmp_path):
+    """A worker's answer lives in its terminal row's ``_meta.reply``: a
+    session holding one is never deleted, even if no goals were written."""
+    from agent_os.onboarding.import_scan import ScanRunner
+
+    mgr = _DiskMgr(_scan_session(tmp_path, [
+        {"role": "system", "source": "daemon", "content": "[Sub-agent] claude-code completed.",
+         "_meta": {"event": "sub_agent_terminal", "kind": "completed",
+                   "reply": "This looks like a scratch workspace for drafts."}}]))
+    asyncio.run(ScanRunner(mgr).discard("p", "s"))
+    assert mgr.deleted == []
+    mgr = _DiskMgr(_scan_session(tmp_path, [{"role": "user", "content": "it is a bakery site"}]))
+    asyncio.run(ScanRunner(mgr).discard("p", "s"))
+    assert mgr.deleted == []
 
 
 def test_a_project_in_flight_is_not_started_twice(store, tmp_path):

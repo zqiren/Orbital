@@ -331,3 +331,52 @@ def test_a_tool_call_left_hanging_is_still_interrupted(world):
     ])
     parsed = lo.read_orbital_session(os.path.join(ws, "orbital", "sessions", "orb_hang.jsonl"))
     assert parsed.entry.stop is not None and parsed.entry.stop.cause == "interrupted"
+
+
+def _claude_kill_between_turns_rows(cause):
+    """The keyless smoke's C4-claude rows (run/1109-keyless ws-c_b1b4561a):
+    the dispatched turn completes, then the CLI is SIGKILLed in spec 129's
+    listening window, which lifecycle_observer writes as ``continued``."""
+    return [
+        {"role": "user", "content": "Run `sleep 90` in the background, then stop.",
+         "target": "claude-code", "timestamp": iso(1)},
+        {"role": "system", "source": "daemon", "timestamp": iso(0.9),
+         "content": "[Sub-agent] claude-code completed. Summary: it's now running in the background.",
+         "_meta": {"event": "sub_agent_terminal", "kind": "completed",
+                   "reply": "It's now running in the background. I'll reply DONE when it finishes.",
+                   "suppress_wake": True}},
+        {"role": "system", "source": "daemon", "timestamp": iso(0.8),
+         "content": ("[Sub-agent] claude-code continued. Summary: Error: Command failed with "
+                     "exit code -9 (exit code: -9)\nError output: Check stderr output for details. "
+                     "Transcript: /x/33dfc9bf.jsonl. This turn was started by the sub-agent itself "
+                     "(a background command it was waiting on finished), not by a message you sent."),
+         "_meta": {"event": "sub_agent_terminal", "kind": "continued", "handle": "claude-code",
+                   "reply": ("Error: Command failed with exit code -9 (exit code: -9)\n"
+                             "Error output: Check stderr output for details"),
+                   **({"cause": cause} if cause else {}), "suppress_wake": True}},
+    ]
+
+
+def test_claude_killed_between_turns_reads_as_stopped_not_its_error_text(world):
+    """F3 (1109 keyless smoke): a ``continued`` row with ``cause: error`` is a
+    stop, exactly like ``kind: error`` — never a result line of raw SDK text."""
+    _home, ws, _desk, scanner = world
+    orbital_session(ws, "orb_kill", _claude_kill_between_turns_rows("error"))
+    parsed = lo.read_orbital_session(os.path.join(ws, "orbital", "sessions", "orb_kill.jsonl"))
+    assert parsed.entry.stop is not None and parsed.entry.stop.cause == "interrupted"
+    assert parsed.reply_line is None
+    out = lo.left_off_for_project({"workspace": ws}, scanner)
+    assert [(u["session_id"], u["cause"], u["agent"]) for u in out["unfinished"]] == [
+        ("orb_kill", "interrupted", "claude-code")]
+
+
+def test_continued_self_turn_that_succeeded_is_still_an_answer(world):
+    """A self-initiated turn that ended normally (no cause, or ``success``)
+    keeps its reply as the result line."""
+    _home, ws, _desk, scanner = world
+    rows = _claude_kill_between_turns_rows("success")
+    rows[-1]["_meta"]["reply"] = "DONE — the sleep finished."
+    orbital_session(ws, "orb_cont", rows)
+    parsed = lo.read_orbital_session(os.path.join(ws, "orbital", "sessions", "orb_cont.jsonl"))
+    assert parsed.entry.stop is None
+    assert parsed.reply_line == "DONE — the sleep finished."
