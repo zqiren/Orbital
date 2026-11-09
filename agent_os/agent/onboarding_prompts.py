@@ -103,6 +103,10 @@ def guess_first_instruction(workspace: str, *, lang: str = "en",
     carries the shared-memory line (§5.4).
     ``language``: the ``## LANGUAGE`` section (``onboarding.user_language``);
     given, the agent picks the reply language from it instead of ``lang``."""
+    # On Windows the drive-letter path is given with forward slashes, like the
+    # worker preamble's; elsewhere this is exactly the joined path.
+    goals_path = _prompt_path(os.path.join(workspace, "orbital", "instructions",
+                                           "project_goals.md"))
     return (
         "## COLD-START WORKSPACE SCAN\n\n"
         "This is an imported project with an existing workspace. The user brought it into\n"
@@ -127,7 +131,7 @@ def guess_first_instruction(workspace: str, *, lang: str = "en",
         "  you read; leave the heading out when nothing is clearly next),\n"
         "  (2) orbital/INDEX.md (navigation map: important files/dirs, one line each),\n"
         "  (3) LAST, your best guess at the Goals to\n"
-        f"  {workspace}/orbital/instructions/project_goals.md (Mission, Triggers, Scope,\n"
+        f"  {goals_path} (Mission, Triggers, Scope,\n"
         "  Rules, Preferences; under 1500 words). Mission, Triggers and Scope are your guess\n"
         "  from the files. Rules and Preferences only where a file states them (README,\n"
         "  notes, config, imported memories); otherwise write \"(none yet)\": the user adds\n"

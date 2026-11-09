@@ -132,6 +132,11 @@ class TestWorkerScanText:
         assert "C:/Users/dev/proj/orbital/INDEX.md" in head
         assert "\\" not in head
         assert "src/app.py\t40" in text and "src\\app.py" not in text
+        # The scan text's own goals line (Stage 3) uses the same form: never
+        # the drive path with backslashes joined to a forward-slash tail.
+        assert "C:\\Users\\dev\\proj/orbital" not in text
+        assert text.count("C:/Users/dev/proj/orbital/instructions/project_goals.md") == 2
+        assert "C:\\Users" not in text
 
     @pytest.mark.skipif(os.name == "nt", reason="POSIX pass-through: os.path.join itself yields backslashes on a Windows host")
     def test_posix_paths_are_untouched(self, monkeypatch):
