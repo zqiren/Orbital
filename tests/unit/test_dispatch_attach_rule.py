@@ -279,6 +279,42 @@ async def test_a_dispatched_codex_is_not_told_about_dispatch(tmp_path, initiator
     assert not note or "dispatch" not in note
 
 
+# Spec 168 (live 2026-11-09, film rig): pinned Claude Code ran `codex exec`
+# from its shell in 2 of 6 runs, so Codex's reply never reached the chat. It
+# was the one seat-holder the first-turn line skipped (a transport allowlist
+# left out `sdk`). Every seat-holder with dispatch available gets the line on
+# its first prompt only; the dispatch context alone decides.
+@pytest.mark.asyncio
+@pytest.mark.parametrize("initiator", ["user_pinned", "queue_item"])
+async def test_top_of_session_claude_code_is_told_about_dispatch_on_its_first_turn_only(
+        tmp_path, initiator):
+    mgr = _mgr(tmp_path)
+    adapter, transport, _ = await _spawn(mgr, "claude-code", initiator)
+    assert type(transport).__name__ == "SDKTransport"
+    mgr._build_recap = AsyncMock(return_value="")
+    mgr._dispatch_async = AsyncMock()
+    prompt = MagicMock(message="fix the sign in bug, then have codex review it",
+                       dispatch_id="d1", transcript_path="t", initiator=initiator)
+    await mgr._dispatch_prompt_locked(adapter, prompt, "p1", "s1", "claude-code")
+    await mgr._dispatch_prompt_locked(adapter, prompt, "p1", "s1", "claude-code")
+    first = mgr._dispatch_async.await_args_list[0].args[3]
+    second = mgr._dispatch_async.await_args_list[1].args[3]
+    assert "`dispatch` tool of the `orbital` MCP server" in first
+    assert "codex" in first.split("\n\n")[0]       # the peer it can hand work to
+    assert "shell" in first
+    assert first.endswith(prompt.message)
+    assert second == prompt.message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("initiator", ["management_agent", "worker:codex"])
+async def test_a_dispatched_claude_code_is_not_told_about_dispatch(tmp_path, initiator):
+    mgr = _mgr(tmp_path)
+    adapter, transport, _ = await _spawn(mgr, "claude-code", initiator)
+    assert transport.dispatch_mcp is None
+    assert not getattr(adapter, "_orbital_first_turn_note", None)
+
+
 # ACP workers (codebuddy, cursor, dsh, kimi-code, minimax-code) take no
 # Orbital system prompt either: the seat-holder gets the endpoint through the
 # transport (mounted on session open) and the same first-turn line.

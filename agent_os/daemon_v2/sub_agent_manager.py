@@ -1468,13 +1468,9 @@ class SubAgentManager:
         # user's settings have moved on (see _spawn_config_stale).
         adapter._spawn_fingerprint = spawn_fp
         adapter._session_params = dict(session_params)
-        # Codex and ACP workers take no Orbital system prompt: the launcher
-        # paragraph (spec 134 Part B, Codex) and, for the seat-holder, the
-        # dispatch line (spec 161) ride on the first dispatch of this process.
-        # Pi takes the system prompt, but its seat-holder gets the same line
-        # so every worker learns about the tool the same way.
-        takes_first_turn_note = transport_kind in (
-            "codex-appserver", "acp-sdk", "pi-rpc")
+        # Codex takes no Orbital system prompt: its launcher paragraph (spec
+        # 134 Part B) rides on the first dispatch of this process, and so
+        # does every seat-holder's dispatch line (spec 161/168, below).
         adapter._orbital_first_turn_note = (
             jobs_hint if transport_kind == "codex-appserver" else None)
         adapter._dispatch_token = dispatch_token
@@ -1524,8 +1520,10 @@ class SubAgentManager:
         if dispatch_token is not None and getattr(transport, "dispatch_mounted", True) is False:
             self._revoke_dispatch_token(adapter)
             adapter._dispatch_token = dispatch_token = None
+        # Every seat-holder that still holds a live token learns about the
+        # tool the same way, whatever its transport (spec 168).
         dctx = self._dispatch_tokens.get(dispatch_token) if dispatch_token else None
-        if takes_first_turn_note and dctx is not None:
+        if dctx is not None:
             note = seat_note(dctx)
             if note:
                 adapter._orbital_first_turn_note = "\n\n".join(
