@@ -1658,8 +1658,8 @@ async def post_goals_confirm(project_id: str, session_id: str) -> str | None:
     Spec 167: one card, whoever created the goals file — the import scan
     (``_run_one``), or the record turn of a project's first real run (the
     manager loop's ``on_goals_created``, a pinned worker's memory turn). The
-    creator posts; a second post finds the same question open and returns
-    None."""
+    creator posts; a second post while the project's card is still open
+    returns None."""
     from agent_os.agent import asks
     from agent_os.agent.context import ask_card_row
     from agent_os.onboarding.import_scan import (
@@ -1681,6 +1681,14 @@ async def post_goals_confirm(project_id: str, session_id: str) -> str | None:
         text, detail = f"{question} options: {yes} | {no}", ""
         record = {"yes": yes, "change": no}
     orbital = ProjectPaths(workspace).orbital_dir
+    # Spec 167 §5.2: one card per project while it is open. The scan and a
+    # first run's record turn can both see the goals appear; open_ask's
+    # same-text check misses this card (its options are not its text).
+    rec = project.get(ASK_FIELD)
+    if isinstance(rec, dict) and rec.get("id"):
+        live = {a.id for a in await asyncio.to_thread(asks.read_asks, orbital) if a.is_open}
+        if rec["id"] in live:
+            return None
     opened = await asyncio.to_thread(asks.open_ask, orbital, text, detail=detail)
     if opened is None:
         return None  # the same question is already open in this project

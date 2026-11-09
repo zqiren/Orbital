@@ -366,3 +366,31 @@ def test_a_new_projects_card_follows_the_ui_language(tmp_path, monkeypatch, ui, 
     ask_id = _asyncio.run(agents_v2.post_goals_confirm(pid, "s1"))
     (ask,) = [a for a in asks.read_asks(str(ws / "orbital")) if a.id == ask_id]
     assert ask.text == (expect or "Did I get this right?")
+
+
+def test_a_second_post_while_the_first_card_is_open_posts_nothing(tmp_path):
+    """§5.2 race (found live, §8 case 9): the scan and a first conversation's
+    record turn both see the goals file appear and both post. The card text
+    carries its options, which ``open_ask``'s same-text check does not see, so
+    the guard is the project's own open card: while it is open, no second."""
+    import asyncio as _asyncio
+
+    from agent_os.agent import asks
+    from agent_os.api.routes import agents_v2
+    from agent_os.agent.session import Session
+    from tests.unit.keyless_harness import build_client, create_project
+
+    tc, deps = build_client(tmp_path, keyed=False)
+    ws = tmp_path / "ws"; ws.mkdir()
+    pid = create_project(tc, ws)["project_id"]
+    _write_goals(ws)
+    for sid in ("scan", "task"):
+        Session.new(sid, str(ws), session_id=sid).append({"role": "assistant", "content": "ok"})
+    first = _asyncio.run(agents_v2.post_goals_confirm(pid, "scan"))
+    second = _asyncio.run(agents_v2.post_goals_confirm(pid, "task"))
+    assert first and second is None
+    assert [a.id for a in asks.read_asks(str(ws / "orbital")) if a.is_open] == [first]
+    assert deps["project_store"].get_project(pid)["import_scan_ask"]["session_id"] == "scan"
+    # Once answered, a later draft (goals emptied and redrafted) asks again.
+    asks.append_event(str(ws / "orbital"), "done", first, "Yes")
+    assert _asyncio.run(agents_v2.post_goals_confirm(pid, "task"))
