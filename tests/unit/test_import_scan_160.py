@@ -352,8 +352,15 @@ def test_a_scan_records_its_session_on_the_project(store, tmp_path):
         runner = FakeRunner(store, hold=True)
         q = ImportScanQueue(store, runner)
         q.kick("import")
-        for _ in range(50):
-            await asyncio.sleep(0)
+        # The run goes through asyncio.to_thread twice before it marks
+        # RUNNING; wait for the state rather than a fixed number of ticks
+        # (50 bare ticks lost the race on a loaded Windows box).
+        deadline = asyncio.get_running_loop().time() + 5.0
+        while asyncio.get_running_loop().time() < deadline:
+            p = store.get_project(a)
+            if p.get(import_scan.STATE_FIELD) == RUNNING and p.get(import_scan.SESSION_FIELD):
+                break
+            await asyncio.sleep(0.01)
         p = store.get_project(a)
         assert p[import_scan.STATE_FIELD] == RUNNING
         assert p[import_scan.SESSION_FIELD] == "sess-%s-1" % a
