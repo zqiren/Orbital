@@ -4573,7 +4573,8 @@ describe('Keyless: the composer pin falls back to the project pin', () => {
     await flushEffects();
     expect(pinnedHandle()).toBe('codex');
     expect(pinTrigger().disabled).toBe(false);
-    expect(placeholder()).toBe('Message codex...');
+    // The product name, never the slug (the keyless hint uses the same name).
+    expect(placeholder()).toBe('Message Codex...');
 
     await send('hello');
     expect(injectCalls).toHaveLength(1);

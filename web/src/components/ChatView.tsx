@@ -4904,7 +4904,8 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                 : hasCapsule
                 ? ''
                 : pinnedTarget
-                  ? t('chat.composer.placeholderPinned', { agent: pinnedTarget })
+                  // The product name, like the keyless hint below; never the slug.
+                  ? t('chat.composer.placeholderPinned', { agent: pinnedAgentName ?? pinnedTarget })
                   : t('chat.composer.placeholder')}
               rows={1}
               disabled={isCancelling}
