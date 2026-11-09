@@ -4,9 +4,8 @@
 
 """Which language onboarding speaks: the agent decides from signals.
 
-Every onboarding prompt (the import scan's guess, the cold-start scan, the
-interview, and their keyless-worker versions) carries one ``## LANGUAGE``
-section listing what Orbital knows about the user's language. The agent
+The import scan's prompt (the manager's and its keyless-worker version)
+carries one ``## LANGUAGE`` section listing what Orbital knows about the user's language. The agent
 picks the language from those signals, so a language the interface does not
 offer (Japanese, say) still works. Owner ask 2026-11-07.
 

@@ -13,8 +13,7 @@
  * the backend has looked through every session log for a session that cannot
  * exist (seconds on a project with hundreds of MB of logs).
  *
- * Deliberately in-memory and consumed exactly once, like
- * `onboardingKickoff.ts`: a reload, a second tab, or a later visit to the same
+ * Deliberately in-memory and consumed exactly once: a reload, a second tab, or a later visit to the same
  * id goes through the normal fetch — by then the file may exist. Keyed by
  * project AND session id so an id minted for one project can never short-
  * circuit a load in another.

@@ -35,7 +35,6 @@ import Sidebar from './components/Sidebar';
 import EdgeStrip from './components/EdgeStrip';
 import { effectivePinned, useWindowCovered } from './hooks/useWindowCover';
 import CreateProject from './components/CreateProject';
-import { requestOnboardingKickoff } from './utils/onboardingKickoff';
 import FirstRunHome from './components/FirstRunHome';
 import ImportProjectsDialog from './components/ImportProjectsDialog';
 import { markFreshSession } from './utils/freshSession';
@@ -613,9 +612,8 @@ export default function App() {
 
   async function handleCreateProject(data: ProjectCreateRequest) {
     const created = await createProject(data);
-    // A project on an empty folder opens with the agent speaking first. A
-    // folder with files gets the scan card instead, whose Skip does the same.
-    if (created.is_empty_workspace) requestOnboardingKickoff(created.project_id);
+    // Spec 167: a new project opens on its empty chat; the user speaks first
+    // and the goals come from that first run.
     setRoute({ name: 'project', projectId: created.project_id, sessionId: undefined });
   }
 

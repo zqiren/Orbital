@@ -547,13 +547,18 @@ async def update_settings(req: UpdateSettingsRequest):
     if req.setup_api_key_skipped:
         # Spec 138: the wizard's "Skip for now" on the Orbital-agent key step.
         telemetry.latch("key_skipped")
-        # Skip means skip (2026-11-07, replacing spec 160 round 2's "the
-        # pinned worker reads them now"): the wizard's deferred imports are
-        # not read and no trigger fires. An explicit import_scan:false still
-        # switches off everything waiting, as before.
-        from agent_os.onboarding.import_scan import turn_off_deferred
-        turn_off_deferred(_project_store)
-        _import_scan_switch(req.import_scan)
+        # Spec 167: Skip skips Orbital's key, not the read. The sign beside
+        # Skip sends its switch: on, the wizard's deferred imports are read by
+        # the user's own agent; off — or no value, from a client that showed
+        # no sign — they are not, and an explicit off also switches off
+        # everything still waiting, as before.
+        from agent_os.onboarding.import_scan import stamp_deferred_pending, turn_off_deferred
+        if req.import_scan is True:
+            if stamp_deferred_pending(_project_store):
+                _import_scan_kick("key_skipped")
+        else:
+            turn_off_deferred(_project_store)
+            _import_scan_switch(req.import_scan)
 
     return _settings_store.get_masked()
 

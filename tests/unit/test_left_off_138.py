@@ -380,3 +380,51 @@ def test_continued_self_turn_that_succeeded_is_still_an_answer(world):
     parsed = lo.read_orbital_session(os.path.join(ws, "orbital", "sessions", "orb_cont.jsonl"))
     assert parsed.entry.stop is None
     assert parsed.reply_line == "DONE — the sleep finished."
+
+
+# ---------------------------------------------------------------------------
+# Spec 167 §5.4: a failed import scan stays visible with its cause. Its
+# session holds only daemon rows, so the daemon's failure rows are what the
+# reader counts.
+# ---------------------------------------------------------------------------
+
+
+def test_a_scan_whose_worker_could_not_start_reads_as_stopped_with_its_text(world):
+    _home, ws, _desk, _scanner = world
+    orbital_session(ws, "scan_w", [
+        {"role": "system", "source": "daemon", "timestamp": iso(1),
+         "content": "[Onboarding] codex is setting up this project",
+         "_meta": {"event": "worker_onboarding", "handle": "codex", "mode": "scan"}},
+        {"role": "system", "source": "daemon", "timestamp": iso(1),
+         "content": "[Sub-agent] codex could not start: Error: You've hit your usage limit · resets 9:29pm",
+         "_meta": {"event": "sub_agent_dispatch_failed", "handle": "codex"}},
+    ])
+    parsed = lo.read_orbital_session(os.path.join(ws, "orbital", "sessions", "scan_w.jsonl"))
+    assert parsed is not None
+    assert parsed.entry.stop is not None and parsed.entry.stop.cause == "usage_limit"
+    assert parsed.reply_text is None
+
+
+def test_a_scan_whose_manager_could_not_start_reads_as_stopped(world):
+    _home, ws, _desk, _scanner = world
+    orbital_session(ws, "scan_m", [
+        {"role": "system", "source": "daemon", "timestamp": iso(1),
+         "content": "[WORKSPACE SKELETON] 1 files\nREADME.md\t5"},
+        {"role": "system", "source": "daemon", "timestamp": iso(1),
+         "content": "[The agent could not be started for this message — RuntimeError: boom. "
+                    "Your message was saved; send it again or retry once the problem is fixed.]",
+         "_meta": {"event": "start_failed"}},
+    ])
+    parsed = lo.read_orbital_session(os.path.join(ws, "orbital", "sessions", "scan_m.jsonl"))
+    assert parsed is not None and parsed.entry.stop is not None
+    assert parsed.entry.stop.cause == "interrupted"
+
+
+def test_a_session_of_daemon_rows_without_a_failure_is_still_no_session(world):
+    _home, ws, _desk, _scanner = world
+    orbital_session(ws, "scan_n", [
+        {"role": "system", "source": "daemon", "timestamp": iso(1),
+         "content": "[Onboarding] codex is setting up this project",
+         "_meta": {"event": "worker_onboarding", "handle": "codex", "mode": "scan"}},
+    ])
+    assert lo.read_orbital_session(os.path.join(ws, "orbital", "sessions", "scan_n.jsonl")) is None

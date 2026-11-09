@@ -95,10 +95,16 @@ def _section(tmp_path, **over):
 SIG = {"ui": "zh", "device": ["zh-CN"], "system": "zh_CN"}
 
 
-@pytest.mark.parametrize("cold_start", [False, True, "guess", "guess:en"])
-def test_every_onboarding_flavour_carries_the_section(tmp_path, cold_start):
+@pytest.mark.parametrize("cold_start", ["guess", "guess:en"])
+def test_the_import_scan_carries_the_section(tmp_path, cold_start):
     text = _section(tmp_path, cold_start=cold_start, language_signals=SIG)
     assert "## LANGUAGE" in text
+
+
+@pytest.mark.parametrize("cold_start", [False, True])
+def test_no_goals_and_no_scan_means_no_section_at_all(tmp_path, cold_start):
+    """Spec 167: no interview; the user speaks first, in their own language."""
+    assert _section(tmp_path, cold_start=cold_start, language_signals=SIG) is None
 
 
 def test_the_guess_reply_no_longer_hard_picks_a_language(tmp_path):
@@ -115,17 +121,17 @@ def test_the_directive_does_not_carry_it(tmp_path):
 
 
 def test_without_signals_the_text_is_unchanged(tmp_path):
-    assert "## LANGUAGE" not in _section(tmp_path, cold_start=True)
+    assert "## LANGUAGE" not in _section(tmp_path, cold_start="guess:en")
 
 
-@pytest.mark.parametrize("mode,guess", [("interview", None), ("scan", None), ("scan", "zh")])
-def test_worker_onboarding_carries_it(tmp_path, mode, guess):
+@pytest.mark.parametrize("guess", ["zh", "en"])
+def test_worker_import_scan_carries_it(tmp_path, guess):
     from agent_os.daemon_v2.worker_onboarding import build_instruction
     project = {"workspace": str(tmp_path), "name": "p"}
-    text = build_instruction("claude-code", project, mode, "README.md\t5",
+    text = build_instruction("claude-code", project, "README.md\t5",
                              guess_lang=guess, language_signals=SIG)
     assert "## LANGUAGE" in text
-    assert "## LANGUAGE" not in build_instruction("claude-code", project, mode,
+    assert "## LANGUAGE" not in build_instruction("claude-code", project,
                                                   "README.md\t5", guess_lang=guess)
 
 

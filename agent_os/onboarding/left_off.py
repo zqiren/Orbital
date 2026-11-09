@@ -230,6 +230,13 @@ def _read_orbital(path: str) -> OrbitalSession | None:
                         turn.interrupted("stopped")
                     else:
                         turn.answered()
+                elif event in ("start_failed", "sub_agent_dispatch_failed"):
+                    # Spec 167: the agent could not start (a scan with no
+                    # reply of its own still reads as stopped, with why).
+                    any_row = True
+                    probe.ended_at = ts or probe.ended_at
+                    turn.error(content, ts)
+                    reply_text = None
                 elif row.get("source") == "management":
                     if content.startswith("LLM error") or "API key was rejected" in content:
                         probe.ended_at = ts or probe.ended_at

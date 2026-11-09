@@ -215,22 +215,15 @@ class TestTokenPressureNudge:
 
 
 # ---------------------------------------------------------------------------
-# Part 3A / 3B — onboarding workspace exploration + INDEX.md creation
+# Part 3A / 3B — (spec 167) no onboarding section: the user speaks first, and
+# the first run's record turn drafts the goals and the index
 # ---------------------------------------------------------------------------
 
-class TestOnboardingExploration:
-    def test_onboarding_includes_workspace_exploration_step(self, tmp_path):
-        # No project_goals.md => onboarding mode
+class TestNoOnboardingSection:
+    def test_no_goals_means_no_onboarding_text(self, tmp_path):
         _c, semi, _d = PromptBuilder(str(tmp_path)).build(_base_ctx(str(tmp_path)))
-        assert "ONBOARDING MODE" in semi
-        assert "explore the workspace" in semi.lower()
-        assert "INDEX.md" in semi
-
-    def test_onboarding_tool_restriction_allows_exploration(self, tmp_path):
-        _c, semi, _d = PromptBuilder(str(tmp_path)).build(_base_ctx(str(tmp_path)))
-        # old text forbade ALL tools until onboarding complete; new text allows
-        # read/list exploration after project_goals.md is written.
-        assert "until goal-setting is complete" in semi
+        assert "ONBOARDING MODE" not in semi
+        assert "until goal-setting is complete" not in semi
 
 
 # ---------------------------------------------------------------------------

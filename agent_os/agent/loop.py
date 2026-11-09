@@ -145,7 +145,6 @@ _EMPTY_RESPONSE_NUDGE_LIMIT = 2
 # produces carries ``_kind: MEMORY_RECORD_KIND`` so it never replaces it.
 # ---------------------------------------------------------------------------
 from agent_os.agent import asks as asks_mod  # noqa: E402
-from agent_os.agent import onboarding_gate  # noqa: E402
 from agent_os.agent.context import MEMORY_RECORD_KIND, ask_card_row  # noqa: E402 — re-exported
 from agent_os.agent.project_paths import ProjectPaths  # noqa: E402
 MEMORY_RECORD_MAX_LLM_CALLS = 3
@@ -170,9 +169,10 @@ def _record_call_retryable(exc: BaseException) -> bool:
 # The four Layer-1 files, by on-disk name (agent_os.agent.context._LAYER1_FILES
 # carries the same list keyed for WorkspaceFileManager).
 _MEMORY_FILE_NAMES = ("PROJECT_STATE.md", "DECISIONS.md", "LESSONS.md", "INDEX.md")
-# The only tools the record turn may run, on the four files only. Scoped to
-# memory persistence, so it runs without the approval interceptor (FO-1) —
-# the precedent set by the (since removed) pre-compaction flush turn.
+# The only tools the record turn may run, on the four files and (spec 167) the
+# goals file only. Scoped to memory persistence, so it runs without the
+# approval interceptor (FO-1) — the precedent set by the (since removed)
+# pre-compaction flush turn.
 _MEMORY_RECORD_TOOLS = frozenset({"read", "edit", "write"})
 
 # 1109 R4: the entry-shape rules, given to whoever writes the memory files at
@@ -185,8 +185,31 @@ MEMORY_SHAPE_RULES = (
     "sentence; a lesson is the rule itself; a state line is what is true now.\n"
     "Detail goes on indented lines under the bullet, only when needed. Never write\n"
     "or edit the <!--format--> header or the hidden <!--mem--> id comments; the\n"
-    "system stamps those.\n"
+    "system stamps those. To revise orbital/instructions/project_goals.md, replace\n"
+    "its paragraph and add one line under it: supersedes: <its old first line>\n"
 )
+
+# Spec 167: goals come from work. While the project has no goals (the file is
+# missing or blank), the record turn drafts them first, then records state.
+_GOALS_REL = "orbital/instructions/project_goals.md"
+_GOALS_DRAFT_TEXT = (
+    "This project has no goals yet. First, draft " + _GOALS_REL + " from the\n"
+    "folder and this conversation: what the project is for, what done looks like\n"
+    "if visible, how the user works (language, preferences seen). One paragraph\n"
+    "plus `- ` bullets, headed 'First draft'. The goals describe the user's\n"
+    "project, never Orbital's or your own operating rules (background jobs,\n"
+    "dispatch, seat rules). Do this even if nothing else in this run is worth\n"
+    "recording. Then record state against it.\n"
+)
+
+
+def project_goals_missing(workspace: str) -> bool:
+    """Spec 167: the project has no goals to work against — the goals file is
+    missing or blank (the prompt's own test). False without a workspace."""
+    if not workspace:
+        return False
+    text = read_text_lenient(ProjectPaths(workspace).project_goals)
+    return text is None or not text.strip()
 
 _MEMORY_RECORD_BODY = (
     "If so, update orbital/PROJECT_STATE.md so the next session starts from what is\n"
@@ -219,6 +242,7 @@ _MEMORY_RECORD_OPENING = {
 _WORKER_MEMORY_RECORD_TEXT = (
     "[Orbital memory] Your last turn is ending. Decide whether anything durable\n"
     "happened in it. Files this turn changed: {files}\n"
+    "{goals}"
     "If so, update orbital/PROJECT_STATE.md so the next session starts from what is\n"
     "true after your work: overwrite stale lines in place, one fact per line, no\n"
     "dated history. Add an entry to orbital/DECISIONS.md or orbital/LESSONS.md only\n"
@@ -248,6 +272,15 @@ def classify_written_path(workspace: str, path) -> str | None:
     if full == orbital or full.startswith(orbital + os.sep):
         return None
     return "workspace"
+
+
+def _is_goals_path(workspace: str, path) -> bool:
+    """``path`` (relative to the workspace, or absolute) is the goals file."""
+    if not workspace or not isinstance(path, str) or not path.strip():
+        return False
+    raw = path.strip()
+    full = os.path.normpath(raw if os.path.isabs(raw) else os.path.join(workspace, raw))
+    return full == os.path.normpath(ProjectPaths(workspace).project_goals)
 
 
 def _read_memory_file(workspace: str, name: str) -> str | None:
@@ -290,7 +323,8 @@ def build_memory_record_text(workspace: str, changed_files: list[str],
         lines.append("Files this run changed: " + ", ".join(changed_files))
     lines.append("Sub-agent results received: "
                  + (", ".join(sub_agent_results) if sub_agent_results else "none"))
-    head = "\n".join(lines) + "\n\n" + _MEMORY_RECORD_BODY
+    goals = _GOALS_DRAFT_TEXT if project_goals_missing(workspace) else ""
+    head = "\n".join(lines) + "\n\n" + goals + _MEMORY_RECORD_BODY
     state = _read_memory_file(workspace, "PROJECT_STATE.md")
     state_text = state.rstrip("\n") if state is not None else _MISSING_FILE_NOTE
     if state is not None and not state.strip():
@@ -306,11 +340,15 @@ def build_memory_record_text(workspace: str, changed_files: list[str],
     return "\n".join(parts)
 
 
-def build_worker_memory_record_text(changed_files: list[str]) -> str:
+def build_worker_memory_record_text(changed_files: list[str], *,
+                                    goals_missing: bool = False) -> str:
     """The pinned direct-chat worker's variant of the record row (spec 112
-    A6): sent as the worker's next turn on its resumed session."""
+    A6): sent as the worker's next turn on its resumed session.
+    ``goals_missing`` (spec 167): the project has no goals yet, so the turn
+    drafts them first."""
     return _WORKER_MEMORY_RECORD_TEXT.format(
-        files=", ".join(changed_files) if changed_files else "none")
+        files=", ".join(changed_files) if changed_files else "none",
+        goals=_GOALS_DRAFT_TEXT if goals_missing else "")
 
 
 def maybe_raise_unsandboxed_run(interceptor, tool_call: dict, result,
@@ -530,6 +568,11 @@ class AgentLoop:
         self._memory_record_enabled = memory_record_enabled
         self._run_changed_files: list[str] = []
         self._run_memory_written: bool = False
+        # Spec 167: the goals file was missing or blank as this run started;
+        # ``on_goals_created`` (set by the AgentManager) posts the confirm card
+        # when the run ends with it written.
+        self._goals_missing_at_run_start: bool = False
+        self.on_goals_created = None
         self._memory_record_done: bool = False
         self._memory_record_active: bool = False
         # 1109: the changed files of a run whose record turn a user message
@@ -1158,13 +1201,13 @@ class AgentLoop:
         self._loop_exit_path = None
         self.last_run_stats = self._fresh_run_stats()
         self._run_tool_calls = 0
-        self._gate_refusals = 0
         rows_at_run_start = None  # set before the while; guarded in finally
         iteration = 0  # bound here so the except-backstop can always report it
         # Spec 112: a run is one snapshot segment. The Layer-1 rendering and
         # the media-pruning horizon are taken here, before the first build,
         # and again right after a compaction.
         self._begin_snapshot_segment()
+        self._goals_missing_at_run_start = project_goals_missing(self._workspace() or "")
         try:
             # Resolve pending if not resuming from approval pause
             if self._session._paused_for_approval:
@@ -1715,7 +1758,6 @@ class AgentLoop:
                             _signal_tc = _tc
 
                 exit_outer = False
-                gate_ended = False
                 intercepted_tc_id = None
                 # Spec 134 Part B: a call asking to end the turn AFTER its
                 # batch (``yield_after_batch``, background jobs) lets its
@@ -1782,28 +1824,6 @@ class AgentLoop:
                         if refusal:
                             self._session.append_tool_result(tc["id"], refusal)
                             continue
-
-                    # The onboarding gate (onboarding_gate.py): after this
-                    # session's run created project_goals.md, tools that act
-                    # on the world wait for the user's go. Before the
-                    # interceptor so a refused call never asks for approval.
-                    # The second refusal in a run ends it.
-                    if (getattr(self._session, "onboarding_gate", False)
-                            and not onboarding_gate.allowed(self._workspace() or "", tc)):
-                        self._gate_refusals += 1
-                        self._session.append_tool_result(tc["id"], onboarding_gate.REFUSAL)
-                        if self._gate_refusals >= onboarding_gate.MAX_REFUSALS_PER_RUN:
-                            for rest in tool_calls:
-                                if rest["id"] in _signal_tc_ids or not rest["id"]:
-                                    continue
-                                if rest["id"] in self._session.pending_tool_calls:
-                                    self._session.append_tool_result(
-                                        rest["id"], onboarding_gate.REFUSAL)
-                            self._note_exit("onboarding_gate", iteration)
-                            gate_ended = True
-                            exit_outer = True
-                            break
-                        continue
 
                     # Interceptor check (fail-closed)
                     if self._interceptor is not None:
@@ -1892,8 +1912,6 @@ class AgentLoop:
                     # Execute tool (async-aware)
                     self._run_tool_calls += 1
                     self.last_run_stats["tool_calls"] += 1
-                    _arms_gate = (self._onboarding_gate_eligible()
-                                  and onboarding_gate.creates_goals(self._workspace() or "", tc))
                     try:
                         if self._tool_registry.is_async(tc["name"]):
                             result: ToolResult = await self._tool_registry.execute_async(
@@ -1922,11 +1940,6 @@ class AgentLoop:
                         # Store result for observation-aware hash
                         _exec_result = result
                         self._note_written_path(tc, tool_content)
-                        if _arms_gate and self._goals_written(tool_content):
-                            self._session.set_onboarding_gate(True)
-                            logger.info("onboarding gate up: project_goals.md created "
-                                        "(session=%s)",
-                                        getattr(self._session, "session_uuid", "?"))
 
                         # yield_turn: a dispatch tool that delivered a task to a
                         # sub-agent ends the management turn immediately so the
@@ -2083,13 +2096,6 @@ class AgentLoop:
 
                 # Check if we need to exit the outer loop
                 if exit_outer:
-                    # The onboarding gate ended the run: a normal end for the
-                    # record turn (memory files only, its own executor).
-                    if gate_ended and self._memory_record_wanted():
-                        await self._memory_record_turn(
-                            active_provider, iteration, trigger="run_end",
-                            rows_at_run_start=rows_at_run_start,
-                        )
                     break
 
                 # Honor the deferred queue signal now that every sibling in
@@ -2426,33 +2432,15 @@ class AgentLoop:
             if shown not in self._run_changed_files:
                 self._run_changed_files.append(shown)
 
-    def _onboarding_gate_eligible(self) -> bool:
-        """Whether a goals creation in this run arms the onboarding gate:
-        only attended chat runs. An automation session, a queue run and the
-        Memory session have nobody to give the go."""
-        if self._queue_state == "running":
-            return False
-        if getattr(self._session, "trigger_type", None) is not None:
-            return False
-        if getattr(self._session, "origin", None) == "memory":
-            return False
-        return bool(self._workspace())
-
-    def _goals_written(self, tool_content) -> bool:
-        if isinstance(tool_content, str) and tool_content.startswith("Error"):
-            return False
-        return os.path.exists(ProjectPaths(self._workspace() or "").project_goals)
-
     def _memory_record_wanted(self) -> bool:
         """Deterministic trigger gate (spec 112 A6). Skips only what cannot
-        be meaningful: a run that already wrote a memory file, the Memory
-        session itself, a scratch project, a loop without a workspace, and a
-        second ask in the same segment."""
+        be meaningful: a run that already wrote a memory file (unless the
+        project has no goals yet, spec 167), the Memory session itself, a
+        scratch project, a loop without a workspace, and a second ask in the
+        same segment."""
         if not self._memory_record_enabled:
             return False
         if self._memory_record_done or self._memory_record_active:
-            return False
-        if self._run_memory_written:
             return False
         if getattr(self._session, "origin", None) == "memory":
             return False
@@ -2462,6 +2450,10 @@ class AgentLoop:
         if base is None or getattr(base, "is_scratch", False):
             return False
         if not getattr(base, "workspace", None):
+            return False
+        # Spec 167: missing goals override "this run already recorded" — the
+        # record turn is where a goal-less project gets its goals.
+        if self._run_memory_written and not project_goals_missing(base.workspace):
             return False
         # Spec 142: a held user message goes first. That run stays unrecorded
         # here; the next ask covers it (1109).
@@ -2543,11 +2535,15 @@ class AgentLoop:
         return found
 
     def _record_turn_tool_allowed(self, tc: dict) -> bool:
+        """The four memory files and, since spec 167, the goals file (write
+        only while it is missing: ``_record_turn_write_refused``)."""
         if tc.get("name") not in _MEMORY_RECORD_TOOLS:
             return False
         args = tc.get("arguments") or {}
         path = args.get("path") if isinstance(args, dict) else None
-        return classify_written_path(self._workspace() or "", path) == "memory"
+        workspace = self._workspace() or ""
+        return (classify_written_path(workspace, path) == "memory"
+                or _is_goals_path(workspace, path))
 
     def _record_turn_write_refused(self, tc: dict) -> bool:
         """Spec 155 §5.1.4: a record-turn ``write`` on a memory file that
@@ -2654,6 +2650,30 @@ class AgentLoop:
 
     async def _memory_record_turn(self, provider, iteration: int, *,
                                   trigger: str, rows_at_run_start) -> None:
+        """The record turn, then spec 167's card: when the goals file did not
+        exist (or was blank) as this run started and exists now, the daemon
+        asks whether the draft is right (``on_goals_created``), once."""
+        await self._run_memory_record_turn(
+            provider, iteration, trigger=trigger, rows_at_run_start=rows_at_run_start)
+        await self._maybe_confirm_goals()
+
+    async def _maybe_confirm_goals(self) -> None:
+        hook = self.on_goals_created
+        workspace = self._workspace()
+        if (not self._goals_missing_at_run_start or hook is None or not workspace
+                or project_goals_missing(workspace)):
+            return
+        self._goals_missing_at_run_start = False
+        try:
+            await hook()
+        except Exception:  # noqa: BLE001 — the card must never fail the run
+            logger.warning("goals confirm card failed", exc_info=True)
+        # The card's ask is the daemon's own row, not one this run opened.
+        if self._open_asks_seen is not None:
+            self._open_asks_seen = self._read_open_asks()
+
+    async def _run_memory_record_turn(self, provider, iteration: int, *,
+                                      trigger: str, rows_at_run_start) -> None:
         """Append the ``[MEMORY]`` row and run the bounded record turn.
 
         Bounds hold by construction: at most ``MEMORY_RECORD_MAX_LLM_CALLS``
@@ -2778,9 +2798,10 @@ class AgentLoop:
                         self._session.append_tool_result(
                             tc["id"],
                             "Error: only read, edit and write on "
-                            "orbital/PROJECT_STATE.md, DECISIONS.md, LESSONS.md "
-                            "and INDEX.md are available in the memory record "
-                            "turn. Do not do other work here.",
+                            "orbital/PROJECT_STATE.md, DECISIONS.md, LESSONS.md, "
+                            "INDEX.md and instructions/project_goals.md are "
+                            "available in the memory record turn. Do not do "
+                            "other work here.",
                         )
                         continue
                     try:

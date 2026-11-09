@@ -499,12 +499,6 @@ claudemd.banner,Your workspace CLAUDE.md may conflict with Orbital's project-sta
 claudemd.viewFile,view CLAUDE.md,button,ClaudemdWarningBanner.tsx,Link to open the CLAUDE.md file,查看 CLAUDE.md,Keep CLAUDE.md.
 claudemd.dismiss,dismiss,button,ClaudemdWarningBanner.tsx,Dismisses the warning banner,忽略,
 claudemd.matched,"(matched: """"{token}"""")",misc,ClaudemdWarningBanner.tsx,Shows which token triggered the warning,"（匹配到：""""{token}""""）",
-coldStart.header,Scan this workspace?,heading,ColdStartCard.tsx,Header on the cold-start consent card,扫描此工作目录？,
-coldStart.body,{folder} already has files in it. I can scan it to understand the project and propose a summary for you to review — nothing is saved until you approve.,description,ColdStartCard.tsx,Explains the cold-start scan,{folder} 中已有文件。我将扫描并阅读来了解该项目，并初始化项目空间。,{folder} is the workspace folder name.
-coldStart.folderFallback,this folder,misc,ChatView.tsx,Fallback folder name in the cold-start card,此文件夹,
-coldStart.scanning,Scanning…,status,ColdStartCard.tsx,Scan button label while busy,扫描中…,
-coldStart.scan,Scan,button,ColdStartCard.tsx,Starts the cold-start scan,扫描,
-coldStart.skip,Skip,button,ColdStartCard.tsx,Dismisses the cold-start card,跳过,
 composerDisabled.aria,Composer unavailable — queue is active,tooltip,ComposerDisabledPrompt.tsx,aria-label for the disabled-composer region,输入框不可用——队列正在运行,
 composerDisabled.prompt,Pause queue to start chatting.,description,ComposerDisabledPrompt.tsx,Notice when queue blocks the composer,暂停队列以开始聊天。,
 composerDisabled.pausing,Pausing…,status,ComposerDisabledPrompt.tsx,Button label while pausing the queue,暂停中…,

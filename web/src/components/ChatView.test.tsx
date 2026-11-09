@@ -209,16 +209,6 @@ let getPendingMock: (projectId: string) => Promise<unknown> = async () => ({
   holder: null,
   pending: [],
 });
-// Per-test override for coldStartScan (credential-error surfacing tests make
-// it reject with a structured ApiError).
-let coldStartScanMock: (...args: unknown[]) => Promise<unknown> = async () => ({
-  status: 'ok',
-});
-// Per-test override for startOnboarding (the agent-speaks-first kickoff).
-const startOnboardingCalls: string[] = [];
-let startOnboardingMock: (...args: unknown[]) => Promise<unknown> = async () => ({
-  status: 'started',
-});
 // v3: cancel/dequeue is server-authoritative — it returns `removed` so recall
 // knows whether it pulled back a still-queued entry (true) or the message had
 // already dispatched (false). Default: removed a live entry.
@@ -249,11 +239,6 @@ vi.mock('../hooks/useAgent', () => {
       return cancelMessageMock(...args);
     }),
     newSession: vi.fn(async () => undefined),
-    coldStartScan: vi.fn((...args: unknown[]) => coldStartScanMock(...args)),
-    startOnboarding: vi.fn((projectId: string) => {
-      startOnboardingCalls.push(projectId);
-      return startOnboardingMock(projectId);
-    }),
     getPending: vi.fn((projectId: string) => getPendingMock(projectId)),
     cancelPendingInput: vi.fn((...args: unknown[]) => {
       cancelPendingInputCalls.push(args);
@@ -369,9 +354,6 @@ beforeEach(() => {
   getPendingMock = async () => ({ holder: null, pending: [] });
   sessionAsksResponse = { asks: [] };
   cancelPendingInputMock = async () => ({ status: 'cancelled', removed: true });
-  coldStartScanMock = async () => ({ status: 'ok' });
-  startOnboardingCalls.length = 0;
-  startOnboardingMock = async () => ({ status: 'started' });
   runStatusHolder = null;
   runStatusTerminalEvent = null;
   pendingApprovalResponder = () => ({ pending: false });
@@ -1497,12 +1479,12 @@ describe('Spec 138: left-off cards in the empty chat', () => {
   });
 });
 
-// Spec 153: an imported project opens on the cards, never the scan offer, and
-// the private-notes card sits above the left-off cards.
+// Spec 153: an imported project opens on the cards, and the private-notes card
+// sits above the left-off cards. Spec 167: no project gets a scan offer.
 describe('Spec 153: imported project first screen', () => {
   const imported = { ...project, is_empty_workspace: false, imported: true, available_workers: ['claude-code', 'codex'] };
 
-  it('skips the cold-start card and shows the notes card above the left-off cards', async () => {
+  it('shows the notes card above the left-off cards', async () => {
     importedNotesResponse = { agent: 'claude-code', count: 145, folded: true, index_path: 'orbital/imported/claude-code/INDEX.md' };
     leftOffResponse = { last_time: { session_id: 'imp_codex_1', agent: 'codex', user_text: 'add a hide list', at: new Date().toISOString(), git: null }, unfinished: [] };
     await act(async () => {
@@ -1518,13 +1500,15 @@ describe('Spec 153: imported project first screen', () => {
     expect(card!.compareDocumentPosition(leftOff!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it('a project that was not imported keeps the cold-start card', async () => {
+  it('a new project on a folder with files opens on the empty chat: no Scan / Skip card', async () => {
     importedNotesResponse = { agent: 'claude-code', count: 145, folded: true, index_path: 'orbital/imported/claude-code/INDEX.md' };
     await act(async () => {
       root.render(<ChatView projectId="p1" project={{ ...project, is_empty_workspace: false }} agentStatus={'idle' as never} agents={[]} />);
     });
     await flushEffects();
-    expect([...container.querySelectorAll('button')].some((b) => /^skip$/i.test((b.textContent ?? '').trim()))).toBe(true);
+    const labels = [...container.querySelectorAll('button')].map((b) => (b.textContent ?? '').trim());
+    expect(labels.some((l) => /^(skip|scan)$/i.test(l))).toBe(false);
+    expect(container.textContent ?? '').toContain('No messages yet');
     expect(container.querySelector('[data-testid="private-notes-card"]')).toBeNull();
   });
 });
@@ -2875,48 +2859,8 @@ describe('credential-error surfacing (AgentErrorNotice)', () => {
     expect(notice!.textContent).toMatch(/API key/i);
   });
 
-  it('shows a classified inline error on the cold-start card when scan fails', async () => {
-    const { ApiError } = await import('../config');
-    coldStartScanMock = async () => {
-      throw new ApiError(
-        400,
-        JSON.stringify({
-          code: 'missing_api_key',
-          message: 'No LLM API key configured',
-        }),
-      );
-    };
-    await act(async () => {
-      root.render(
-        <ChatView
-          projectId="p1"
-          project={{ ...project, is_empty_workspace: false }}
-          agentStatus="idle"
-          agents={[]}
-        />,
-      );
-    });
-    await flushEffects();
-    const scanBtn = [...container.querySelectorAll('button')].find(
-      (b) => /scan/i.test(b.textContent ?? ''),
-    );
-    expect(scanBtn).toBeTruthy();
-    await act(async () => {
-      scanBtn!.click();
-    });
-    await flushEffects();
-    const err = container.querySelector('[data-testid="cold-start-error"]');
-    expect(err).not.toBeNull();
-    expect(err!.textContent).toMatch(/API key/i);
-  });
 });
 
-// --------------------------------------------------------------------------
-// Onboarding kickoff: the agent speaks first, but ONLY off a user action —
-// Skip on the scan card, or the project the user just created. Merely opening
-// a project stays pure navigation (the open-time auto-start removed in
-// 0722d5fa made agents with goals invent their own work).
-// --------------------------------------------------------------------------
 describe('Spec 107 FE-1: a freshly minted session id does not fetch history', () => {
   const SKELETON = '.animate-pulse.h-12';
   const chatFetchesFor = (sid: string) =>
@@ -2977,82 +2921,20 @@ describe('Spec 107 FE-1: a freshly minted session id does not fetch history', ()
   });
 });
 
-describe('ChatView: onboarding kickoff', () => {
-  async function renderProject(isEmpty: boolean) {
-    await act(async () => {
-      root.render(
-        <ChatView
-          projectId="p1"
-          project={{ ...project, is_empty_workspace: isEmpty }}
-          agentStatus="idle"
-          agents={[]}
-        />,
-      );
-    });
-    await flushEffects();
-  }
-
-  function skipButton() {
-    return [...container.querySelectorAll('button')].find(
-      (b) => /^skip$/i.test((b.textContent ?? '').trim()),
-    );
-  }
-
-  it('Skip on the scan card starts onboarding and dismisses the card', async () => {
-    await renderProject(false);
-    expect(startOnboardingCalls).toEqual([]);
-    await act(async () => {
-      skipButton()!.click();
-    });
-    await flushEffects();
-    expect(startOnboardingCalls).toEqual(['p1']);
-    expect(skipButton()).toBeUndefined();
-  });
-
-  it('opening a project never starts onboarding', async () => {
-    await renderProject(true);
-    await renderProject(false);
-    expect(startOnboardingCalls).toEqual([]);
-  });
-
-  it('a just-created project starts onboarding exactly once', async () => {
-    const { requestOnboardingKickoff } = await import('../utils/onboardingKickoff');
-    requestOnboardingKickoff('p1');
-    await renderProject(true);
-    expect(startOnboardingCalls).toEqual(['p1']);
-    // Re-rendering / revisiting the same project is inert: the mark was consumed.
-    await renderProject(true);
-    expect(startOnboardingCalls).toEqual(['p1']);
-  });
-
-  it('a failed kickoff shows the classified error in the empty state', async () => {
-    const { ApiError } = await import('../config');
-    startOnboardingMock = async () => {
-      throw new ApiError(
-        400,
-        JSON.stringify({ code: 'missing_api_key', message: 'No LLM API key configured' }),
-      );
-    };
-    await renderProject(false);
-    await act(async () => {
-      skipButton()!.click();
-    });
-    await flushEffects();
-    const err = container.querySelector('[data-testid="onboarding-error"]');
-    expect(err).not.toBeNull();
-    expect(err!.textContent).toMatch(/API key/i);
-  });
-
-  it("the backend's 409 guard is silent", async () => {
-    const { ApiError } = await import('../config');
-    startOnboardingMock = async () => {
-      throw new ApiError(409, 'project already has sessions');
-    };
-    await renderProject(false);
-    await act(async () => {
-      skipButton()!.click();
-    });
-    await flushEffects();
+// Spec 167: the user speaks first. Opening a project, empty or not, starts
+// nothing; the goals come from the first run's record turn.
+describe('Spec 167: work first', () => {
+  it('opening an empty or a non-empty project sends nothing and starts no agent', async () => {
+    for (const isEmpty of [true, false]) {
+      await act(async () => {
+        root.render(
+          <ChatView projectId="p1" project={{ ...project, is_empty_workspace: isEmpty }} agentStatus="idle" agents={[]} />,
+        );
+      });
+      await flushEffects();
+    }
+    expect(injectCalls).toEqual([]);
+    expect(startAgentCalls).toEqual([]);
     expect(container.querySelector('[data-testid="onboarding-error"]')).toBeNull();
   });
 });
@@ -4824,36 +4706,13 @@ describe('Keyless: the composer pin falls back to the project pin', () => {
   });
 });
 
-describe('Keyless: worker onboarding through the cold-start card', () => {
+describe('Keyless: the import scan on the pinned worker', () => {
   const keylessImported: Project = {
     ...project,
     is_empty_workspace: false,
     manager_ready: false,
     effective_pinned_target: 'codex',
   };
-  const button = (re: RegExp) =>
-    [...container.querySelectorAll('button')].find((b) => re.test(b.textContent ?? '')) as HTMLButtonElement;
-
-  it('the card stays visible in keyless mode, and a worker-run scan (runner=codex) is success', async () => {
-    coldStartScanMock = async () => ({ status: 'ok', session_id: 's_scan', session_uuid: 'u', runner: 'codex' });
-    await renderChat({ sessionId: undefined, agents: [{ slug: 'codex', name: 'Codex' }], project: keylessImported });
-    await flushEffects();
-    expect(button(/scan/i)).toBeTruthy();
-    await act(async () => { button(/scan/i).click(); });
-    await flushEffects();
-    expect(container.querySelector('[data-testid="cold-start-error"]')).toBeNull();
-  });
-
-  it('Skip runs the worker interview (runner=codex) with no error', async () => {
-    startOnboardingMock = async () => ({ status: 'ok', session_id: 's_int', session_uuid: 'u', runner: 'codex' });
-    await renderChat({ sessionId: undefined, agents: [{ slug: 'codex', name: 'Codex' }], project: keylessImported });
-    await flushEffects();
-    await act(async () => { button(/skip/i).click(); });
-    await flushEffects();
-    expect(startOnboardingCalls).toEqual(['p1']);
-    expect(container.querySelector('[data-testid="onboarding-error"]')).toBeNull();
-    expect(container.querySelector('[data-testid="cold-start-error"]')).toBeNull();
-  });
 
   it('the worker_onboarding row renders as a daemon divider, never a user bubble', async () => {
     chatInitialResponse = {

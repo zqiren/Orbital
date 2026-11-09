@@ -476,7 +476,7 @@ def _provider_currency(provider: str, model: str) -> str:
 def _workspace_is_empty(workspace: str) -> bool:
     """True if the workspace has no user content (ignoring Orbital's own scaffold
     — orbital/ and the AGENTS.md seeded at project creation — and dotfiles).
-    Used by the frontend to decide whether to offer a cold-start scan.
+    Reported on the project as ``is_empty_workspace``.
     """
     if not workspace or not os.path.isdir(workspace):
         return True
@@ -1588,44 +1588,10 @@ async def start_agent(req: StartAgentRequest):
     return {"status": "started"}
 
 
-@router.post("/agents/{project_id}/cold-start-scan", status_code=201)
-async def cold_start_scan(project_id: str):
-    """Mint the project's first session and start the agent in cold-start mode.
-
-    Runs the deterministic skeleton walk synchronously (so a walker failure
-    surfaces as an HTTP error), then starts a content-less loop whose prompt
-    drives the 3-stage scan. No user message is fabricated.
-
-    Keyless project (``manager_ready`` false): the effective pinned worker
-    runs the scan instead (``_worker_onboarding``); the body carries
-    ``runner`` either way ("orbital" on the manager path).
-    """
-    from agent_os.agent.workspace_scan import scan_workspace
-    project = _project_store.get_project(project_id)
-    if not project:
-        raise HTTPException(status_code=404, detail="project not found")
-    workspace = project.get("workspace", "")
-    if not workspace or not os.path.isdir(workspace):
-        raise HTTPException(status_code=400, detail="workspace missing")
-
-    skeleton = scan_workspace(workspace)
-    if not _agent_manager.manager_ready(project_id):
-        # Keyless project: the pinned worker runs the scan (contract §5).
-        if project_id in _ONBOARDING_STARTING:
-            raise HTTPException(status_code=409, detail="onboarding already starting")
-        _ONBOARDING_STARTING.add(project_id)
-        try:
-            return await _worker_onboarding(project_id, "scan", skeleton)
-        finally:
-            _ONBOARDING_STARTING.discard(project_id)
-    return await _start_manager_scan(project_id, skeleton, cold_start=True)
-
-
 async def _start_manager_scan(project_id: str, skeleton: str, *,
-                              cold_start, title: str | None = None) -> dict:
-    """The manager half of the cold-start scan: validate, mint, start a
-    content-less loop. ``cold_start`` picks the prompt flavour — ``True`` is
-    the card's propose → confirm → write; ``"guess"`` / ``"guess:<lang>"`` is spec
+                              flavour: str, title: str | None = None) -> dict:
+    """The manager half of the import scan: validate, mint, start a
+    content-less loop. ``flavour`` is ``"guess"`` / ``"guess:<lang>"``, spec
     160's read → write the guess → ask (``PromptContext.cold_start``)."""
     config = _agent_manager._build_agent_config_from_project(project_id)
     # Validate the provider BEFORE minting: a credential failure must surface
@@ -1643,7 +1609,7 @@ async def _start_manager_scan(project_id: str, skeleton: str, *,
             project_id, config,
             initial_message=None,
             session_id=session_id,
-            cold_start=cold_start,
+            cold_start=flavour,
             cold_start_skeleton=skeleton,
         )
     except ProviderConfigError as e:
@@ -1662,15 +1628,38 @@ async def _start_manager_scan(project_id: str, skeleton: str, *,
             "runner": "orbital"}
 
 
-async def post_scan_confirm(project_id: str, session_id: str) -> str | None:
-    """Spec 160 round 4: the scan wrote its guess; the DAEMON asks whether it
-    is right — an ask card (这样理解对吗？ · 对 | 需要改) through the asks write
+def _card_lang(project: dict) -> str:
+    """The confirm card's language: the import's UI language (spec 160);
+    for a project with none (spec 167: one created by hand), the interface
+    language the app last reported, when it is zh or en; else the system's."""
+    from agent_os.onboarding.import_scan import LANG_FIELD, LANGS, guess_lang
+    if project.get(LANG_FIELD) not in LANGS:
+        store = getattr(_agent_manager, "_settings_store", None)
+        try:
+            ui = (getattr(store.get(), "ui_language", None) or "") if store is not None else ""
+        except Exception:
+            ui = ""
+        ui = ui.split("-")[0].split("_")[0].lower()
+        if ui in LANGS:
+            return ui
+    return guess_lang(project)
+
+
+async def post_goals_confirm(project_id: str, session_id: str) -> str | None:
+    """Spec 160 round 4: the goals were drafted; the DAEMON asks whether they
+    are right — an ask card (这样理解对吗？ · 对 | 需要改) through the asks write
     path, plus the ``ask_opened`` row an agent-opened ask gets, so the
     composer and the Workbench show it. Returns the ask id.
 
     Round 5: when the scan recorded next steps (PROJECT_STATE's ``## Next
     steps``), the card lists them as its detail and offers step 1
-    (对，做第 1 步 | 对，先不做 | 需要改)."""
+    (对，做第 1 步 | 对，先不做 | 需要改).
+
+    Spec 167: one card, whoever created the goals file — the import scan
+    (``_run_one``), or the record turn of a project's first real run (the
+    manager loop's ``on_goals_created``, a pinned worker's memory turn). The
+    creator posts; a second post while the project's card is still open
+    returns None."""
     from agent_os.agent import asks
     from agent_os.agent.context import ask_card_row
     from agent_os.onboarding.import_scan import (
@@ -1679,7 +1668,7 @@ async def post_scan_confirm(project_id: str, session_id: str) -> str | None:
     project = _project_store.get_project(project_id)
     if not project:
         return None
-    lang = guess_lang(project)
+    lang = _card_lang(project)
     workspace = project.get("workspace", "")
     steps = await asyncio.to_thread(next_steps, workspace)
     if steps:
@@ -1692,6 +1681,14 @@ async def post_scan_confirm(project_id: str, session_id: str) -> str | None:
         text, detail = f"{question} options: {yes} | {no}", ""
         record = {"yes": yes, "change": no}
     orbital = ProjectPaths(workspace).orbital_dir
+    # Spec 167 §5.2: one card per project while it is open. The scan and a
+    # first run's record turn can both see the goals appear; open_ask's
+    # same-text check misses this card (its options are not its text).
+    rec = project.get(ASK_FIELD)
+    if isinstance(rec, dict) and rec.get("id"):
+        live = {a.id for a in await asyncio.to_thread(asks.read_asks, orbital) if a.is_open}
+        if rec["id"] in live:
+            return None
     opened = await asyncio.to_thread(asks.open_ask, orbital, text, detail=detail)
     if opened is None:
         return None  # the same question is already open in this project
@@ -1713,9 +1710,7 @@ async def post_scan_confirm(project_id: str, session_id: str) -> str | None:
 
 async def _record_scan_yes(project_id: str, req: "InjectRequest") -> dict:
     """The scan's confirm card answered with its yes option: the daemon
-    records the user's row and dispatches nothing — no run, no LLM call. The
-    row carries no ``source: user`` so the onboarding gate stays armed: the
-    user's NEXT real message is the go-ahead."""
+    records the user's row and dispatches nothing — no run, no LLM call."""
     user_msg: dict = {
         "role": "user",
         "content": req.content,
@@ -1762,49 +1757,24 @@ async def start_import_scan(project_id: str, runner: str = "orbital") -> str:
         if not _agent_manager.manager_ready(project_id):
             raise HTTPException(status_code=400, detail="manager has no key")
         started = await _start_manager_scan(project_id, skeleton,
-                                            cold_start=guess_flavour(project),
+                                            flavour=guess_flavour(project),
                                             title=scan_title(lang))
         return started["session_id"]
     workers = await asyncio.to_thread(_agent_manager.available_worker_slugs, project_id)
     started = await _worker_onboarding(
-        project_id, "scan", skeleton, guess_lang=lang,
+        project_id, skeleton, guess_lang=lang,
         # §5.4 keyless: "more than one agent" = two workers to switch between.
         multi_agent=len(workers) >= 2, title=scan_title(lang))
     return started["session_id"]
 
 
-# Projects with a start-onboarding request between its guard and its mint. The
-# guard reads the session list and the mint awaits, so without this a
-# double-fire would pass the guard twice and leave an orphan second session.
-_ONBOARDING_STARTING: set[str] = set()
-
-
-def _orbital_sessions(entries) -> list[dict]:
-    """The session-list entries that are real Orbital sessions.
-
-    The list also carries VIRTUAL entries for Claude Code / Codex
-    conversations found under the project folder that have not been imported
-    yet (``imported.materialized`` false). They are not sessions of this
-    project until opened, so they must not trip the onboarding guard — or
-    every project created on an existing agent folder would 409 there.
-    """
-    out = []
-    for entry in entries or []:
-        imported = entry.get("imported") if isinstance(entry, dict) else None
-        if isinstance(imported, dict) and imported.get("materialized") is False:
-            continue
-        out.append(entry)
-    return out
-
-
-async def _worker_onboarding(project_id: str, mode: str,
-                             skeleton: str | None = None, **scan_kwargs) -> dict:
-    """The keyless branch of start-onboarding / cold-start-scan (contract §5).
+async def _worker_onboarding(project_id: str, skeleton: str | None = None,
+                             **scan_kwargs) -> dict:
+    """The keyless branch of the import scan (contract §5).
 
     Orbital's own agent has no key here, so the project's effective pinned
-    worker runs the interview or the scan. No worker available → the typed
-    ``missing_api_key`` 400 the manager branch has always returned, and no
-    session is minted.
+    worker runs the scan. No worker available → the typed
+    ``missing_api_key`` 400, and no session is minted.
     """
     from agent_os.daemon_v2.worker_onboarding import (
         WorkerDispatchError, start_worker_onboarding,
@@ -1821,7 +1791,7 @@ async def _worker_onboarding(project_id: str, mode: str,
     try:
         return await start_worker_onboarding(
             _agent_manager, _sub_agent_manager, project_id, runner,
-            mode=mode, skeleton_text=skeleton, ws_manager=_ws_manager,
+            skeleton_text=skeleton, ws_manager=_ws_manager,
             **scan_kwargs,
         )
     except WorkerDispatchError as e:
@@ -1829,72 +1799,6 @@ async def _worker_onboarding(project_id: str, mode: str,
             "code": "worker_dispatch_failed", "message": str(e),
             "runner": runner, "session_id": e.session_id,
         })
-
-
-@router.post("/agents/{project_id}/start-onboarding", status_code=201)
-async def start_onboarding(project_id: str):
-    """Mint the project's first session and let the agent speak first.
-
-    A content-less start, like the cold-start scan minus the scan: with no
-    project_goals.md the prompt is in onboarding mode, so the run is a greeting
-    and clarifying questions with no tool calls. Called once by the frontend —
-    after creating a project on an empty folder, or after Skip on the scan
-    card.
-
-    The guard lives HERE, not in the caller: no goals, no sessions, not Quick
-    Tasks — else 409. A content-less start on a project that HAS goals is how
-    agents used to invent their own work on project open (removed in 0722d5fa);
-    a stale tab or a retry must not be able to bring that back.
-
-    Keyless project (``manager_ready`` false): same guards, then the
-    effective pinned worker runs the interview (``_worker_onboarding``).
-    """
-    project = _project_store.get_project(project_id)
-    if not project:
-        raise HTTPException(status_code=404, detail="project not found")
-    workspace = project.get("workspace", "")
-    if not workspace or not os.path.isdir(workspace):
-        raise HTTPException(status_code=400, detail="workspace missing")
-    if project.get("is_scratch"):
-        raise HTTPException(status_code=409, detail="not an onboarding project")
-    # Same "missing" test the prompt uses: an empty goals file is still onboarding.
-    if _read_file_or_empty(ProjectPaths(workspace).project_goals).strip():
-        raise HTTPException(status_code=409, detail="project already has goals")
-    if project_id in _ONBOARDING_STARTING:
-        raise HTTPException(status_code=409, detail="onboarding already starting")
-    await _ensure_seeded(project_id)
-    _ONBOARDING_STARTING.add(project_id)
-    try:
-        sessions = await asyncio.to_thread(_agent_manager.list_sessions, project_id)
-        if _orbital_sessions(sessions):
-            raise HTTPException(status_code=409, detail="project already has sessions")
-        if not _agent_manager.manager_ready(project_id):
-            # Keyless project: the pinned worker runs the interview.
-            return await _worker_onboarding(project_id, "interview")
-        config = _agent_manager._build_agent_config_from_project(project_id)
-        # Validate before minting, as the scan does: a credential failure is a
-        # structured 400 and leaves no orphan session behind.
-        try:
-            _agent_manager.validate_provider_config(config)
-        except ProviderConfigError as e:
-            raise HTTPException(status_code=400,
-                                detail={"code": e.code, "message": str(e)})
-        minted = await _agent_manager.new_session(project_id)
-        session_id = minted["session_id"]
-        try:
-            await _agent_manager.start_agent(
-                project_id, config,
-                initial_message=None,
-                session_id=session_id,
-            )
-        except ProviderConfigError as e:
-            raise HTTPException(status_code=400,
-                                detail={"code": e.code, "message": str(e)})
-    finally:
-        _ONBOARDING_STARTING.discard(project_id)
-    return {"status": "started", "session_id": session_id,
-            "session_uuid": minted.get("session_uuid", session_id),
-            "runner": "orbital"}
 
 
 # The session JSONL's advisory lock is held in short bursts by concurrent
@@ -1993,9 +1897,9 @@ async def inject_message(project_id: str, req: InjectRequest):
             # Spec 160 round 4/5: the import scan's confirm card.
             # * yes / not-now (or a bare 对 typed): the daemon alone, no run;
             # * do step 1: one run carrying an explicit approval of step 1
-            #   (hidden from the bubble; a real reply, so the gate opens);
-            # * needs-changes: one turn with the guard instruction folded
-            #   into this message only (the gate holds through it);
+            #   (hidden from the bubble);
+            # * needs-changes: one turn with the orbital-only instruction
+            #   folded into this message only;
             # * anything else typed: the user's own message, as is.
             lang = guess_lang(project)
             kind = classify_answer(scan_ask, req.ask_answer or req.content, lang)

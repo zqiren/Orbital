@@ -197,8 +197,8 @@ class ImportBody(BaseModel):
     # projects: they are created unstamped, exactly like pre-160 imports.
     import_scan: bool = True
     # Round 3: the wizard's import comes before its key step, so it stamps
-    # the projects but fires no trigger; the key step's Save does (its Skip
-    # turns them off: skip means skip).
+    # the projects but fires no trigger; the key step's Save does, and so
+    # does its Skip with the sign's switch on (spec 167; off turns them off).
     defer_scan: bool = False
 
 
