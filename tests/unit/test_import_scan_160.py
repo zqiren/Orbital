@@ -55,6 +55,8 @@ def _write_goals(ws, text="# Mission\nx\n"):
 
 
 def _imported(store, tmp_path, name, *, activity=None, state=PENDING, attempts=None):
+    """``attempts``: a pre-167 record's attempt counter (left on old records,
+    never read now)."""
     ws = tmp_path / f"ws-{name}"
     ws.mkdir()
     fields = {"name": name, "workspace": str(ws), "deferred_seed": True, "imported": True}
@@ -62,7 +64,7 @@ def _imported(store, tmp_path, name, *, activity=None, state=PENDING, attempts=N
         fields.update(import_scan.pending_fields(activity))
         fields[import_scan.STATE_FIELD] = state
     if attempts is not None:
-        fields[import_scan.ATTEMPTS_FIELD] = attempts
+        fields["import_scan_attempts"] = attempts
     return store.create_project(fields), ws
 
 
@@ -264,7 +266,9 @@ def test_goals_already_written_skips_the_scan(store, tmp_path):
     assert store.get_project(a)[import_scan.STATE_FIELD] == SKIPPED
 
 
-def test_failure_retries_once_on_the_next_trigger_then_stops(store, tmp_path):
+def test_failure_is_final_and_its_session_stays(store, tmp_path):
+    """Spec 167 §5.4: no retry on any later trigger, and the failed run's
+    session is kept — it is the record of the failure the user should see."""
     a, _ = _imported(store, tmp_path, "a")
 
     async def go():
@@ -274,20 +278,33 @@ def test_failure_retries_once_on_the_next_trigger_then_stops(store, tmp_path):
         await q.idle()
         p = store.get_project(a)
         assert p[import_scan.STATE_FIELD] == FAILED
-        assert p[import_scan.ATTEMPTS_FIELD] == 1
-        assert len(runner.started) == 1  # not retried inside the same trigger
-        assert runner.discarded == ["sess-%s-1" % a]
-        q.kick("default_card_changed")
-        await q.idle()
-        assert len(runner.started) == 2
-        assert store.get_project(a)[import_scan.ATTEMPTS_FIELD] == 2
-        q.kick("card_created")
+        assert "import_scan_attempts" not in p
+        assert runner.discarded == []
+        for reason in ("default_card_changed", "card_created", "card_updated",
+                       "legacy_key_saved", "key_skipped"):
+            q.kick(reason)
+            await q.idle()
+        q.resume()
         await q.idle()
         return runner
 
     runner = _run(go())
-    assert len(runner.started) == 2  # given up: today's first-use behaviour
+    assert len(runner.started) == 1
     assert store.get_project(a)[import_scan.STATE_FIELD] == FAILED
+
+
+def test_a_pre167_failed_record_with_a_retry_left_is_final_too(store, tmp_path):
+    a, _ = _imported(store, tmp_path, "a", state=FAILED, attempts=1)
+
+    async def go():
+        runner = FakeRunner(store)
+        q = ImportScanQueue(store, runner)
+        q.kick("card_created")
+        await q.idle()
+        return runner
+
+    assert _run(go()).started == []
+    assert unscanned_count(store) == 0
 
 
 def test_a_start_error_counts_as_a_failure(store, tmp_path):
@@ -301,7 +318,7 @@ def test_a_start_error_counts_as_a_failure(store, tmp_path):
 
     _run(go())
     p = store.get_project(a)
-    assert p[import_scan.STATE_FIELD] == FAILED and p[import_scan.ATTEMPTS_FIELD] == 1
+    assert p[import_scan.STATE_FIELD] == FAILED
 
 
 def test_resume_after_restart_picks_pending_and_crashed_running_but_not_failed(store, tmp_path):
@@ -485,15 +502,15 @@ def test_module_kick_is_a_noop_until_configured():
 
 def test_unscanned_count(store, tmp_path):
     _imported(store, tmp_path, "pend")
-    _imported(store, tmp_path, "retry", state=FAILED, attempts=1)
-    _imported(store, tmp_path, "gave_up", state=FAILED, attempts=2)
+    _imported(store, tmp_path, "deferred", state=import_scan.DEFERRED)
+    _imported(store, tmp_path, "failed", state=FAILED, attempts=1)
     _imported(store, tmp_path, "done", state=DONE)
     _imported(store, tmp_path, "running", state=RUNNING)
     _imported(store, tmp_path, "legacy", state=None)
     _, ws = _imported(store, tmp_path, "has_goals")
     _write_goals(ws)
-    # pending + the failed one with its retry left; running is being read
-    # already and spends nothing more on save.
+    # pending + the wizard's deferred one; failed is final (spec 167); running
+    # is being read already and spends nothing more on save.
     assert unscanned_count(store) == 2
     assert unscanned_count(None) == 0
 
@@ -523,8 +540,8 @@ def kicks(monkeypatch):
     seen: list[tuple[str, bool]] = []
 
     class Q:
-        def kick(self, reason, *, include_failed=True):
-            seen.append((reason, include_failed))
+        def kick(self, reason, *, include_deferred=True):
+            seen.append((reason, include_deferred))
 
     import_scan.configure(Q())
     yield seen
@@ -868,14 +885,13 @@ def test_settings_get_carries_the_scan_agent(store, tmp_path, monkeypatch):
     assert body["import_scan_agent"] == {"slug": "claude-code", "name": "Claude Code"}
 
 
-def test_wizard_skip_never_scans(tmp_path, monkeypatch, kicks):
-    """Skip means skip (2026-11-07 owner call): the wizard's "Skip for now"
-    on the key step neither starts the deferred wizard import's read with the
-    user's own agent nor fires a trigger. Those projects turn ``off`` (left
-    to the first-use Scan card); a sidebar import still waiting keeps its
-    stamp, since its own import is what the user consented to."""
+def test_wizard_skip_with_the_switch_on_reads_with_the_users_agent(tmp_path, monkeypatch, kicks):
+    """Spec 167 §5.4 (reversing "Skip means skip"): Skip skips Orbital's
+    key, not the read. With the sign's switch on, the deferred wizard imports
+    become ``pending`` (so a restart resumes them too) and the queue is kicked;
+    the runner pick then takes the pinned worker."""
     from agent_os.api.routes import settings as settings_routes
-    from agent_os.onboarding.import_scan import DEFERRED, OFF
+    from agent_os.onboarding.import_scan import DEFERRED
 
     client = _settings_app(tmp_path, monkeypatch)
     store = settings_routes._project_store
@@ -883,14 +899,27 @@ def test_wizard_skip_never_scans(tmp_path, monkeypatch, kicks):
     side, _ = _imported(store, tmp_path, "side", state=PENDING)
     client.put("/api/v2/settings", json={"sub_agents_hidden": []})
     assert kicks == []
-    r = client.put("/api/v2/settings", json={"setup_api_key_skipped": True})
+    r = client.put("/api/v2/settings", json={"setup_api_key_skipped": True, "import_scan": True})
     assert r.status_code == 200, r.text
+    assert [k for k, _ in kicks] == ["key_skipped"]
+    assert store.get_project(wiz)[import_scan.STATE_FIELD] == PENDING
+    assert store.get_project(side)[import_scan.STATE_FIELD] == PENDING
+
+
+def test_wizard_skip_with_the_switch_off_reads_nothing(tmp_path, monkeypatch, kicks):
+    from agent_os.api.routes import settings as settings_routes
+    from agent_os.onboarding.import_scan import DEFERRED, OFF
+
+    client = _settings_app(tmp_path, monkeypatch)
+    store = settings_routes._project_store
+    wiz, _ = _imported(store, tmp_path, "wiz", state=DEFERRED)
+    client.put("/api/v2/settings", json={"setup_api_key_skipped": True, "import_scan": False})
     assert kicks == []
     assert store.get_project(wiz)[import_scan.STATE_FIELD] == OFF
-    assert store.get_project(side)[import_scan.STATE_FIELD] == PENDING
-    # An older client's import_scan:true cannot turn Skip back into a scan.
+    # A Skip that carries no switch value (a client without the sign) never
+    # spends the user's quota: the user saw no sign.
     wiz2, _ = _imported(store, tmp_path, "wiz2", state=DEFERRED)
-    client.put("/api/v2/settings", json={"setup_api_key_skipped": True, "import_scan": True})
+    client.put("/api/v2/settings", json={"setup_api_key_skipped": True})
     assert kicks == []
     assert store.get_project(wiz2)[import_scan.STATE_FIELD] == OFF
 
@@ -1019,19 +1048,18 @@ def test_import_seeds_the_checked_map_empty_so_the_scan_reply_is_unread(tmp_path
 # ---------------------------------------------------------------------------
 
 
-def test_turn_off_waiting_covers_pending_and_retry_left_only(store, tmp_path):
+def test_turn_off_waiting_covers_pending_only(store, tmp_path):
     from agent_os.onboarding.import_scan import OFF, turn_off_waiting
 
     pend, _ = _imported(store, tmp_path, "pend")
-    retry, _ = _imported(store, tmp_path, "retry", state=FAILED, attempts=1)
-    gave_up, _ = _imported(store, tmp_path, "gave_up", state=FAILED, attempts=2)
+    failed, _ = _imported(store, tmp_path, "failed", state=FAILED, attempts=1)
     running, _ = _imported(store, tmp_path, "running", state=RUNNING)
     done, _ = _imported(store, tmp_path, "done", state=DONE)
     legacy, _ = _imported(store, tmp_path, "legacy", state=None)
-    assert sorted(turn_off_waiting(store)) == sorted([pend, retry])
+    assert sorted(turn_off_waiting(store)) == [pend]
     st = lambda p: store.get_project(p).get(import_scan.STATE_FIELD)
-    assert st(pend) == OFF and st(retry) == OFF
-    assert st(gave_up) == FAILED and st(running) == RUNNING and st(done) == DONE
+    assert st(pend) == OFF
+    assert st(failed) == FAILED and st(running) == RUNNING and st(done) == DONE
     assert st(legacy) is None
     assert unscanned_count(store) == 0
 
@@ -1126,7 +1154,7 @@ def test_card_save_and_skip_with_the_switch_off(tmp_path, monkeypatch, kicks):
     client.put("/api/v2/settings", json={"setup_api_key_skipped": True, "import_scan": False})
     assert store.get_project(c)[import_scan.STATE_FIELD] == OFF
     # The action's own trigger still fires; it simply finds nothing. (Skip
-    # is no trigger at all: skip means skip.)
+    # with the switch off fires none.)
     assert [k for k, _ in kicks] == ["card_created", "card_created", "card_updated"]
     # import_scan is never written onto the card.
     for call in settings_routes._settings_store.update_card.call_args_list:
@@ -1619,7 +1647,6 @@ def test_a_busy_start_goes_back_to_pending_without_an_attempt(store, tmp_path):
     _run(go())
     p = store.get_project(a)
     assert p[import_scan.STATE_FIELD] == PENDING
-    assert not p.get(import_scan.ATTEMPTS_FIELD)
 
 
 def test_the_retired_slot_refusal_is_an_ordinary_failure(store, tmp_path):
@@ -1635,4 +1662,4 @@ def test_the_retired_slot_refusal_is_an_ordinary_failure(store, tmp_path):
 
     _run(go())
     p = store.get_project(a)
-    assert p[import_scan.STATE_FIELD] == FAILED and p[import_scan.ATTEMPTS_FIELD] == 1
+    assert p[import_scan.STATE_FIELD] == FAILED

@@ -25,21 +25,24 @@ the manager writes its best guess at goals, ``PROJECT_STATE.md`` and
 * **Opt-out** (round 2): the sign's switch, per batch. Off on the sidebar
   import → those projects are never stamped (pre-160 behaviour). Off on a
   key Save → everything still waiting turns ``off``.
-* **Skip means skip** (2026-11-07 owner call, replacing round 2's "the
-  pinned worker reads them now"): the wizard's key-step Skip turns its
-  ``deferred`` imports ``off`` and fires no trigger; each project keeps its
-  first-use Scan card.
-* **Failure** (the run ends without goals, or the start fails): ``failed``,
-  retried once on the next trigger, then left to today's first-use
-  behaviour. A failed run's session is removed when nothing in it is the
-  user's or a real reply, so a provider error leaves no litter.
+* **Skip skips Orbital's key, not the read** (spec 167, replacing the
+  2026-11-07 "Skip means skip"): the wizard's key step shows the same sign
+  and switch beside Skip. Switch on, Skip stamps its ``deferred`` imports
+  ``pending`` and kicks the queue (the pinned worker reads them); switch
+  off, they turn ``off``. Either way a project with no goals gets them from
+  its first real run's record turn.
+* **Failure is final** (the run ends without goals, or the start fails):
+  ``failed``, never re-queued by any trigger or restart. The failed run's
+  session stays, an ordinary unfinished session showing its cause; the
+  project gets its goals the first time someone works in it. A ``running``
+  scan found at startup was interrupted, not failed, and is resumed once.
 * **Runner, chosen per run** (round 3): the manager when it has a key; else
   the project's effective pinned worker when one is ready, through the
   existing keyless path; else nobody, and the project stays ``pending``
   until a key or a worker arrives. The wizard imports before its key step,
   so its import is marked ``defer_scan`` and stamps without triggering: the
-  key step's Save is the trigger there (its Skip reads nothing). One queue, the same 2 slots,
-  for both runners.
+  key step's Save is the trigger there (its Skip too, with the switch on).
+  One queue, the same 2 slots, for both runners.
 * The scan session is titled 项目梳理 / Project overview (the import's UI
   language), set at mint like a rename: the user's first reply does not
   retitle it; a manual rename still does.
@@ -59,7 +62,6 @@ logger = logging.getLogger(__name__)
 
 STATE_FIELD = "import_scan"
 AT_FIELD = "import_scan_at"
-ATTEMPTS_FIELD = "import_scan_attempts"
 ACTIVITY_FIELD = "import_scan_activity"
 # The UI language at import (``zh`` | ``en``), for the guess reply.
 LANG_FIELD = "import_scan_lang"
@@ -77,13 +79,12 @@ SKIPPED = "skipped"
 # Round 2 opt-out: the user switched the sign off for the batch behind a
 # button. Terminal, like done: the queue never picks it, nothing re-arms it.
 OFF = "off"
-# Round 4: a wizard import (``defer_scan``) waits for the key step's Save
-# (its Skip turns it ``off``) — a daemon restart in between must not start it. Picked by a real
+# Round 4: a wizard import (``defer_scan``) waits for the key step's Save or
+# Skip (spec 167: Skip with the switch on stamps it ``pending``, off turns it
+# ``off``) — a daemon restart in between must not start it. Picked by a real
 # trigger, never by the startup resume.
 DEFERRED = "deferred"
 
-# One try plus the retry on the next trigger.
-MAX_ATTEMPTS = 2
 CONCURRENCY = 2
 
 
@@ -289,26 +290,23 @@ def has_goals(workspace: str) -> bool:
         return False
 
 
-def wants_scan(project: dict | None, *, include_failed: bool = True) -> bool:
+def wants_scan(project: dict | None, *, include_deferred: bool = True) -> bool:
     """Whether ``project``'s stamp still asks for a scan (goals aside).
-    ``include_failed=False`` is the startup resume: neither a failed project
-    (its retry waits for a trigger) nor a deferred wizard import."""
+    ``include_deferred=False`` is the startup resume: a deferred wizard
+    import waits for its key step. ``failed`` is final (spec 167)."""
     if not isinstance(project, dict) or project.get("is_scratch"):
         return False
     state = project.get(STATE_FIELD)
     if state in (PENDING, RUNNING):
         return True
     if state == DEFERRED:
-        return include_failed
-    if state == FAILED and include_failed:
-        return int(project.get(ATTEMPTS_FIELD) or 0) < MAX_ATTEMPTS
+        return include_deferred
     return False
 
 
 def turn_off_waiting(project_store) -> list[str]:
     """The sign's switch was off when the user pressed its button: every
-    project still waiting for its read (``pending``, or ``failed`` with the
-    retry left) becomes ``off`` in that same action, so the trigger the
+    project still waiting for its read (``pending`` or ``deferred``) becomes ``off`` in that same action, so the trigger the
     action fires finds nothing. A scan already ``running`` is left alone (the
     session's own stop handles it); queued-but-not-started ones are
     ``pending`` and so are covered. Returns the ids turned off."""
@@ -335,11 +333,23 @@ def turn_off_waiting(project_store) -> list[str]:
 
 
 def turn_off_deferred(project_store) -> list[str]:
-    """The wizard's key-step Skip: skip means skip (2026-11-07 owner call,
-    replacing round 2's "your agent reads them now"). Every wizard import
-    still ``deferred`` becomes ``off``, so nothing reads it until the user
-    presses the project's own first-use Scan. Other waiting projects (a
-    sidebar import) keep their stamp. Returns the ids turned off."""
+    """The wizard's key-step Skip with the sign's switch off: every wizard
+    import still ``deferred`` becomes ``off``; it gets its goals from its
+    first real run. Other waiting projects (a sidebar import) keep their
+    stamp. Returns the ids turned off."""
+    return _restamp_deferred(project_store, OFF, "key step skipped, %d project(s) not read")
+
+
+def stamp_deferred_pending(project_store) -> list[str]:
+    """The wizard's key-step Skip with the sign's switch on (spec 167): every
+    wizard import still ``deferred`` becomes ``pending``, for the pinned
+    worker to read (the caller kicks the queue; a restart resumes them).
+    Returns the ids stamped."""
+    return _restamp_deferred(project_store, PENDING,
+                             "key step skipped, %d project(s) to read with the user's agent")
+
+
+def _restamp_deferred(project_store, state: str, note: str) -> list[str]:
     if project_store is None:
         return []
     out = []
@@ -353,13 +363,12 @@ def turn_off_deferred(project_store) -> list[str]:
             continue
         pid = p.get("project_id")
         try:
-            project_store.update_project(pid, {STATE_FIELD: OFF, AT_FIELD: _now()})
+            project_store.update_project(pid, {STATE_FIELD: state, AT_FIELD: _now()})
             out.append(pid)
         except Exception:
-            logger.warning("import scan: could not turn off %s", pid, exc_info=True)
+            logger.warning("import scan: could not restamp %s", pid, exc_info=True)
     if out:
-        logger.info("import scan: key step skipped, %d project(s) not read: %s",
-                    len(out), ", ".join(out))
+        logger.info("import scan: " + note + ": %s", len(out), ", ".join(out))
     return out
 
 
@@ -405,7 +414,8 @@ class ImportScanQueue:
       project now (blocking: it may read the agent setup cache);
     * ``async start(pid, who) -> session_id`` — mint and start the scan;
     * ``async wait(pid, session_id, who)`` — return when that run has ended;
-    * ``async discard(pid, session_id)`` — drop a failed run's empty session;
+    * ``async discard(pid, session_id)`` — drop the noise-only session of a
+      run a restart abandoned (a failed run's session stays);
     * ``async confirm(pid, session_id)`` — post the confirm card (round 4).
     """
 
@@ -421,7 +431,7 @@ class ImportScanQueue:
 
     # -- triggers ------------------------------------------------------------
 
-    def kick(self, reason: str, *, include_failed: bool = True) -> None:
+    def kick(self, reason: str, *, include_deferred: bool = True) -> None:
         """Queue every stamped project that still wants a scan and make sure
         the pump runs. Sync; needs a running event loop (a route handler)."""
         try:
@@ -429,7 +439,7 @@ class ImportScanQueue:
         except RuntimeError:
             logger.debug("import scan: kick(%s) outside an event loop ignored", reason)
             return
-        added = self._collect(include_failed=include_failed)
+        added = self._collect(include_deferred=include_deferred)
         if added:
             logger.info("import scan: %s queued %d project(s): %s", reason,
                         len(added), ", ".join(added))
@@ -438,8 +448,9 @@ class ImportScanQueue:
 
     def resume(self) -> None:
         """Daemon start: carry on with projects already ``pending`` (or left
-        ``running`` by a crash). A ``failed`` one waits for a real trigger."""
-        self.kick("resume", include_failed=False)
+        ``running`` by a crash: interrupted, not failed). A ``deferred``
+        wizard import waits for its key step; ``failed`` is final."""
+        self.kick("resume", include_deferred=False)
 
     async def idle(self) -> None:
         """Return once nothing is queued or running (tests, shutdown)."""
@@ -451,7 +462,7 @@ class ImportScanQueue:
 
     # -- internals -----------------------------------------------------------
 
-    def _collect(self, *, include_failed: bool) -> list[str]:
+    def _collect(self, *, include_deferred: bool) -> list[str]:
         try:
             projects = list(self._store.list_projects())
         except Exception:
@@ -462,7 +473,7 @@ class ImportScanQueue:
         for pid, (_i, p) in order.items():
             if not pid or pid in self._inflight or pid in self._waiting:
                 continue
-            if not wants_scan(p, include_failed=include_failed):
+            if not wants_scan(p, include_deferred=include_deferred):
                 continue
             self._waiting.append(pid)
             added.append(pid)
@@ -495,11 +506,10 @@ class ImportScanQueue:
                            exc_info=True)
 
     def _fail(self, pid: str) -> None:
-        project = self._store.get_project(pid) or {}
-        attempts = int(project.get(ATTEMPTS_FIELD) or 0) + 1
-        self._mark(pid, FAILED, **{ATTEMPTS_FIELD: attempts})
-        if attempts >= MAX_ATTEMPTS:
-            logger.info("import scan: %s failed twice; first use takes over", pid)
+        """Final (spec 167): nothing re-queues it; the project gets its goals
+        from its first real run."""
+        self._mark(pid, FAILED)
+        logger.info("import scan: %s failed; its first real run drafts the goals", pid)
 
     async def _run_one(self, pid: str) -> None:
         try:
@@ -551,12 +561,9 @@ class ImportScanQueue:
                     logger.warning("import scan: could not post the confirm card for %s",
                                    pid, exc_info=True)
                 return
+            # Spec 167: the failed run's session stays — an ordinary
+            # unfinished session, showing why it stopped.
             self._fail(pid)
-            try:
-                await self._runner.discard(pid, session_id)
-            except Exception:
-                logger.warning("import scan: could not discard %s/%s", pid, session_id,
-                               exc_info=True)
         except Exception:
             logger.exception("import scan: %s crashed", pid)
         finally:
@@ -776,12 +783,12 @@ def get_queue():
     return _queue
 
 
-def kick(reason: str, *, include_failed: bool = True) -> None:
+def kick(reason: str, *, include_deferred: bool = True) -> None:
     """Fire a decidable trigger. A no-op until the app wires a queue (unit
     tests of the routes) and never raises into a route."""
     if _queue is None:
         return
     try:
-        _queue.kick(reason, include_failed=include_failed)
+        _queue.kick(reason, include_deferred=include_deferred)
     except Exception:
         logger.warning("import scan: kick(%s) failed", reason, exc_info=True)

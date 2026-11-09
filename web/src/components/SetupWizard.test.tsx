@@ -672,14 +672,20 @@ describe('SetupWizard — skip the key step', () => {
     expect(sign.textContent).toBe('3');
     expect(sign.nextElementSibling?.textContent).toBe('Next →');
     expect(screen.getAllByTestId('token-cost-sign')).toHaveLength(1);
+    // No worker ready: nothing beside Skip (it would read nothing).
+    expect(screen.getByTestId('wizard-skip-key').previousElementSibling).toBeNull();
     cleanup();
-    // Skip means skip: even with a worker ready, nothing beside Skip.
+    // Spec 167: with a worker ready, the worker sign sits beside Skip too.
     stubUnscanned.agent = 'Claude Code';
     mockApi({ apiKeySet: false });
     await renderAtKey();
-    await screen.findByTestId('token-cost-sign');
-    expect(screen.getAllByTestId('token-cost-sign')).toHaveLength(1);
-    expect(screen.getByTestId('wizard-skip-key').previousElementSibling).toBeNull();
+    await screen.findAllByTestId('token-cost-sign');
+    const signs = screen.getAllByTestId('token-cost-sign');
+    expect(signs).toHaveLength(2);
+    const beside = screen.getByTestId('wizard-skip-key').previousElementSibling as HTMLElement;
+    expect(beside?.getAttribute('data-testid')).toBe('token-cost-sign');
+    expect(beside.getAttribute('data-kind')).toBe('importAgent');
+    expect(beside.textContent).toBe('3');
     stubUnscanned.n = 0;
     stubUnscanned.agent = null;
   });
@@ -691,18 +697,33 @@ describe('SetupWizard — skip the key step', () => {
     fireEvent.click(screen.getByTestId('wizard-skip-key'));
     await waitFor(() => expect(screen.getByText('Connect Your Accounts')).toBeTruthy());
 
-    // [0] is the Agents step's hidden list.
-    expect(settingsPuts().slice(1)).toEqual([{ setup_api_key_skipped: true }]);
+    // [0] is the Agents step's hidden list. Nothing to read: no read.
+    expect(settingsPuts().slice(1)).toEqual([{ setup_api_key_skipped: true, import_scan: false }]);
   });
 
-  it('Skip means skip: with imports waiting and a worker ready, it sends only the skip flag', async () => {
+  it('Skip with imports waiting and a worker ready reads them with the switch on (spec 167)', async () => {
     stubUnscanned.n = 2;
     stubUnscanned.agent = 'Claude Code';
     mockApi({ apiKeySet: false });
     await renderAtKey();
     fireEvent.click(screen.getByTestId('wizard-skip-key'));
     await waitFor(() => expect(screen.getByText('Connect Your Accounts')).toBeTruthy());
-    expect(settingsPuts().slice(1)).toEqual([{ setup_api_key_skipped: true }]);
+    expect(settingsPuts().slice(1)).toEqual([{ setup_api_key_skipped: true, import_scan: true }]);
+    stubUnscanned.n = 0;
+    stubUnscanned.agent = null;
+  });
+
+  it('the switch in the sign beside Skip turns the read off', async () => {
+    stubUnscanned.n = 2;
+    stubUnscanned.agent = 'Claude Code';
+    mockApi({ apiKeySet: false });
+    await renderAtKey();
+    const beside = screen.getByTestId('wizard-skip-key').previousElementSibling as HTMLElement;
+    fireEvent.click(beside);
+    fireEvent.click(await screen.findByTestId('token-cost-switch'));
+    fireEvent.click(screen.getByTestId('wizard-skip-key'));
+    await waitFor(() => expect(screen.getByText('Connect Your Accounts')).toBeTruthy());
+    expect(settingsPuts().slice(1)).toEqual([{ setup_api_key_skipped: true, import_scan: false }]);
     stubUnscanned.n = 0;
     stubUnscanned.agent = null;
   });
