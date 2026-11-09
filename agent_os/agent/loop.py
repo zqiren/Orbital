@@ -200,10 +200,11 @@ _MEMORY_RECORD_BODY = (
     "\n"
     + MEMORY_SHAPE_RULES +
     "\n"
-    "Write only what you already know from this run. Do not tidy or trim anything,\n"
-    "do not reply to the user. Edit with the exact text below as old_text; to add\n"
-    "an entry to DECISIONS / LESSONS / INDEX, anchor on the last line shown. One or\n"
-    "two edits, then stop.\n"
+    "PROJECT_STATE.md must be true after this run: also fix or remove any line in\n"
+    "it that is no longer true. Do not tidy DECISIONS.md, LESSONS.md or INDEX.md.\n"
+    "Write only what you already know, and do not reply to the user. Edit with the\n"
+    "exact text below as old_text; to add an entry to DECISIONS / LESSONS / INDEX,\n"
+    "anchor on the last line shown. A few edits at most, then stop.\n"
     "If nothing durable happened, reply exactly: nothing to record\n"
 )
 
@@ -262,15 +263,30 @@ def _last_line(text: str | None) -> str:
     return "(the file is empty)"
 
 
+# 1109: spec 142 lets a user message go ahead of the record turn and leaves
+# that run unrecorded, for the next record turn to cover. The next ask says so.
+_UNRECORDED_RUN_LINE = (
+    "The previous run was not recorded (a new message came first): record what "
+    "is durable from it and from this run.")
+
+
 def build_memory_record_text(workspace: str, changed_files: list[str],
                              sub_agent_results: list[str], *,
-                             trigger: str = "run_end") -> str:
+                             trigger: str = "run_end",
+                             unrecorded_files: list[str] | None = None) -> str:
     """The ``[MEMORY]`` row (spec 112 A6). Fixed wording; only the changed-file
     line (omitted when none), the sub-agent line and the file excerpts are
     filled from facts. ``trigger`` picks the opening sentence (run end vs
-    before a compaction)."""
+    before a compaction). ``unrecorded_files`` (None = the previous run was
+    recorded) names a run whose record turn a user message skipped, and folds
+    its changed files into the file line."""
     lines = [_MEMORY_RECORD_OPENING.get(trigger, _MEMORY_RECORD_OPENING["run_end"])]
-    if changed_files:
+    if unrecorded_files is not None:
+        lines.append(_UNRECORDED_RUN_LINE)
+        merged = list(dict.fromkeys([*unrecorded_files, *changed_files]))
+        if merged:
+            lines.append("Files changed since the last record: " + ", ".join(merged))
+    elif changed_files:
         lines.append("Files this run changed: " + ", ".join(changed_files))
     lines.append("Sub-agent results received: "
                  + (", ".join(sub_agent_results) if sub_agent_results else "none"))
@@ -516,6 +532,10 @@ class AgentLoop:
         self._run_memory_written: bool = False
         self._memory_record_done: bool = False
         self._memory_record_active: bool = False
+        # 1109: the changed files of a run whose record turn a user message
+        # skipped (spec 142), for the next ask to cover; None = nothing owed.
+        # Lives across runs on purpose (never reset by a new segment).
+        self._unrecorded_files: list[str] | None = None
         # Spec 155: True while this loop's record turn holds the project's
         # record lock (released in that turn's ``finally``).
         self._record_lock_held: bool = False
@@ -2432,9 +2452,6 @@ class AgentLoop:
             return False
         if self._memory_record_done or self._memory_record_active:
             return False
-        # Spec 142: a held user message goes first. That run stays unrecorded.
-        if self._session.list_queued():
-            return False
         if self._run_memory_written:
             return False
         if getattr(self._session, "origin", None) == "memory":
@@ -2444,7 +2461,19 @@ class AgentLoop:
         base = getattr(self._context_manager, "_base_ctx", None)
         if base is None or getattr(base, "is_scratch", False):
             return False
-        return bool(getattr(base, "workspace", None))
+        if not getattr(base, "workspace", None):
+            return False
+        # Spec 142: a held user message goes first. That run stays unrecorded
+        # here; the next ask covers it (1109).
+        if self._session.list_queued():
+            self._owe_record(self._run_changed_files)
+            return False
+        return True
+
+    def _owe_record(self, files) -> None:
+        """Note that a run went unrecorded, so the next ask names it."""
+        owed = self._unrecorded_files or []
+        self._unrecorded_files = list(dict.fromkeys([*owed, *(files or [])]))
 
     def _read_open_asks(self) -> dict | None:
         """Open asks by id, or None without a workspace or on a read failure."""
@@ -2648,6 +2677,7 @@ class AgentLoop:
         lock_wait_ms = 0
         self._record_lock_held = False
         self._record_retried = False
+        carried = self._unrecorded_files
         try:
             # Spec 155 §5.1.2: take the project's record lock BEFORE the row
             # is built, so a second session's row is the file as the first
@@ -2674,7 +2704,7 @@ class AgentLoop:
             text = build_memory_record_text(
                 workspace, list(self._run_changed_files),
                 self._sub_agent_results_this_run(rows_at_run_start),
-                trigger=trigger,
+                trigger=trigger, unrecorded_files=carried,
             )
             self._note_record_row_seen(workspace)
             self._session.row_kind = MEMORY_RECORD_KIND
@@ -2684,6 +2714,7 @@ class AgentLoop:
                 "source": "daemon",
                 "_meta": {"event": "memory_record", "trigger": trigger},
             })
+            self._unrecorded_files = None  # the ask now names it
             while llm_calls < MEMORY_RECORD_MAX_LLM_CALLS:
                 if self._session.list_queued():
                     outcome = "yielded"
@@ -2785,6 +2816,11 @@ class AgentLoop:
             logger.warning("memory record turn failed", exc_info=True)
             outcome = "error"
         finally:
+            # 1109: a user message ended this turn before it recorded anything
+            # (lock wait, cancelled call, or a check between calls): the next
+            # ask covers this run, and anything it was already carrying.
+            if outcome in ("yielded", "cancelled") and not self._session.is_stopped():
+                self._owe_record([*(carried or []), *self._run_changed_files])
             # Release whenever the acquire completed, including a cancel that
             # landed after it (spec 155 §5.1.2 invariant).
             if lock is not None and self._record_lock_held:
