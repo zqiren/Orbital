@@ -937,6 +937,25 @@ async def _available_workers(project_id: str, project: dict) -> list[str]:
         return []
 
 
+async def _refuse_keyless_manager(project_id: str, agent: str | None) -> None:
+    """The send would go to Orbital (``agent`` ``"orbital"``, or omitted with
+    no worker pin to fall back on) and Orbital has no key here: the typed
+    ``missing_api_key`` 400 the onboarding routes raise, before any mint, so
+    no session is left holding a message nobody can answer."""
+    if _agent_manager is None:
+        return
+    target = agent or await asyncio.to_thread(
+        _agent_manager.effective_pinned_target, project_id) or "orbital"
+    if target != "orbital":
+        return
+    if await asyncio.to_thread(_agent_manager.manager_ready, project_id):
+        return
+    from agent_os.daemon_v2.provider_errors import ProviderConfigError
+    err = ProviderConfigError(
+        "missing_api_key", "No LLM API key configured for this project or globally")
+    raise HTTPException(status_code=400, detail={"code": err.code, "message": str(err)})
+
+
 class TaskRequest(BaseModel):
     text: str
     project_id: str | None = None
@@ -975,7 +994,8 @@ async def create_task(req: TaskRequest):
     ``"fallback"``. Every refusal comes before the mint, so it leaves no
     session: 422 empty text, 404 unknown or Workbench-excluded project (or
     nowhere to route), 400 an agent that is not available or an invalid
-    attachment, 502 routing failed after its retry (nothing sent — pass a
+    attachment, 400 ``{"code": "missing_api_key"}`` when the send would go
+    to Orbital and Orbital has no key here, 502 routing failed after its retry (nothing sent — pass a
     ``project_id``). An error from the inject itself (after the mint) is
     returned as the inject route answered it."""
     text = req.text.strip()
@@ -1000,6 +1020,7 @@ async def create_task(req: TaskRequest):
     if req.agent and req.agent != "orbital" and req.agent not in await _available_workers(pid, project):
         raise HTTPException(status_code=400,
                             detail=f"Agent {req.agent!r} is not available in this project")
+    await _refuse_keyless_manager(pid, req.agent)
     if req.attachments:
         from agent_os.api.routes._attachment_formatter import validate_attachments
         try:

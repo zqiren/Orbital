@@ -116,6 +116,9 @@ class FakeManager:
     # The pin switcher's list (``available_workers`` on the project row).
     workers = ["claude-code", "codex"]
 
+    def effective_pinned_target(self, project_id, *, ready=None):
+        return self.pinned.get(project_id)
+
     def available_worker_slugs(self, project_id, *, project=None):
         return list(self.workers)
 
@@ -363,15 +366,57 @@ async def test_null_project_id_routes_too(rig):
     assert r.json()["by"] == "model" and r.json()["project_id"] == "proj_app"
 
 
-async def test_keyless_lands_in_quick_tasks(rig):
-    client, _store, mgr, _ = rig(FakeManager(ready=False))
+async def test_keyless_lands_in_quick_tasks_on_its_pin(rig):
+    client, _store, mgr, subs = rig(FakeManager(ready=False, pinned={"proj_scratch": "codex"}))
     r = await _post(client, {"text": "anything"})
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["project_id"] == "proj_scratch"
     assert body["by"] == "fallback"
     assert body["reason"] == "no API key"
-    assert mgr.injected == [("proj_scratch", "anything", "s_1")]
+    assert body["agent"] == "codex"
+    (_pid, handle, message, _kw), = subs.sent
+    assert (handle, message) == ("codex", "anything")
+    assert mgr.injected == []
+
+
+# --------------------------------------------------------------------------
+# Keyless: a send that would go to Orbital is refused before the mint
+# --------------------------------------------------------------------------
+
+async def test_keyless_agent_orbital_400_missing_api_key_before_mint(rig):
+    client, _store, mgr, subs = rig(FakeManager(ready=False, pinned={"proj_app": "codex"}))
+    r = await _post(client, {"text": "PONG", "project_id": "proj_app", "agent": "orbital"})
+    assert r.status_code == 400, r.text
+    assert r.json()["detail"]["code"] == "missing_api_key"
+    assert mgr.log == []                                      # no session minted
+    assert subs.sent == []
+
+
+async def test_keyless_no_pin_400_missing_api_key_before_mint(rig):
+    # Every worker unchecked or unready: the pin would fall back to Orbital.
+    client, _store, mgr, subs = rig(FakeManager(ready=False))
+    r = await _post(client, {"text": "PONG", "project_id": "proj_app"})
+    assert r.status_code == 400, r.text
+    assert r.json()["detail"]["code"] == "missing_api_key"
+    assert mgr.log == []
+    assert subs.sent == []
+
+
+async def test_keyless_routed_to_quick_tasks_with_no_pin_400_before_mint(rig):
+    client, _store, mgr, _ = rig(FakeManager(ready=False))
+    r = await _post(client, {"text": "anything"})
+    assert r.status_code == 400, r.text
+    assert r.json()["detail"]["code"] == "missing_api_key"
+    assert [e[0] for e in mgr.log] == []
+
+
+async def test_keyless_named_worker_still_sends(rig):
+    client, _store, mgr, subs = rig(FakeManager(ready=False))
+    r = await _post(client, {"text": "PONG", "project_id": "proj_app", "agent": "codex"})
+    assert r.status_code == 200, r.text
+    (_pid, handle, _m, _kw), = subs.sent
+    assert handle == "codex"
 
 
 async def test_routing_failure_sends_nothing(rig):

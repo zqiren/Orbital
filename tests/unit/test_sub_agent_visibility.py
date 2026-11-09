@@ -86,3 +86,67 @@ def test_no_engine_no_lists_returns_empty():
         disabled_sub_agents=[],
         setup_engine=None,
     ) == []
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-09: one readiness test for "who can this project's work go to"
+# ---------------------------------------------------------------------------
+
+from agent_os.daemon_v2.sub_agent_visibility import worker_ready  # noqa: E402
+
+
+class _Full:
+    def __init__(self, slug, *, installed=True, dependencies_met=True,
+                 credentials_configured=True, update_needed=False, handshake=None):
+        self.slug = slug
+        self.installed = installed
+        self.dependencies_met = dependencies_met
+        self.credentials_configured = credentials_configured
+        self.update_needed = update_needed
+        self.handshake = handshake
+
+
+def test_worker_ready_is_the_dispatch_gate_test():
+    assert worker_ready(_Full("claude-code"))
+    assert not worker_ready(_Full("built-in"))
+    assert not worker_ready(_Full("codebuddy", credentials_configured=False))
+    assert not worker_ready(_Full("gemini-cli", installed=False))
+    assert not worker_ready(_Full("kimi", dependencies_met=False))
+    assert not worker_ready(_Full("codex", update_needed=True))
+    assert not worker_ready(_Full("dsh", handshake={"state": "failed", "detail": "x"}))
+    assert worker_ready(_Full("dsh", handshake={"state": "unknown"}))
+
+
+def _ready_engine():
+    return _Engine([_Full("claude-code"), _Full("codex"),
+                    _Full("codebuddy", credentials_configured=False),
+                    _Full("gemini-cli", credentials_configured=False),
+                    _Full("pi"), _Full("built-in")])
+
+
+def test_ready_only_drops_unready_workers_from_autodetect():
+    slugs = resolve_visible_sub_agent_slugs(
+        enabled_sub_agents=None, disabled_sub_agents=["pi"],
+        setup_engine=_ready_engine(), ready_only=True)
+    assert slugs == ["claude-code", "codex"]
+
+
+def test_ready_only_filters_an_explicit_allowlist_too():
+    slugs = resolve_visible_sub_agent_slugs(
+        enabled_sub_agents=["codex", "codebuddy"], disabled_sub_agents=[],
+        setup_engine=_ready_engine(), ready_only=True)
+    assert slugs == ["codex"]
+
+
+def test_ready_only_without_an_engine_keeps_the_list():
+    slugs = resolve_visible_sub_agent_slugs(
+        enabled_sub_agents=["codex", "codebuddy"], disabled_sub_agents=[],
+        setup_engine=None, ready_only=True)
+    assert slugs == ["codex", "codebuddy"]
+
+
+def test_default_still_lists_installed_but_unready():
+    # The orchestrator-prompt path keeps its old behaviour (not ready_only).
+    slugs = resolve_visible_sub_agent_slugs(
+        enabled_sub_agents=None, disabled_sub_agents=[], setup_engine=_ready_engine())
+    assert "codebuddy" in slugs and "gemini-cli" in slugs

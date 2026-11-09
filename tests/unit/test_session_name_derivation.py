@@ -175,3 +175,68 @@ def test_inline_skill_block_body_never_becomes_the_name():
 
 def test_skill_block_name_is_machine_derived():
     assert is_machine_derived_name('<use_skill name="task-planning" path="/w/…')
+
+
+# ---------------------------------------- bookkeeping rows never name (2026-11-09)
+#
+# A keyless interview or Scan card starts with a worker turn whose memory
+# reminder is a ``role: "user"`` bookkeeping row (``_kind: memory_record``).
+# It used to become the session's name ("[Orbital memory] Your last turn is
+# ending…"). Only the user's own row names a session.
+
+MEMORY_ROW = {"role": "user", "source": "daemon", "_kind": "memory_record",
+              "content": "[Orbital memory] Your last turn is ending. Record what matters."}
+
+
+def test_append_bookkeeping_user_row_does_not_name_the_session(tmp_path):
+    s = Session.new("proj_33334444", str(tmp_path))
+    s.append({"role": "system", "source": "daemon", "content": "onboarding",
+              "_meta": {"event": "worker_onboarding"}})
+    s.append(dict(MEMORY_ROW))
+    assert s.name is None
+    s.append({"role": "user", "content": "I run a bakery", "source": "user"})
+    assert s.name == "I run a bakery"
+    path = tmp_path / "orbital" / "sessions" / "proj_33334444.jsonl"
+    meta = [json.loads(line) for line in path.read_text().splitlines()
+            if json.loads(line).get("role") == "meta"]
+    assert [m.get("name") for m in meta if m.get("name")] == ["I run a bakery"]
+
+
+def test_load_backfill_skips_bookkeeping_user_rows(tmp_path):
+    d = tmp_path / "orbital" / "sessions"
+    d.mkdir(parents=True)
+    rows = [
+        {"role": "meta", "event": "session_start", "session_id": "proj_cccc3333",
+         "session_uuid": "proj_cccc3333", "origin": "chat",
+         "timestamp": "2026-11-09T00:00:00+00:00"},
+        dict(MEMORY_ROW),
+        {"role": "user", "content": "the real answer", "source": "user"},
+    ]
+    path = d / "proj_cccc3333.jsonl"
+    path.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+    assert Session.load(str(path)).name == "the real answer"
+
+
+def test_orbital_memory_stored_name_is_machine_derived():
+    assert is_machine_derived_name("[Orbital memory] Your last turn is ending…")
+    assert not is_machine_derived_name("Orbital memory notes")
+
+
+def test_load_heals_a_stored_orbital_memory_name(tmp_path):
+    # Sessions already misnamed on shipped keyless installs re-derive, read-only.
+    d = tmp_path / "orbital" / "sessions"
+    d.mkdir(parents=True)
+    rows = [
+        {"role": "meta", "event": "session_start", "session_id": "proj_dddd4444",
+         "session_uuid": "proj_dddd4444", "origin": "chat",
+         "name": "[Orbital memory] Your last turn is ending…",
+         "timestamp": "2026-11-09T00:00:00+00:00"},
+        dict(MEMORY_ROW),
+    ]
+    path = d / "proj_dddd4444.jsonl"
+    before = "\n".join(json.dumps(r) for r in rows) + "\n"
+    path.write_text(before)
+    assert Session.load(str(path)).name is None
+    from agent_os.daemon_v2 import session_index as si
+    assert si.derive_disk_entry(str(path), "proj_dddd4444")["name"] != rows[0]["name"]
+    assert path.read_text() == before          # nothing rewritten

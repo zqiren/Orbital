@@ -256,6 +256,12 @@ async def test_message_survives_raising_start(tmp_path):
     systems = [r for r in _rows(ws, SESSION_ID) if r.get("role") == "system"]
     assert len(systems) == 1
     assert "could not be started" in systems[0]["content"]
+    # The failure is the session's answer: it counts as unread (2026-11-09),
+    # so the Workbench hands its "Starting…" card over to a real one.
+    assert systems[0]["_meta"] == {"event": "start_failed"}
+    row = next(s for s in mgr.list_sessions("proj") if s["session_uuid"] == SESSION_ID)
+    assert row["last_reply_at"] is not None
+    assert row["last_reply_at"] >= row["last_user_at"]
     # 4. A classified error the UI can render.
     terminal = mgr.get_last_terminal_event("proj", session_id=SESSION_ID)
     assert terminal["type"] == "error"

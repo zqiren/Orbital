@@ -4771,6 +4771,15 @@ describe('Keyless: the composer pin falls back to the project pin', () => {
     }
   });
 
+  it('a worker unchecked for this project (disabled_sub_agents) is not in the pin menu', async () => {
+    await renderChat({ sessionId: 's_new', agents: CODEX, project: { ...keyless, disabled_sub_agents: ['claude-code'] } });
+    await flushEffects();
+    await act(async () => { pinTrigger().click(); });
+    const labels = Array.from(container.querySelectorAll('[role="option"]')).map((el) => el.textContent ?? '');
+    expect(labels.some((l) => l.includes('Codex'))).toBe(true);
+    expect(labels.some((l) => l.includes('Claude Code'))).toBe(false);
+  });
+
   it('keyless + pinned + empty chat: the hint names the agent under the composer', async () => {
     await renderChat({ sessionId: 's_new', agents: CODEX, project: keyless });
     await flushEffects();
@@ -5256,6 +5265,26 @@ describe('ChatView: the / skill picker (spec 132)', () => {
     await type('/');
     expect(optionNames()).toEqual(['automate']);
     expect(container.querySelector('[data-testid="skill-menu-empty"]')).toBeNull();
+  });
+
+  // Keyless (2026-11-09): no manager to run it, so `/automate` is not offered.
+  it('keyless: / does not list /automate; installed skills still show', async () => {
+    await renderChat({ sessionId: 's1', project: { ...project, manager_ready: false } });
+    await flushEffects();
+    await type('/');
+    expect(optionNames()).not.toContain('automate');
+    expect(optionNames()).toContain('Task Planning');
+  });
+
+  it('keyless with no skills installed: / opens no menu, and the text sends as typed', async () => {
+    skillCatalogResponse = [];
+    await renderChat({ sessionId: 's1', project: { ...project, manager_ready: false } });
+    await flushEffects();
+    await type('/automate');
+    expect(menu()).toBeNull();
+    await press('Enter');
+    expect(injectCalls).toHaveLength(1);
+    expect(injectCalls[0][1]).toBe('/automate');
   });
 
   it('/automate sits in the same flat list as installed skills, first, with no badge', async () => {

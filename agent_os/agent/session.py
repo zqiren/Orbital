@@ -20,6 +20,7 @@ import threading
 from datetime import datetime, timezone
 
 from agent_os.agent import blob_store
+from agent_os.daemon_v2.session_index import is_user_row
 from agent_os.agent.token_utils import estimate_message_tokens
 from agent_os.utils.file_lock import session_lock
 from agent_os.utils.text_io import read_text_lenient, read_text_lenient_raising
@@ -113,8 +114,10 @@ def is_machine_derived_name(name) -> bool:
     """
     if not isinstance(name, str):
         return False
+    # "[Orbital memory]": a worker's memory reminder (a bookkeeping row)
+    # named keyless interview and scan sessions before 2026-11-09.
     return (name.startswith("<attached_files>") or name.startswith("[QUEUE ITEM")
-            or name.startswith("<use_skill "))
+            or name.startswith("<use_skill ") or name.startswith("[Orbital memory]"))
 
 
 # Spec 078 §5.4: the composer appends a quotes block under this heading when
@@ -542,7 +545,7 @@ class Session:
                 session.name = stored_name
             else:
                 for m in session._messages:
-                    if m.get("role") == "user":
+                    if is_user_row(m):
                         derived = _derive_name(m.get("content"))
                         if derived is not None:
                             session.name = derived
@@ -604,8 +607,10 @@ class Session:
         # derived by truncation (see ``_derive_name``); it is stored on the
         # session_start meta record so it persists with the JSONL. Only the
         # first user message sets it — later messages and renames don't.
+        # Only the user's own row: a bookkeeping ``user`` row (a worker's
+        # [Orbital memory] reminder, the record turn's ask) is not a title.
         meta_fields: dict = {}
-        if self.name is None and message.get("role") == "user":
+        if self.name is None and is_user_row(message):
             derived = _derive_name(message.get("content"))
             if derived is not None:
                 self.name = derived
