@@ -764,6 +764,17 @@ class SetupEngine:
                 return status
         return None
 
+    def check_all_cached(self) -> list[AgentSetupStatus] | None:
+        """The last ``check_all`` sweep's statuses, stale or not — never
+        probes, never waits. A missing or expired result starts one
+        background sweep; None until a sweep has finished. For routes that
+        must answer at once (``GET /settings`` is also the desktop shell's
+        boot health check)."""
+        cached = self._check_all_cache
+        if cached is None or time.monotonic() >= cached[1]:
+            self._refresh_in_background()
+        return None if cached is None else cached[0]
+
     def last_auth_probe(self, slug: str) -> dict | None:
         """Structured outcome of the last auth probe for ``slug`` (spec 113):
         ``{exit_code, error_class, stderr_category, duration_ms}``, or None
