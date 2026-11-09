@@ -184,6 +184,10 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
   // Spec 167: the worker a keyless read would spend (product name), for the
   // sign beside Skip. null: no worker ready, so Skip reads nothing.
   const [scanAgent, setScanAgent] = useState<string | null>(null);
+  // Whether the key form's settings read has reported yet. Until it has,
+  // Skip cannot tell from state whether anything waits, so it reads the
+  // settings itself (a Skip clicked at once must not turn the read off).
+  const [scanKnown, setScanKnown] = useState(false);
   // Round 2 opt-out (per batch, never lasting), shared by the signs beside
   // Next and Skip: one batch, one switch.
   const [scanOn, setScanOn] = useState(true);
@@ -359,9 +363,20 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
     setSkipError(null);
     setNextError(null);
     try {
+      let reads = skipReads;
+      if (!scanKnown) {
+        // The form's own read has not landed: ask the daemon directly rather
+        // than guess "nothing waits" (import_scan:false is final for the
+        // wizard's imports).
+        const data = await api<{
+          unscanned_imports?: number;
+          import_scan_agent?: { slug: string; name: string } | null;
+        }>('/api/v2/settings');
+        reads = (data.unscanned_imports ?? 0) >= 1 && !!data.import_scan_agent;
+      }
       await api('/api/v2/settings', {
         method: 'PUT',
-        body: JSON.stringify({ setup_api_key_skipped: true, import_scan: skipReads && scanOn }),
+        body: JSON.stringify({ setup_api_key_skipped: true, import_scan: reads && scanOn }),
       });
       setStep('accounts');
     } catch {
@@ -369,7 +384,7 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
     } finally {
       setSkippingKey(false);
     }
-  }, [t, skipReads, scanOn]);
+  }, [t, skipReads, scanKnown, scanOn]);
 
   // Connector connect — the backend runs a BLOCKING loopback OAuth flow (up
   // to ~300 s while the user completes browser consent), so the card shows a
@@ -516,7 +531,7 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
               card={defaultCard}
               hideSaveButton
               saveRef={saveRef}
-              onUnscannedImports={(n, agent) => { setUnscannedImports(n); setScanAgent(agent); }}
+              onUnscannedImports={(n, agent) => { setUnscannedImports(n); setScanAgent(agent); setScanKnown(true); }}
               importScan={scanOn}
               providerPicker="cards"
               // One-click sign-in creates (or re-keys) a card on the daemon;

@@ -43,13 +43,16 @@ const MockApiError = vi.hoisted(() => {
   };
 });
 vi.mock('../config', () => ({ api: apiMock, ApiError: MockApiError }));
-const stubUnscanned = vi.hoisted(() => ({ n: 0, agent: null as string | null }));
+const stubUnscanned = vi.hoisted(() => ({ n: 0, agent: null as string | null, silent: false }));
 vi.mock('./LLMProviderSettings', async () => {
   const { useEffect } = await import('react');
   return {
     // Spec 160: the real form reports the unscanned-imports count it read.
     default: ({ onUnscannedImports }: { onUnscannedImports?: (n: number, agent: string | null) => void }) => {
-      useEffect(() => { onUnscannedImports?.(stubUnscanned.n, stubUnscanned.agent); }, [onUnscannedImports]);
+      useEffect(() => {
+        if (stubUnscanned.silent) return;
+        onUnscannedImports?.(stubUnscanned.n, stubUnscanned.agent);
+      }, [onUnscannedImports]);
       return <div data-testid="llm-provider-settings-stub" />;
     },
   };
@@ -123,6 +126,7 @@ const SOME_PROJECTS = {
 };
 
 interface MockRoutes {
+  settingsExtra?: Record<string, unknown>;
   apiKeySet?: boolean;
   hidden?: string[];
   /** PUT /api/v2/settings. Default resolves. */
@@ -149,7 +153,11 @@ function mockApi(routes: MockRoutes) {
       return routes.settingsPut ? routes.settingsPut(body) : {};
     }
     if (path === '/api/v2/settings') {
-      return { llm: { api_key_set: routes.apiKeySet ?? true }, sub_agents_hidden: routes.hidden ?? [] };
+      return {
+        llm: { api_key_set: routes.apiKeySet ?? true },
+        sub_agents_hidden: routes.hidden ?? [],
+        ...(routes.settingsExtra ?? {}),
+      };
     }
     if (path === '/api/v2/settings/sub-agents' || path === '/api/v2/settings/sub-agents/refresh') {
       return routes.agents ?? AGENTS;
@@ -726,6 +734,32 @@ describe('SetupWizard — skip the key step', () => {
     expect(settingsPuts().slice(1)).toEqual([{ setup_api_key_skipped: true, import_scan: false }]);
     stubUnscanned.n = 0;
     stubUnscanned.agent = null;
+  });
+
+  it('Skip before the key form has reported still reads with the switch on (the sign inputs come from the settings read)', async () => {
+    // The race: the form's own GET /settings has not landed when Skip is
+    // clicked, so the wizard knows no count and no worker yet. It must not
+    // send import_scan:false (which turns every waiting import off for good).
+    stubUnscanned.silent = true;
+    mockApi({
+      apiKeySet: false,
+      settingsExtra: { unscanned_imports: 2, import_scan_agent: { slug: 'claude-code', name: 'Claude Code' } },
+    });
+    await renderAtKey();
+    fireEvent.click(screen.getByTestId('wizard-skip-key'));
+    await waitFor(() => expect(screen.getByText('Connect Your Accounts')).toBeTruthy());
+    expect(settingsPuts().slice(1)).toEqual([{ setup_api_key_skipped: true, import_scan: true }]);
+    stubUnscanned.silent = false;
+  });
+
+  it('Skip before the key form has reported, with nothing to read, sends import_scan:false', async () => {
+    stubUnscanned.silent = true;
+    mockApi({ apiKeySet: false, settingsExtra: { unscanned_imports: 0, import_scan_agent: null } });
+    await renderAtKey();
+    fireEvent.click(screen.getByTestId('wizard-skip-key'));
+    await waitFor(() => expect(screen.getByText('Connect Your Accounts')).toBeTruthy());
+    expect(settingsPuts().slice(1)).toEqual([{ setup_api_key_skipped: true, import_scan: false }]);
+    stubUnscanned.silent = false;
   });
 
   it('a failed Skip shows an error line and stays on the key step', async () => {
