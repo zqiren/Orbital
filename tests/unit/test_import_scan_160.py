@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from pathlib import PurePath
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -712,7 +713,8 @@ def test_guess_scan_writes_first_then_asks(tmp_path, en_locale):
     i_index = flat.index("orbital/INDEX.md")
     i_goals = flat.index("project_goals.md")
     assert i_state < i_index < i_goals
-    assert f"{tmp_path}/orbital/instructions/project_goals.md" in text
+    # The path as the prompt renders it (forward slashes on Windows too).
+    assert f"{PurePath(str(tmp_path)).as_posix()}/orbital/instructions/project_goals.md" in text
     # Round 4: no closing question — the daemon posts the confirm card.
     # Round 5: the summary ends with 1-3 numbered next steps, the same ones
     # recorded under PROJECT_STATE's "## Next steps" (the card reads them
@@ -1467,9 +1469,17 @@ def test_next_steps_reads_the_state_files_section(tmp_path):
         assert next_steps(str(tmp_path)) == ["续写第二篇", "动笔《散步》"], heading
     # Nothing clearly next: no section, or only a placeholder.
     for body in ("# S\n\n## Current focus\n- x\n", "# S\n\n## Next steps\n- (none yet)\n",
-                 "# S\n\n## Next steps\n- 无\n"):
+                 "# S\n\n## Next steps\n- 无\n",
+                 # Spec 167: the record turn's own "nothing is next" lines.
+                 "# S\n\n## Next steps\n- None pending; awaiting the user's next instruction.\n",
+                 "# S\n\n## Next steps\n- Nothing yet\n",
+                 "# S\n\n## Next steps\n- 暂无。\n"):
         (orb / "PROJECT_STATE.md").write_text(body, encoding="utf-8")
         assert next_steps(str(tmp_path)) == [], body
+    # A real step that merely starts with those letters is kept.
+    (orb / "PROJECT_STATE.md").write_text(
+        "# S\n\n## Next steps\n- Nonetheless publish 0.4.0\n- 无锁队列改为有锁\n", encoding="utf-8")
+    assert next_steps(str(tmp_path)) == ["Nonetheless publish 0.4.0", "无锁队列改为有锁"]
 
 
 def test_the_card_with_steps_offers_step_one(tmp_path):

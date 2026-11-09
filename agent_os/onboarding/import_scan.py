@@ -172,7 +172,12 @@ def picked_step_block(lang: str, step: str) -> str:
 _STEPS_HEADING_RE = re.compile(r"^#{2,6}\s+.*(next\s+steps?|下一步)", re.IGNORECASE)
 _HEADING_RE = re.compile(r"^#{1,6}\s")
 _ITEM_RE = re.compile(r"^(?:[-*+]|\d+[.)])\s+(.*\S)")
-_PLACEHOLDER_RE = re.compile(r"^[(（].*[)）]$|^(none|无|暂无|n/a)[.。]?$", re.IGNORECASE)
+# A bracketed note, or an item that opens with "none" / "nothing" / "n/a" /
+# "无" / "暂无" / "没有" ("None pending; awaiting the user's next instruction." is
+# the record turn's way of saying nothing is next; it must not become step 1).
+_PLACEHOLDER_RE = re.compile(
+    r"^[(（].*[)）]$|^(none|nothing|n/a)(?![a-z])|^(无|暂无|没有)(?:[\s.。,，;；:：]|$)",
+    re.IGNORECASE)
 
 
 def next_steps(workspace: str) -> list[str]:
