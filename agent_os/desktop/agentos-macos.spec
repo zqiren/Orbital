@@ -34,7 +34,8 @@ a = Analysis(
     datas=[
         (os.path.join(project_root, 'agent_os', 'agents', 'manifests'), 'agent_os/agents/manifests'),
         # Per-agent assets: dsh's per-spawn patch template (read in place by
-        # the renderer) and whatever the on-demand installer stages.
+        # the renderer), Pi's dispatch extension (passed to pi with -e) and
+        # whatever the on-demand installer stages.
         (os.path.join(project_root, 'agent_os', 'agents', 'assets'), 'agent_os/agents/assets'),
         (os.path.join(project_root, 'agent_os', 'config'), 'agent_os/config'),
         (os.path.join(project_root, 'agent_os', 'default_skills'), 'agent_os/default_skills'),

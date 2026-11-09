@@ -36,6 +36,18 @@
 # Sandbox: none of its own; pi runs with the user's permissions
 #   (docs/security.md). Transport-backed agents spawn outside Orbital's
 #   profile, so no network_domains are claimed.
+# Dispatch (spec 161; probed 2026-11-09, pi 1.5.0): pi >= 0.99 has a built-in
+#   MCP client, and an extension can add a server for one session
+#   (pi.registerMcpServer). The seat-holder is spawned with
+#   `-e <agent_os/agents/assets/pi/orbital-dispatch.ts>`; `-e` loads under
+#   --no-approve. A missing or throwing -e extension makes pi exit 1 at
+#   startup, so the file never throws and is only passed when bundled. While
+#   binding extensions (before get_state answers) pi wrote the extension's
+#   setStatus record, and with --no-mcp an extension_error
+#   (event register_mcp_server). The tool reaches the model as
+#   mcp__orbital__dispatch (exposure "direct"). Deleting the token from
+#   process.env in the extension hid it from pi's bash. pi sends
+#   x-opencode-session itself (opencode-go works with OPENCODE_API_KEY).
 # -----------------------------------------------------------------------
 
 manifest_version: "1"

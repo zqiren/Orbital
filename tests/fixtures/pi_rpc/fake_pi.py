@@ -24,6 +24,9 @@ FAKE_PI_REFUSE_PATHS      exit 1 for ``--session <file>`` / ``--fork <file>``
 opens that file: its header id is the session, the file is the sessionFile.
 ``--fork <file>`` copies it into a new session in ``--session-dir``.
 FAKE_PI_SCENARIO          JSONL replayed for every prompt
+FAKE_PI_STARTUP_RECORDS   JSONL written once before any command is read
+                          (what real pi emits while its extensions bind:
+                          setStatus requests, extension_error records)
 
 Scenario directives (lines that are not protocol records):
 {"__sleep__": s}            pause
@@ -196,6 +199,13 @@ def main() -> int:
             sys.stderr.write(f"No session found matching '{requested}'\n")
             sys.stderr.flush()
             return 1
+
+    startup = os.environ.get("FAKE_PI_STARTUP_RECORDS")
+    if startup:
+        with open(startup, encoding="utf-8") as f:
+            for line in f:
+                if line.strip():
+                    emit(json.loads(line))
 
     commands: "queue.Queue" = queue.Queue()
     threading.Thread(target=_read_stdin, args=(commands,), daemon=True).start()

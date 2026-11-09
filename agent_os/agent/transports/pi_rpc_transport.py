@@ -32,6 +32,16 @@ _proc (psutil), _resume_session_id, resume_outcome.
 Pi has no sandbox and no permission prompts of its own. ``--no-approve`` (in
 the manifest args) only keeps untrusted project-local Pi resources from
 loading; the process runs with the user's permissions.
+
+Spec 161: a Pi at the top of its session gets the daemon's ``dispatch`` tool
+through Pi's own MCP client (pi >= 0.99). Orbital's one-file extension
+(``agent_os/agents/assets/pi/orbital-dispatch.ts``) is passed with ``-e`` and
+registers the ``orbital`` HTTP server for that session; the URL and the
+bearer token ride in the spawn env, and the extension deletes both from Pi's
+env before any tool runs. ``dispatch_mounted`` is true only when the
+extension's status record said ``mounted`` and no ``extension_error`` came
+from that file; pi writes both while binding extensions, before it answers
+``get_state`` [OBSERVED pi 1.5.0, 2026-11-09].
 """
 
 from __future__ import annotations
@@ -74,6 +84,20 @@ _DIALOG_METHODS = frozenset({"select", "confirm", "input", "editor"})
 _STDERR_TAIL_LINES = 20
 _KEY_LIKE = re.compile(r"\bsk-[A-Za-z0-9_\-]{8,}")
 _SEND_TIMEOUT_SECONDS = 600.0
+
+# Spec 161. The names the extension reads; the token name is the one the
+# daemon mints for (dispatch_tools.TOKEN_ENV, asserted equal in the tests).
+DISPATCH_EXTENSION = "orbital-dispatch.ts"
+DISPATCH_URL_ENV = "ORBITAL_DISPATCH_URL"
+DISPATCH_TOKEN_ENV = "ORBITAL_DISPATCH_TOKEN"
+DISPATCH_STATUS_KEY = "orbital-dispatch"
+
+
+def dispatch_extension_path() -> str | None:
+    """The bundled extension that mounts the dispatch endpoint, or None when
+    this build does not carry it (pi exits at startup on a missing ``-e``)."""
+    from agent_os.agents.installer import bundled_asset_path
+    return bundled_asset_path("pi", DISPATCH_EXTENSION)
 
 
 class PiProtocolError(Exception):
@@ -162,6 +186,7 @@ class PiRPCTransport(AgentTransport):
     def __init__(self, system_prompt: str | None = None,
                  resume_record: dict | None = None,
                  session_dir: str | None = None, *,
+                 dispatch_mcp: dict | None = None,
                  command_timeout: float = 30.0,
                  abort_timeout: float = 5.0,
                  max_line_bytes: int = DEFAULT_MAX_LINE_BYTES,
@@ -210,6 +235,12 @@ class PiRPCTransport(AgentTransport):
         self._text_parts: dict[int, str] = {}
         self._texts_emitted: set[int] = set()
         self._final_texts: list[str] = []
+        # Spec 161: ``{"url", "token"}`` when this worker holds the seat.
+        self.dispatch_mcp: dict | None = dispatch_mcp
+        self.dispatch_mounted = False
+        self._dispatch_extension: str | None = None
+        self._dispatch_status: str | None = None
+        self._dispatch_failed = False
 
     # ------------------------------------------------------------------
     # turn bookkeeping
@@ -276,6 +307,16 @@ class PiRPCTransport(AgentTransport):
         if rtype == "extension_ui_request":
             await self._on_extension_ui_request(record)
             return
+        if rtype == "extension_error":
+            # Startup errors arrive before any turn (pi binds extensions
+            # first), so this is routed whether or not a turn is open.
+            logger.warning("PiRPCTransport: pi extension %s failed (%s): %s",
+                           record.get("extensionPath"), record.get("event"),
+                           record.get("error"))
+            if (self._dispatch_extension is not None
+                    and record.get("extensionPath") == self._dispatch_extension):
+                self._dispatch_failed = True
+            return
         if not self._turn_open:
             logger.debug("PiRPCTransport: %s outside a turn", rtype)
             return
@@ -295,9 +336,6 @@ class PiRPCTransport(AgentTransport):
             if not record.get("success"):
                 self._turn_error = str(
                     record.get("finalError") or "pi's automatic retry failed")
-        elif rtype == "extension_error":
-            logger.warning("PiRPCTransport: pi extension %s failed: %s",
-                           record.get("extensionPath"), record.get("error"))
         elif rtype == "agent_settled":
             await self._on_settled()
         # agent_start, agent_end, turn_start/turn_end, tool_execution_update,
@@ -380,6 +418,10 @@ class PiRPCTransport(AgentTransport):
             await self._close_turn("success")
 
     async def _on_extension_ui_request(self, record: dict) -> None:
+        if (record.get("method") == "setStatus"
+                and record.get("statusKey") == DISPATCH_STATUS_KEY):
+            self._dispatch_status = str(record.get("statusText") or "")
+            return
         if record.get("method") not in _DIALOG_METHODS:
             return  # notify/setStatus/...: fire-and-forget, nothing to answer
         # pi blocks on an extension dialog until it is answered, and Orbital
@@ -506,6 +548,7 @@ class PiRPCTransport(AgentTransport):
         argv = [command, *args]
         if self._session_dir:
             argv += ["--session-dir", self._session_dir]
+        argv += self._dispatch_args(merged_env)
         try:
             self._prompt_file = self._write_prompt_file()
             if self._prompt_file:
@@ -518,6 +561,14 @@ class PiRPCTransport(AgentTransport):
             await self.stop()
             raise
         self._session_file = state.get("sessionFile")
+        self.dispatch_mounted = bool(
+            self._dispatch_extension and self._dispatch_status == "mounted"
+            and not self._dispatch_failed)
+        if self._dispatch_extension and not self.dispatch_mounted:
+            logger.warning(
+                "PiRPCTransport: the dispatch tool is not mounted (status=%r, "
+                "extension error=%s); pi >= 0.99 with its built-in MCP is needed",
+                self._dispatch_status, self._dispatch_failed)
         model = state.get("model") or {}
         self._provider = model.get("provider")
         model_id = model.get("id")
@@ -532,6 +583,24 @@ class PiRPCTransport(AgentTransport):
             "resume_status": self._resume_outcome[0],
             "resume_reason": self._resume_outcome[1],
         }))
+
+    def _dispatch_args(self, env: dict) -> list[str]:
+        """``-e <extension>`` for the seat-holder, with the URL and token put
+        in ``env``; nothing below the seat or when the build lacks the file."""
+        cfg = self.dispatch_mcp
+        if not cfg or not cfg.get("url") or not cfg.get("token"):
+            return []
+        path = dispatch_extension_path()
+        if path is None:
+            logger.warning("PiRPCTransport: %s is missing from this build; "
+                           "the dispatch tool is not mounted", DISPATCH_EXTENSION)
+            return []
+        self._dispatch_extension = path
+        env[DISPATCH_URL_ENV] = cfg["url"]
+        env[DISPATCH_TOKEN_ENV] = cfg["token"]
+        # ORBITAL_* values are not redacted by default; this one is a secret.
+        self._secrets.append(cfg["token"])
+        return ["-e", path]
 
     async def _open_session(self, argv: list[str], env: dict) -> dict:
         """Spawn pi, resuming the recorded session when pi confirms it.
@@ -601,6 +670,10 @@ class PiRPCTransport(AgentTransport):
 
     async def _spawn(self, argv: list[str], env: dict) -> dict:
         self._stderr_tail.clear()
+        # Each process reports its own extension outcome (a resume restart
+        # spawns again).
+        self._dispatch_status = None
+        self._dispatch_failed = False
         popen = await asyncio.create_subprocess_exec(
             *argv,
             stdin=asyncio.subprocess.PIPE,
