@@ -276,6 +276,41 @@ async def test_message_survives_raising_start(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_idle_loop_inject_that_cannot_resume_gets_the_failure_row(tmp_path):
+    """Case 2 (a live, idle handle): the user row is appended and the resume
+    raises (a keyless Orbital session, missing_api_key). The session must
+    carry the same start_failed row the fresh-start path writes, so the
+    message is not left looking unanswered after a reload."""
+    from agent_os.daemon_v2.agent_manager import ProjectHandle
+    from agent_os.daemon_v2.models import make_session_key
+    ws = str(tmp_path)
+    mgr = _manager(ws)
+    session = Session.new(SESSION_ID, ws)
+    persist_user_row(session, "an earlier turn")
+    mgr._handles[make_session_key("proj", SESSION_ID)] = ProjectHandle(
+        session=session, loop=MagicMock(), provider=MagicMock(), registry=MagicMock(),
+        context_manager=MagicMock(), interceptor=None, task=None,
+    )
+
+    async def refuse(project_id, *, session_id=None, **kwargs):
+        raise ProviderConfigError("missing_api_key", "No LLM API key configured")
+    mgr._start_loop = refuse
+
+    with pytest.raises(ProviderConfigError):
+        await mgr.inject_message("proj", "Say hi", nonce="n-hi", session_id=SESSION_ID)
+
+    users = _user_rows(ws, SESSION_ID)
+    assert [r["content"] for r in users] == ["an earlier turn", "Say hi"]
+    systems = [r for r in _rows(ws, SESSION_ID) if r.get("role") == "system"]
+    assert len(systems) == 1
+    assert "could not be started" in systems[0]["content"]
+    assert systems[0]["_meta"] == {"event": "start_failed"}
+    terminal = mgr.get_last_terminal_event("proj", session_id=SESSION_ID)
+    assert terminal["type"] == "error"
+    assert terminal["error_code"] == "missing_api_key"
+
+
+@pytest.mark.asyncio
 async def test_message_survives_cancelled_start(tmp_path):
     """The supersede route: the start is cancelled before the loop can run.
     Identical outcome — content preserved, failure surfaced with a non-empty

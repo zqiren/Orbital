@@ -3515,7 +3515,15 @@ class AgentManager:
         if nonce:
             user_msg["nonce"] = nonce
         handle.session.append(user_msg)
-        await self._start_loop(project_id, session_id=session_id)
+        try:
+            await self._start_loop(project_id, session_id=session_id)
+        except BaseException as exc:
+            # The row is on disk already: say in the session why no turn
+            # followed it, as the fresh-start path does (a keyless Orbital
+            # session refused for missing_api_key otherwise shows an
+            # unanswered message after a reload). Always re-raised.
+            self._record_start_failure(project_id, session_id, handle.session, exc)
+            raise
         return "delivered"
 
     def is_running(self, project_id: str, *,
