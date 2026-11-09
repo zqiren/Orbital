@@ -12,6 +12,7 @@ import {
   fetchAgentAvailability,
   settleInstalledAgents,
   useInstalledAgents,
+  projectAgents,
 } from './hooks/useAgentAvailability';
 import { useWebSocket, type ConnectionState } from './hooks/useWebSocket';
 import { bumpPricingVersion } from './budget/pricingVersion';
@@ -903,7 +904,7 @@ export default function App() {
                     key={`queue-${selectedProject.project_id}`}
                     projectId={selectedProject.project_id}
                     project={selectedProject}
-                    agents={agentsAvailable ?? []}
+                    agents={projectAgents(agentsAvailable ?? [], selectedProject)}
                   />
                 ),
                 settings: (

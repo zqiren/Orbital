@@ -352,3 +352,39 @@ async def test_pi_without_the_mount_loses_the_token_and_the_line(tmp_path):
     assert mgr._dispatch_tokens == {}
     assert adapter._dispatch_token is None
     assert not adapter._orbital_first_turn_note
+
+
+# 2026-11-09 (keyless smoke D4): the dispatch tool's agent list names only
+# workers that can run now — the same test as the pin list — so a Claude seat
+# no longer relays "codebuddy, gemini-cli" that are installed but signed out.
+
+@pytest.mark.asyncio
+async def test_the_dispatch_list_names_only_ready_workers(tmp_path):
+    from types import SimpleNamespace as NS
+    mgr = _mgr(tmp_path)
+    mgr._project_store.get_project.return_value = {
+        "workspace": str(tmp_path / "ws"), "disabled_sub_agents": ["pi"]}
+
+    def status(slug, **kw):
+        base = dict(slug=slug, installed=True, dependencies_met=True,
+                    credentials_configured=True, update_needed=False, handshake=None)
+        base.update(kw)
+        return NS(**base)
+
+    mgr._setup_engine.check_all.return_value = [
+        status("claude-code"), status("codex"), status("pi"),
+        status("codebuddy", credentials_configured=False),
+        status("gemini-cli", credentials_configured=False),
+        status("built-in"),
+    ]
+    with patch("agent_os.daemon_v2.sub_agent_manager.CLIAdapter") as adapter_cls:
+        adapter = MagicMock()
+        adapter.start = AsyncMock()
+        adapter.stop = AsyncMock()
+        adapter.is_alive = MagicMock(return_value=True)
+        adapter_cls.return_value = adapter
+        result = await mgr.start("p1", "claude-code", session_id="s1", announce=False,
+                                 initiator="user_pinned")
+    assert result.startswith("Started"), result
+    token = adapter_cls.call_args.kwargs["transport"].dispatch_mcp["token"]
+    assert mgr.dispatch_context(token).agents == ("claude-code", "codex")

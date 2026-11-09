@@ -352,3 +352,38 @@ async def test_a_checked_automation_run_leaves_the_feed(tmp_path):
     assert ("proj_a", "s_auto") not in await _feed(client)
     assert store.project("proj_a") == {"s_auto": T_REPLY}
     assert ws.events == [("proj_a", {"type": "workbench.changed", "project_id": "proj_a"})]
+
+
+def test_a_send_that_could_not_start_is_a_card_with_its_stop(tmp_path):
+    """2026-11-09: a send whose agent could not start (no key, a worker that
+    cannot run) must not sit on "Starting…" forever: the failure row counts
+    as the session's reply, so the feed carries the session, and the card's
+    muted line names the stop."""
+    from agent_os.daemon_v2 import session_index as si
+    proj = _project(tmp_path, "proj_k")
+    t_fail = "2026-11-04T08:00:01+00:00"
+    cases = {
+        "s_mgr": {"role": "system", "source": "daemon", "timestamp": t_fail,
+                  "content": "[The agent could not be started for this message — "
+                             "ProviderConfigError: No LLM API key configured.]",
+                  "_meta": {"event": "start_failed"}},
+        "s_wkr": {"role": "system", "source": "daemon", "timestamp": t_fail,
+                  "content": "[Sub-agent] codebuddy could not start: Error: not signed in",
+                  "_meta": {"event": "sub_agent_dispatch_failed", "handle": "codebuddy",
+                            "dispatch_id": "d1", "suppress_wake": True}},
+    }
+    rows = []
+    for sid, failure in cases.items():
+        user = {"role": "user", "content": "PONG", "timestamp": T_USER}
+        if sid == "s_wkr":
+            user["target"] = "codebuddy"
+        _write_session(proj, sid, [user, failure])
+        path = os.path.join(proj["workspace"], "orbital", "sessions", f"{sid}.jsonl")
+        entry = si.derive_disk_entry(path, sid)
+        assert entry["last_reply_at"] == t_fail
+        rows.append(_row(sid, user=entry["last_user_at"], reply=entry["last_reply_at"]))
+    out = wb.feed_rows(proj, rows, NOW)
+    assert [r["session_id"] for r in out] == ["s_mgr", "s_wkr"]
+    for r in out:
+        assert r["result_line"] is None
+        assert r["stop"] is not None and r["stop"]["cause"]

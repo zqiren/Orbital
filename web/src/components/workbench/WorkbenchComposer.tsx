@@ -33,6 +33,11 @@
  * project chip never shows 自动. It starts on the last project sent to from
  * this browser (else Quick Tasks), and the picker's 自动 row stays visible
  * but not selectable, with a note; a click on it opens the model settings.
+ * The agent picker's Orbital row does the same (2026-11-09): Orbital itself
+ * needs the key. Its 自动 row stays: keyless, 自动 means the project's pin.
+ *
+ * A worker unchecked for the picked project (`disabled_sub_agents`) is not
+ * in the agent picker; with no project picked (自动) every worker is.
  */
 
 import { useEffect, useRef, useState, type DragEvent, type KeyboardEvent } from 'react';
@@ -46,6 +51,7 @@ import {
   modelLineText, workerModelInfo, type SubAgentModelEntry,
 } from '../../hooks/useConversationModels';
 import { restoreComposer, useWorkbenchFeed } from '../../hooks/useWorkbenchFeed';
+import { projectAgents } from '../../hooks/useAgentAvailability';
 import { overUploadCap, useAttachments } from '../../hooks/useAttachments';
 import AttachmentChip from '../AttachmentChip';
 import type { SendChoice, SendDeps } from './sendTask';
@@ -175,6 +181,8 @@ export default function WorkbenchComposer({
   const effectiveProjectId = projectId ?? keylessDefault;
   const picked = effectiveProjectId ? projects.find((p) => p.project_id === effectiveProjectId) ?? null : null;
   const projectLabel = picked ? projectDisplayName(picked, t) : t('workbench.composer.auto');
+  // A worker unchecked for the picked project is not offered for it.
+  const offered = projectAgents(agents, picked);
   const agentLabel = agent
     ? (agent === MAIN_AGENT_HANDLE ? 'Orbital' : agents.find((a) => a.slug === agent)?.name ?? agent)
     : t('workbench.composer.auto');
@@ -422,7 +430,28 @@ export default function WorkbenchComposer({
             {ck(!agent)}
           </button>
           <div className="wb-sep" />
-          {[{ slug: MAIN_AGENT_HANDLE, name: 'Orbital' }, ...agents].map((a) => {
+          {keyless ? (
+            // No key: Orbital stays visible, not selectable, like the
+            // project picker's 自动; the click goes where the key is added.
+            <button
+              type="button"
+              role="option"
+              aria-selected={false}
+              aria-disabled="true"
+              className="wb-opt is-off"
+              data-testid="wb-opt-orbital"
+              onClick={() => {
+                setPop('none');
+                window.dispatchEvent(new CustomEvent('open-global-settings', { detail: { section: 'llm' } }));
+              }}
+            >
+              <AgentMark slug={MAIN_AGENT_HANDLE} size={22} />
+              <span className="wb-tx"><span className="wb-n1">Orbital</span></span>
+              <span className="wb-note">{t('workbench.composer.needsKey')}</span>
+              {ck(false)}
+            </button>
+          ) : null}
+          {[...(keyless ? [] : [{ slug: MAIN_AGENT_HANDLE, name: 'Orbital' }]), ...offered].map((a) => {
             const line = modelLine(a.slug);
             return (
               <button

@@ -537,6 +537,40 @@ describe('ProjectDetail — the status line', () => {
     expect(setRoute).toHaveBeenCalledWith(expect.objectContaining({ page: 'tasks', queuePane: 'automations' }));
   });
 
+  // Keyless (2026-11-09): `/automate` is not offered without a key, so the
+  // empty state keeps its title and drops the hint.
+  it('keyless: nothing scheduled shows the title only, no /automate hint, still opening Automations', () => {
+    const setRoute = vi.fn();
+    render(
+      <ProjectDetail
+        project={{ ...mockProject, manager_ready: false } as Project}
+        agentStatus="idle"
+        route={baseRoute}
+        setRoute={setRoute}
+      />,
+    );
+    const line = screen.getByTestId('trigger-summary');
+    expect(screen.getByTestId('status-line-teach-title').textContent).toBe('Nothing scheduled');
+    expect(screen.queryByTestId('status-line-teach-hint')).toBeNull();
+    expect(line.textContent).not.toContain('/automate');
+    expect(line).toHaveAttribute('title', 'Nothing scheduled');
+    fireEvent.click(line);
+    expect(setRoute).toHaveBeenCalledWith(expect.objectContaining({ page: 'tasks', queuePane: 'automations' }));
+  });
+
+  it('keyless phone band: the title only, no /automate', () => {
+    setViewportWidth(390);
+    render(
+      <ProjectDetail
+        project={{ ...mockProject, manager_ready: false } as Project}
+        agentStatus="idle"
+        route={baseRoute}
+        setRoute={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId('status-line-teach').textContent).toBe('Nothing scheduled');
+  });
+
   it('stays in the column on a page, and shows as the chosen row while Tasks is open', () => {
     const { unmount } = renderProjectDetail();
     expect(screen.getByTestId('trigger-summary')).not.toHaveAttribute('aria-current');

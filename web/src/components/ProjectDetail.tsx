@@ -456,6 +456,7 @@ export default function ProjectDetail({
               queued={queuedCount}
               triggers={triggers}
               onOpen={handleOpenTasks}
+              teach={project.manager_ready !== false}
             />
           </div>
         )}
@@ -515,6 +516,7 @@ export default function ProjectDetail({
           triggers={triggers}
           onOpen={handleOpenTasks}
           selected={page === 'tasks'}
+          teach={project.manager_ready !== false}
         />
         <SessionSidebar
           projectId={project.project_id}

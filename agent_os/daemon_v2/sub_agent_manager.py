@@ -1200,7 +1200,9 @@ class SubAgentManager:
 
                 # Determine peer slugs (other enabled sub-agents in the project),
                 # honouring the project's disabled_sub_agents denylist so a
-                # disabled sub-agent is never listed as a peer either.
+                # disabled sub-agent is never listed as a peer either, and
+                # only workers that can run now (``ready_only``, 2026-11-09):
+                # the dispatch tool must not name one that is signed out.
                 # Stale-ok and threaded (spec 101): an expired probe cache
                 # refreshes in the background, and an empty one probes in a
                 # worker thread, never on the loop.
@@ -1210,6 +1212,7 @@ class SubAgentManager:
                     disabled_sub_agents=(project.get("disabled_sub_agents") if project else None),
                     setup_engine=(StaleOkView(self._setup_engine)
                                   if self._setup_engine is not None else None),
+                    ready_only=True,
                 )
                 if not enabled_sub_agents:
                     enabled_sub_agents = [handle]
@@ -1608,8 +1611,23 @@ class SubAgentManager:
         dispatching it itself. The inject route passes
         ``initiator="user_pinned"`` for every ``target`` send (spec 091) and
         fires no notification of its own.
+
+        A send the user started (``TOP_INITIATORS``: the pin, a queue item or
+        automation) to a worker unchecked for this project
+        (``disabled_sub_agents``) is refused with an ``Error: …`` string
+        before anything spawns (2026-11-09). The manager's own dispatches are
+        already limited to the visible list.
         """
         session_id = self._resolve_session_id(session_id)
+        if initiator in TOP_INITIATORS and self._project_store is not None:
+            project = self._project_store.get_project(project_id) or {}
+            if handle in (project.get("disabled_sub_agents") or []):
+                # No stale start-failure reason may ride on this refusal's row.
+                self._start_failures.pop((project_id, handle), None)
+                logger.info("send: %s is turned off in project %s; refused",
+                            handle, project_id)
+                return (f"Error: '{handle}' is turned off for this project — "
+                        f"open Project Settings → Sub-agents to turn it on")
         if dispatch_id is None:
             from uuid import uuid4
             dispatch_id = f"{session_id}:{uuid4().hex[:8]}"
