@@ -121,6 +121,31 @@ async def test_tool_list_names_the_other_enabled_agents(served):
     assert set(tool["inputSchema"].get("required", [])) == {"agent", "task"}
 
 
+@pytest.mark.asyncio
+async def test_tool_says_when_to_use_it_instead_of_a_shell_command(served):
+    """Live 2026-11-09 (v0.21.0, Quick Tasks): pinned Codex listed the tool,
+    then ran ``claude -p`` through its shell instead, and the reply never
+    reached the user. The description must name the trigger and rule out
+    the shell route."""
+    client, _ = served
+    body = await _rpc(client, "tools/list", {}, "tok-good")
+    [tool] = body["result"]["tools"]
+    desc = tool["description"].lower()
+    assert "asks for another agent" in desc
+    assert "shell" in desc
+
+
+@pytest.mark.asyncio
+async def test_every_parameter_is_described(served):
+    client, _ = served
+    body = await _rpc(client, "tools/list", {}, "tok-good")
+    [tool] = body["result"]["tools"]
+    props = tool["inputSchema"]["properties"]
+    for name in ("agent", "task", "fresh"):
+        assert props[name].get("description"), name
+    assert props["fresh"].get("default") is False
+
+
 def test_no_port_means_no_attach_and_one_warning(monkeypatch, caplog):
     monkeypatch.delenv("AGENT_OS_PORT", raising=False)
     app = FastAPI()

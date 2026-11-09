@@ -46,6 +46,8 @@ from acp.schema import (
     ElicitationCapabilities,
     ElicitationFormCapabilities,
     FileSystemCapabilities,
+    HttpHeader,
+    HttpMcpServer,
     Implementation,
     PermissionOption,
     PlanCapabilities,
@@ -152,6 +154,7 @@ class ACPSDKTransport(AgentTransport):
         mode: str | None = None,
         config_options: Mapping[str, str | bool] | None = None,
         auth_method_id: str | None = None,
+        dispatch_mcp: dict | None = None,
     ) -> None:
         if permission_mode not in _VALID_PERMISSION_MODES:
             raise ValueError(
@@ -168,6 +171,12 @@ class ACPSDKTransport(AgentTransport):
         if mode is not None:
             self._desired_config.setdefault("mode", mode)
         self._auth_method_id = auth_method_id
+        # Spec 161: ``{"url", "token"}`` of the daemon's dispatch MCP endpoint
+        # when this worker sits at the top of its session, else None. Handed
+        # to the agent on every session open; ``dispatch_mounted`` says
+        # whether the agent took it (it must advertise HTTP MCP).
+        self.dispatch_mcp: dict | None = dispatch_mcp
+        self.dispatch_mounted = False
 
         self._workspace = ""
         self._session_id: str | None = None
@@ -336,6 +345,7 @@ class ACPSDKTransport(AgentTransport):
         if self._auth_method_id is not None:
             await self.authenticate(self._auth_method_id)
 
+        mcp = self._mcp_servers() or None  # None: the call is byte-identical to before
         session_response: Any
         requested_resume = self._resume_session_id
         if requested_resume is not None:
@@ -343,18 +353,20 @@ class ACPSDKTransport(AgentTransport):
                 session_caps = getattr(self._agent_capabilities, "session_capabilities", None)
                 if session_caps is not None and session_caps.resume is not None:
                     session_response = await self._connection.resume_session(
-                        session_id=requested_resume, cwd=self._workspace
+                        session_id=requested_resume, cwd=self._workspace,
+                        mcp_servers=mcp,
                     )
                 elif bool(getattr(self._agent_capabilities, "load_session", False)):
                     session_response = await self._connection.load_session(
-                        session_id=requested_resume, cwd=self._workspace
+                        session_id=requested_resume, cwd=self._workspace,
+                        mcp_servers=mcp,
                     )
                 else:
                     raise _ResumeUnsupported
             except _ResumeUnsupported:
                 self._resume_session_id = None
                 self._resume_outcome = ("fresh", "resume_unsupported")
-                session_response = await self._connection.new_session(cwd=self._workspace)
+                session_response = await self._connection.new_session(cwd=self._workspace, mcp_servers=mcp)
                 self._session_id = session_response.session_id
             except RequestError as exc:
                 # ACP resource-not-found, or invalid-params: the agent refused
@@ -370,13 +382,13 @@ class ACPSDKTransport(AgentTransport):
                 )
                 self._resume_session_id = None
                 self._resume_outcome = ("fresh", "resume_failed")
-                session_response = await self._connection.new_session(cwd=self._workspace)
+                session_response = await self._connection.new_session(cwd=self._workspace, mcp_servers=mcp)
                 self._session_id = session_response.session_id
             else:
                 self._session_id = requested_resume
                 self._resume_outcome = ("resumed", None)
         else:
-            session_response = await self._connection.new_session(cwd=self._workspace)
+            session_response = await self._connection.new_session(cwd=self._workspace, mcp_servers=mcp)
             self._session_id = session_response.session_id
             self._resume_outcome = ("fresh", None)
 
@@ -390,6 +402,25 @@ class ACPSDKTransport(AgentTransport):
             "model": self._effective_config_value("model") or self._model,
         }
         await self._event_queue.put(TransportEvent("thread_started", event_data))
+
+    def _mcp_servers(self) -> list:
+        """Orbital's dispatch server for this session open, when this worker
+        holds the seat and the agent speaks HTTP MCP; else none."""
+        self.dispatch_mounted = False
+        if not self.dispatch_mcp:
+            return []
+        caps = getattr(self._agent_capabilities, "mcp_capabilities", None)
+        if not getattr(caps, "http", False):
+            logger.warning(
+                "ACPSDKTransport: the agent does not advertise HTTP MCP; "
+                "the dispatch tool is not mounted")
+            return []
+        self.dispatch_mounted = True
+        return [HttpMcpServer(
+            type="http", name="orbital", url=self.dispatch_mcp["url"],
+            headers=[HttpHeader(name="Authorization",
+                                value=f"Bearer {self.dispatch_mcp['token']}")],
+        )]
 
     async def authenticate(self, method_id: str) -> None:
         if self._connection is None:

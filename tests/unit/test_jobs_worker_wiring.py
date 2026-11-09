@@ -106,7 +106,7 @@ async def test_codex_gets_the_paragraph_on_its_first_dispatch_only(tmp_path):
     mgr._process_manager = MagicMock()
     mgr._build_recap = AsyncMock(return_value="RECAP\n")
     mgr._dispatch_async = AsyncMock()
-    adapter = SimpleNamespace(_orbital_jobs_hint="JOBS HINT")
+    adapter = SimpleNamespace(_orbital_first_turn_note="JOBS HINT")
     prompt = SimpleNamespace(message="do the thing", dispatch_id="d1",
                              transcript_path="t", initiator="management_agent")
     await mgr._dispatch_prompt_locked(adapter, prompt, "p", "s", "codex")

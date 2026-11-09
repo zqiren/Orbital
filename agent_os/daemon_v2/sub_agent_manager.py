@@ -33,6 +33,7 @@ from agent_os.daemon_v2.dispatch_tools import (
     TOKEN_ENV as DISPATCH_TOKEN_ENV,
     TOP_INITIATORS,
     DispatchContext,
+    seat_note,
 )
 from agent_os.daemon_v2.sub_agent_visibility import resolve_visible_sub_agent_slugs
 from agent_os.daemon_v2.models import (
@@ -658,6 +659,7 @@ class SubAgentManager:
             return ACPSDKTransport(
                 resume_record=resume_record,
                 config_options=(config_dict or {}).get("acp_config_options") or None,
+                dispatch_mcp=dispatch_mcp,
             )
         elif transport_type == "codex-appserver":
             from agent_os.agent.transports.codex_transport import CodexTransport
@@ -1382,9 +1384,11 @@ class SubAgentManager:
         # user's settings have moved on (see _spawn_config_stale).
         adapter._spawn_fingerprint = spawn_fp
         adapter._session_params = dict(session_params)
-        # Codex takes no system prompt: the launcher paragraph rides on the
-        # first dispatch of this process instead (spec 134 Part B).
-        adapter._orbital_jobs_hint = (
+        # Codex and ACP workers take no Orbital system prompt: the launcher
+        # paragraph (spec 134 Part B, Codex) and, for the seat-holder, the
+        # dispatch line (spec 161) ride on the first dispatch of this process.
+        takes_first_turn_note = transport_kind in ("codex-appserver", "acp-sdk")
+        adapter._orbital_first_turn_note = (
             jobs_hint if transport_kind == "codex-appserver" else None)
         adapter._dispatch_token = dispatch_token
 
@@ -1407,6 +1411,19 @@ class SubAgentManager:
             if sk not in self._adapters:
                 self._adapters[sk] = {}
             self._adapters[sk][handle] = adapter
+
+        # Only now is it known whether the agent took the dispatch endpoint
+        # (an ACP agent must advertise HTTP MCP); a token nobody mounted is
+        # revoked and the worker is not told about a tool it lacks.
+        if dispatch_token is not None and getattr(transport, "dispatch_mounted", True) is False:
+            self._revoke_dispatch_token(adapter)
+            adapter._dispatch_token = dispatch_token = None
+        dctx = self._dispatch_tokens.get(dispatch_token) if dispatch_token else None
+        if takes_first_turn_note and dctx is not None:
+            note = seat_note(dctx)
+            if note:
+                adapter._orbital_first_turn_note = "\n\n".join(
+                    n for n in (adapter._orbital_first_turn_note, note) if n)
 
         # ACP session/load is the authority on whether continuity actually
         # happened.  The pre-start resume decision only says an attempt is
@@ -1743,10 +1760,10 @@ class SubAgentManager:
         # path — pinned, @mention, manager dispatch — gets the same block.
         preamble = await self._build_recap(
             adapter, project_id, session_id, handle, message=prompt.message)
-        jobs_hint = getattr(adapter, "_orbital_jobs_hint", None)
-        if isinstance(jobs_hint, str) and jobs_hint:
-            preamble = f"{jobs_hint}\n\n{preamble}"
-            adapter._orbital_jobs_hint = None
+        first_turn = getattr(adapter, "_orbital_first_turn_note", None)
+        if isinstance(first_turn, str) and first_turn:
+            preamble = f"{first_turn}\n\n{preamble}"
+            adapter._orbital_first_turn_note = None
         try:
             await self._dispatch_async(
                 adapter, project_id, handle, preamble + prompt.message,

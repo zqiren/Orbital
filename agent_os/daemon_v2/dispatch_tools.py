@@ -27,8 +27,10 @@ import asyncio
 import logging
 import os
 from dataclasses import dataclass
+from typing import Annotated
 
 from mcp.server.fastmcp import Context, FastMCP
+from pydantic import Field
 from mcp.server.fastmcp.server import StreamableHTTPASGIApp
 from starlette.routing import Route
 
@@ -45,12 +47,21 @@ TOP_INITIATORS = ("user_pinned", "queue_item")
 WORKER_INITIATOR_PREFIX = "worker:"
 
 _DESCRIPTION = (
-    "Hand a task to another agent in this project. It runs in the background "
-    "and its result arrives as your next message: after calling this, end "
-    "your turn and wait. Write the task so the agent can act on it alone. "
-    "Set fresh=true only to start that agent over without its earlier "
-    "conversation."
+    "Hand a task to another agent in this project. Use it whenever the user "
+    "asks for another agent, by name or by role. Never run another agent's "
+    "CLI from your shell instead: its reply would never reach the user. The "
+    "agent works in the background and its result arrives as your next "
+    "message: after calling this, end your turn and wait."
 )
+# Live 2026-11-09 (v0.21.0): with only "what it does" in the description,
+# pinned Codex listed the tool and then ran ``claude -p`` in its shell. Codex
+# gets no Orbital system prompt, so the trigger has to live here.
+
+_AGENT_PARAM = "The agent's id, exactly as listed in this tool's description."
+_TASK_PARAM = ("The whole task, written so the agent can act on it without "
+               "seeing this conversation.")
+_FRESH_PARAM = ("true starts the agent over without its earlier conversation. "
+                "Leave false to continue it.")
 
 
 @dataclass(frozen=True)
@@ -77,6 +88,20 @@ def tool_description(ctx: DispatchContext | None) -> str:
     if not others:
         return _DESCRIPTION
     return f"{_DESCRIPTION} Agents: {', '.join(others)}."
+
+
+def seat_note(ctx: DispatchContext) -> str | None:
+    """The first-turn line for a seat-holder that gets no Orbital system
+    prompt (Codex, ACP workers). Codex's code mode also lists MCP tools only
+    inside ``ALL_TOOLS``, so without this line it never learns the tool
+    exists. None when there is no one to hand work to."""
+    others = [a for a in ctx.agents if a != ctx.handle]
+    if not others:
+        return None
+    return (f"Other agents in this project: {', '.join(others)}. When the user "
+            f"asks for one of them, hand it the task with the `{TOOL_NAME}` tool "
+            f"of the `{SERVER_NAME}` MCP server. Never run that agent's CLI from "
+            f"your shell: its reply would never reach the user.")
 
 
 async def dispatch(sub_agent_manager, ctx: DispatchContext, agent: str, task: str,
@@ -126,7 +151,12 @@ class DispatchServer:
                       streamable_http_path="/mcp")
 
         @mcp.tool(name=TOOL_NAME, description=_DESCRIPTION, structured_output=False)
-        async def _dispatch(agent: str, task: str, ctx: Context, fresh: bool = False) -> str:
+        async def _dispatch(
+            agent: Annotated[str, Field(description=_AGENT_PARAM)],
+            task: Annotated[str, Field(description=_TASK_PARAM)],
+            ctx: Context,
+            fresh: Annotated[bool, Field(description=_FRESH_PARAM)] = False,
+        ) -> str:
             dctx = server_self._context_of(ctx)
             if dctx is None:
                 return ("Error: this dispatch link is no longer valid (the agent "

@@ -35,6 +35,7 @@ def _mgr(tmp_path, *, url=URL):
     registry = AgentRegistry()
     registry.register(ManifestLoader.load(os.path.join(_MANIFESTS, "claude_code.yaml")))
     registry.register(ManifestLoader.load(os.path.join(_MANIFESTS, "codex.yaml")))
+    registry.register(ManifestLoader.load(os.path.join(_MANIFESTS, "minimax-code.yaml")))
     ws = tmp_path / "ws"
     ws.mkdir(exist_ok=True)
     setup_engine = MagicMock()
@@ -56,15 +57,26 @@ def _mgr(tmp_path, *, url=URL):
     return mgr
 
 
-async def _spawn(mgr, handle, initiator):
+async def _spawn(mgr, handle, initiator, *, acp_mounts=True):
+    holder = {}
+
+    async def start(config):
+        # The real ACP handshake sets this; the mocked adapter never runs it.
+        t = holder.get("transport")
+        if type(t).__name__ == "ACPSDKTransport" and t.dispatch_mcp:
+            t.dispatch_mounted = acp_mounts
+
     with patch("agent_os.daemon_v2.sub_agent_manager.CLIAdapter") as adapter_cls, \
          patch("agent_os.daemon_v2.sub_agent_manager.resolve_visible_sub_agent_slugs",
                return_value=["claude-code", "codex"]):
         adapter = MagicMock()
-        adapter.start = AsyncMock()
+        adapter.start = AsyncMock(side_effect=start)
         adapter.stop = AsyncMock()
         adapter.is_alive = MagicMock(return_value=True)
-        adapter_cls.return_value = adapter
+        def make(*a, **kw):
+            holder["transport"] = kw.get("transport")
+            return adapter
+        adapter_cls.side_effect = make
         result = await mgr.start("p1", handle, session_id="s1", announce=False,
                                  initiator=initiator)
     assert result.startswith("Started"), result
@@ -237,3 +249,64 @@ async def test_codex_transport_without_a_url_execs_bare_app_server():
     transport = CodexTransport()
     seen = await _codex_exec(transport, {"ORBITAL_SESSION": "s1"})
     assert seen["argv"] == ("/fake/codex", "app-server")
+
+
+# Live 2026-11-09 (v0.21.0): Codex 0.157 keeps MCP tools out of the model's
+# tool list (code mode: the model must filter ALL_TOOLS to find them), and
+# it takes no system prompt. Pinned Codex therefore never learned the
+# dispatch tool existed and ran `claude -p` in its shell. The seat-holder
+# Codex is told on its first turn, in the note that already carries the
+# background-job paragraph.
+@pytest.mark.asyncio
+@pytest.mark.parametrize("initiator", ["user_pinned", "queue_item"])
+async def test_top_of_session_codex_is_told_about_dispatch_on_its_first_turn(
+        tmp_path, initiator):
+    mgr = _mgr(tmp_path)
+    adapter, _, _ = await _spawn(mgr, "codex", initiator)
+    note = adapter._orbital_first_turn_note
+    assert "`dispatch` tool of the `orbital` MCP server" in note
+    assert "claude-code" in note          # the peers it can hand work to
+    assert "shell" in note
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("initiator", ["management_agent", "worker:claude-code"])
+async def test_a_dispatched_codex_is_not_told_about_dispatch(tmp_path, initiator):
+    mgr = _mgr(tmp_path)
+    adapter, _, _ = await _spawn(mgr, "codex", initiator)
+    note = getattr(adapter, "_orbital_first_turn_note", None)
+    assert not note or "dispatch" not in note
+
+
+# ACP workers (codebuddy, cursor, dsh, kimi-code, minimax-code) take no
+# Orbital system prompt either: the seat-holder gets the endpoint through the
+# transport (mounted on session open) and the same first-turn line.
+@pytest.mark.asyncio
+async def test_top_of_session_acp_worker_gets_the_http_config_and_the_line(tmp_path):
+    mgr = _mgr(tmp_path)
+    adapter, transport, config = await _spawn(mgr, "minimax-code", "user_pinned")
+    assert type(transport).__name__ == "ACPSDKTransport"
+    cfg = transport.dispatch_mcp
+    assert cfg["url"] == URL
+    assert mgr.dispatch_context(cfg["token"]).handle == "minimax-code"
+    assert TOKEN_ENV not in (config.env or {})
+    assert "dispatch" in adapter._orbital_first_turn_note
+
+
+@pytest.mark.asyncio
+async def test_a_dispatched_acp_worker_gets_nothing(tmp_path):
+    mgr = _mgr(tmp_path)
+    adapter, transport, _ = await _spawn(mgr, "minimax-code", "management_agent")
+    assert transport.dispatch_mcp is None
+    assert mgr._dispatch_tokens == {}
+    assert not getattr(adapter, "_orbital_first_turn_note", None)
+
+
+@pytest.mark.asyncio
+async def test_acp_agent_without_http_mcp_loses_the_token_and_the_line(tmp_path):
+    mgr = _mgr(tmp_path)
+    adapter, transport, _ = await _spawn(mgr, "minimax-code", "user_pinned",
+                                         acp_mounts=False)
+    assert mgr._dispatch_tokens == {}
+    assert adapter._dispatch_token is None
+    assert not adapter._orbital_first_turn_note
