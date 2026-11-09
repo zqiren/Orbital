@@ -66,6 +66,15 @@ class TestClassifyErrorText:
         stop = ht.classify_error_text("You're out of usage credits")
         assert stop.cause == ht.CAUSE_USAGE_LIMIT and stop.resets_at is None
 
+    def test_a_worker_that_is_not_signed_in_reads_as_sign_in(self):
+        # Spec 167: a failed import scan shows why it stopped. Verbatim from
+        # the dispatch-failed rows of a signed-out worker.
+        for text in ("[Sub-agent] minimax-code could not start: Error: adapter start failed: "
+                     "Authentication required: Run `mcode login` and try again.",
+                     "Error: 'claude-code' is installed but not signed in",
+                     "Not logged in · Please run /login"):
+            assert ht.classify_error_text(text).cause == ht.CAUSE_NETWORK_AUTH, text
+
     def test_model_unavailable(self):
         stop = ht.classify_error_text("400 Bad Request: The 'gpt-x' model is not supported when using Codex with a ChatGPT account.")
         assert stop.cause == ht.CAUSE_MODEL_UNAVAILABLE

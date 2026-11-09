@@ -117,7 +117,9 @@ _MODEL_RE = re.compile(r"model (?:is )?(?:not (?:supported|available|found)|unav
 _NETWORK_AUTH_RE = re.compile(
     r"ECONNRESET|ETIMEDOUT|ENOTFOUND|socket hang up|network error|connection (?:reset|refused|error)"
     r"|\b40[13]\b|failed to authenticate|authentication (?:failed|error)|invalid api key"
-    r"|unauthori[sz]ed|forbidden|please (?:run )?/?login", re.IGNORECASE)
+    r"|unauthori[sz]ed|forbidden|please (?:run )?/?login"
+    # Spec 167: a signed-out worker's could-not-start row.
+    r"|authentication required|not signed in|not logged in", re.IGNORECASE)
 
 # "resets 10pm (Asia/Shanghai)", "resets at 9:30 am (UTC)", "resets 22:00"
 _RESET_RE = re.compile(
