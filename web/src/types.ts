@@ -1585,6 +1585,12 @@ export interface WorkbenchFeedAsk {
   options: string[];
   /** Markdown context under the question ("" when none). */
   detail: string;
+  /**
+   * Batch 1110 item 2: the goals card's "needs changes" option, when this
+   * ask is that card. A tap on it prefills the reply instead of sending the
+   * bare option, so the correction travels in one turn. Absent otherwise.
+   */
+  change_option?: string | null;
 }
 
 /** Why a finished session stopped (the left-off reader's causes). */

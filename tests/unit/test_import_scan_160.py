@@ -1680,3 +1680,18 @@ def test_the_retired_slot_refusal_is_an_ordinary_failure(store, tmp_path):
     _run(go())
     p = store.get_project(a)
     assert p[import_scan.STATE_FIELD] == FAILED
+
+
+def test_a_prefilled_change_answer_is_still_the_guarded_change_turn():
+    """Batch 1110 item 2: the card prefills 「需要改：」 / "Needs changes: " and
+    the user types the correction after it; the whole line classifies as
+    change (one guarded turn), not as a free message."""
+    from agent_os.onboarding.import_scan import classify_answer
+    rec = {"yes": "对", "change": "需要改"}
+    assert classify_answer(rec, "需要改", "zh") == "change"
+    assert classify_answer(rec, "需要改：目标应该说这是练手项目", "zh") == "change"
+    assert classify_answer(rec, "需要改: goals should say kata", "zh") == "change"
+    assert classify_answer(rec, "需要改进一下文风", "zh") == "message"  # not the option + colon
+    rec_en = {"yes": "Yes", "change": "Needs changes"}
+    assert classify_answer(rec_en, "Needs changes: it is a shop, not a blog", "en") == "change"
+    assert classify_answer(rec_en, "Needs changes to the README", "en") == "message"

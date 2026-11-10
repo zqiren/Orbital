@@ -105,3 +105,55 @@ describe('TaskCard — an ask\'s question renders as inline markdown', () => {
     expect(title.textContent).toBe('“读 这篇”');
   });
 });
+
+
+describe('TaskCard — the goals card\'s change option asks for the correction (batch 1110 item 2)', () => {
+  const ask = {
+    id: 'g1', text: '这样理解对吗？', created: '2026-11-05T09:00:00Z', due: null, overdue: false,
+    options: ['对', '需要改'], detail: '', change_option: '需要改',
+  };
+
+  it('tapping 需要改 prefills the reply and sends nothing', () => {
+    const onReply = renderCardWithReply(row({ ask }));
+    const buttons = screen.getAllByTestId('wb-card-option');
+    const change = buttons.find((b) => b.textContent === '需要改') as HTMLButtonElement;
+    expect(change.getAttribute('data-change-option')).toBe('true');
+    fireEvent.click(change);
+    expect(onReply).not.toHaveBeenCalled();
+    expect((screen.getByTestId('wb-card-reply') as HTMLInputElement).value).toBe('需要改：');
+  });
+
+  it('the yes option still sends at once', () => {
+    const onReply = renderCardWithReply(row({ ask }));
+    const yes = screen.getAllByTestId('wb-card-option').find((b) => b.textContent === '对') as HTMLButtonElement;
+    expect(yes.getAttribute('data-change-option')).toBeNull();
+    fireEvent.click(yes);
+    expect(onReply).toHaveBeenCalledTimes(1);
+    expect(onReply.mock.calls[0][1]).toBe('对');
+  });
+
+  it('an English change option gets a spaced colon', () => {
+    renderCardWithReply(row({ ask: { ...ask, options: ['Yes', 'Needs changes'], change_option: 'Needs changes' } }));
+    const change = screen.getAllByTestId('wb-card-option').find((b) => b.textContent === 'Needs changes') as HTMLButtonElement;
+    fireEvent.click(change);
+    expect((screen.getByTestId('wb-card-reply') as HTMLInputElement).value).toBe('Needs changes: ');
+  });
+});
+
+function renderCardWithReply(r: WorkbenchFeedRow) {
+  const item: FeedItem = { key: 'k', row: r, pending: null, dot: 'new', waiting: true, time: r.last_reply_at };
+  const onReply = vi.fn((_item: FeedItem, _words: string) => Promise.resolve(true));
+  render(
+    <TaskCard
+      item={item}
+      projectName={() => 'Marketing'}
+      agentName={(s) => s}
+      activity={null}
+      phone={false}
+      onOpen={vi.fn()}
+      onConfirm={vi.fn()}
+      onReply={onReply}
+    />,
+  );
+  return onReply;
+}

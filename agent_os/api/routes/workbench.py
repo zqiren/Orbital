@@ -171,7 +171,21 @@ def _ask_row(project_id: str, a, tz: str, now: datetime) -> dict:
         "options": list(a.options),
         # The markdown context under the question ("" when none).
         "detail": a.detail,
+        # Batch 1110 item 2: the goals card's "needs changes" option, when
+        # this ask is that card: the UI prefills the reply with it instead of
+        # sending it bare, so the correction travels in one turn.
+        "change_option": _change_option(project_id, a),
     }
+
+
+def _change_option(project_id: str, a) -> str | None:
+    from agent_os.onboarding.import_scan import scan_ask_of
+    try:
+        rec = scan_ask_of(_project_store.get_project(project_id), a.id)
+    except Exception:  # noqa: BLE001 — display data
+        return None
+    change = rec.get("change") if isinstance(rec, dict) else None
+    return change if isinstance(change, str) and change in list(a.options) else None
 
 
 def _closed_row(project_id: str, a) -> dict:
@@ -322,7 +336,8 @@ async def session_asks(project_id: str, session_id: str = Query(...)):
         if a.is_open
     }
     return {"asks": [{"id": i, "text": open_asks[i].text, "due": open_asks[i].due,
-                      "options": list(open_asks[i].options), "detail": open_asks[i].detail}
+                      "options": list(open_asks[i].options), "detail": open_asks[i].detail,
+                      "change_option": _change_option(project_id, open_asks[i])}
                      for i in ids if i in open_asks]}
 
 

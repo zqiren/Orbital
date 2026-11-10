@@ -61,6 +61,7 @@ import ComposerDisabledPrompt from './ComposerDisabledPrompt';
 import AskCard from './AskCard';
 import { useSessionAsks, type SessionAsk } from '../hooks/useSessionAsks';
 import { formatAskAnswer } from '../utils/askAnswer';
+import { changeOptionPrefill, isChangeOption } from '../utils/changeOptionPrefill';
 import PinTargetSelect, { resolveSendTarget } from './PinTargetSelect';
 import { useConversationModels } from '../hooks/useConversationModels';
 import { resolveCard } from '../hooks/useCredentialCards';
@@ -3571,7 +3572,22 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   const askCardNode = cardAsk ? (
     <AskCard
       ask={cardAsk}
-      onOption={(option) => void sendComposer(option)}
+      onOption={(option) => {
+        // Batch 1110 item 2: the goals card's 需要改 asks for the correction.
+        if (isChangeOption(option, cardAsk.change_option)) {
+          const prefill = changeOptionPrefill(option);
+          setInputText(prefill);
+          requestAnimationFrame(() => {
+            const ta = textareaRef.current;
+            if (!ta) return;
+            adjustTextareaHeight();
+            ta.focus({ preventScroll: true });
+            ta.setSelectionRange(prefill.length, prefill.length);
+          });
+          return;
+        }
+        void sendComposer(option);
+      }}
       onDone={(id) => { setAskReply(null); void closeAsk(id, 'fulfilled'); }}
       onNotNeeded={(id) => { setAskReply(null); void closeAsk(id, 'irrelevant'); }}
       onLater={() => {

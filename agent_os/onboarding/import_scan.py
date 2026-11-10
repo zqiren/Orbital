@@ -246,6 +246,12 @@ def classify_answer(rec: dict, words: str | None, lang: str) -> str:
     change = rec.get("change") or confirm_ask(lang)[2]
     if said == _norm_answer(change):
         return "change"
+    # Batch 1110 item 2: the card prefills the reply with the change option
+    # ("需要改：…" / "Needs changes: …"); the words that follow are the
+    # correction, and the turn is still the guarded orbital-only one.
+    for sep in ("：", ":"):
+        if said.startswith(_norm_answer(change) + sep):
+            return "change"
     return "message"
 
 

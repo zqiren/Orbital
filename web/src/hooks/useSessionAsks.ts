@@ -13,6 +13,8 @@ export interface SessionAsk {
   options: string[];
   /** Markdown context under the question ("" when none). */
   detail: string;
+  /** The goals card's "needs changes" option (batch 1110 item 2); absent otherwise. */
+  change_option?: string | null;
 }
 
 /** The open asks this conversation opened. Refetched on `workbench.changed`

@@ -27,10 +27,11 @@
  * always renders from the feed row it is given.
  */
 
-import { useEffect, useState, type KeyboardEvent, type MouseEvent } from 'react';
+import { useEffect, useState, type KeyboardEvent, type MouseEvent, useRef } from 'react';
 import { Check, Send } from 'lucide-react';
 import type { WorkbenchFeedRow } from '../../types';
 import { useT } from '../../i18n/useT';
+import { changeOptionPrefill, isChangeOption } from '../../utils/changeOptionPrefill';
 import type { StringKey } from '../../i18n/strings';
 import { formatRelativeTime } from '../../utils/relativeTime';
 import { getAgentIcon, MAIN_AGENT_HANDLE } from '../../utils/agentIcons';
@@ -80,6 +81,7 @@ export default function TaskCard({
 }: TaskCardProps) {
   const t = useT();
   const [reply, setReply] = useState('');
+  const replyRef = useRef<HTMLInputElement>(null);
   const [sending, setSending] = useState(false);
   const [leaving, setLeaving] = useState(false);
   const row: WorkbenchFeedRow | null = item.row;
@@ -219,7 +221,17 @@ export default function TaskCard({
                 type="button"
                 className="wb-askopt"
                 data-testid="wb-card-option"
-                onClick={() => void sendReply(option)}
+                data-change-option={isChangeOption(option, ask?.change_option) ? 'true' : undefined}
+                onClick={() => {
+                  // Batch 1110 item 2: "needs changes" asks for the
+                  // correction instead of sending the bare option.
+                  if (isChangeOption(option, ask?.change_option)) {
+                    setReply(changeOptionPrefill(option));
+                    requestAnimationFrame(() => replyRef.current?.focus());
+                    return;
+                  }
+                  void sendReply(option);
+                }}
                 disabled={sending}
               >
                 {option}
@@ -229,6 +241,7 @@ export default function TaskCard({
         )}
         <div className="wb-rbox">
           <input
+            ref={replyRef}
             value={reply}
             onChange={(e) => setReply(e.target.value)}
             onKeyDown={onReplyKey}
