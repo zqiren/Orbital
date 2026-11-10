@@ -169,7 +169,13 @@ class TestSubAgentTranscriptEndpoint:
         resp = client.get(
             f"/api/v2/agents/{pid}/sub-agents/..%2F..%2Fetc/transcript",
         )
-        assert resp.status_code in (400, 404)  # never 200; may 404 via routing
+        # Never the transcript API's 200. The path may 404 via routing, or a
+        # built SPA may answer it with index.html (text/html): either way it
+        # must not be a JSON transcript body.
+        if resp.status_code == 200:
+            assert "application/json" not in (resp.headers.get("content-type") or "")
+        else:
+            assert resp.status_code in (400, 404)
 
         # An explicit, well-formed-but-traversal-bearing value fails 400 —
         # exercise the regex directly against a handle containing a dot,

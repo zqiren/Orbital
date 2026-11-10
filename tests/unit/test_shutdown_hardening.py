@@ -262,7 +262,10 @@ def _sam():
 def _sleeper():
     import subprocess
     import sys
-    return subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    # The real interpreter: a venv's python.exe on Windows is a launcher that
+    # spawns the interpreter as a child, which would be a second pid.
+    exe = getattr(sys, "_base_executable", None) or sys.executable
+    return subprocess.Popen([exe, "-c", "import time; time.sleep(60)"])
 
 
 def _cleanup(proc, release):
