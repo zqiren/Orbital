@@ -16,7 +16,7 @@ import sys
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse
 
 from agent_os.api.ws import WebSocketManager
 from agent_os.api.middleware import RelayRedactionMiddleware
@@ -198,6 +198,48 @@ def schedule_sandbox_grant_refresh(platform_provider, workspaces: list[str]):
 
     future.add_done_callback(_done)
     return future
+
+
+def _spa_request_path_is_plain(full_path: str) -> bool:
+    """Pure string check of an SPA request path, run before any filesystem call.
+
+    ``full_path`` is the percent-decoded path after the route's leading
+    ``/``. Refuses absolute paths (a request ``//etc/passwd`` arrives as
+    ``/etc/passwd``), UNC (``//host/share``, ``\\\\host``), any backslash,
+    a drive letter or any colon in the first segment (``C:/Windows``,
+    ``C:foo``), NUL, and any ``..`` segment. A segment made only of dots
+    and spaces (``...``, ``.. ``) is refused too, because Windows strips
+    trailing dots and spaces and would read it as ``..``. Deliberately
+    independent of ``os.path`` so the Windows forms are refused (and
+    testable) on every OS.
+    """
+    if "\x00" in full_path or "\\" in full_path:
+        return False
+    if full_path.startswith("/"):
+        return False
+    segments = full_path.split("/")
+    if ":" in segments[0]:
+        return False
+    for seg in segments:
+        if seg not in ("", ".") and not seg.strip(". "):
+            return False
+    return True
+
+
+def _spa_contained_path(spa_dir: str, full_path: str) -> str | None:
+    """Real path of ``full_path`` under ``spa_dir``, or ``None`` if it escapes.
+
+    Mirrors the house containment rule in ``files_v2._resolve_path``:
+    realpath BOTH sides (a symlink inside the folder pointing out, or a
+    symlinked ancestor of the folder itself, stays consistent) and require
+    the candidate to equal the root or start with root + separator (so a
+    sibling sharing the name prefix, ``web`` vs ``web-evil``, is outside).
+    """
+    real_root = os.path.realpath(spa_dir)
+    real_target = os.path.realpath(os.path.join(spa_dir, full_path))
+    if real_target != real_root and not real_target.startswith(real_root + os.sep):
+        return None
+    return real_target
 
 
 def create_app(data_dir: str | None = None) -> FastAPI:
@@ -904,7 +946,15 @@ def _assemble_app(app: FastAPI, data_dir: str | None) -> FastAPI:
         @app.get("/{full_path:path}")
         async def spa_fallback(full_path: str):
             nonlocal _cached_index_html
-            file_path = os.path.join(spa_dir, full_path)
+            # Any-file-read guard: the packaged app listens on every
+            # interface without auth. Text check first, so no filesystem
+            # call (on Windows, a UNC probe leaks the user's credential
+            # hash) ever sees a hostile path; then realpath containment.
+            if not _spa_request_path_is_plain(full_path):
+                return PlainTextResponse("Not Found", status_code=404)
+            file_path = _spa_contained_path(spa_dir, full_path)
+            if file_path is None:
+                return PlainTextResponse("Not Found", status_code=404)
             if os.path.isfile(file_path):
                 return FileResponse(file_path)
             # Serve index.html with injected __AGENT_OS_LOCAL__ flag
