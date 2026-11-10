@@ -49,5 +49,5 @@ what people need.
 ## Security problems
 
 Please do not post the details of a security problem in a public issue or pull
-request. Open an issue that says only "security report" and asks for a private
-channel, and you will get one.
+request. Report it privately: on the repository's **Security** tab, choose
+**Report a vulnerability**. Only the maintainer sees the report.
