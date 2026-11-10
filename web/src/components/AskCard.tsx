@@ -14,6 +14,10 @@ interface AskCardProps {
   onDone: (askId: string) => void;
   onNotNeeded: (askId: string) => void;
   onLater: () => void;
+  /** Spec 169 D: with both, a workspace link in `detail` (the goals card's
+   *  `project_goals.md`) is the chat's file card and opens the right panel. */
+  workspace?: string;
+  onOpenPath?: (path: string) => void;
 }
 
 /** Item 160, Claude Code style (2026-11-05): while this conversation has an
@@ -23,7 +27,7 @@ interface AskCardProps {
  *  banner. One ask at a time; the next appears once this one is answered or
  *  closed. 已完成 / 不需要 close it without a reply; 稍后 puts the plain
  *  composer back for this session. */
-export default function AskCard({ ask, onOption, onDone, onNotNeeded, onLater }: AskCardProps) {
+export default function AskCard({ ask, onOption, onDone, onNotNeeded, onLater, workspace, onOpenPath }: AskCardProps) {
   const t = useT();
   const actionClass = 'text-[12.5px] text-muted hover:text-primary whitespace-nowrap';
   const options = ask.options ?? [];
@@ -51,7 +55,7 @@ export default function AskCard({ ask, onOption, onDone, onNotNeeded, onLater }:
           data-testid="ask-card-detail"
           className="pl-3.5 pr-1 -mt-1 max-h-[40vh] overflow-y-auto break-words [&_.markdown-content]:!text-primary/75 [&_.markdown-content_strong]:!text-primary"
         >
-          <MarkdownContent content={detail} />
+          <MarkdownContent content={detail} workspace={workspace} onOpenPath={onOpenPath} />
         </div>
       )}
       {options.length > 0 && (

@@ -320,6 +320,7 @@ import { __resetForkSendsForTests } from '../utils/editMessage';
 import { useAgent } from '../hooks/useAgent';
 import type { DisplayItem } from '../utils/chatTransform';
 import type { Project } from '../types';
+import { OpenPathContext } from './filePreviewContext';
 // Producer↔renderer parity fixture (backlog #23 D2 / #27) — the same file the
 // transform tests and the pytest read. See the marker-row tests at the end.
 import subAgentMarkerFixturesData from '../utils/subAgentMarkerFixtures.json';
@@ -2041,6 +2042,27 @@ describe('item 160: an open ask takes the composer, Claude Code style', () => {
     expect(body.content).toContain('already closed');
     // The answered ask leaves the composer at once, before the feed agrees.
     expect(container.querySelector('[data-testid="ask-card"]')).toBeNull();
+  });
+
+  it('spec 169 D: the goals file in the card\'s detail is a file card that opens the right panel', async () => {
+    const onOpenPath = vi.fn();
+    sessionAsksResponse = { asks: [{
+      ...ASK, text: '这样理解对吗？', options: ['对', '需要改'],
+      detail: '[project_goals.md](orbital/instructions/project_goals.md)\n\n1. Ship the deck',
+    }] };
+    await act(async () => {
+      root.render(
+        <OpenPathContext.Provider value={onOpenPath}>
+          <ChatView projectId="p1" project={project} agentStatus={'idle' as never} agents={[]} sessionId="s1" />
+        </OpenPathContext.Provider>,
+      );
+    });
+    await flushEffects();
+    const detail = container.querySelector('[data-testid="ask-card-detail"]')!;
+    const card = [...detail.querySelectorAll('button')].find((b) => (b.textContent ?? '').includes('project_goals.md'));
+    expect(card).toBeTruthy();
+    await act(async () => { card!.click(); });
+    expect(onOpenPath).toHaveBeenCalledWith('orbital/instructions/project_goals.md');
   });
 
   it('clicking an option answers the ask with it, in one gesture', async () => {
@@ -5436,6 +5458,23 @@ describe('ChatView: embedded in the Workbench pane', () => {
     await flushEffects();
     expect(injectCalls).toHaveLength(1);
     expect(onUserSend).toHaveBeenCalledTimes(1);
+  });
+
+  it('spec 169 B: onUserSend carries the inject response (the Workbench pane releases on "recorded")', async () => {
+    injectMessageMock = async () => ({ status: 'recorded', session_id: 's1' });
+    const onUserSend = vi.fn();
+    await act(async () => {
+      root.render(
+        <ChatView projectId="p1" project={project} agentStatus={'idle' as never} agents={[]}
+          sessionId="s1" onUserSend={onUserSend} />,
+      );
+    });
+    await flushEffects();
+    await act(async () => { typeInComposer('对'); });
+    await flushEffects();
+    await act(async () => { pressKey('Enter'); });
+    await flushEffects();
+    expect(onUserSend).toHaveBeenCalledWith({ status: 'recorded', session_id: 's1' });
   });
 });
 

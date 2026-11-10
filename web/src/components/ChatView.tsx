@@ -14,7 +14,7 @@ import { sendTelemetry } from '../utils/telemetry';
 import OrbitalMark from './OrbitalMark';
 import { api, apiWithTotal, ApiError } from '../config';
 import { useWebSocket } from '../hooks/useWebSocket';
-import { useAgent } from '../hooks/useAgent';
+import { useAgent, type InjectResult } from '../hooks/useAgent';
 import { useQueue } from '../hooks/useQueue';
 import { projectAgents } from '../hooks/useAgentAvailability';
 import { useAutoScroll } from '../hooks/useAutoScroll';
@@ -853,8 +853,9 @@ interface ChatViewProps {
    */
   checksOnView?: boolean;
   /** Called once the user's own message went out (the pane moves its card
-   *  to 进行中 at once). */
-  onUserSend?: () => void;
+   *  to 进行中 at once), with the inject response: a `recorded` reply
+   *  started no turn, so the pane lets its card go (spec 169 B). */
+  onUserSend?: (result: InjectResult | undefined) => void;
 }
 
 interface StreamState {
@@ -3579,6 +3580,8 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   const askCardNode = cardAsk ? (
     <AskCard
       ask={cardAsk}
+      workspace={project.workspace}
+      onOpenPath={onOpenPath}
       onOption={(option) => {
         // Batch 1110 item 2: the goals card's 需要改 asks for the correction.
         if (isChangeOption(option, cardAsk.change_option)) {
@@ -3824,7 +3827,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         send.skill,
         send.answering,
       );
-      onUserSend?.();
+      onUserSend?.(result);
       // A pinned send materialized the session on the backend — if the pin
       // PATCH had failed earlier (brand-new session, 404 before the first
       // message), persist it now so it survives reloads. `pinAgent`'s

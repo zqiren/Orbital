@@ -42,8 +42,8 @@ export interface WorkbenchPaneProps {
   onClose: () => void;
   /** 打开会话: the full session (also a session link inside the chat). */
   onOpenSession: (sessionId: string) => void;
-  /** The user sent from the pane's composer. */
-  onUserSend: () => void;
+  /** The user sent from the pane's composer; `result` is the inject response. */
+  onUserSend: (result?: unknown) => void;
 }
 
 export default function WorkbenchPane({

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import AskCard from './AskCard';
 import type { SessionAsk } from '../hooks/useSessionAsks';
 import { formatAskAnswer, parseAskAnswer } from '../utils/askAnswer';
@@ -101,5 +101,34 @@ describe('AskCard — the question renders as inline markdown', () => {
     expect(q.querySelector('code')).toHaveTextContent('x');
     expect(q.querySelector('p')).toBeNull();
     expect(q.textContent).toBe('看这里 和 x');
+  });
+});
+
+describe('AskCard — spec 169 D: the goals file is a file card', () => {
+  const GOALS: SessionAsk = {
+    id: 'dddddd', text: '这样理解对吗？', due: null, options: ['对', '需要改'],
+    detail: '[project_goals.md](orbital/instructions/project_goals.md)\n\n1. Ship the deck',
+  };
+
+  it('with workspace + onOpenPath, the link renders as a file card that opens the right panel', () => {
+    const onOpenPath = vi.fn();
+    render(
+      <AskCard ask={GOALS} workspace="/ws/a" onOpenPath={onOpenPath}
+        onOption={vi.fn()} onDone={vi.fn()} onNotNeeded={vi.fn()} onLater={vi.fn()} />,
+    );
+    const detail = screen.getByTestId('ask-card-detail');
+    const card = within(detail).getByRole('button', { name: /orbital\/instructions\/project_goals\.md/ });
+    expect(card).toHaveTextContent('project_goals.md');
+    // The next steps still follow, as markdown.
+    expect(detail.querySelector('ol li')?.textContent).toBe('Ship the deck');
+    fireEvent.click(card);
+    expect(onOpenPath).toHaveBeenCalledWith('orbital/instructions/project_goals.md');
+  });
+
+  it('without them, the link stays inert (no button, nothing to navigate)', () => {
+    render(<AskCard ask={GOALS} onOption={vi.fn()} onDone={vi.fn()} onNotNeeded={vi.fn()} onLater={vi.fn()} />);
+    const detail = screen.getByTestId('ask-card-detail');
+    expect(within(detail).queryByRole('button')).toBeNull();
+    expect(detail.querySelector('a[href]')).toBeNull();
   });
 });

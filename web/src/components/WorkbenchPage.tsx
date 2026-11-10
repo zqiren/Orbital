@@ -52,7 +52,7 @@ import { useT } from '../i18n/useT';
 import { useAgent } from '../hooks/useAgent';
 import { markChecked, useCheckedMarks } from '../hooks/useSeenReplies';
 import {
-  activityText, hideClosedAsk, holdCard, refreshFeed, releaseCard, useWorkbenchFeed,
+  activityText, hideClosedAsk, holdCard, refreshFeed, settleReply, useWorkbenchFeed,
 } from '../hooks/useWorkbenchFeed';
 import { projectDisplayName } from '../utils/projectDisplayName';
 import { formatAskAnswer } from '../utils/askAnswer';
@@ -211,6 +211,7 @@ export default function WorkbenchPage({
     const row = item.row;
     if (!row) return false;
     setOpenError(null);
+    let heldAs: string | null = null;
     try {
       let sessionId = row.session_id;
       if (!sessionId) {
@@ -222,20 +223,20 @@ export default function WorkbenchPage({
       const content = ask ? formatAskAnswer(ask.id, ask.text, words) : words;
       const target = row.agent ?? undefined;
       holdCard({ ...row, session_id: sessionId });
+      heldAs = sessionId;
       const result = await injectMessage(
         row.project_id, content, target, newNonce(), undefined, sessionId, !!target,
         undefined, ask ? { id: ask.id, words } : undefined,
       );
-      // Spec 160 round 4: a 对 on the import scan's card is recorded by the
-      // daemon and starts no turn, so nothing would release the hold.
-      if (result && typeof result === 'object' && (result as { status?: string }).status === 'recorded') {
-        releaseCard(row.project_id, sessionId);
-      }
-      void refreshFeed();
+      // Spec 160 round 4 / 169 B: a 对 the daemon recorded starts no turn,
+      // so nothing else would release the hold.
+      settleReply(row.project_id, sessionId, result);
       return true;
     } catch {
       setOpenError(t('workbench.error.open'));
-      void refreshFeed();
+      // Spec 169 B: a send that failed starts no turn either.
+      if (heldAs) settleReply(row.project_id, heldAs, null);
+      else void refreshFeed();
       return false;
     }
   }
@@ -247,10 +248,13 @@ export default function WorkbenchPage({
     ? (paneRow.trigger_type ? classifySessionName(paneRow.name).displayName : null)
       ?? paneRow.name ?? t('workbench.card.untitled')
     : '';
-  const handlePaneSend = useCallback(() => {
+  // The pane's composer reports a send the daemon accepted, with its
+  // response (a failed send never gets here): the same step as the card's
+  // reply field, so the two routes cannot drift (spec 169 B).
+  const handlePaneSend = useCallback((result?: unknown) => {
     if (!paneRow) return;
     holdCard(paneRow);
-    void refreshFeed();
+    settleReply(paneRow.project_id, paneRow.session_id, result);
   }, [paneRow]);
 
   const summary = [
