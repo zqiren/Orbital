@@ -691,6 +691,8 @@ class PiRPCTransport(AgentTransport):
         except psutil.Error:
             self._proc = None
             logger.warning("PiRPCTransport: could not wrap pid=%s in psutil", popen.pid)
+        from agent_os.utils.windows_job import assign_worker
+        assign_worker(popen.pid)
         self._alive = True
         self._reader_task = asyncio.create_task(
             self._read_loop(popen), name=f"pi-read-{popen.pid}")

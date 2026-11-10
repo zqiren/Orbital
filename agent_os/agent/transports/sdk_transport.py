@@ -483,6 +483,9 @@ class SDKTransport(AgentTransport):
         except Exception:
             logger.warning("SDKTransport: could not wrap subprocess pid=%s in "
                            "psutil.Process", pid, exc_info=True)
+        # Windows: the worker (and its shells) die with the daemon.
+        from agent_os.utils.windows_job import assign_worker
+        assign_worker(pid)
 
     @property
     def dispatch_pending(self) -> bool:

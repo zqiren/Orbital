@@ -933,6 +933,9 @@ class CodexTransport(AgentTransport):
         except psutil.Error:
             logger.warning("CodexTransport: could not wrap pid=%s in psutil",
                            self._popen.pid)
+        # Windows: the app-server (and its shells) die with the daemon.
+        from agent_os.utils.windows_job import assign_worker
+        assign_worker(self._popen.pid)
         self._alive = True
         self._reader_task = asyncio.create_task(
             self._read_loop(), name=f"codex-read-{id(self)}")

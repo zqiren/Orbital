@@ -305,6 +305,8 @@ class ACPSDKTransport(AgentTransport):
                 self._proc = psutil.Process(self._popen.pid)
             except Exception:
                 logger.warning("ACPSDKTransport: could not capture process pid=%s", self._popen.pid)
+            from agent_os.utils.windows_job import assign_worker
+            assign_worker(self._popen.pid)
             if self._popen.stderr is not None:
                 self._stderr_task = asyncio.create_task(
                     self._drain_stderr(), name=f"acp-stderr-{self._popen.pid}"
