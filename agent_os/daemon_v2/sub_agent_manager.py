@@ -96,6 +96,8 @@ class SubAgentManager:
         self._setup_engine = setup_engine
         self._project_store = project_store
         self._lifecycle_observer = lifecycle_observer
+        # Batch 1110 item 13: strong refs to the early thread-record tasks.
+        self._thread_sink_tasks: set = set()
         # WebSocketManager used to surface CLAUDE.md interference banners.
         # Optional: when None we fall back to process_manager._ws if set.
         self._ws_manager = ws_manager
@@ -583,6 +585,31 @@ class SubAgentManager:
             from agent_os.daemon_v2 import worker_commands
             transport.set_commands_sink(
                 lambda cmds, _s=slug, _w=workspace: worker_commands.publish(_s, _w, cmds))
+
+    def _attach_thread_sink(self, transport, project_id: str, session_id: str | None,
+                            handle: str) -> None:
+        """Batch 1110 item 13: the native thread id is recorded the moment the
+        worker has one, through the same ``on_thread_update`` the completed
+        turn uses, so a restart during the first turn resumes instead of
+        starting fresh. Fire-and-forget on the running loop."""
+        if not hasattr(transport, "set_thread_sink"):
+            return
+        observer = self._lifecycle_observer
+
+        def sink(native_id, rollout_path=None, _p=project_id, _s=session_id, _h=handle):
+            if observer is None or not native_id:
+                return
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                return
+            task = loop.create_task(observer.on_thread_update(
+                _p, _h, claude_session_id=native_id, session_id=_s,
+                rollout_path=rollout_path))
+            self._thread_sink_tasks.add(task)
+            task.add_done_callback(self._thread_sink_tasks.discard)
+
+        transport.set_thread_sink(sink)
 
     async def probe_worker_commands(self, slug: str, workspace: str) -> list[dict] | None:
         """Spec 166 cold probe for the `/` picker: ask the worker's CLI for
@@ -1447,6 +1474,7 @@ class SubAgentManager:
         # the `/` picker's store under (slug, workspace).
         if transport is not None:
             self._attach_commands_sink(transport, manifest.slug, workspace)
+            self._attach_thread_sink(transport, project_id, session_id, handle)
 
         # Files the user attached by local path are readable by this worker:
         # the transport answers its CLI's own permission ask for exactly

@@ -989,6 +989,7 @@ class CodexTransport(AgentTransport):
         if not self._thread_id:
             raise RuntimeError(
                 f"codex thread/start returned no thread id: {result}")
+        self._publish_thread(self._thread_id, rollout_path=self._rollout_path)
 
     async def _fork_held_thread(self, params: dict) -> dict:
         """Spec 126 B: the thread is held by another app-server (the Codex

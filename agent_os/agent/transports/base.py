@@ -90,6 +90,28 @@ class AgentTransport(ABC):
             logging.getLogger(__name__).warning(
                 "worker commands sink failed", exc_info=True)
 
+    # Batch 1110 item 13: the native thread id as soon as the worker has one
+    # (Claude's init frame, Codex's thread/start), so a daemon restart during
+    # the FIRST turn can still resume it. The completion-time record keeps
+    # adding model and process identity on top.
+    _thread_sink = None
+
+    def set_thread_sink(self, sink) -> None:
+        """``sink(native_id, rollout_path=None)`` receives each new id."""
+        self._thread_sink = sink
+
+    def _publish_thread(self, native_id, rollout_path=None) -> None:
+        """Hand a new native thread id on. Never raises."""
+        sink = self._thread_sink
+        if sink is None or not native_id:
+            return
+        try:
+            sink(native_id, rollout_path=rollout_path)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).warning(
+                "thread sink failed", exc_info=True)
+
     def read_is_granted(self, path) -> bool:
         """True when ``path`` (absolute) resolves to a granted attached file."""
         import os

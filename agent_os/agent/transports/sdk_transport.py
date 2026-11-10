@@ -1070,6 +1070,7 @@ class SDKTransport(AgentTransport):
             if (getattr(msg, "subtype", None) == "init"
                     and sid and self._session_id != sid):
                 self._session_id = sid
+                self._publish_thread(sid)
                 events.append(TransportEvent(
                     event_type="thread_started",
                     data={"session_id": sid, "model": self._last_model},
