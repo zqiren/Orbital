@@ -1,37 +1,53 @@
 # Contributing to Orbital
 
-Thank you for your interest in contributing!
+Thank you for wanting to make Orbital better.
 
-## Getting Started
+Orbital is designed, built and maintained by one person working with AI agents.
+It is open source, but it is not open to code contributions: **please open an
+issue, not a pull request.**
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/my-feature`)
-3. Make your changes
-4. Run tests (`pytest tests/` and `cd web && npm test`)
-5. Commit with a clear message
-6. Push and open a Pull Request
+## Open an issue
 
-## Contributor License Agreement
+The most useful thing you can give the project is a clear report: what you did,
+what happened, and what you expected. Bugs, rough edges, missing features and
+questions are all welcome, in English or Chinese.
 
-By submitting a pull request, you agree to license your contribution under the project's GPL-3.0 license and grant the project maintainers the right to use, modify, and relicense your contribution under any license. This is necessary to preserve the maintainers' ability to offer the software under alternative licenses for commercial use.
+For a bug, please include:
 
-If you do not agree with these terms, please do not submit a pull request.
-
-## Code Style
-
-- Python: Follow existing patterns. Type hints preferred.
-- TypeScript/React: Follow existing patterns. Functional components with hooks.
-
-## Testing
-
-- Every bug fix must include a regression test in `tests/regression/`
-- Run `pytest tests/` for Python tests
-- Run `cd web && npm test` for frontend tests
-
-## Reporting Issues
-
-Please include:
-- OS and version
-- Python and Node.js versions
+- Your OS and version, and the Orbital version (Settings shows it)
 - Steps to reproduce
-- Expected vs actual behavior
+- What you expected and what happened instead
+- Logs or a screenshot if you have them
+
+If you have already found the cause, say so in the issue: the file, the line,
+and what you think is wrong. A precise diagnosis is what gets a fix shipped
+fastest, and you will be credited by name in the release notes as the person
+who found it.
+
+## Pull requests are not accepted
+
+Every change to Orbital carries product and architecture decisions: which
+platforms are supported, what a setting promises the user, how a worker is
+driven. Those decisions, and every line that ships, are kept in one place so
+that one person can stand behind all of it.
+
+So Orbital does not merge outside pull requests. If one is opened, it is read
+as a report: the problem it describes is checked and, if it is real, fixed in
+the main line. The pull request is then closed with a note saying what was
+found and which release carries the fix.
+
+This is not a judgement on anyone's work. Please save yourself the effort and
+describe the problem in an issue instead.
+
+## Forks are welcome
+
+Orbital is licensed under GPL-3.0. You are free to fork it, change it, and
+share your version under the same license. If you maintain a fork that does
+something Orbital does not, open an issue and say so: it is useful to know
+what people need.
+
+## Security problems
+
+Please do not post the details of a security problem in a public issue or pull
+request. Open an issue that says only "security report" and asks for a private
+channel, and you will get one.
