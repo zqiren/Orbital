@@ -160,7 +160,10 @@ class FakeRunner:
             raise RuntimeError("provider said no")
         self.started.append(pid)
         self.runners.append(who)
-        return f"sess-{pid}-{len(self.started)}"
+        # Numbered per project: two projects resumed together reach start()
+        # in either order (thread hops), and a shared counter made the
+        # second one's first session look like a second start.
+        return f"sess-{pid}-{self.started.count(pid)}"
 
     async def wait(self, pid, sid, who):
         self.running += 1
