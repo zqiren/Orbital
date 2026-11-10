@@ -67,7 +67,34 @@ export interface FeedState {
 }
 
 /** A held card that never saw its turn start is let go after this long. */
-const HOLD_SAFETY_MS = 2 * 60 * 1000;
+export const HOLD_SAFETY_MS = 2 * 60 * 1000;
+
+/** Spec 169 B: each hold's own expiry, so a hold whose turn never starts
+ *  lets go at HOLD_SAFETY_MS even when no feed fetch comes (or it fails).
+ *  Keyed like `held`; cleared whenever the hold goes by any route. */
+const holdTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function clearHoldTimer(key: string): void {
+  const id = holdTimers.get(key);
+  if (id === undefined) return;
+  clearTimeout(id);
+  holdTimers.delete(key);
+}
+
+function expireHold(key: string, at: number): void {
+  holdTimers.delete(key);
+  const h = state.held.get(key);
+  // A newer hold has its own timer; a hold whose run was seen is the feed's.
+  if (!h || h.at !== at || h.sawRunning) return;
+  const left = at + HOLD_SAFETY_MS - Date.now();
+  if (left > 0) {
+    holdTimers.set(key, setTimeout(() => expireHold(key, at), left));
+    return;
+  }
+  const held = new Map(state.held);
+  held.delete(key);
+  set({ held });
+}
 
 const EMPTY: FeedState = {
   rows: [],
@@ -123,8 +150,11 @@ function applyRows(rows: WorkbenchFeedRow[]): void {
     const row = byKey.get(key);
     if (row && isRunning(row)) {
       held.set(key, { ...h, sawRunning: true, row });
-    } else if (h.sawRunning || now - h.at > HOLD_SAFETY_MS) {
+      // The run is seen: its end releases the hold, not the clock.
+      clearHoldTimer(key);
+    } else if (h.sawRunning || now - h.at >= HOLD_SAFETY_MS) {
       held.delete(key);
+      clearHoldTimer(key);
     } else if (row) {
       held.set(key, { ...h, row });
     }
@@ -179,17 +209,39 @@ export function removePending(nonce: string): void {
 
 /** Draw this card in 进行中 until the turn its reply starts has ended. */
 export function holdCard(row: WorkbenchFeedRow): void {
+  const key = sessionKeyOf(row.project_id, row.session_id);
+  const at = Date.now();
   const held = new Map(state.held);
-  held.set(sessionKeyOf(row.project_id, row.session_id), { sawRunning: false, at: Date.now(), row });
+  held.set(key, { sawRunning: false, at, row });
+  clearHoldTimer(key);
+  holdTimers.set(key, setTimeout(() => expireHold(key, at), HOLD_SAFETY_MS));
   set({ held });
 }
 
 /** Spec 160 round 4: the reply started no turn (the daemon recorded a 对 on
  *  the import scan's confirm card): let the held card go at once. */
 export function releaseCard(projectId: string, sessionId: string | null | undefined): void {
+  const key = sessionKeyOf(projectId, sessionId ?? null);
+  clearHoldTimer(key);
   const held = new Map(state.held);
-  if (!held.delete(sessionKeyOf(projectId, sessionId ?? null))) return;
+  if (!held.delete(key)) return;
   set({ held });
+}
+
+/**
+ * Spec 169 B: the step shared by both routes that answer a card (its reply
+ * field, the reading pane's composer), after the card was held. `result`
+ * is the inject response, or `null` when the send failed. A reply that
+ * started no turn (the daemon recorded it, `status: "recorded"`) or never
+ * got through lets the hold go at once; then refetch.
+ */
+export function settleReply(
+  projectId: string, sessionId: string | null | undefined, result: unknown,
+): void {
+  const recorded = !!result && typeof result === 'object'
+    && (result as { status?: unknown }).status === 'recorded';
+  if (result === null || recorded) releaseCard(projectId, sessionId);
+  void refreshFeed();
 }
 
 export function hideClosedAsk(projectId: string, askId: string): void {
@@ -232,6 +284,8 @@ export function activityText(feed: FeedState, projectId: string, sessionId: stri
 
 /** Test seam. */
 export function __resetWorkbenchFeed(): void {
+  for (const id of holdTimers.values()) clearTimeout(id);
+  holdTimers.clear();
   inFlight = false;
   queued = false;
   state = EMPTY;

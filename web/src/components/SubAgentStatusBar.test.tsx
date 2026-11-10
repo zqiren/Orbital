@@ -166,3 +166,61 @@ describe('SubAgentStatusBar — stop flow with honest warning', () => {
     expect(postCalls).toHaveLength(0);
   });
 });
+
+describe('SubAgentStatusBar — spec 169 C: the stop dialog', () => {
+  const agent = (status: 'running' | 'background-running' | 'idle') => ({
+    handle: 'claude-code', display_name: 'Claude Code', status, background_commands: [] as string[],
+  });
+  const live = (agents: ReturnType<typeof agent>[]) => ({ agents, refresh: vi.fn(async () => {}) });
+
+  it('renders under document.body, outside the chip line (which the app window clips)', async () => {
+    const user = userEvent.setup();
+    render(<SubAgentStatusBar projectId="p1" sessionId="s1" live={live([agent('running')])} />);
+    await user.click(screen.getByTestId('sub-agent-stop-claude-code'));
+    const dialog = screen.getByTestId('sub-agent-stop-confirm');
+    expect(dialog.parentElement).toBe(document.body);
+    expect(screen.getByTestId('sub-agent-status-bar').contains(dialog)).toBe(false);
+    // Copy and theme context unchanged through the portal.
+    expect(dialog).toHaveTextContent('Stop Claude Code?');
+  });
+
+  it('a click inside the panel does not dismiss it; the backdrop does', async () => {
+    const user = userEvent.setup();
+    render(<SubAgentStatusBar projectId="p1" sessionId="s1" live={live([agent('running')])} />);
+    await user.click(screen.getByTestId('sub-agent-stop-claude-code'));
+    await user.click(screen.getByTestId('sub-agent-stop-warning'));
+    expect(screen.getByTestId('sub-agent-stop-confirm')).toBeInTheDocument();
+    await user.click(screen.getByTestId('sub-agent-stop-confirm'));
+    expect(screen.queryByTestId('sub-agent-stop-confirm')).toBeNull();
+  });
+
+  it('closes when the confirmed agent turns idle', async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(<SubAgentStatusBar projectId="p1" sessionId="s1" live={live([agent('running')])} />);
+    await user.click(screen.getByTestId('sub-agent-stop-claude-code'));
+    expect(screen.getByTestId('sub-agent-stop-confirm')).toBeInTheDocument();
+    rerender(<SubAgentStatusBar projectId="p1" sessionId="s1" live={live([agent('idle')])} />);
+    expect(screen.queryByTestId('sub-agent-stop-confirm')).toBeNull();
+    // And it does not come back when the agent runs again.
+    rerender(<SubAgentStatusBar projectId="p1" sessionId="s1" live={live([agent('running')])} />);
+    expect(screen.queryByTestId('sub-agent-stop-confirm')).toBeNull();
+  });
+
+  it('closes when the confirmed agent leaves the line', async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(<SubAgentStatusBar projectId="p1" sessionId="s1" live={live([agent('running')])} />);
+    await user.click(screen.getByTestId('sub-agent-stop-claude-code'));
+    rerender(<SubAgentStatusBar projectId="p1" sessionId="s1" live={live([])} />);
+    expect(screen.queryByTestId('sub-agent-stop-confirm')).toBeNull();
+    rerender(<SubAgentStatusBar projectId="p1" sessionId="s1" live={live([agent('running')])} />);
+    expect(screen.queryByTestId('sub-agent-stop-confirm')).toBeNull();
+  });
+
+  it('stays open while the agent moves from running to background', async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(<SubAgentStatusBar projectId="p1" sessionId="s1" live={live([agent('running')])} />);
+    await user.click(screen.getByTestId('sub-agent-stop-claude-code'));
+    rerender(<SubAgentStatusBar projectId="p1" sessionId="s1" live={live([agent('background-running')])} />);
+    expect(screen.getByTestId('sub-agent-stop-confirm')).toBeInTheDocument();
+  });
+});

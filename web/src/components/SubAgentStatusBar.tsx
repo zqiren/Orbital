@@ -17,6 +17,7 @@
 // REPORT-piece3-child-classification.md).
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { api } from '../config';
 import { useT } from '../i18n/useT';
 import {
@@ -91,6 +92,14 @@ export default function SubAgentStatusBar({ projectId, sessionId, live }: Props)
     }
   }, [projectId, sessionId, refresh]);
 
+  // Spec 169 C: nothing left to stop — the confirmed agent left the line or
+  // went idle — closes the dialog (adjusting state during render, not in an
+  // effect, so it never paints a frame asking to stop an idle worker).
+  if (confirming) {
+    const current = agents.find((a) => a.handle === confirming.handle);
+    if (!current || current.status === 'idle') setConfirming(null);
+  }
+
   if (agents.length === 0 && !lastStop) return null;
 
   // A line of the session heading, not a bar of its own (spec 137 follow-up,
@@ -157,7 +166,14 @@ export default function SubAgentStatusBar({ projectId, sessionId, live }: Props)
         </span>
       )}
 
-      {confirming && (
+      {/* Spec 169 C: portalled to <body>, as CardList's dialogs are. Inside
+          the chip line it sat under the line's overflow box and z-10
+          stacking context: the packaged app's WKWebView clipped the
+          viewport backdrop to the line (a grey band that ate clicks, the
+          dialog itself off-strip), and elsewhere the heading stayed undimmed
+          above it. React context (i18n) carries through the portal; theme
+          tokens live on :root. */}
+      {confirming && createPortal(
         <div
           data-testid="sub-agent-stop-confirm"
           className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4"
@@ -201,7 +217,8 @@ export default function SubAgentStatusBar({ projectId, sessionId, live }: Props)
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );

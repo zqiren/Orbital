@@ -32,6 +32,7 @@ vi.mock('./ChatView', async () => {
       <div data-testid="chatview-stub" data-session={String(props.sessionId)}>
         <button type="button" data-testid="stub-open-doc" onClick={() => open?.('docs/a.md')}>doc</button>
         <button type="button" data-testid="stub-send" onClick={() => (props.onUserSend as (() => void) | undefined)?.()}>send</button>
+        <button type="button" data-testid="stub-send-recorded" onClick={() => (props.onUserSend as ((r: unknown) => void) | undefined)?.({ status: 'recorded', session_id: String(props.sessionId) })}>send recorded</button>
       </div>
     );
   }
@@ -366,6 +367,17 @@ describe('Workbench — card actions', () => {
     await act(async () => { await refreshFeed(); });
     // Not drawn from a held snapshot in 进行中 either.
     expect(cards().some((c) => (c.textContent ?? '').includes('这样理解对吗'))).toBe(false);
+  });
+
+  it('spec 169 B: a reply from the field that fails lets the card go at once (not held in 进行中)', async () => {
+    await renderPage(FEED, {
+      'POST /api/v2/agents/proj-a/inject': () => { throw new Error('500'); },
+    });
+    const done = cardWith('Hero copy');
+    fireEvent.change(within(done).getByTestId('wb-card-reply'), { target: { value: 'one more pass' } });
+    fireEvent.keyDown(within(done).getByTestId('wb-card-reply'), { key: 'Enter' });
+    await screen.findByTestId('workbench-open-error');
+    expect(cardWith('Hero copy').getAttribute('data-dot')).not.toBe('run');
   });
 
   it('a card answered from its field sits in 进行中 until the turn ends, then comes back to 等你 unchecked', async () => {
@@ -783,6 +795,15 @@ describe('Workbench — reading pane (2026-11-04)', () => {
     // Still selected, pane still open.
     expect(cardWith('Hero copy').getAttribute('data-selected')).toBe('true');
     expect(pane()).not.toBeNull();
+  });
+
+  it('spec 169 B: a 对 sent from the pane that the daemon recorded (no turn) does not leave the card in 进行中', async () => {
+    await renderPage();
+    fireEvent.click(cardWith('Hero copy'));
+    expect(cardWith('Hero copy').getAttribute('data-dot')).toBe('new');
+    fireEvent.click(screen.getByTestId('stub-send-recorded'));
+    expect(cardWith('Hero copy').getAttribute('data-dot')).not.toBe('run');
+    expect(screen.getByTestId('workbench-summary')).not.toHaveTextContent('2 running');
   });
 
   it('a document opens OVER the pane with a back chevron; back returns to the same chat', async () => {
