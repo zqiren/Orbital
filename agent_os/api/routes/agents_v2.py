@@ -71,6 +71,9 @@ class CreateProjectRequest(BaseModel):
     workspace: str
     # None = follow the global default card.
     card_id: str | None = None
+    # Batch 1110 (dsh pass): the sticky pin at creation, validated like the
+    # PUT's; it used to be silently dropped as an unknown field.
+    default_pinned_target: str | None = None
     autonomy: str | None = None
     instructions: str | None = None
     agent_slug: str | None = None
@@ -844,6 +847,9 @@ async def create_project_from_request(req: CreateProjectRequest, *,
         project_data["agent_slug"] = req.agent_slug
     if req.enabled_sub_agents is not None:
         project_data["enabled_sub_agents"] = req.enabled_sub_agents
+    if req.default_pinned_target is not None:
+        _validate_pin_slug(req.default_pinned_target)
+        project_data["default_pinned_target"] = req.default_pinned_target
     if req.disabled_sub_agents is not None:
         project_data["disabled_sub_agents"] = req.disabled_sub_agents
     else:

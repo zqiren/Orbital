@@ -57,3 +57,21 @@ def test_twice_without_flag_is_201_then_409(client, workspace):
     r2 = _post(client, workspace)
     assert (r1.status_code, r2.status_code) == (201, 409)
     assert "already in use" in r2.json()["detail"]
+
+
+def test_default_pinned_target_at_creation_is_kept_and_validated(client, workspace, monkeypatch):
+    """Batch 1110 (dsh pass): POST /projects used to drop default_pinned_target
+    silently (an unknown field); it is stored now, after the same check the
+    PUT applies."""
+    from agent_os.api.routes import agents_v2
+    registry = MagicMock()
+    registry.get = MagicMock(side_effect=lambda slug: object() if slug in ("dsh", "codex") else None)
+    monkeypatch.setattr(agents_v2, "_setup_engine", MagicMock(_registry=registry))
+    r = _post(client, workspace, default_pinned_target="dsh")
+    assert r.status_code == 201, r.text
+    pid = r.json()["project_id"]
+    assert client.get(f"/api/v2/projects/{pid}").json()["default_pinned_target"] == "dsh"
+    # Unknown slug: refused before anything is stored.
+    r = _post(client, workspace, auto_unique_name=True, default_pinned_target="nope")
+    assert r.status_code == 400
+    assert "default_pinned_target" in r.text
