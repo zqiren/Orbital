@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { useState, useEffect, useId, useRef } from 'react';
+import AutonomyScopeHint from './AutonomyScopeHint';
 import { ChevronDown, ChevronRight, Folder, FolderPlus, Lightbulb, Loader2, X } from 'lucide-react';
 import type {
   Autonomy,
@@ -415,6 +416,7 @@ export default function CreateProject({
                 <div>
                   <label className="block text-sm font-medium text-primary mb-2">
                     {t('autonomy.level.label')}
+                    <AutonomyScopeHint />
                   </label>
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                     {AUTONOMY_OPTIONS.map((opt) => (

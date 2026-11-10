@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { useState, useRef, useEffect, useCallback } from 'react';
+import AutonomyScopeHint from './AutonomyScopeHint';
 import type {
   Autonomy,
   FallbackModelEntry,
@@ -772,7 +773,7 @@ export default function SettingsView({
 
         <SettingsGroup title={t('settings.group.limits')}>
         {/* Autonomy Level */}
-        <SettingsSection id="autonomy" title={t('autonomy.level.label')}>
+        <SettingsSection id="autonomy" title={t('autonomy.level.label')} suffix={<AutonomyScopeHint />}>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             {AUTONOMY_OPTIONS.map((opt) => (
               <button
