@@ -214,20 +214,50 @@ class DispatchServer:
         self._task = None
 
 
-def attach_dispatch_server(app, sub_agent_manager) -> DispatchServer | None:
+class BoundPortProbe:
+    """ASGI middleware: the first request tells the daemon which port it is
+    bound to, so the dispatch URL never has to be guessed.
+
+    ``AGENT_OS_PORT`` is what the packaged app and the scripts export; a
+    daemon started any other way (``python -m uvicorn … --port N``) used to
+    attach no dispatch endpoint at all, and a pinned worker then quietly ran
+    the other agent's CLI from its shell (batch 1110, item 7). uvicorn puts
+    the bound ``(host, port)`` in every request scope, and no worker is ever
+    spawned before an HTTP request has arrived, so the first request pins
+    the URL exactly. A wrong default (another daemon on 8000) would be worse
+    than none, so there is no default."""
+
+    def __init__(self, app, sub_agent_manager) -> None:
+        self._app = app
+        self._sam = sub_agent_manager
+
+    async def __call__(self, scope, receive, send):
+        if (self._sam._dispatch_url is None
+                and scope.get("type") in ("http", "websocket")):
+            server = scope.get("server")
+            port = server[1] if isinstance(server, (tuple, list)) and len(server) > 1 else None
+            if isinstance(port, int) and port > 0:
+                self._sam._dispatch_url = f"http://127.0.0.1:{port}/mcp"
+                logger.info("dispatch MCP endpoint resolved from the bound port: %s",
+                            self._sam._dispatch_url)
+        await self._app(scope, receive, send)
+
+
+def attach_dispatch_server(app, sub_agent_manager) -> DispatchServer:
     """Mount ``/mcp`` on ``app`` and tell the sub-agent manager its URL.
 
-    Without ``AGENT_OS_PORT`` the URL is unknown, so nothing is attached and
-    top-of-session workers simply get no dispatch tool."""
-    url = dispatch_url()
-    if url is None:
-        logger.warning(
-            "AGENT_OS_PORT is not set: the dispatch MCP endpoint is not attached, "
-            "so pinned workers get no dispatch tool")
-        return None
+    The URL comes from ``AGENT_OS_PORT`` when set; otherwise from the port
+    the first request shows the daemon is bound to (``BoundPortProbe``)."""
     server = DispatchServer(sub_agent_manager)
     app.router.routes.append(server.route)
     app.on_event("startup")(server.start)
     app.on_event("shutdown")(server.stop)
-    sub_agent_manager._dispatch_url = url
+    url = dispatch_url()
+    if url is not None:
+        sub_agent_manager._dispatch_url = url
+    else:
+        sub_agent_manager._dispatch_url = None
+        app.add_middleware(BoundPortProbe, sub_agent_manager=sub_agent_manager)
+        logger.info("AGENT_OS_PORT is not set: the dispatch MCP URL is taken from "
+                    "the bound port on the first request")
     return server
