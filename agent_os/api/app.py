@@ -159,7 +159,9 @@ def _configure_file_logging(data_dir: str) -> None:
 #: Seconds after daemon start before the first sub-agent sweep. Its ~15 CLI
 #: probes and handshakes competed with the boot the window waits on (batch
 #: 1026 DMG: daemon start → window 2.9 s → 5.7–6.8 s); by now the window is
-#: up and the session index built.
+#: up and the session index built. Automations missed while Orbital was
+#: closed wait the same delay before they catch up (v0.21.0: three due at
+#: launch pushed the first answer past the window's 15 s health check).
 STARTUP_SWEEP_DELAY_S = 10.0
 
 
@@ -498,7 +500,8 @@ def _assemble_app(app: FastAPI, data_dir: str | None) -> FastAPI:
     sub_agent_manager._worker_deps_factory = agent_manager.build_worker_deps
 
     # 6b. Trigger manager
-    trigger_manager = TriggerManager(project_store, agent_manager, ws_manager=ws_manager)
+    trigger_manager = TriggerManager(project_store, agent_manager, ws_manager=ws_manager,
+                                     first_tick_delay_s=STARTUP_SWEEP_DELAY_S)
     agent_manager._trigger_manager = trigger_manager
 
     @app.on_event("startup")
