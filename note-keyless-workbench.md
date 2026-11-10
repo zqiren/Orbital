@@ -77,7 +77,10 @@ The wizard's Orbital API key step has a Skip. After Skip, Orbital's own agent (t
 1. Back up `sub_agent_config.json`, `user_memory.md`, `user_preferences.md`; note mtimes.
 2. Create three scratch workspaces and give each native history so the wizard can
    import them: `git init` each, then inside run
-   `claude -p "Reply with just OK"` and `codex exec --skip-git-repo-check "Reply with just OK"`
+   `claude -p "The code word for this folder is MAPLE. Remember it."` and
+   `codex exec --skip-git-repo-check "The code word for this folder is MAPLE. Remember it."`
+   (a probe-shaped first message such as "Reply with just OK" is filtered out of the history as
+   noise, so the folder would never reach the wizard)
    (one of each per folder; the ACP agent's history is optional).
 3. Start the isolated daemon on a fresh data dir, then Vite against it. Confirm the
    listening PID on the port is the daemon you just started.

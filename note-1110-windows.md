@@ -72,7 +72,7 @@ Everything else (A1, A6, all of B, C, D, the rest of E) runs as written. D1/D2 o
   show `D:/…/orbital/instructions/project_goals.md` (forward slashes, drive letter kept). After a first task on a
   project with no goals, the worker writes `<ws>\orbital\instructions\project_goals.md`, not a cwd guess.
 - **167-W2 Wizard keyless import.** Fresh install, no key, import 2 scratch folders. On the key step the coin sign
-  with "2" and the worker name sits beside Skip; hover/tap shows the sentence and the switch.
+  with "2" sits beside Skip; hover/tap shows the sentence (which names the worker) and the switch.
   Switch on, Skip: 项目梳理 sessions run on the worker, at most 2 at once, each ending with the zh card.
   Switch off, Skip: no scan; the first message in a project brings the card.
 - **167-W3 New empty project ×3** (sticky pin set). No greeting and no session until you send. Send one small task:
