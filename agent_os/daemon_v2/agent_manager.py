@@ -2913,12 +2913,16 @@ class AgentManager:
             handle = _terminal_handle(meta, row.get("content"))
             if not handle or getattr(session, "pinned_target", None) != handle:
                 return
+            project = (self._project_store.get_project(project_id)
+                       if self._project_store else None)
+            # Spec 169 A: Quick Tasks never records memory (the manager's
+            # ``_memory_record_wanted`` already skips it), so no goals draft.
+            if isinstance(project, dict) and project.get("is_scratch"):
+                return
             if not self._worker_record_transport_eligible(project_id, session_id, handle):
                 return
             if not self._worker_quiescent(project_id, session_id, handle):
                 return
-            project = (self._project_store.get_project(project_id)
-                       if self._project_store else None)
             workspace = (project or {}).get("workspace", "") if isinstance(project, dict) else ""
             tool_rows = self._worker_run_tool_rows(project_id, session_id, handle, session)
             changed, wrote_memory = worker_turn_changed_files(tool_rows or [], workspace)
@@ -3021,7 +3025,9 @@ class AgentManager:
         try:
             project = self._project_store.get_project(project_id) if self._project_store else None
             workspace = (project or {}).get("workspace", "") if isinstance(project, dict) else ""
-            if workspace and project_goals_missing(workspace):
+            # Spec 169 A: Quick Tasks owes no goals draft.
+            scratch = isinstance(project, dict) and bool(project.get("is_scratch"))
+            if workspace and not scratch and project_goals_missing(workspace):
                 self._stamp_goals_pending(project_id, True)
             if loop is not None:
                 loop.goals_draft_pending = self._goals_pending(project_id)

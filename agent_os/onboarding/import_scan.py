@@ -291,6 +291,35 @@ def guess_flavour(project: dict | None) -> str:
     return f"guess:{lang}" if lang in LANGS else "guess"
 
 
+# Spec 169 D (R8): a draft is Chinese when CJK is a real share of its letters,
+# so an English draft quoting a Chinese file name stays English.
+_CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
+CJK_SHARE = 0.3
+
+
+def text_lang(text: str | None) -> str | None:
+    """``"zh"`` when CJK characters are at least ``CJK_SHARE`` of the
+    letters in ``text``; ``None`` otherwise (the caller's rule decides)."""
+    letters = sum(1 for ch in text or "" if ch.isalpha())
+    if not letters:
+        return None
+    cjk = len(_CJK_RE.findall(text or ""))
+    return "zh" if cjk / letters >= CJK_SHARE else None
+
+
+def goals_lang(workspace: str) -> str | None:
+    """:func:`text_lang` of the project's goals file (``None`` when unreadable)."""
+    if not workspace:
+        return None
+    from agent_os.agent.project_paths import ProjectPaths
+    try:
+        with open(ProjectPaths(workspace).project_goals, encoding="utf-8",
+                  errors="replace") as fh:
+            return text_lang(fh.read())
+    except OSError:
+        return None
+
+
 def has_goals(workspace: str) -> bool:
     """The test the prompt uses: an empty goals file is still onboarding."""
     if not workspace:

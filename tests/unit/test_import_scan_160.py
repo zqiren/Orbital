@@ -1509,7 +1509,9 @@ def test_the_card_with_steps_offers_step_one(tmp_path):
     (ask,) = [a for a in asks.read_asks(str(ws / "orbital")) if a.id == ask_id]
     assert ask.text == "这样理解对吗？" and ask.is_open
     assert ask.options == ("对，做第 1 步", "对，先不做", "需要改")
+    # Spec 169 D: the goals file leads the detail, the steps follow unchanged.
     assert ask.detail == (
+        "[project_goals.md](orbital/instructions/project_goals.md)\n\n"
         "1. Implement `dumps()` so it round-trips with `loads()`\n"
         "2. Add line numbers to `ParseError`\n"
         "3. Publish 0.4.0 to PyPI")
@@ -1532,7 +1534,9 @@ def test_the_card_without_steps_is_unchanged(tmp_path):
     tc, deps, pid, sid, ws, ask_id, _ = _confirm_env(
         tmp_path, keyed=True, state="# S\n\n## Current focus\n- x\n")
     (ask,) = [a for a in asks.read_asks(str(ws / "orbital")) if a.id == ask_id]
-    assert ask.options == ("对", "需要改") and ask.detail == ""
+    # Spec 169 D: no steps, so the detail is just the goals file's link.
+    assert ask.options == ("对", "需要改")
+    assert ask.detail == "[project_goals.md](orbital/instructions/project_goals.md)"
     rec = deps["project_store"].get_project(pid)[import_scan.ASK_FIELD]
     assert rec["yes"] == "对" and "go" not in rec and "steps" not in rec
 
