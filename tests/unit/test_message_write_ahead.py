@@ -276,6 +276,35 @@ async def test_message_survives_raising_start(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_a_start_the_provider_would_refuse_writes_no_row(tmp_path):
+    """Batch 1110 item 3 (keyless A6): with no key the start is refused BEFORE
+    the user row exists, so no dead session is left; and when the project has
+    no worker either, the code is no_runner (both remedies), not the key alone."""
+    ws = str(tmp_path)
+    mgr = _manager(ws)
+    keyless = _config(ws)
+    keyless.api_key = ""
+    mgr._build_agent_config_from_project = lambda pid: keyless
+    mgr.start_agent = _CapturingStart(ws)
+
+    # A worker could still take it: the plain missing_api_key, no row.
+    mgr.available_worker_slugs = lambda pid, project=None: ["claude-code"]
+    with pytest.raises(ProviderConfigError) as info:
+        await mgr.inject_message("proj", "hello", nonce="n-1", session_id=SESSION_ID)
+    assert info.value.code == "missing_api_key"
+    assert _rows(ws, SESSION_ID) == []
+    assert mgr.start_agent.calls == []
+
+    # Nobody at all: both remedies, still no row.
+    mgr.available_worker_slugs = lambda pid, project=None: []
+    with pytest.raises(ProviderConfigError) as info:
+        await mgr.inject_message("proj", "hello", nonce="n-2", session_id=SESSION_ID)
+    assert info.value.code == "no_runner"
+    assert "enable an agent" in str(info.value) and "API key" in str(info.value)
+    assert _rows(ws, SESSION_ID) == []
+
+
+@pytest.mark.asyncio
 async def test_idle_loop_inject_that_cannot_resume_gets_the_failure_row(tmp_path):
     """Case 2 (a live, idle handle): the user row is appended and the resume
     raises (a keyless Orbital session, missing_api_key). The session must

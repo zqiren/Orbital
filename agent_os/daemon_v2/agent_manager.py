@@ -3174,6 +3174,7 @@ class AgentManager:
         rejection = self._start_rejection(project_id, session_id, session)
         if rejection is not None:
             raise rejection
+        self._preflight_provider(project_id, config)
 
         if session is None:
             session = self._new_session_object(
@@ -3204,6 +3205,34 @@ class AgentManager:
             )
             raise
         return "started"
+
+    def _preflight_provider(self, project_id: str, config: AgentConfig) -> None:
+        """Batch 1110 item 3: a start the provider would refuse (no key) is
+        refused BEFORE the user row is written, so a keyless project leaves
+        no dead session behind. When no worker could take the message either
+        (every agent turned off here), the error names both remedies as
+        ``no_runner`` instead of blaming the key alone."""
+        try:
+            self.validate_provider_config(config)
+        except ProviderConfigError as exc:
+            if getattr(exc, "code", None) == "missing_api_key" and self._no_worker_available(project_id):
+                raise ProviderConfigError(
+                    "no_runner",
+                    "Orbital's agent has no API key, and no agent is enabled for this "
+                    "project. Add a key in Settings, or enable an agent in the "
+                    "project's settings.",
+                ) from exc
+            raise
+
+    def _no_worker_available(self, project_id: str) -> bool:
+        """True when a keyless send has nobody to go to: the project turned
+        every ready worker off (or none is installed). False when unsure."""
+        try:
+            project = self._project_store.get_project(project_id)
+            slugs = self.available_worker_slugs(project_id, project=project)
+        except Exception:  # noqa: BLE001 — a probe failure is not a refusal reason
+            return False
+        return isinstance(slugs, list) and not slugs
 
     def _record_start_failure(self, project_id: str, session_id: str,
                               session: "Session", exc: BaseException,
