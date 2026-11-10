@@ -118,12 +118,14 @@ HOME after the dsh pass: the three Orbital files unchanged; `~/.dsh` exists sinc
   fixtures, `test_version` reading stale installed metadata 0.18.0, `C:\` being a git work tree here). The other
   three are test-environment artifacts, explained in the decisions file §C. None is this batch's code.
 - `tsc -b` clean; `vitest` 2761 → 2765 passed (new wizard tests, updated ChatView test); `check-i18n` 7 pre-existing missing-zh warnings.
-- After the second pass: `pytest` **35 failed / 7071 passed** (the two test-side artifacts are green now; the
-  card-shape test gained the `change_option` key; the two remaining new reds are flaky, not regressions:
-  `test_history_sources_138::TestMiniMax::test_sub_sessions_and_archived_are_skipped` fails one run in two
-  on the untouched source, and `test_provider_integration::test_run_process_overwrites_terminates_old`
-  passed on rerun). `tsc -b` clean; `vitest` **2771 passed / 178 files**; `check-i18n` 1555 keys, the same 7
-  pre-existing missing-zh warnings.
+- After the second pass, on the pushed tip `bfe99da`: `pytest` **33 failed / 7074 passed** (the two
+  test-side artifacts are green now; the card-shape test gained the `change_option` key). 32 of the 33 are the
+  pre-existing Windows reds listed above; the one other,
+  `test_provider_integration::test_run_process_overwrites_terminates_old`, is flaky under load (passes on
+  rerun), as is `test_history_sources_138::TestMiniMax::test_sub_sessions_and_archived_are_skipped` and the
+  Vitest `SubAgentSettings` update-floor case (each failed once in a full run and passed alone, on untouched
+  code). `tsc -b` clean; `vitest` **2774 passed / 178 files**; `check-i18n` 1555 keys, the same 7 pre-existing
+  missing-zh warnings.
 - `test_import_scan_160::test_a_scan_records_its_session_on_the_project` waited 50 bare event-loop ticks for a
   run that goes through `asyncio.to_thread` twice: passed in one full run, failed 3/3 alone on a quiet machine
   (also on the untouched `ca770dc` file). It now waits for the RUNNING state (commit below); 3/3 green after.
