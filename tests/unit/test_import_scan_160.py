@@ -1487,6 +1487,15 @@ def test_next_steps_reads_the_state_files_section(tmp_path):
     (orb / "PROJECT_STATE.md").write_text(
         "# S\n\n## Next steps\n- Nonetheless publish 0.4.0\n- 无锁队列改为有锁\n", encoding="utf-8")
     assert next_steps(str(tmp_path)) == ["Nonetheless publish 0.4.0", "无锁队列改为有锁"]
+    # "Wait for the user" is not a step either (dsh wrote it, batch 1110).
+    for body in ("# S\n\n## Next steps\n- Wait for the user's actual request; ask what the project is for.\n",
+                 "# S\n\n## Next steps\n- Waiting for user input\n",
+                 "# S\n\n## Next steps\n- 等待用户提出具体需求\n"):
+        (orb / "PROJECT_STATE.md").write_text(body, encoding="utf-8")
+        assert next_steps(str(tmp_path)) == [], body
+    (orb / "PROJECT_STATE.md").write_text(
+        "# S\n\n## Next steps\n- Wait for CI to finish, then tag 0.4.0\n", encoding="utf-8")
+    assert next_steps(str(tmp_path)) == ["Wait for CI to finish, then tag 0.4.0"]
 
 
 def test_the_card_with_steps_offers_step_one(tmp_path):

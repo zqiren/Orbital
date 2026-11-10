@@ -176,7 +176,10 @@ _ITEM_RE = re.compile(r"^(?:[-*+]|\d+[.)])\s+(.*\S)")
 # "无" / "暂无" / "没有" ("None pending; awaiting the user's next instruction." is
 # the record turn's way of saying nothing is next; it must not become step 1).
 _PLACEHOLDER_RE = re.compile(
-    r"^[(（].*[)）]$|^(none|nothing|n/a)(?![a-z])|^(无|暂无|没有)(?:[\s.。,，;；:：]|$)",
+    r"^[(（].*[)）]$|^(none|nothing|n/a)(?![a-z])|^(无|暂无|没有)(?:[\s.。,，;；:：]|$)"
+    # "Wait for the user's actual request…" (dsh, batch 1110) is not a step
+    # the card can start: nothing to do until the user speaks.
+    r"|^(wait|waiting)\s+(for\s+)?(the\s+)?user\b|^等待?用户",
     re.IGNORECASE)
 
 
