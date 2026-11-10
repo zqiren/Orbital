@@ -34,6 +34,8 @@ CARD_KEYS = {
     # Item 160 (2026-11-05): the choices the agent offered, [] when none.
     # Additive: a cached v0.13 SPA ignores the extra key.
     "options", "detail",
+    # Batch 1110 item 2: the goals card's "needs changes" option (None elsewhere).
+    "change_option",
 }
 
 SEEDED_ASKS = "\n".join([
