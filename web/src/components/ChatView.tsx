@@ -3450,6 +3450,13 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   // keyless with no skills installed, `/` opens nothing).
 
 
+  /** Batch 1110 item 12: Claude Code's own `/schedule` creates a cloud routine
+   *  on the user's Claude account, which Orbital can neither see nor stop;
+   *  the picker says so beside it (hiding it would only hide the danger). */
+  function isCloudRoutineCommand(entry: SkillCatalogEntry): boolean {
+    return entry.source === 'worker' && entry.key === 'schedule';
+  }
+
   /** Pick a skill: the `/query` text goes, the chip replaces any earlier pick. */
   function pickSkill(entry: SkillCatalogEntry) {
     setSelectedSkillIndex(0);
@@ -4818,6 +4825,13 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                     )}
                     {skill.description && (
                       <span className="min-w-0 flex-1 truncate text-xs text-muted">{skill.description}</span>
+                    )}
+                    {isCloudRoutineCommand(skill) && (
+                      // Batch 1110 item 12: a worker command that creates a
+                      // routine on the user's own account, outside Orbital.
+                      <span data-testid="skill-option-warning" className="shrink-0 truncate text-xs text-warning">
+                        {t('skills.worker.cloudRoutine')}
+                      </span>
                     )}
                   </span>
                 </button>

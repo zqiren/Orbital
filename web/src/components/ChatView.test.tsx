@@ -5784,6 +5784,25 @@ describe("Spec 166: the / picker offers the pinned worker's own commands", () =>
     };
   });
 
+  it("a worker's /schedule carries the outside-Orbital warning (batch 1110 item 12)", async () => {
+    const SCHEDULE = {
+      key: 'schedule', name: 'schedule', description: 'Create, update, list, or run scheduled cloud agents',
+      source: 'worker', path: '', dir_name: '', invoke: '/schedule ', hint: '',
+    };
+    skillCatalogResponder = (path) => {
+      const worker = new URL(path, 'http://x').searchParams.get('worker');
+      return worker === 'claude-code' ? [SCHEDULE, REVIEW, TASK] : [TASK];
+    };
+    await renderChat({ sessionId: 's1', agents: WORKERS, project: pinnedTo('claude-code') });
+    await flushEffects();
+    await type('/');
+    const warnings = Array.from(container.querySelectorAll('[data-testid="skill-option-warning"]'));
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].textContent).toMatch(/outside Orbital/);
+    const row = warnings[0].closest('[data-testid="skill-option"]');
+    expect(row?.getAttribute('data-skill-name')).toBe('schedule');
+  });
+
   it('a worker pin loads its list before the first /, with ?worker=', async () => {
     await renderChat({ sessionId: 's1', agents: WORKERS, project: pinnedTo('claude-code') });
     await flushEffects();
