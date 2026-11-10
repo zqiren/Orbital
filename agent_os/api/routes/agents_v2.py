@@ -1651,6 +1651,10 @@ def _card_lang(project: dict) -> str:
     return guess_lang(project)
 
 
+# The goals file, workspace-relative: the confirm card's file card.
+_GOALS_CARD_PATH = "orbital/instructions/project_goals.md"
+
+
 async def post_goals_confirm(project_id: str, session_id: str) -> str | None:
     """Spec 160 round 4: the goals were drafted; the DAEMON asks whether they
     are right — an ask card (这样理解对吗？ · 对 | 需要改) through the asks write
@@ -1665,26 +1669,35 @@ async def post_goals_confirm(project_id: str, session_id: str) -> str | None:
     (``_run_one``), or the record turn of a project's first real run (the
     manager loop's ``on_goals_created``, a pinned worker's memory turn). The
     creator posts; a second post while the project's card is still open
-    returns None."""
+    returns None.
+
+    Spec 169: never in Quick Tasks (the scratch project records no memory,
+    so it has no goals to confirm) — this is the card's one exclusion,
+    whichever route asks. The detail opens with the goals file as a link
+    (the chat renders it as a file card that opens the right panel), and
+    the card speaks the draft's language: zh when the goals file is mostly
+    CJK, else ``_card_lang``."""
     from agent_os.agent import asks
     from agent_os.agent.context import ask_card_row
     from agent_os.onboarding.import_scan import (
-        ASK_FIELD, confirm_ask, confirm_ask_steps, guess_lang, next_steps,
+        ASK_FIELD, confirm_ask, confirm_ask_steps, goals_lang, next_steps,
     )
     project = _project_store.get_project(project_id)
-    if not project:
+    if not project or project.get("is_scratch"):
         return None
-    lang = _card_lang(project)
     workspace = project.get("workspace", "")
+    lang = await asyncio.to_thread(goals_lang, workspace) or _card_lang(project)
     steps = await asyncio.to_thread(next_steps, workspace)
+    goals_link = f"[project_goals.md]({_GOALS_CARD_PATH})"
     if steps:
         question, go, yes, no = confirm_ask_steps(lang)
         text = f"{question} options: {go} | {yes} | {no}"
-        detail = "\n".join(f"{i}. {step}" for i, step in enumerate(steps, 1))
+        detail = goals_link + "\n\n" + "\n".join(
+            f"{i}. {step}" for i, step in enumerate(steps, 1))
         record = {"yes": yes, "change": no, "go": go, "steps": steps}
     else:
         question, yes, no = confirm_ask(lang)
-        text, detail = f"{question} options: {yes} | {no}", ""
+        text, detail = f"{question} options: {yes} | {no}", goals_link
         record = {"yes": yes, "change": no}
     orbital = ProjectPaths(workspace).orbital_dir
     # Spec 167 §5.2: one card per project while it is open. The scan and a
