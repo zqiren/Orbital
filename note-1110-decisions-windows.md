@@ -5,6 +5,28 @@ committed on `batch/1110` (see `note-1110-results-windows.md`, "Fixes made in th
 below are product or architecture calls, or need something only you have. None of them blocks the
 batch; each has a suggested default so you can answer in one word.
 
+## Outcomes (owner's walk-through, 2026-11-10 morning, implemented on Windows)
+
+| Item | Owner's call | Landed |
+|---|---|---|
+| 1 | say it, don't plumb it: an ⓘ beside Autonomy Level explains the level applies to Orbital's agent and other agents keep their own permission models | `3b8112b` |
+| 2 | go | `285348f` (需要改 prefills the reply; prefixed answer is still the guarded change turn) |
+| 3 | go | `44fa468`, `786d2a0` (refuse before persisting; `no_runner` names both remedies) |
+| 4 | fix the note | `f7a626f` |
+| 5 | leave | — |
+| 6 | go | `9a46c79` |
+| 7 | no guessed default ("what if 8000 is taken?"): read the bound port | `cb1b652` (`BoundPortProbe`; `/mcp` always attached) |
+| 8 | go | `b4a5ef5` (`goals_draft_pending` stamp on the project) |
+| 9, 10, 15 | accept | — |
+| 11 | nothing needed: the reader already strips the BOM | — |
+| 12 | keep `/schedule` listed, mark it | `109cc67` (Orbital cannot list or delete Claude's cloud routines, so showing them in Orbital's automation list is not possible today) |
+| 13 | go | `f276d26` |
+| 14 | go | `c8da35d` |
+| 16 | copy ok | upgrade half done (results note §"Second pass"); downgrade half still needs an admin install of the v0.21 exe |
+| 17 | install dsh with the OpenCode Go key | installed; ACP rows in the results note |
+| 18 | fix the recipe | `f7a626f` |
+| §C | the two test-side fixes | `1fb22e3` |
+
 ## A. Product / architecture (found by the smoke)
 
 1. **Supervised autonomy is ignored for pinned workers (C3, same as the Mac).**
@@ -92,6 +114,35 @@ batch; each has a suggested default so you can answer in one word.
 15. **Import-scan summaries sometimes come back in English with `import_scan_lang: zh`** (claude-code ws-w1/w2,
     codex ws-c1; the card question and options are zh). Model output under the LANGUAGE section; the Mac saw
     zh. Suggested default: leave; revisit if users report it.
+
+19. **Idle worker processes are never reaped while the daemon runs** (dsh pass). Every session that ever ran
+    dsh keeps its `cmd.exe → DeepSeek Harness.exe` alive; 10 at once on rig D, the oldest idle 25 minutes.
+    `_reap_idle_sub_agents` (`agent_manager.py:~6884`) runs only when the owning session goes away; the
+    same holds for Claude Code and Codex (the Mac saw ~20 at peak). Resume makes stopping them lossless.
+    Suggested default: an idle timeout per worker adapter (say 10 minutes), stop → resume on the next send.
+
+20. **dsh's Windows sandbox repairs ACLs on the user's folder** (external, dsh 0.2.2-rc.1). Its first shell call
+    on a fresh folder fails (`SetNamedSecurityInfoW failed (Win32 5): grantWrite(<ws>)`); it then loads its
+    bundled `diagnose-windows-sandbox-acl` skill and runs the repair with `danger-full-access`, leaving
+    `acl-recovery\` folders (once outside the workspace) and new ACEs (`Everyone:(CI)(DENY)(S,DC)`, a
+    capability SID with W,D,DC, `Low Mandatory Level`). Not Orbital's code, but an Orbital user on Windows
+    sees it. Suggested default: raise with the dsh team; consider a one-line warning in Orbital's dsh card.
+
+21. **One `POST /mcp` 400 per worker spawn** (every dsh and Claude Code spawn, before the 200 initialize): the
+    MCP SDK's stateless streamable-HTTP transport answering the client's first probe. Dispatch works.
+    CLAUDE.md asks for no 400s in daemon logs. Suggested default: document it; or answer the probe with a
+    200 in our ASGI route if the SDK exposes a hook.
+
+22. **Job object and `claude.exe` on the test rigs (item 14 follow-up).** Rig D's log shows `windows job: pid …
+    not assigned (error 5)` for Claude Code spawns only (dsh and Codex assigned fine). The daemon on that
+    rig was launched from inside a Claude Code session, whose harness keeps its children in a job; a process
+    that broke away from that job cannot be added to a job nested under it. From a plain console a native
+    `claude.exe` assigns fine (verified). Expected to be clean under the desktop app; verify once on the
+    CI-built installer (a `windows job:` warning in the packaged daemon's log would mean it is not).
+
+23. **Mixed path separators** when a project's workspace was created through the API with forward slashes
+    (`C:/orbital-scratch/D/ws-w3\orbital\sub_agents\…`). Cosmetic; the UI sends backslashes. Suggested
+    default: `os.path.normpath` on create; left alone because tests compare the stored workspace verbatim.
 
 ## B. Needs something only you have
 

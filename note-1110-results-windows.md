@@ -41,6 +41,74 @@ group without a `skills` list is the builder's explicit choice (its test asserts
 Everything that needs a product or architecture call is in **`note-1110-decisions-windows.md`**
 (18 items, each with a suggested default).
 
+## Second pass (2026-11-10 morning): the decisions, implemented on Windows
+
+The owner went through `note-1110-decisions-windows.md` from first principles; each item's outcome is
+recorded in that file. What landed on the branch, each its own commit with a regression test:
+
+| Commit | Decision | What |
+|---|---|---|
+| `c8da35d` | 14 | Windows: every worker process (and its shells) is assigned to one kill-on-close Job Object, so a hard daemon kill takes the workers with it (`agent_os/utils/windows_job.py`, ctypes only; `test_windows_job.py` proves a child inherits membership) |
+| `9a46c79` | 6 | the dispatch tool's `task` argument says it carries the text and that there is no `message` argument |
+| `cb1b652` | 7 | `/mcp` is always attached; with no `AGENT_OS_PORT` the URL comes from the bound port in the first request's ASGI scope (`BoundPortProbe`), never a guessed default |
+| `f276d26` | 13 | the native thread id is recorded when the worker gets it (Claude's init frame, Codex's `thread/start`) through a transport sink → `on_thread_update`, so a restart during the FIRST turn resumes |
+| `44fa468`, `786d2a0` | 3 | a start the provider would refuse writes no row (keyless A6 leaves no dead session); no key AND no enabled worker is `no_runner`, with its own UI message naming both remedies |
+| `b4a5ef5` | 8 | the goals card is never lost: `goals_draft_pending` is stamped on the project at every goal-less run start and when a worker is asked to draft; the run end (record turn or not) and the worker's memory terminal post the card whenever goals exist and a draft was owed; posting clears the stamp |
+| `285348f` | 2 | 需要改 / Needs changes on the goals card (Workbench and in-chat) prefills the reply with 「需要改：」 and focuses it; the daemon classifies the prefixed line as the guarded change turn; the feed and session-asks payloads carry `change_option` |
+| `3b8112b` | 1 | the owner chose wording over plumbing: an ⓘ beside Autonomy Level (project settings and the create form) says the level applies to the Orbital agent, other agents keep their own permission models |
+| `109cc67` | 12 | `/schedule` stays in the keyless picker (owner's call) with a warning that it creates a routine on the user's account outside Orbital |
+| `f7a626f` | 4, 18 | the note's W2 wording; the runbook's history recipe is non-probe |
+| `1fb22e3` | §C | the two Windows test artifacts made deterministic (shutdown snapshot spawns the real interpreter; the transcript traversal test accepts the SPA's text/html but never JSON) |
+
+Not changed, by the owner's decision or because nothing was needed: 5 (shell writes in the changed-files
+hint), 9, 10, 15; 11 (the lenient reader already strips a UTF-8 BOM, so only raw viewers see it).
+
+**ACP agent (item 17):** the owner approved installing DeepSeek Harness 0.2.2-rc.1 on this machine
+(`deepseek-harness-0.2.2-rc.1-win-x64.exe`, 280 MB from the vendor URL in `dsh.yaml`, Authenticode
+signature valid, per-user NSIS `/S /currentuser`, no UAC). The stale `dsh` demo override was removed from
+`~/.orbital/sub_agent_config.json` (the only edit to a shared HOME file in this pass, backed up); Orbital
+then detects `…\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd` as installed and ready. The OpenCode Go
+route rides on a scratch `DSH_HOME` (`C:\orbital-scratch\dsh-home\profiles\desktop\cordis.patch.yml`: an
+`llm-pi-ai` providers row `opencode-go` with `api: anthropic-messages`, `baseURL https://opencode.ai/zen/go`,
+`apiKeyEnv OPENCODE_API_KEY`, header `x-opencode-session: orbital`, model `deepseek-v4.1-flash`; and
+`agent-default-model` pointing at it), which Orbital's mirror copies into every spawn; the key lives only in
+the test daemon's environment. First round trip: pinned dsh answered PONG, its memory turn drafted
+`project_goals.md` and the 这样理解对吗 card opened. The dsh ACP rows are in the section below.
+
+**Upgrade check (item 16, upgrade half):** the owner approved copying the real app's data dir
+(`%APPDATA%\Orbital`, `data_version: 1`, the v0.21 layout) to `C:\orbital-scratch\upgrade\data` without
+`browsers/` and `webview/`, with `projects.json` cut to three projects whose workspaces were also copied to
+scratch (`smoke1022`, `open117`, the data dir's own `scratch`), so no real folder could be touched. This
+branch's daemon opened it on port 8341 with no error or migration line, listed every old session (3 + 3) as
+idle chats, and a first task on goal-less `smoke1022` with Claude Code pinned created the file, ran the
+memory turn, wrote `orbital/instructions/project_goals.md` ("First draft … smoke-test the agent harness")
+and opened the card. Not done: the downgrade half (opening this branch's data with the v0.21 installer),
+which needs an admin install the owner was not present for. No half-way interview session existed in that
+data dir, so that specific transition was not exercised.
+
+## dsh ACP rows (tester D, dsh 0.2.2-rc.1 via OpenCode Go)
+
+Rig: daemon `127.0.0.1:8342` (keyless, `C:\orbital-scratch\D\data`, `DSH_HOME=C:\orbital-scratch\dsh-home`), Vite 5176,
+wizard done with every real folder unchecked. Claude Code and Codex also enabled.
+
+- 167-W3-dsh PASS — empty project pinned dsh: `sessions: []`, no greeting (「正在与 DeepSeek Harness 对话…」); first task created hello.txt and answered DONE; the memory turn carried "This project has no goals yet…" and dsh answered "Recorded."; `project_goals.md` "# First draft" describes the scratch workspace (no orbital/bin, MCP, dispatch); card 251134 这样理解对吗？ `options: 对 | 需要改`; tapping 对 → `inject {ask_id}`, one `import_scan_confirmed` row, `- done 251134 … by:user 对`, transcript unchanged (no run).
+- 167-W4-dsh PASS — folder with files, no Scan card; dsh added `remove()` to groc.py (3 min, mostly its own sandbox repair, below); memory turn drafted goals from folder + conversation and opened card 6a968d; the correction typed as 「需要改：这只是我学 Python 的练习…」 → `inject {ask_id}`, exactly one dsh turn, 「已经更新，只动了 orbital/ 下的文件」; mtime diff: nothing outside `orbital\` changed, goals got a `supersedes:` line.
+- 167-W7-dsh PASS — dsh listed the workspace (`Get-ChildItem -Force`); two starts 5 s apart answered in 21 s / 6 s, no stall, no prompt.
+- B3-dsh PASS — Workbench 自动 send on a dsh-pinned project: pending card at once, `new-session` → `inject {target: dsh}`, PONG in 4 s, card with the DeepSeek Harness logo, counted in 「6 件等你」.
+- B6-dsh PASS — upload → new-session → inject with `attachments`, no `/workbench/route`; dsh answered the file's first line (KIWI-77).
+- B7-dsh PASS — Quick Tasks + DeepSeek Harness chip: PONG in 3 s, dsh session dir shows cwd = the Quick Tasks folder; no manager / missing-key line.
+- C1-dsh PASS (the Mac's dsh FAILED this) — dsh appended `- open Which one should I go with: red or blue? options: red | blue` to ASKS.md and stopped; card with pills and the dsh logo; tapping red → `inject {ask_id, ask_answer: red}`, `- done d0425a … by:user red`, same session continued ("red it is"), DECISIONS.md updated by the memory turn.
+- C2-dsh PASS — card reply → next turn of the same session (same native dsh session dir), card result PING; ✓ dropped it from 「8 件等你」 to 7; opening a session cleared its card.
+- C4-dsh PASS — killed the session's `DeepSeek Harness.exe` 30 s into `Start-Sleep 90`: row "dsh stopped with error: Error: Connection closed", card 「w7-dsh · 已中断」, left-off card 「未完成 · DeepSeek Harness · 已中断」; a send with `target: claude-code` into the same session got the recap ("You had asked it to run Start-Sleep -Seconds 90 and then reply DONE").
+- C5-dsh PASS — every run got the `[Orbital memory]` turn (goals on first runs, PROJECT_STATE / DECISIONS later, "nothing to record" otherwise); `last_reply_at` stays on the real reply so the card did not turn unread again; no memory bubble in the chat.
+- **D3 PASS, both directions** — dsh seat → Codex: `POST /mcp` initialize/initialized, `ListToolsRequest`, `CallToolRequest`, `Message sent to codex: "Reply with the single word PONG…"`, dsh's turn ended at once, Codex `completed. Summary: PONG`, `worker_result` row, dsh's next turn "Codex's reply came back as exactly the single word: PONG". Claude Code seat → dsh child: `CallToolRequest`, `Message sent to dsh`, dsh PONG, Claude's follow-up "dsh replied as asked"; the depth-1 dsh child logged no `ListToolsRequest` (no tool, as designed).
+- 166-5-dsh BLOCKED — dsh 0.2.2-rc.1 advertises no commands: `skill-catalog?worker=dsh` → `[]` after 12 spawns, `worker-commands.json` has no dsh entry, and a raw ACP probe (`initialize` + `session/new`, 25 s listen) received no `session/update` at all, so no `available_commands_update`. Nothing to pick or persist.
+- C7-dsh N/A (no imported dsh history).
+
+Findings from the dsh pass: (plain, fixed below) the empty-state left-off card quoted the ask-answer wire text `[Answer to ask d0425a, already closed: "…"] red`; `POST /projects` silently ignored `default_pinned_target` (UI unaffected); the 对，做第 1 步 option was offered for a step that reads "Wait for the user's actual request". (product, decisions §A19–21) idle worker processes are never reaped while the daemon runs (10 dsh processes alive, one per session that ever ran); dsh's own Windows sandbox fails its first shell call (`SetNamedSecurityInfoW … grantWrite`) and then runs an unconfined ACL repair that leaves `acl-recovery\` folders (one outside the workspace) and new deny ACEs on the user's folder; one `POST /mcp` 400 per worker spawn from the MCP SDK's stateless transport. The job-object `error 5` lines for `claude.exe` on this rig are explained in §A22 (the daemon ran inside the Claude Code harness's own job; a plain-console probe assigns `claude.exe` fine).
+
+HOME after the dsh pass: the three Orbital files unchanged; `~/.dsh` exists since the first `dsh -V` probe (empty template, no key); `~/.dsh/profiles/acp/cordis.yml` was rewritten once at 10:15 by a `dsh --profile acp` launch without `DSH_HOME` (the upgrade-rig daemon, which had none; harmless: the file is dsh's empty template). Everything else dsh wrote is under `C:\orbital-scratch\dsh-home` and the projects' `orbital\sub_agents\dsh\dsh-sessions\`.
+
 ## Suites
 
 - `pytest tests/unit tests/platform --timeout 120` (excluding the two `sandbox-exec` files): **34 failed /
@@ -50,6 +118,12 @@ Everything that needs a product or architecture call is in **`note-1110-decision
   fixtures, `test_version` reading stale installed metadata 0.18.0, `C:\` being a git work tree here). The other
   three are test-environment artifacts, explained in the decisions file §C. None is this batch's code.
 - `tsc -b` clean; `vitest` 2761 → 2765 passed (new wizard tests, updated ChatView test); `check-i18n` 7 pre-existing missing-zh warnings.
+- After the second pass: `pytest` **35 failed / 7071 passed** (the two test-side artifacts are green now; the
+  card-shape test gained the `change_option` key; the two remaining new reds are flaky, not regressions:
+  `test_history_sources_138::TestMiniMax::test_sub_sessions_and_archived_are_skipped` fails one run in two
+  on the untouched source, and `test_provider_integration::test_run_process_overwrites_terminates_old`
+  passed on rerun). `tsc -b` clean; `vitest` **2771 passed / 178 files**; `check-i18n` 1555 keys, the same 7
+  pre-existing missing-zh warnings.
 - `test_import_scan_160::test_a_scan_records_its_session_on_the_project` waited 50 bare event-loop ticks for a
   run that goes through `asyncio.to_thread` twice: passed in one full run, failed 3/3 alone on a quiet machine
   (also on the untouched `ca770dc` file). It now waits for the RUNNING state (commit below); 3/3 green after.
