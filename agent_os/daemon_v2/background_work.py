@@ -86,9 +86,17 @@ class BackgroundWorkRegistry:
     """Tracks registered background work per (project_id, session_id, handle)."""
 
     def __init__(self, capture_window_s: float = 6.0,
-                 capture_poll_s: float = 0.25):
+                 capture_poll_s: float = 0.25,
+                 watch_poll_s: float = 1.0):
         self.capture_window_s = capture_window_s
         self.capture_poll_s = capture_poll_s
+        # How often a key with live work is re-checked so its END is pushed
+        # (liveness is otherwise only read on demand).
+        self.watch_poll_s = watch_poll_s
+        # listener(project_id, session_id, handle): the key's work went live
+        # or ended. SubAgentManager recomputes the worker status from it.
+        self._listener = None
+        self._watchers: dict[Key, asyncio.Task] = {}
         # Windows gate, opened 2026-11-02 (see module docstring). Instance
         # attr so tests can exercise the degraded two-state path.
         self.three_state_supported = True
@@ -125,7 +133,50 @@ class BackgroundWorkRegistry:
             project_id, session_id, handle, command[:80],
             "started" if rec.capture_task else "unavailable",
         )
+        self._notify(key)
+        self._ensure_watcher(key)
         return rec
+
+    # ------------------------------------------------------------ push ----
+    def set_listener(self, listener) -> None:
+        """``listener(project_id, session_id, handle)`` is called when a
+        key's background work goes live or ends."""
+        self._listener = listener
+
+    def _notify(self, key: Key) -> None:
+        if self._listener is None:
+            return
+        try:
+            self._listener(*key)
+        except Exception:
+            logger.exception("background work listener raised for %s", key)
+
+    def _ensure_watcher(self, key: Key) -> None:
+        task = self._watchers.get(key)
+        if task is not None and not task.done():
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._watchers[key] = loop.create_task(
+            self._watch(key), name=f"bgwork-watch-{key[2]}")
+
+    async def _watch(self, key: Key) -> None:
+        """Re-check a key's work until none is live, then tell the
+        listener once: the end of background work is a status change that
+        nothing else observes."""
+        try:
+            while True:
+                await asyncio.sleep(self.watch_poll_s)
+                if not self._records.get(key):
+                    break  # cleared / terminated — that path notified
+                if not self._prune(key):
+                    self._notify(key)
+                    break
+        finally:
+            if self._watchers.get(key) is asyncio.current_task():
+                self._watchers.pop(key, None)
 
     async def _capture_anchor(self, key: Key, rec: BackgroundWorkRecord,
                               root_proc: "psutil.Process", baseline: set[int]) -> None:
@@ -244,6 +295,7 @@ class BackgroundWorkRegistry:
                 terminated.append(rec.command)
         self._records.pop(key, None)
         self._last_activity[key] = time.monotonic()
+        self._notify(key)
         return terminated
 
     def clear(self, project_id: str, session_id: str, handle: str) -> None:
@@ -251,4 +303,6 @@ class BackgroundWorkRegistry:
         for rec in self._records.get(key, []):
             if rec.capture_task is not None and not rec.capture_task.done():
                 rec.capture_task.cancel()
-        self._records.pop(key, None)
+        had = self._records.pop(key, None)
+        if had:
+            self._notify(key)

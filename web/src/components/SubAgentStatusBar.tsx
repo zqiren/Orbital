@@ -7,6 +7,8 @@
 // Status vocabulary (SDK claude-code; other transports never report
 // background-running):
 //   running            — turn open, agent producing output ("Working")
+//     + awaiting_approval — the open turn waits on the user's permission
+//                          answer ("Needs you"; still dot, no ring)
 //   background-running — turn done BUT tracked background work is alive
 //                        ("Background"). Looks done, isn't done.
 //   idle               — turn done, nothing real underneath.
@@ -42,18 +44,33 @@ interface Props {
   live?: SubAgentStatusState;
 }
 
-const BADGE_LABEL_KEY: Record<SubAgentInfo['status'], 'subAgentBar.working' | 'subAgentBar.background' | 'subAgentBar.idle'> = {
+/** What the chip shows: the reported status, or `needs-you` while the open
+ *  turn waits on the user's approval. A status this build does not know
+ *  (a newer daemon) shows as idle. */
+type ChipState = 'running' | 'needs-you' | 'background-running' | 'idle';
+
+function chipState(a: SubAgentInfo): ChipState {
+  if (a.status === 'running') return a.awaiting_approval === true ? 'needs-you' : 'running';
+  if (a.status === 'background-running') return 'background-running';
+  return 'idle';
+}
+
+const BADGE_LABEL_KEY: Record<ChipState, 'subAgentBar.working' | 'subAgentBar.needsYou' | 'subAgentBar.background' | 'subAgentBar.idle'> = {
   running: 'subAgentBar.working',
+  'needs-you': 'subAgentBar.needsYou',
   'background-running': 'subAgentBar.background',
   idle: 'subAgentBar.idle',
 };
 
 /** The dot before the status word (spec 145): green while its turn runs,
- *  with the pin switcher's moving ring; amber for work alive after the turn;
- *  grey when idle. Stable state colours at readable contrast in both themes;
- *  the chip's name carries the identity. */
-const DOT_CLASS: Record<SubAgentInfo['status'], string> = {
+ *  with the pin switcher's moving ring; amber and still when it waits on
+ *  the user (the word in amber too, as the queue's "needs you"); amber for
+ *  work alive after the turn; grey when idle. The ring means "producing",
+ *  so only `running` has it. Stable state colours at readable contrast in
+ *  both themes; the chip's name carries the identity. */
+const DOT_CLASS: Record<ChipState, string> = {
   running: 'bg-success-text',
+  'needs-you': 'bg-warning-text',
   'background-running': 'bg-warning-text',
   idle: 'bg-idle',
 };
@@ -97,7 +114,7 @@ export default function SubAgentStatusBar({ projectId, sessionId, live }: Props)
   // effect, so it never paints a frame asking to stop an idle worker).
   if (confirming) {
     const current = agents.find((a) => a.handle === confirming.handle);
-    if (!current || current.status === 'idle') setConfirming(null);
+    if (!current || chipState(current) === 'idle') setConfirming(null);
   }
 
   if (agents.length === 0 && !lastStop) return null;
@@ -112,7 +129,9 @@ export default function SubAgentStatusBar({ projectId, sessionId, live }: Props)
       data-testid="sub-agent-status-bar"
       className="sub-agent-line relative z-10 shrink-0 flex items-center gap-2 overflow-x-auto px-4 pt-2 pb-2.5 md:px-7 md:pt-0.5 bg-card text-xs"
     >
-      {agents.map((a) => (
+      {agents.map((a) => {
+        const state = chipState(a);
+        return (
         <div
           key={a.handle}
           data-testid={`sub-agent-chip-${a.handle}`}
@@ -122,13 +141,15 @@ export default function SubAgentStatusBar({ projectId, sessionId, live }: Props)
           <span
             data-testid={`sub-agent-badge-${a.handle}`}
             data-status={a.status}
-            className="inline-flex items-center gap-1.5 text-2xs leading-4 text-secondary"
+            data-state={state}
+            className={`inline-flex items-center gap-1.5 text-2xs leading-4 ${
+              state === 'needs-you' ? 'text-warning' : 'text-secondary'}`}
           >
             {/* The dot sits in a 12px box so the ring grows inside room of
                 its own, clear of the name and the word; the box is under
                 the badge's 16px line, so the chip keeps its height. */}
             <span aria-hidden="true" className="relative grid place-items-center w-3 h-3 shrink-0">
-              {a.status === 'running' && (
+              {state === 'running' && (
                 <span
                   data-testid={`sub-agent-ring-${a.handle}`}
                   className="absolute inset-[2.5px] rounded-full border-[1.5px] border-success-text
@@ -138,12 +159,12 @@ export default function SubAgentStatusBar({ projectId, sessionId, live }: Props)
               <span
                 data-testid={`sub-agent-dot-${a.handle}`}
                 aria-hidden="true"
-                className={`relative w-[7px] h-[7px] rounded-full ${DOT_CLASS[a.status]}`}
+                className={`relative w-[7px] h-[7px] rounded-full ${DOT_CLASS[state]}`}
               />
             </span>
-            {t(BADGE_LABEL_KEY[a.status])}
+            {t(BADGE_LABEL_KEY[state])}
           </span>
-          {a.status !== 'idle' && (
+          {state !== 'idle' && (
             <button
               data-testid={`sub-agent-stop-${a.handle}`}
               title={t('subAgentBar.stopTitle', { name: a.display_name })}
@@ -156,7 +177,8 @@ export default function SubAgentStatusBar({ projectId, sessionId, live }: Props)
             </button>
           )}
         </div>
-      ))}
+        );
+      })}
 
       {lastStop && (
         <span data-testid="sub-agent-stop-result" className="text-secondary shrink-0">

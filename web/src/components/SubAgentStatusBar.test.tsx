@@ -116,6 +116,45 @@ describe('SubAgentStatusBar — three-state badge', () => {
   });
 });
 
+describe('SubAgentStatusBar — needs you (awaiting approval)', () => {
+  const live = (agents: unknown[]) =>
+    ({ agents, refresh: vi.fn(async () => {}) }) as unknown as Parameters<typeof SubAgentStatusBar>[0]['live'];
+  const base = { handle: 'claude-code', display_name: 'Claude Code', background_commands: [] as string[] };
+
+  it('a running turn waiting on approval reads Needs you, with a still amber dot and the stop control', () => {
+    render(<SubAgentStatusBar projectId="p1" sessionId="s1"
+      live={live([{ ...base, status: 'running', awaiting_approval: true }])} />);
+    const badge = screen.getByTestId('sub-agent-badge-claude-code');
+    expect(badge).toHaveTextContent('Needs you');
+    expect(badge.dataset.status).toBe('running');
+    expect(badge.dataset.state).toBe('needs-you');
+    expect(badge).toHaveClass('text-warning');
+    expect(screen.getByTestId('sub-agent-dot-claude-code')).toHaveClass('bg-warning-text');
+    // The moving ring means producing; waiting has none.
+    expect(screen.queryByTestId('sub-agent-ring-claude-code')).toBeNull();
+    expect(screen.getByTestId('sub-agent-stop-claude-code')).toBeInTheDocument();
+  });
+
+  it('awaiting_approval false or missing (an older daemon) reads Working', () => {
+    const { unmount } = render(<SubAgentStatusBar projectId="p1" sessionId="s1"
+      live={live([{ ...base, status: 'running', awaiting_approval: false }])} />);
+    expect(screen.getByTestId('sub-agent-badge-claude-code')).toHaveTextContent('Working');
+    unmount();
+    render(<SubAgentStatusBar projectId="p1" sessionId="s1" live={live([{ ...base, status: 'running' }])} />);
+    expect(screen.getByTestId('sub-agent-badge-claude-code')).toHaveTextContent('Working');
+    expect(screen.getByTestId('sub-agent-ring-claude-code')).toBeInTheDocument();
+  });
+
+  it('a status this build does not know renders as idle, without crashing', () => {
+    render(<SubAgentStatusBar projectId="p1" sessionId="s1"
+      live={live([{ ...base, status: 'paused-for-something-new' }, { ...base, handle: 'codex', status: undefined }])} />);
+    expect(screen.getByTestId('sub-agent-badge-claude-code')).toHaveTextContent('Idle');
+    expect(screen.getByTestId('sub-agent-dot-claude-code')).toHaveClass('bg-idle');
+    expect(screen.getByTestId('sub-agent-badge-codex')).toHaveTextContent('Idle');
+    expect(screen.queryByTestId('sub-agent-stop-claude-code')).toBeNull();
+  });
+});
+
 describe('SubAgentStatusBar — stop flow with honest warning', () => {
   it('background-running stop shows the commands AND the raw-detach warning, then POSTs', async () => {
     apiMock.mockImplementation(async (_path: string, options?: RequestInit) => {

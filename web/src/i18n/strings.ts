@@ -1203,6 +1203,7 @@ export const STRINGS = {
   "subAgentBar.confirm.title": { en: "Stop {name}?", zh: "停止 {name}？" },
   "subAgentBar.confirm.warning": { en: "Work the agent detached via a raw shell '&'/'nohup' runs outside its process tree and cannot be guaranteed stopped.", zh: "Agent通过原始 shell 的 '&'/'nohup' 分离出的工作运行在其进程树之外，无法保证被停止。" },
   "subAgentBar.idle": { en: "Idle", zh: "空闲" },
+  "subAgentBar.needsYou": { en: "Needs you", zh: "等你确认" },
   "subAgentBar.stopTitle": { en: "Stop {name}", zh: "停止 {name}" },
   "subAgentBar.stopped": { en: "Stopped {handle}", zh: "已停止 {handle}" },
   "subAgentBar.working": { en: "Working", zh: "工作中" },

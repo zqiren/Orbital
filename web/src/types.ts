@@ -819,6 +819,22 @@ export interface QuotaUpdatedEvent {
  * (SDK claude-code only; other transports report two-state). */
 export type SubAgentRunStatus = 'running' | 'background-running' | 'idle';
 
+/** The daemon pushes a worker's status whenever it changes (one event per
+ *  worker and change). `stopped` = the worker left the session. A newer
+ *  daemon may send a value this build does not know; the chip renders it
+ *  as idle. */
+export interface SubAgentStatusEvent {
+  type: 'sub_agent.status';
+  project_id: string;
+  session_id?: string | null;
+  handle: string;
+  display_name?: string;
+  status: SubAgentRunStatus | 'stopped';
+  /** The open turn waits on the user's approval (rides with `running`). */
+  awaiting_approval?: boolean;
+  background_commands?: string[];
+}
+
 /**
  * One entry in a sub-agent transcript, returned by
  * GET /api/v2/agents/{project_id}/sub-agents/{handle}/transcript (spec 009
@@ -1227,6 +1243,7 @@ export type WebSocketEvent =
   | ApprovalResolvedEvent
   | SubAgentMessageEvent
   | SubAgentLifecycleEvent
+  | SubAgentStatusEvent
   | UserMessageEvent
   | AgentNotifyEvent
   | PendingDispatchedEvent

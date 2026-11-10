@@ -181,6 +181,13 @@ class SubAgentManager:
         # the dispatch tool.
         self._dispatch_tokens: dict[str, DispatchContext] = {}
         self._dispatch_url: str | None = None
+        # The last ``sub_agent.status`` broadcast per (project, session,
+        # handle): ``_publish_status`` sends only when this changes.
+        self._last_status: dict[tuple[str, str, str], tuple] = {}
+        from agent_os.daemon_v2.background_work import BackgroundWorkRegistry
+        registry = getattr(self._process_manager, "background_work", None)
+        if isinstance(registry, BackgroundWorkRegistry):
+            registry.set_listener(self._on_background_work_change)
 
         # ProcessManager observes the genuine streaming turn boundary.  Keep
         # this duck-typed so focused tests and older embedders can supply a
@@ -369,6 +376,7 @@ class SubAgentManager:
             if sk not in self._adapters:
                 self._adapters[sk] = {}
             self._adapters[sk][handle] = adapter
+        self._wire_status(adapter, project_id, session_id, handle)
 
         # Create transcript if workspace is available
         transcript = None
@@ -1568,6 +1576,7 @@ class SubAgentManager:
                 if sk not in self._adapters:
                     self._adapters[sk] = {}
                 self._adapters[sk][handle] = adapter
+                self._wire_status(adapter, project_id, session_id, handle)
         if fork_start_error is not None:
             # Spec 156 §5.4 fallback: the native fork could not start. Log
             # the CLI's words and start once more without it (outside the
@@ -3024,6 +3033,7 @@ class SubAgentManager:
                     getattr(adapter, "_rendered_config_path", None))
                 if isinstance(registry, BackgroundWorkRegistry):
                     registry.clear(project_id, session_id, handle)
+                self._publish_status(project_id, session_id, handle)
             else:
                 # NEVER pop-and-leak: keep the slot so the process stays
                 # addressable; broken refuses reuse; Part F's backstop
@@ -3108,6 +3118,120 @@ class SubAgentManager:
                 return "background-running"
         return "idle"
 
+    def _awaiting_approval(self, adapter, project_id: str, session_id: str,
+                           handle: str) -> bool:
+        """The worker's open turn waits on a permission prompt the user has
+        to answer. A request the 10-minute "approve all" bypass is about to
+        answer, or one already answered (a done future), is not waiting."""
+        transport = getattr(adapter, "_transport", None)
+        pending = getattr(transport, "_pending_approvals", None)
+        if not isinstance(pending, dict) or not pending:
+            return False
+        if self._permission_bypass_until.get(
+                (project_id, session_id, handle), 0.0) > time.monotonic():
+            return False
+        return any(
+            not (isinstance(v, asyncio.Future) and v.done())
+            for v in pending.values()
+        )
+
+    def _wire_status(self, adapter, project_id: str, session_id: str,
+                     handle: str) -> None:
+        """Hand a newly registered adapter (and its transport) the listener
+        that pushes its status, then push the first one."""
+        def _listener() -> None:
+            self._publish_status(project_id, session_id, handle,
+                                 adapter=adapter)
+        try:
+            adapter._on_status_change = _listener
+            transport = getattr(adapter, "_transport", None)
+            if transport is not None and callable(
+                    getattr(transport, "set_status_listener", None)):
+                transport.set_status_listener(_listener)
+        except Exception:
+            logger.debug("status listener wiring failed for %s", handle,
+                         exc_info=True)
+        self._publish_status(project_id, session_id, handle, adapter=adapter)
+
+    def _on_background_work_change(self, project_id: str, session_id: str,
+                                   handle: str) -> None:
+        if session_id:  # the consumer keys sessionless work under ""
+            self._publish_status(project_id, session_id, handle)
+
+    def _publish_status(self, project_id: str, session_id: str | None,
+                        handle: str, *, adapter=None) -> None:
+        """The one place a worker's status is pushed: compute it, broadcast
+        ``sub_agent.status`` when it differs from the last one sent for
+        (project, session, handle). Called at every transition — the adapter
+        flags (dispatch, turn_complete, a self-initiated turn), its stream
+        ending, a permission request opening or closing, background work
+        going live or ending, stop and eviction. Transport-agnostic: it reads
+        only ``is_alive()`` / ``is_idle()`` / ``_pending_approvals`` and the
+        background registry.
+
+        ``status`` is ``running`` | ``background-running`` | ``idle`` |
+        ``stopped`` (the worker left the session: the chip goes).
+        ``awaiting_approval`` rides alongside ``running``.
+
+        ``adapter`` names the notifying instance: a listener of an adapter
+        the slot no longer holds (a replaced or released one) reports
+        ``stopped`` only when the slot is empty, never over its successor.
+        Never raises — it runs inside property setters and transports.
+        """
+        try:
+            if handle.startswith("worker:"):
+                return  # fanout workers have their own surface (FanoutCard)
+            session_id = self._resolve_session_id(session_id)
+            current = self._adapters.get(
+                make_session_key(project_id, session_id), {}).get(handle)
+            if adapter is not None and current is not None \
+                    and current is not adapter:
+                return
+            if current is None or not current.is_alive():
+                status, awaiting, commands, name = "stopped", False, [], handle
+            else:
+                status = self._adapter_status(
+                    current, project_id, session_id, handle)
+                awaiting = (status == "running" and self._awaiting_approval(
+                    current, project_id, session_id, handle))
+                commands = []
+                if status == "background-running":
+                    from agent_os.daemon_v2.background_work import (
+                        BackgroundWorkRegistry,
+                    )
+                    registry = getattr(
+                        self._process_manager, "background_work", None)
+                    if isinstance(registry, BackgroundWorkRegistry):
+                        commands = registry.live_commands(
+                            project_id, session_id, handle)
+                name = getattr(current, "display_name", handle)
+            key = (project_id, session_id, handle)
+            snapshot = (status, awaiting, tuple(commands), name)
+            if self._last_status.get(key) == snapshot:
+                return
+            if status == "stopped" and key not in self._last_status:
+                return  # never announced, nothing to take back
+            self._last_status[key] = snapshot
+            if status == "stopped":
+                # Keep no memory of a gone worker; a respawn announces itself.
+                self._last_status.pop(key, None)
+            ws = self._ws()
+            if ws is None:
+                return
+            ws.broadcast(project_id, {
+                "type": "sub_agent.status",
+                "project_id": project_id,
+                "session_id": session_id,
+                "handle": handle,
+                "display_name": name,
+                "status": status,
+                "awaiting_approval": awaiting,
+                "background_commands": list(commands),
+            })
+        except Exception:
+            logger.exception("sub_agent.status publish failed for %s/%s",
+                             project_id, handle)
+
     def status(self, project_id: str, handle: str, *,
                session_id: str | None = None) -> str:
         """Return 'running' | 'background-running' | 'idle' | 'stopped' | 'unknown'."""
@@ -3187,6 +3311,9 @@ class SubAgentManager:
         key = (project_id, session_id, handle)
         if self._permission_bypass_until.get(key, 0.0) <= time.monotonic():
             self._permission_bypass_until.pop(key, None)
+            # The card goes up: the worker waits on the user (also when the
+            # bypass lapsed between the request opening and reaching here).
+            self._publish_status(project_id, session_id, handle)
             return False
         return await self.resolve_sub_agent_approval(
             project_id, request_id, approved=True, session_id=session_id,
@@ -3280,6 +3407,11 @@ class SubAgentManager:
                         else:
                             await transport.respond_to_permission(
                                 tool_call_id, approved)
+                        # Answered: no longer waiting on the user (the
+                        # transports push this too; dedup keeps it one).
+                        listener = getattr(adapter, "_on_status_change", None)
+                        if callable(listener):
+                            listener()
                         return True
         return False
 
@@ -3400,6 +3532,10 @@ class SubAgentManager:
                     "display_name": getattr(adapter, "display_name", handle),
                     "status": self._adapter_status(
                         adapter, project_id, session_id, handle),
+                    # Additive (an older SPA ignores it and still reads
+                    # ``running``): the open turn waits on the user.
+                    "awaiting_approval": self._awaiting_approval(
+                        adapter, project_id, session_id, handle),
                 })
             else:
                 dead.append(handle)
@@ -3408,6 +3544,8 @@ class SubAgentManager:
             logger.debug("cleaned stale adapter %s for %s", handle, sk)
         if not adapters:
             self._adapters.pop(sk, None)
+        for handle in dead:
+            self._publish_status(project_id, session_id, handle)
         return result
 
     def live_transports(self):
