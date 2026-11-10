@@ -69,6 +69,7 @@ export const STRINGS = {
   "agentError.internal_error": { en: "Something went wrong inside Orbital, so this turn didn't finish. Sending feedback attaches the logs so we can find it.", zh: "Orbital 内部出错，这一轮没能完成。发送反馈会附上日志，帮我们定位问题。" },
   "agentError.invalid_api_key": { en: "The provider rejected the API key. Check the key and its endpoint/region in Settings.", zh: "API 密钥被服务商拒绝。请在设置中检查密钥及其端点/区域。" },
   "agentError.missing_api_key": { en: "No API key is configured for this project or globally. Add one in Settings to run the agent.", zh: "项目和全局均未配置 API 密钥。请在设置中添加后再运行Agent。" },
+  "agentError.no_runner": { en: "Orbital's agent has no API key, and no agent is enabled for this project. Add a key in Settings, or enable an agent in the project settings.", zh: "Orbital 的 Agent 没有 API 密钥，且此项目没有启用任何 Agent。请在设置中添加密钥，或在项目设置里启用一个 Agent。" },
   "agentError.missing_card": { en: "This project points at an LLM provider that no longer exists, and there is no default. Pick one in Settings.", zh: "本项目空间指向的凭据卡已不存在，且没有默认凭据卡。请在设置中选择一张。" },
   "agentError.model_not_found": { en: "The provider couldn't find the configured model. Check the model name in Settings.", zh: "服务商找不到所配置的模型。请在设置中检查模型名称。" },
   "agentError.openSettings": { en: "Open Settings", zh: "打开设置" },

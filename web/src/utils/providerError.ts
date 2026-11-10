@@ -20,6 +20,8 @@ export interface ProviderErrorInfo {
 
 const KEY_BY_CODE: Record<string, StringKey> = {
   missing_api_key: 'agentError.missing_api_key',
+  // Batch 1110 item 3: no key AND no enabled agent in this project.
+  no_runner: 'agentError.no_runner',
   // Spec 082: the project's credential card is gone and there is no default.
   missing_card: 'agentError.missing_card',
   invalid_api_key: 'agentError.invalid_api_key',
