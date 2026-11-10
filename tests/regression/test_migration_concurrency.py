@@ -267,7 +267,10 @@ def test_a_stale_pid_file_admits_exactly_one_racer(tmp_path):
             time.sleep(0.005)
         try:
             acquire_pid_file(pathlib.Path({str(pid_path)!r}))
-            print("acquired")
+            print("acquired", flush=True)
+            # A daemon stays up. Exiting at once would release the file and
+            # rightly admit the other racer once its serialized claim runs.
+            time.sleep(2)
         except DaemonAlreadyRunning:
             print("refused")
     """)

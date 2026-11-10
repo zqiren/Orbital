@@ -103,6 +103,33 @@ def test_declining_keeps_the_old_instance(shown):
     assert shown and shown[0][0] == "Orbital is already running"
 
 
+def test_no_readable_pid_never_offers_to_end_anything(shown):
+    # The claim lock timed out and the PID file held no PID: another
+    # instance is mid-start. Nothing to end, and no nonsense PID shown.
+    with patch.object(main, "boot_daemon_with_retry", side_effect=DaemonAlreadyRunning(None)), \
+         patch.object(main, "_recorded_daemon", return_value=(None, None)), \
+         patch.object(main, "_can_offer_end_and_restart", return_value=True), \
+         patch.object(main, "_confirm_end_unresponsive", return_value=True) as confirm, \
+         patch.object(main, "_end_process_tree") as ended:
+        assert main._boot_or_report(8000) is None
+    confirm.assert_not_called()
+    ended.assert_not_called()
+    assert len(shown) == 1
+    headline, message = shown[0]
+    for nonsense in ("None", "-1", "PID"):
+        assert nonsense not in headline + (message or "")
+
+
+def test_no_pid_in_the_error_uses_the_pid_file_reread(shown):
+    # By the time the window code runs, the other claim may have finished.
+    meta = {"pid": 4321, "create_time": 1.0, "port": "8123"}
+    with patch.object(main, "boot_daemon_with_retry", side_effect=DaemonAlreadyRunning(None)), \
+         patch.object(main, "_recorded_daemon", return_value=(4321, meta)), \
+         patch.object(main, "_daemon_answers", return_value=True):
+        assert main._boot_or_report(8000) == 8123
+    assert shown == []
+
+
 def test_a_source_run_never_offers_to_kill():
     # Tests launch this module; a click must never end the user's app there.
     with patch.object(main, "_confirm_end_unresponsive") as confirm:

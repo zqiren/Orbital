@@ -199,12 +199,48 @@ _DeleteProcThreadAttributeList.restype = None
 _DeleteProcThreadAttributeList.argtypes = [ctypes.c_void_p]
 
 
+_STILL_ACTIVE = 259
+
+
 def _close_process_handles(handle: ProcessHandle) -> None:
-    """Close a launched process's handles (a finished run used to leak them)."""
+    """Close a launched process's handles (a finished run used to leak them).
+
+    Each stored value is cleared as it is closed, so the helper is
+    idempotent: after ``CloseHandle`` the OS may reuse the number for an
+    unrelated object (the daemon's kill-on-close job handle among them), and
+    a later wait or second close on it would act on that object. The exit
+    code is recorded first so ``wait()`` can still answer afterwards.
+    """
+    natives = handle._native_handles
+    proc_h = natives.get("process_handle")
+    if proc_h and "exit_code" not in natives:
+        code = wintypes.DWORD()
+        if _GetExitCodeProcess(proc_h, ctypes.byref(code)) and code.value != _STILL_ACTIVE:
+            natives["exit_code"] = code.value
     for key in ("process_handle", "thread_handle"):
-        native = handle._native_handles.get(key)
+        native = natives.get(key)
+        natives[key] = None
         if native:
             _CloseHandle(native)
+
+
+def _launched_native_handles(process_h, thread_h, **extra) -> dict:
+    """The ``_native_handles`` dict for a launched process.
+
+    ``is_alive`` reads the handle from the dict at call time (not a captured
+    number), so once the handle is closed it answers False without touching
+    Win32. The lambda references the dict, not the ProcessHandle wrapper.
+    """
+    natives = {"process_handle": process_h, "thread_handle": thread_h, **extra}
+    natives["is_alive"] = lambda: _process_alive(natives)
+    return natives
+
+
+def _process_alive(natives: dict) -> bool:
+    proc_h = natives.get("process_handle")
+    if not proc_h:
+        return False
+    return _WaitForSingleObject(proc_h, 0) == WAIT_TIMEOUT
 
 
 # ---- ProcessLauncher ----
@@ -314,16 +350,10 @@ class ProcessLauncher:
                     f"CreateProcessWithLogonW failed with error code {error_code}"
                 )
 
-        # Capture raw Win32 handle for is_alive lambda (avoids circular ref).
-        _proc_h = pi.hProcess
         handle = ProcessHandle(
             pid=pi.dwProcessId,
             command=cmd_line,
-            _native_handles={
-                "process_handle": pi.hProcess,
-                "thread_handle": pi.hThread,
-                "is_alive": lambda: _WaitForSingleObject(_proc_h, 0) == WAIT_TIMEOUT,
-            },
+            _native_handles=_launched_native_handles(pi.hProcess, pi.hThread),
         )
 
         logger.info("Process launched: pid=%d, command=%s", handle.pid, cmd_line)
@@ -478,30 +508,21 @@ class ProcessLauncher:
         stdout_file = io.FileIO(stdout_fd, mode='rb', closefd=True)
 
         # Step 7: Build ProcessHandle
-        # Capture raw Win32 handle for is_alive lambda (avoids circular ref
-        # through the ProcessHandle wrapper).
-        _proc_h = pi.hProcess
         handle = ProcessHandle(
             pid=pi.dwProcessId,
             command=cmd_line,
             stdin=stdin_file,
             stdout=stdout_file,
             stderr=None,  # ConPTY merges stderr into stdout
-            _native_handles={
-                "process_handle": pi.hProcess,
-                "thread_handle": pi.hThread,
-                "hpc": hpc,
-                "is_alive": lambda: _WaitForSingleObject(_proc_h, 0) == WAIT_TIMEOUT,
-            },
+            _native_handles=_launched_native_handles(pi.hProcess, pi.hThread, hpc=hpc),
         )
 
         logger.info("ConPTY process launched: pid=%d, command=%s", handle.pid, cmd_line)
         return handle
 
     def is_running(self, handle: ProcessHandle) -> bool:
-        """Check whether the process is still running."""
-        result = _WaitForSingleObject(handle._native_handles["process_handle"], 0)
-        return result == WAIT_TIMEOUT
+        """Check whether the process is still running (False once closed)."""
+        return _process_alive(handle._native_handles)
 
     def terminate(self, handle: ProcessHandle, timeout_sec: int = 10) -> bool:
         """Terminate a process, trying graceful shutdown first.
@@ -510,12 +531,14 @@ class ProcessLauncher:
         If the process does not exit, it is forcefully killed via
         TerminateProcess. Handles are closed before returning.
 
-        Returns True when the process has been stopped.
+        Returns True when the process has been stopped. A second call (the
+        handles are already closed) is a no-op.
         """
+        if not handle._native_handles.get("process_handle"):
+            return True
         if not self.is_running(handle):
             logger.info("Process pid=%d already exited, closing handles", handle.pid)
-            _CloseHandle(handle._native_handles["process_handle"])
-            _CloseHandle(handle._native_handles["thread_handle"])
+            _close_process_handles(handle)
             return True
 
         logger.info("Sending CTRL_BREAK_EVENT to pid=%d", handle.pid)
@@ -532,13 +555,12 @@ class ProcessLauncher:
             _TerminateProcess(handle._native_handles["process_handle"], 1)
             _WaitForSingleObject(handle._native_handles["process_handle"], 5000)
 
-        _CloseHandle(handle._native_handles["process_handle"])
-        _CloseHandle(handle._native_handles["thread_handle"])
+        _close_process_handles(handle)
 
         logger.info("Process pid=%d terminated and handles closed", handle.pid)
         return True
 
-    def wait(self, handle: ProcessHandle, timeout_sec: int | None = None) -> int:
+    def wait(self, handle: ProcessHandle, timeout_sec: int | None = None) -> int | None:
         """Wait for the process to exit and return its exit code.
 
         Args:
@@ -546,11 +568,16 @@ class ProcessLauncher:
             timeout_sec: Maximum seconds to wait (None = infinite).
 
         Returns:
-            The process exit code.
+            The process exit code. Once the handles are closed, the code
+            recorded when they were closed, or None if none was recorded
+            (never an invented success).
 
         Raises:
             TimeoutError: If the process does not exit within the timeout.
         """
+        if not handle._native_handles.get("process_handle"):
+            return handle._native_handles.get("exit_code")
+
         timeout_ms = INFINITE if timeout_sec is None else timeout_sec * 1000
 
         result = _WaitForSingleObject(handle._native_handles["process_handle"], timeout_ms)

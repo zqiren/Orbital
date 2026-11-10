@@ -1897,13 +1897,23 @@ def _boot_or_report(preferred: int, _retried: bool = False):
     except DaemonAlreadyRunning as exc:
         _boot_logger().error("Orbital could not start: %s", exc)
         pid, meta = _recorded_daemon()
-        if meta is not None and meta.get("pid") == exc.existing_pid and _daemon_answers(meta):
+        # No PID in the error: another instance held the claim lock and had
+        # not recorded one yet. Use what the file says now, if anything.
+        owner = exc.existing_pid if exc.existing_pid is not None else pid
+        if owner is None:
+            _show_boot_failure(
+                "Orbital is already starting",
+                "Another Orbital is starting. Wait a moment, then start "
+                "Orbital again.",
+            )
+            return None
+        if meta is not None and meta.get("pid") == owner and _daemon_answers(meta):
             return int(meta.get("port") or preferred)
-        if not _retried and _offer_end_and_restart(exc.existing_pid, meta):
+        if not _retried and _offer_end_and_restart(owner, meta):
             return _boot_or_report(preferred, _retried=True)
         _show_boot_failure(
             "Orbital is already running",
-            f"Another Orbital (PID {exc.existing_pid}) is running but not "
+            f"Another Orbital (PID {owner}) is running but not "
             "responding. End it in Task Manager (Windows) or Activity Monitor "
             "(macOS), then start Orbital again.",
         )
