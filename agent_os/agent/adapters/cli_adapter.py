@@ -47,8 +47,52 @@ class AdapterBrokenError(RuntimeError):
     """
 
 
+class _StatusFlag:
+    """An adapter flag that ``is_idle()`` / the worker status reads.
+
+    Assigning it tells the adapter's status listener (wired by
+    SubAgentManager), so every place that opens or closes a turn — a
+    dispatch, ``turn_complete``, a self-initiated turn's first chunk (set
+    from ProcessManager), a blocking send returning, a broken send — pushes
+    the worker's status without knowing about it. The listener recomputes
+    and broadcasts only on change, so a repeat assignment costs nothing.
+    """
+
+    def __init__(self, default):
+        self._default = default
+        self._slot = ""
+
+    def __set_name__(self, owner, name):
+        self._slot = "_flag" + name
+
+    def __get__(self, obj, objtype=None):
+        if obj is None:
+            return self
+        return obj.__dict__.get(self._slot, self._default)
+
+    def __set__(self, obj, value):
+        obj.__dict__[self._slot] = value
+        obj._status_changed()
+
+
 class CLIAdapter(AgentAdapter):
     agent_type = "cli"
+
+    _idle = _StatusFlag(False)
+    _pending_response = _StatusFlag(False)
+    _broken = _StatusFlag(False)
+    # Zero-arg status listener (SubAgentManager._wire_status); None = unwired.
+    _on_status_change = None
+
+    def _status_changed(self) -> None:
+        listener = self._on_status_change
+        if listener is None:
+            return
+        try:
+            listener()
+        except Exception:
+            logger.exception("status listener raised for adapter %s",
+                             getattr(self, "handle", "?"))
 
     def __init__(self, handle: str, display_name: str,
                  platform_provider=None, project_id: str | None = None,
@@ -233,6 +277,10 @@ class CLIAdapter(AgentAdapter):
                     continue
                 chunk = transport_event_to_chunk(event)
                 yield chunk
+            # Every streaming transport's stream ends with its process (a
+            # blocking pipe's ends at once and stays alive): the listener
+            # reads is_alive() and reports a dead worker gone.
+            self._status_changed()
             return
         if self._using_provider and self._proc_handle:
             async for chunk in self._read_provider():

@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """Abstract transport interface and shared event type."""
+import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import AsyncIterator
@@ -58,6 +59,26 @@ class AgentTransport(ABC):
     def set_read_grants(self, grants) -> None:
         """``grants()`` → the realpaths this worker may read (attached files)."""
         self._read_grants = grants
+
+    # The worker's status is pushed, not polled: SubAgentManager hands each
+    # transport a zero-arg callable that recomputes the worker's status and
+    # broadcasts it if it changed. A transport calls ``_status_changed()``
+    # where only it can see a transition — a permission request opening or
+    # closing (``_pending_approvals``), its reader dying.
+    _on_status_change = None
+
+    def set_status_listener(self, listener) -> None:
+        self._on_status_change = listener
+
+    def _status_changed(self) -> None:
+        listener = self._on_status_change
+        if listener is None:
+            return
+        try:
+            listener()
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "transport status listener raised")
 
     def granted_read_paths(self) -> frozenset:
         fn = self._read_grants

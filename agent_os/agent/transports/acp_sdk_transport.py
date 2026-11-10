@@ -752,6 +752,7 @@ class ACPSDKTransport(AgentTransport):
         }
         self._pending_approvals[request_id] = future
         self._pending_approval_data[request_id] = data
+        self._status_changed()
         await self._event_queue.put(
             TransportEvent(
                 "permission_request",
@@ -764,6 +765,7 @@ class ACPSDKTransport(AgentTransport):
         finally:
             self._pending_approvals.pop(request_id, None)
             self._pending_approval_data.pop(request_id, None)
+            self._status_changed()
 
     def _is_attached_file_read(self, tool_call: Any) -> bool:
         """A ``read`` tool call whose every location is an attached file."""
@@ -810,6 +812,9 @@ class ACPSDKTransport(AgentTransport):
                 outcome=AllowedOutcome(outcome="selected", option_id=option_id)
             )
         future.set_result(response)
+        # Answered: the worker is back to the model (the entry is popped
+        # when the waiter wakes; a done future already reads as answered).
+        self._status_changed()
 
     async def respond_to_permission_response(
         self,

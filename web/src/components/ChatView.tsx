@@ -961,7 +961,11 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   // status bar's chips and the pin control's running dot both read it.
   const subAgentStatus = useSubAgentStatus(projectId, sessionId);
   const runningSubAgents = useMemo(
-    () => subAgentStatus.agents.filter((a) => a.status === 'running').map((a) => a.handle),
+    // The pin dot pulses for a worker producing output; one waiting on the
+    // user's approval is not producing.
+    () => subAgentStatus.agents
+      .filter((a) => a.status === 'running' && a.awaiting_approval !== true)
+      .map((a) => a.handle),
     [subAgentStatus.agents],
   );
   // Spec 002: open a clicked workspace path in the FilePreviewDrawer. Provided

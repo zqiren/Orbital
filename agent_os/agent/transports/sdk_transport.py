@@ -658,6 +658,8 @@ class SDKTransport(AgentTransport):
         # waiting on the kill.
         if dead_reader_error is not None:
             await self._kill_after_reader_death(dead_reader_error)
+            # The worker is gone, though read_stream() stays open on _alive.
+            self._status_changed()
 
     async def _handle_message(self, msg) -> None:
         self._track_background_task(msg, self._outstanding)
@@ -807,6 +809,7 @@ class SDKTransport(AgentTransport):
                 future.set_result(False)
         self._pending_approvals.clear()
         self._pending_approval_data.clear()
+        self._status_changed()
 
         # Cancel the persistent reader BEFORE disconnecting the client. If
         # the order were reversed, the reader would observe a None/closed
@@ -924,6 +927,7 @@ class SDKTransport(AgentTransport):
         self._pending_approval_data.pop(permission_id, None)
         if future is not None and not future.done():
             future.set_result(approved)
+        self._status_changed()
 
     async def _handle_permission(self, tool_name: str, tool_input: dict, context) -> "PermissionResultAllow | PermissionResultDeny":
         """Called by the SDK when a tool needs permission.
@@ -954,6 +958,8 @@ class SDKTransport(AgentTransport):
             "tool_name": tool_name,
             "tool_input": tool_input,
         }
+        # The worker now waits on the user, not on the model.
+        self._status_changed()
 
         # Emit permission request event
         event = TransportEvent(
@@ -973,6 +979,7 @@ class SDKTransport(AgentTransport):
         except asyncio.CancelledError:
             self._pending_approvals.pop(request_id, None)
             self._pending_approval_data.pop(request_id, None)
+            self._status_changed()
             return PermissionResultDeny(message="Request cancelled")
 
         if approved:

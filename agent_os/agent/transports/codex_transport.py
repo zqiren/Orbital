@@ -335,6 +335,7 @@ class CodexTransport(AgentTransport):
             "tool_name": tool_name,
             "tool_input": tool_input,
         }
+        self._status_changed()
         await self._event_queue.put(TransportEvent(
             event_type="permission_request",
             data=dict(self._pending_approval_data[request_id]),
@@ -1174,6 +1175,7 @@ class CodexTransport(AgentTransport):
         self._pending_approval_data.pop(permission_id, None)
         if pending is None:
             return
+        self._status_changed()
         await self._send_raw({"jsonrpc": "2.0", "id": pending["rpc_id"],
                               "result": {"decision": decision}})
 
