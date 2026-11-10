@@ -150,3 +150,67 @@ def test_without_a_delay_the_sweep_starts_at_once():
         assert len(engine.warmed) == 1
 
     asyncio.run(scenario())
+
+
+# ---------------------------------------------------------------------------
+# Automations missed while Orbital was closed wait until the boot is done
+# ---------------------------------------------------------------------------
+# v0.21.0, 2026-11-10: three daily automations had come due while the app was
+# closed. The tick's immediate catch-up fired them all during startup — each
+# started an agent run, an agent check and a memory pass — and the daemon
+# answered the window's health check at 15.5 s and 17.9 s, past its 15 s
+# window: "Failed to start daemon" twice, then a clean launch once nothing
+# was left to catch up.
+
+def test_the_first_evaluation_waits_for_the_startup_delay(monkeypatch):
+    monkeypatch.setattr(tm_module, "_warm_timezones", lambda: None)
+    tm = TriggerManager(MagicMock(), MagicMock(), first_tick_delay_s=0.3)
+    seen = []
+
+    async def evaluate():
+        seen.append(time.monotonic())
+        tm._running = False
+
+    tm._evaluate_due_triggers = evaluate
+    tm.tick_interval_seconds = 0
+
+    async def scenario():
+        tm._running = True
+        started = time.monotonic()
+        task = asyncio.create_task(tm._tick_loop())
+        await asyncio.sleep(0.1)
+        assert seen == []
+        await asyncio.wait_for(task, 2)
+        assert len(seen) == 1 and seen[0] - started >= 0.3
+
+    asyncio.run(scenario())
+
+
+def test_stop_during_the_startup_delay_fires_nothing(monkeypatch):
+    monkeypatch.setattr(tm_module, "_warm_timezones", lambda: None)
+    store = MagicMock()
+    store.list_projects.return_value = []
+    tm = TriggerManager(store, MagicMock(), first_tick_delay_s=5)
+    seen = []
+
+    async def evaluate():
+        seen.append(True)
+
+    tm._evaluate_due_triggers = evaluate
+
+    async def scenario():
+        await tm.start()
+        await asyncio.sleep(0.05)
+        await asyncio.wait_for(tm.stop(), 1)
+
+    asyncio.run(scenario())
+    assert seen == []
+
+
+def test_the_daemon_delays_the_catch_up_like_the_first_sweep(tmp_path):
+    from agent_os.api.app import create_app
+    from agent_os.api.routes import agents_v2
+
+    create_app(data_dir=str(tmp_path))
+    tm = agents_v2._agent_manager._trigger_manager
+    assert tm.first_tick_delay_s == app_module.STARTUP_SWEEP_DELAY_S >= 5

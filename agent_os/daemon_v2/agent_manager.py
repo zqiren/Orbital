@@ -2142,7 +2142,8 @@ class AgentManager:
             return False
 
     def available_worker_slugs(self, project_id: str, *,
-                               project: dict | None = None) -> list[str]:
+                               project: dict | None = None,
+                               wait: bool = True) -> list[str]:
         """Worker slugs a pinned send in this project could reach right now.
 
         Same per-agent test the dispatch gate (``SubAgentManager``) and
@@ -2151,6 +2152,10 @@ class AgentManager:
         minus the project's ``disabled_sub_agents``. In the setup engine's
         registry order. Stale-ok (spec 101): an expired probe result is served
         while a background sweep refreshes it.
+
+        ``wait=False`` never runs the check on a cold cache: it answers from
+        the last result, or ``[]`` while the first one runs in the background
+        (for routes that must answer at once).
         """
         if project is None:
             project = (self._project_store.get_project(project_id)
@@ -2161,7 +2166,9 @@ class AgentManager:
         disabled = set(project.get("disabled_sub_agents") or [])
         out: list[str] = []
         try:
-            for status in engine.check_all(allow_stale=True):
+            statuses = (engine.check_all(allow_stale=True) if wait
+                        else engine.check_all_cached() or [])
+            for status in statuses:
                 if worker_ready(status) and status.slug not in disabled:
                     out.append(status.slug)
         except Exception:
@@ -2171,7 +2178,8 @@ class AgentManager:
         return out
 
     def effective_pinned_target(self, project_id: str, *,
-                                ready: bool | None = None) -> str | None:
+                                ready: bool | None = None,
+                                wait: bool = True) -> str | None:
         """The slug a NEW session in this project starts pinned to, or None.
 
         The project's ``default_pinned_target`` when that worker is available
@@ -2180,7 +2188,7 @@ class AgentManager:
         project must never start a session on an agent that cannot answer;
         otherwise None (Orbital). Computed on read, never persisted.
         ``ready`` lets a caller that already resolved ``manager_ready`` skip
-        the second lookup.
+        the second lookup. ``wait`` as in :meth:`available_worker_slugs`.
         """
         project = (self._project_store.get_project(project_id)
                    if self._project_store is not None else None)
@@ -2192,7 +2200,7 @@ class AgentManager:
                 ready = self.manager_ready(project_id)
             if ready:
                 return None
-        available = self.available_worker_slugs(project_id, project=project)
+        available = self.available_worker_slugs(project_id, project=project, wait=wait)
         if default is not None and default in available:
             return default
         if ready is None:

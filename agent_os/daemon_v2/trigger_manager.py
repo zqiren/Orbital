@@ -125,13 +125,19 @@ class TriggerManager:
 
     TICK_INTERVAL_SECONDS = 60
 
-    def __init__(self, project_store, agent_manager, ws_manager=None, now_fn=None):
+    def __init__(self, project_store, agent_manager, ws_manager=None, now_fn=None,
+                 first_tick_delay_s: float = 0.0):
         self._project_store = project_store
         self._agent_manager = agent_manager
         self._ws = ws_manager
         self._now_fn = now_fn or (lambda: datetime.now(timezone.utc))
         # Instance attribute (not the class constant) so tests can shrink it.
         self.tick_interval_seconds = self.TICK_INTERVAL_SECONDS
+        # Seconds the first evaluation waits. The daemon passes its startup
+        # delay: automations missed while Orbital was closed would otherwise
+        # all start during the boot the desktop window waits on (v0.21.0:
+        # "Failed to start daemon" with three catch-ups due).
+        self.first_tick_delay_s = first_tick_delay_s
         self._schedule_ids: set[str] = set()  # trigger_ids evaluated each tick
         self._held: set[str] = set()  # trigger_ids currently holding on agent_busy
         self._file_observers: dict[str, Observer] = {}
@@ -167,9 +173,9 @@ class TriggerManager:
             "TriggerManager started: %d schedule + %d file_watch triggers registered",
             schedule_count, file_watch_count,
         )
-        # The tick loop runs an immediate catch-up evaluation before its
-        # first sleep (see _tick_loop), so daemon-restart catch-up needs no
-        # special-casing here.
+        # The tick loop runs a catch-up evaluation before its first sleep
+        # (after first_tick_delay_s, see _tick_loop), so daemon-restart
+        # catch-up needs no special-casing here.
         self._tick_task = asyncio.create_task(self._tick_loop())
 
     async def stop(self) -> None:
@@ -379,10 +385,16 @@ class TriggerManager:
     async def _tick_loop(self) -> None:
         """Periodic tick: evaluate all due schedule triggers, then sleep.
 
-        The first evaluation runs immediately (before the first sleep) so a
-        trigger missed during machine sleep or a daemon restart is caught up
-        promptly instead of waiting for its next natural occurrence.
+        The first evaluation runs before the first sleep, after
+        ``first_tick_delay_s``, so a trigger missed during machine sleep or a
+        daemon restart is caught up promptly instead of waiting for its next
+        natural occurrence — but not inside the boot.
         """
+        if self.first_tick_delay_s > 0:
+            try:
+                await asyncio.sleep(self.first_tick_delay_s)
+            except asyncio.CancelledError:
+                return
         try:
             await asyncio.to_thread(_warm_timezones)
         except asyncio.CancelledError:

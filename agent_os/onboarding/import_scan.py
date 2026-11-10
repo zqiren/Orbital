@@ -746,14 +746,18 @@ def scan_agent(agent_manager, project_store) -> dict | None:
     """Spec 160 round 2: the worker a keyless scan would run on, for the
     cost sign ({"slug", "name"} with the product name, never a raw id) —
     the first unscanned project's effective pinned worker, else the worker a
-    new project would get. None when no worker is ready."""
+    new project would get. None when no worker is ready, or before the
+    first agent check has finished: it never waits for one, because
+    ``GET /settings`` serves this and is also the desktop shell's boot health
+    check (v0.21.0 showed "Failed to start daemon" on a slow machine)."""
     if agent_manager is None:
         return None
     slug = None
     try:
         for p in (project_store.list_projects() if project_store is not None else []):
             if wants_scan(p) and p.get(STATE_FIELD) != RUNNING:
-                slug = agent_manager.effective_pinned_target(p.get("project_id"), ready=False)
+                slug = agent_manager.effective_pinned_target(
+                    p.get("project_id"), ready=False, wait=False)
                 if slug:
                     break
         if slug is None:
@@ -762,7 +766,7 @@ def scan_agent(agent_manager, project_store) -> dict | None:
             if store is not None:
                 hidden = list(getattr(store.get(), "sub_agents_hidden", None) or [])
             workers = agent_manager.available_worker_slugs(
-                "", project={"disabled_sub_agents": hidden})
+                "", project={"disabled_sub_agents": hidden}, wait=False)
             slug = workers[0] if workers else None
     except Exception:
         logger.warning("import scan: could not resolve the keyless runner", exc_info=True)

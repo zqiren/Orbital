@@ -846,10 +846,10 @@ class _Mgr:
     def manager_ready(self, pid):
         return self.key
 
-    def effective_pinned_target(self, pid, ready=None):
+    def effective_pinned_target(self, pid, ready=None, wait=True):
         return self.worker
 
-    def available_worker_slugs(self, pid, project=None):
+    def available_worker_slugs(self, pid, project=None, wait=True):
         return [self.worker] if self.worker else []
 
 
