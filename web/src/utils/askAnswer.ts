@@ -23,6 +23,15 @@ export function parseAskAnswer(content: string): { question: string | null; rest
  *  tap carries (`<orbital_picked_step>`): the bubble shows the tap. */
 const TURN_NOTE_RE = /\s*<(orbital_turn_note|orbital_picked_step)>[\s\S]*?<\/\1>/g;
 
+/** What a user row says, for a one-line quote (the left-off cards): the
+ *  answer's wire prefix and any daemon turn note stripped, so an ask answered
+ *  with a pill reads as the word tapped, not as
+ *  `[Answer to ask d0425a, already closed: "…"] red` (batch 1110, dsh pass). */
+export function displayAnswerText(content: string): string {
+  const rest = parseAskAnswer(stripTurnNote(content)).rest.trim();
+  return rest || content;
+}
+
 export function stripTurnNote(content: string): string {
   return content.includes('<orbital_turn_note>') || content.includes('<orbital_picked_step>')
     ? content.replace(TURN_NOTE_RE, '')

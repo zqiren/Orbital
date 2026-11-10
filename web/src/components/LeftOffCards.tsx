@@ -30,6 +30,7 @@ import { useT } from '../i18n/useT';
 import { useLocale } from '../i18n/LocaleContext';
 import type { StringKey } from '../i18n/strings';
 import { formatRelativeTime } from '../utils/relativeTime';
+import { displayAnswerText } from '../utils/askAnswer';
 import {
   agentDisplayName,
   hasLeftOff,
@@ -133,7 +134,7 @@ export default function LeftOffCards({ projectId, agents, onOpen, fallback }: Le
               </span>
               {open}
             </span>
-            {quote(last.user_text)}
+            {quote(displayAnswerText(last.user_text))}
             {git && (git.branch || git.uncommitted > 0 || git.commits_since > 0) && (
               <span className="flex flex-wrap gap-1.5">
                 {git.branch && (
@@ -185,7 +186,7 @@ export default function LeftOffCards({ projectId, agents, onOpen, fallback }: Le
                 </span>
                 {open}
               </span>
-              {quote(r.user_text)}
+              {quote(displayAnswerText(r.user_text))}
             </button>
           ))}
         </div>

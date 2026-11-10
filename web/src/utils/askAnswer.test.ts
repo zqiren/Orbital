@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { describe, it, expect } from 'vitest';
-import { formatAskAnswer, parseAskAnswer, stripTurnNote } from './askAnswer';
+import { formatAskAnswer, parseAskAnswer, stripTurnNote, displayAnswerText } from './askAnswer';
 
 describe('stripTurnNote (spec 160 round 4)', () => {
   it('hides the one-turn daemon note; the answer still parses', () => {
@@ -26,5 +26,18 @@ describe('stripTurnNote (spec 160 round 4)', () => {
   it('leaves every other message byte-identical', () => {
     const plain = 'Fix the <b>tag</b> in README\n\nthanks';
     expect(stripTurnNote(plain)).toBe(plain);
+  });
+});
+
+describe('displayAnswerText (batch 1110, left-off cards)', () => {
+  it('shows the tapped word, not the wire prefix', () => {
+    expect(displayAnswerText('[Answer to ask d0425a, already closed: "Which one: red or blue?"]\nred')).toBe('red');
+  });
+  it('drops a daemon turn note and keeps plain text as is', () => {
+    expect(displayAnswerText('需要改 <orbital_turn_note>guard</orbital_turn_note>')).toBe('需要改');
+    expect(displayAnswerText('Fix the login bug')).toBe('Fix the login bug');
+  });
+  it('never returns an empty quote', () => {
+    expect(displayAnswerText('[Answer to ask d0425a, already closed: "Q?"]\n')).toBe('[Answer to ask d0425a, already closed: "Q?"]\n');
   });
 });
