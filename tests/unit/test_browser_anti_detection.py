@@ -659,6 +659,27 @@ class TestDetectLocale:
                    side_effect=Exception("boom")):
             assert _detect_locale() == "en-US"
 
+    @pytest.mark.parametrize("raw", [
+        ("C", "UTF-8"), ("C.UTF-8", None), ("c.utf8", None),
+        ("POSIX", None), ("POSIX.UTF-8", "UTF-8"),
+    ])
+    def test_c_and_posix_are_not_browser_locales(self, raw):
+        """A daemon started with no LANG/LC_* (launchd, headless rigs,
+        ``env -i``) gets ("C", "UTF-8") from getdefaultlocale. "C"/"POSIX"
+        must fall back exactly like None does, never reach Chromium."""
+        with patch("agent_os.daemon_v2.browser_manager.sys_locale.getdefaultlocale",
+                   return_value=raw), \
+             patch("agent_os.daemon_v2.browser_manager.sys_locale.getlocale",
+                   return_value=raw):
+            assert _detect_locale() == "en-US"
+
+    def test_c_default_still_uses_real_getlocale(self):
+        with patch("agent_os.daemon_v2.browser_manager.sys_locale.getdefaultlocale",
+                   return_value=("C", "UTF-8")), \
+             patch("agent_os.daemon_v2.browser_manager.sys_locale.getlocale",
+                   return_value=("zh_CN", "UTF-8")):
+            assert _detect_locale() == "zh-CN"
+
 
 class TestDetectTimezone:
     """Test the _detect_timezone helper function."""

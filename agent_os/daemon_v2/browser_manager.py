@@ -133,6 +133,11 @@ _UTC_OFFSET_TO_IANA = {
 }
 
 
+def _is_c_locale(raw: str) -> bool:
+    """True for the POSIX "no locale" names: C, POSIX, C.UTF-8, ..."""
+    return raw.split(".", 1)[0].strip().upper() in ("C", "POSIX")
+
+
 def _detect_locale() -> str:
     """Detect system locale in BCP-47 format (e.g. 'en-US', 'zh-CN').
 
@@ -140,19 +145,24 @@ def _detect_locale() -> str:
     'Chinese (Simplified)_China' instead of IETF codes.  We use the
     (deprecated) ``getdefaultlocale()`` which returns correct codes, with
     a validation fallback for future Python versions.
+
+    "C" / "POSIX" (optionally with an encoding suffix, e.g. ``C.UTF-8``)
+    is what a process started with no LANG/LC_* gets (launchd, headless
+    rigs, ``env -i``). They are not browser locales, so they are treated
+    exactly like no locale at all.
     """
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", DeprecationWarning)
             raw = sys_locale.getdefaultlocale()[0]
-        if raw:
+        if raw and not _is_c_locale(raw):
             return raw.replace("_", "-")
     except Exception:
         pass
     # Fallback: try getlocale, but only if it looks like a real code
     try:
         raw = sys_locale.getlocale()[0] or ""
-        if raw and len(raw) <= 10 and "_" in raw:
+        if raw and not _is_c_locale(raw) and len(raw) <= 10 and "_" in raw:
             return raw.replace("_", "-")
     except Exception:
         pass
