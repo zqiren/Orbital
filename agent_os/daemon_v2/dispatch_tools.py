@@ -58,8 +58,12 @@ _DESCRIPTION = (
 # gets no Orbital system prompt, so the trigger has to live here.
 
 _AGENT_PARAM = "The agent's id, exactly as listed in this tool's description."
-_TASK_PARAM = ("The whole task, written so the agent can act on it without "
-               "seeing this conversation.")
+# Live 2026-11-10 (Windows smoke, 168-2): Claude Code first passed the text as
+# `message`, got a validation error, and then recorded the schema detail in the
+# project's LESSONS.md. The argument's own words now say where the text goes.
+_TASK_PARAM = ("The task text itself goes in this `task` argument (there is no "
+               "`message` argument). Write the whole task so the agent can act "
+               "on it without seeing this conversation.")
 _FRESH_PARAM = ("true starts the agent over without its earlier conversation. "
                 "Leave false to continue it.")
 

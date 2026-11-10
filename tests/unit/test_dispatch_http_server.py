@@ -144,16 +144,47 @@ async def test_every_parameter_is_described(served):
     for name in ("agent", "task", "fresh"):
         assert props[name].get("description"), name
     assert props["fresh"].get("default") is False
+    # Batch 1110 item 6: the task argument says it is the one that carries the
+    # text, so a model never reaches for a `message` argument first.
+    assert "`task`" in props["task"]["description"]
+    assert "no `message` argument" in props["task"]["description"]
 
 
-def test_no_port_means_no_attach_and_one_warning(monkeypatch, caplog):
+def test_no_port_still_attaches_and_the_first_request_pins_the_url(monkeypatch):
+    """Batch 1110 item 7: without AGENT_OS_PORT the route is still mounted and
+    the dispatch URL comes from the port the daemon is bound to (the request
+    scope's ``server``), never from a guessed default."""
+    import asyncio
+    from agent_os.daemon_v2.dispatch_tools import BoundPortProbe
+
     monkeypatch.delenv("AGENT_OS_PORT", raising=False)
     app = FastAPI()
     sam = _sam()
     before = len(app.router.routes)
-    with caplog.at_level(logging.WARNING):
-        assert attach_dispatch_server(app, sam) is None
-    assert len(app.router.routes) == before
+    assert attach_dispatch_server(app, sam) is not None
+    assert len(app.router.routes) == before + 1
+    assert sam._dispatch_url is None  # unknown until a request arrives
+
+    seen = []
+
+    async def inner(scope, receive, send):
+        seen.append(scope["type"])
+
+    probe = BoundPortProbe(inner, sub_agent_manager=sam)
+    # A lifespan scope carries no server address: nothing is pinned.
+    asyncio.run(probe({"type": "lifespan"}, None, None))
     assert sam._dispatch_url is None
-    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
-    assert len(warnings) == 1 and "AGENT_OS_PORT" in warnings[0].getMessage()
+    asyncio.run(probe({"type": "http", "server": ("127.0.0.1", 8339)}, None, None))
+    assert sam._dispatch_url == "http://127.0.0.1:8339/mcp"
+    # Later requests on another interface never move it.
+    asyncio.run(probe({"type": "http", "server": ("0.0.0.0", 9999)}, None, None))
+    assert sam._dispatch_url == "http://127.0.0.1:8339/mcp"
+    assert seen == ["lifespan", "http", "http"]
+
+
+def test_env_port_wins_over_the_probe(monkeypatch):
+    monkeypatch.setenv("AGENT_OS_PORT", "8541")
+    app = FastAPI()
+    sam = _sam()
+    attach_dispatch_server(app, sam)
+    assert sam._dispatch_url == "http://127.0.0.1:8541/mcp"
