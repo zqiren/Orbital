@@ -573,6 +573,11 @@ class AgentLoop:
         # when the run ends with it written.
         self._goals_missing_at_run_start: bool = False
         self.on_goals_created = None
+        # Batch 1110 item 8: the AgentManager sets this at run start when the
+        # project store says a goals draft is still owed (a run that wrote the
+        # goals but was cut off, or whose record turn never ran, or a daemon
+        # restart in between), so this run's end posts the card instead.
+        self.goals_draft_pending: bool = False
         self._memory_record_done: bool = False
         self._memory_record_active: bool = False
         # 1109: the changed files of a run whose record turn a user message
@@ -2237,6 +2242,13 @@ class AgentLoop:
         finally:
             if not self._session._paused_for_approval:
                 self._session.resolve_pending_tool_calls()
+            # Batch 1110 item 8: the goals appeared during this run but no
+            # record turn ran (a queued message, record disabled, a stopped
+            # run): the card is still owed. Idempotent after the record turn.
+            try:
+                await self._maybe_confirm_goals()
+            except Exception:  # noqa: BLE001 — never mask the run's own exit
+                logger.warning("goals confirm at run end failed", exc_info=True)
             # Drain any remaining deferred messages
             for msg in self._session.pop_deferred_messages():
                 self._session.append(msg)
@@ -2660,10 +2672,12 @@ class AgentLoop:
     async def _maybe_confirm_goals(self) -> None:
         hook = self.on_goals_created
         workspace = self._workspace()
-        if (not self._goals_missing_at_run_start or hook is None or not workspace
-                or project_goals_missing(workspace)):
+        if hook is None or not workspace or project_goals_missing(workspace):
+            return
+        if not (self._goals_missing_at_run_start or self.goals_draft_pending):
             return
         self._goals_missing_at_run_start = False
+        self.goals_draft_pending = False
         try:
             await hook()
         except Exception:  # noqa: BLE001 — the card must never fail the run

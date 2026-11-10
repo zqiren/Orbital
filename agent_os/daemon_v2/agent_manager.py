@@ -301,6 +301,10 @@ class AgentManager:
         # Spec 167: the subset of those reminders sent while the project had
         # no goals (they ask for the draft). When such a reminder's terminal
         # lands and the goals file exists, the daemon posts the confirm card.
+        # Batch 1110 item 8: the project store carries the same fact as
+        # ``goals_draft_pending`` (``_stamp_goals_pending``), so a daemon
+        # restart in between, or a run whose record turn never ran, still
+        # ends with the card.
         self._worker_goals_drafts: set[tuple[str, str | None, str]] = set()
         # Spec 129 §5E: one asyncio.Lock per session key around every
         # daemon-internal hydrate of a disk-only session, so the daemon
@@ -1633,6 +1637,7 @@ class AgentManager:
             loop._queue_state = queue_state
         # Spec 167: the record turn that creates the goals file gets the card.
         loop.on_goals_created = self._goals_confirm_hook(project_id, session_id)
+        self._note_goals_state_at_run_start(project_id, loop)
 
         # 12a. Register checkpoint_state tool now that the loop exists.
         # The tool calls loop.trigger_checkpoint() (agent-decided trigger).
@@ -2914,6 +2919,8 @@ class AgentManager:
             if wrote_memory and not goals_missing:
                 return
             text = build_worker_memory_record_text(changed, goals_missing=goals_missing)
+            if goals_missing:
+                self._stamp_goals_pending(project_id, True)
             task = asyncio.ensure_future(self._send_worker_memory_record(
                 project_id, session_id, handle, text, goals_draft=goals_missing))
             self._background_tasks.add(task)
@@ -2940,9 +2947,12 @@ class AgentManager:
             return
         handle = _terminal_handle(meta, row.get("content"))
         key = (project_id, session_id, handle)
-        if not handle or key not in self._worker_goals_drafts:
+        if not handle:
             return
-        self._worker_goals_drafts.discard(key)
+        if key in self._worker_goals_drafts:
+            self._worker_goals_drafts.discard(key)
+        elif not self._goals_pending(project_id):
+            return
         project = self._project_store.get_project(project_id) if self._project_store else None
         workspace = (project or {}).get("workspace", "") if isinstance(project, dict) else ""
         if not workspace or project_goals_missing(workspace):
@@ -2954,16 +2964,61 @@ class AgentManager:
     async def _confirm_goals(self, project_id: str, session_id: str | None) -> None:
         """Post the goals confirm card (spec 160's 这样理解对吗？) in this
         session. Never raises. The ask it opens is the daemon's, so the
-        worker's ask baseline takes it in (no second card row later)."""
+        worker's ask baseline takes it in (no second card row later). The
+        project's draft-owed stamp is cleared either way: the card is up
+        (or already was)."""
         try:
             from agent_os.api.routes import agents_v2
             ask_id = await agents_v2.post_goals_confirm(project_id, session_id)
             seen = self._worker_asks_seen.get((project_id, session_id or ""))
             if ask_id and seen is not None:
                 seen.add(ask_id)
+            self._stamp_goals_pending(project_id, False)
         except Exception:  # noqa: BLE001
             logger.warning("goals confirm card failed for %s/%s", project_id, session_id,
                            exc_info=True)
+
+    # Batch 1110 item 8: "a goals draft is owed" lives on the project, so no
+    # restart or skipped record turn loses the card.
+    GOALS_PENDING_FIELD = "goals_draft_pending"
+
+    def _stamp_goals_pending(self, project_id: str, on: bool) -> None:
+        store = self._project_store
+        if store is None:
+            return
+        try:
+            project = store.get_project(project_id)
+            if not isinstance(project, dict):
+                return
+            if bool(project.get(self.GOALS_PENDING_FIELD)) == on:
+                return
+            store.update_project(project_id, {self.GOALS_PENDING_FIELD: on})
+        except Exception:  # noqa: BLE001 — bookkeeping, never a failure
+            logger.debug("goals pending stamp failed for %s", project_id, exc_info=True)
+
+    def _goals_pending(self, project_id: str) -> bool:
+        store = self._project_store
+        if store is None:
+            return False
+        try:
+            project = store.get_project(project_id)
+        except Exception:  # noqa: BLE001
+            return False
+        return isinstance(project, dict) and project.get(self.GOALS_PENDING_FIELD) is True
+
+    def _note_goals_state_at_run_start(self, project_id: str, loop) -> None:
+        """At a manager run's start: a project with no goals is stamped as
+        owing a draft; a project whose stamp is still set (the earlier run
+        was cut off, or its card never posted) tells this run's end to post."""
+        try:
+            project = self._project_store.get_project(project_id) if self._project_store else None
+            workspace = (project or {}).get("workspace", "") if isinstance(project, dict) else ""
+            if workspace and project_goals_missing(workspace):
+                self._stamp_goals_pending(project_id, True)
+            if loop is not None:
+                loop.goals_draft_pending = self._goals_pending(project_id)
+        except Exception:  # noqa: BLE001
+            logger.debug("goals state at run start failed for %s", project_id, exc_info=True)
 
     def _goals_confirm_hook(self, project_id: str, session_id: str | None):
         """The manager loop's ``on_goals_created`` for this session."""
@@ -6434,6 +6489,7 @@ class AgentManager:
         if handle is None:
             return
         handle.last_activity = time.time()  # resume = activity; defer eviction
+        self._note_goals_state_at_run_start(project_id, handle.loop)
 
         # Live-resolve the LLM provider/model/key from the CURRENT project
         # config at turn start (TASK-session-provider-live-resolve): a provider

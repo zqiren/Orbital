@@ -402,3 +402,109 @@ def test_a_second_post_while_the_first_card_is_open_posts_nothing(tmp_path):
     # Once answered, a later draft (goals emptied and redrafted) asks again.
     asks.append_event(str(ws / "orbital"), "done", first, "Yes")
     assert _asyncio.run(agents_v2.post_goals_confirm(pid, "task"))
+
+
+# ---------------------------------------------------------------------------
+# Batch 1110 item 8: the card is never lost
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_goals_written_by_the_run_with_no_record_turn_still_post_at_run_end(tmp_path):
+    """The main run wrote the goals but its record turn never ran (here:
+    recording disabled, as with a queued user message): the run end posts."""
+    llm = _ScriptedLLM([_write_goals_call(), _reply("Done, goals written.")])
+    session, tools, loop = _rig(tmp_path, llm)
+    _drop_goals(tmp_path)
+    loop._memory_record_enabled = False
+    hook = AsyncMock()
+    loop.on_goals_created = hook
+    await loop.run()
+    assert not project_goals_missing(str(tmp_path))
+    hook.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_a_pending_draft_stamp_makes_a_run_with_goals_post_the_card(tmp_path):
+    """The goals already exist as this run starts (an earlier run drafted them
+    and was cut off before its card): the AgentManager's stamp tells this
+    run's end to post, once."""
+    _write_goals(tmp_path)
+    llm = _ScriptedLLM([_reply("ok")])
+    session, tools, loop = _rig(tmp_path, llm)
+    loop._memory_record_enabled = False
+    hook = AsyncMock()
+    loop.on_goals_created = hook
+    loop.goals_draft_pending = True
+    await loop.run()
+    hook.assert_awaited_once()
+    assert loop.goals_draft_pending is False
+    # And without the stamp, a project with goals never asks again.
+    hook.reset_mock()
+    await loop.run()
+    hook.assert_not_awaited()
+
+
+def test_manager_stamps_a_goal_less_project_at_run_start_and_tells_the_loop(tmp_path):
+    from unittest.mock import MagicMock as _MM
+    mgr, _sub = wmr._manager(tmp_path)
+    store = mgr._project_store
+    state = {"workspace": str(tmp_path)}
+    store.get_project = _MM(side_effect=lambda pid: dict(state))
+    def _update(pid, fields):
+        state.update(fields)
+    store.update_project = _MM(side_effect=_update)
+    loop = _MM()
+    loop.goals_draft_pending = False
+    mgr._note_goals_state_at_run_start(PROJECT_W, loop)
+    assert state["goals_draft_pending"] is True
+    assert loop.goals_draft_pending is True
+    # With goals present and no stamp, nothing is stamped and the loop is told so.
+    _write_goals(tmp_path)
+    state.pop("goals_draft_pending")
+    loop.goals_draft_pending = True
+    mgr._note_goals_state_at_run_start(PROJECT_W, loop)
+    assert "goals_draft_pending" not in state
+    assert loop.goals_draft_pending is False
+
+
+@pytest.mark.asyncio
+async def test_worker_terminal_after_a_restart_posts_from_the_stamp(tmp_path):
+    """The in-memory set of drafting reminders is gone (daemon restart), but
+    the project store still says a draft is owed: the memory-record terminal
+    posts when the goals exist."""
+    from unittest.mock import MagicMock as _MM
+    from agent_os.agent.loop import MEMORY_RECORD_KIND
+    mgr, sub = wmr._manager(tmp_path)
+    mgr._confirm_goals = AsyncMock()
+    state = {"workspace": str(tmp_path), "goals_draft_pending": True}
+    mgr._project_store.get_project = _MM(side_effect=lambda pid: dict(state))
+    wmr._plant_session(mgr, tmp_path)
+    _write_goals(tmp_path)
+    assert mgr._worker_goals_drafts == set()
+    await mgr.inject_system_message(
+        PROJECT_W, "[Sub-agent] codex completed. Summary: nothing to record.",
+        session_id=wmr.SID, meta={**wmr._completed_meta(), "_kind": MEMORY_RECORD_KIND})
+    # inject_system_message tags the row's _kind through meta? If not, send the
+    # row the way the reminder's terminal lands.
+    await wmr._settle()
+    if not mgr._confirm_goals.await_count:
+        row = {"role": "system", "source": "daemon", "_kind": MEMORY_RECORD_KIND,
+               "content": "[Sub-agent] codex completed. Summary: nothing to record.",
+               "_meta": wmr._completed_meta()}
+        mgr._maybe_confirm_worker_goals(PROJECT_W, wmr.SID, row)
+        await wmr._settle()
+    mgr._confirm_goals.assert_awaited_once_with(PROJECT_W, wmr.SID)
+
+
+def test_confirm_goals_clears_the_stamp(tmp_path):
+    from unittest.mock import MagicMock as _MM
+    mgr, _sub = wmr._manager(tmp_path)
+    state = {"workspace": str(tmp_path), "goals_draft_pending": True}
+    mgr._project_store.get_project = _MM(side_effect=lambda pid: dict(state))
+    mgr._project_store.update_project = _MM(side_effect=lambda pid, f: state.update(f))
+    import asyncio as _aio
+    from unittest.mock import patch as _patch
+    with _patch("agent_os.api.routes.agents_v2.post_goals_confirm", AsyncMock(return_value="ask1")):
+        _aio.run(mgr._confirm_goals(PROJECT_W, wmr.SID))
+    assert state["goals_draft_pending"] is False
