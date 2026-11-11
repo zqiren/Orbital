@@ -170,6 +170,26 @@ describe('FirstJourneyTour', () => {
     document.querySelectorAll('#anchors').forEach((n) => n.remove());
   });
 
+  it('an open session counts as the answer: the replay shows its first stop without the wait', async () => {
+    // Settings → About replays on the most recent session, whose chat never
+    // mounts the left-off cards; it used to sit out the ~1.6 s fallback.
+    mountAnchors(ALL, false);
+    const chat = document.createElement('div');
+    chat.setAttribute('data-chat-state', 'open');
+    document.getElementById('anchors')!.appendChild(chat);
+    render(<FirstJourneyTour folderName="x" agentNames={[]} onClose={vi.fn()} />);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(screen.getByTestId('tour-card')).toBeTruthy();
+    expect(stepId()).toBe('project');
+  });
+
+  it('a chat still loading is not an answer', async () => {
+    mountAnchors(ALL, false);
+    render(<FirstJourneyTour folderName="x" agentNames={[]} onClose={vi.fn()} />);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(screen.queryByTestId('tour-card')).toBeNull();
+  });
+
   it('goes on without the left-off stop when no answer ever comes (a session with messages is open)', async () => {
     mountAnchors(ALL, false);
     render(<FirstJourneyTour folderName="x" agentNames={[]} onClose={vi.fn()} />);

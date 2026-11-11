@@ -1086,11 +1086,10 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       : recordedPin !== undefined
         ? recordedPin
         : projectPin;
-  // Before the first session exists the pin can only be the project's sticky
-  // choice: offer it when there is one to show, or when Orbital has no key
-  // (a worker is then the only way to talk at all). Otherwise, as before,
-  // the control waits for a session.
-  const pinDisabled = sessionId === undefined && projectPin === null && managerReady;
+  // Before the first session exists a pick is the project's sticky pin
+  // (handlePinChange) and the local pin steers the first send, so the
+  // control is always live — a new project's first message can go to a
+  // worker without 新建会话 first.
   // Spec 171 A8: a stable handler, so the memoised pin control skips the
   // renders a keystroke or a stream frame cause.
   const handlePinChange = useCallback((slug: string | null) => {
@@ -4186,7 +4185,14 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         />
       ) : (
       <>
-      <div ref={scrollRef} onScroll={handleScroll} className="flex-1 overflow-y-auto px-7 py-5 max-md:pb-20 flex flex-col gap-4">
+      {/* data-chat-state: a session with messages is showing, so no left-off
+          cards will mount — the tour reads that as its answer. */}
+      <div
+        ref={scrollRef}
+        onScroll={handleScroll}
+        data-chat-state={!loading && (items.length > 0 || stream) ? 'open' : undefined}
+        className="flex-1 overflow-y-auto px-7 py-5 max-md:pb-20 flex flex-col gap-4"
+      >
         {loading && (
           <div className="space-y-3">
             {viewedIsUnimportedImport && (
@@ -4929,7 +4935,6 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
               managerReady={managerReady}
               models={pinModels}
               onChange={handlePinChange}
-              disabled={pinDisabled}
             />}
             <input
               type="file"

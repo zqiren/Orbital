@@ -129,14 +129,17 @@ export default function FirstJourneyTour({ folderName, agentNames, onClose }: Fi
   // the route changes; the header mounts a frame or two later) and for the
   // left-off answer — its stop exists only when cards come back, and the
   // empty chat that holds them mounts after the chat's own load. Then freeze
-  // the list of stops. Gives up quietly if the header never shows; without a
-  // left-off answer (a session with messages is open) it goes on after ~1.5 s.
+  // the list of stops. Gives up quietly if the header never shows. A session
+  // with messages open never shows the cards, so its chat (`data-chat-state`
+  // "open") is the answer too; with no answer at all it goes on after ~1.5 s.
   useEffect(() => {
     let tries = 0;
     let timer = 0;
     const header = STEPS.find((s) => s.id === 'project')!;
     const probe = () => {
-      const answered = !!document.querySelector('[data-tour="left-off"], [data-left-off-state="none"]');
+      const answered = !!document.querySelector(
+        '[data-tour="left-off"], [data-left-off-state="none"], [data-chat-state="open"]',
+      );
       const loading = !!document.querySelector('[data-left-off-state="loading"]');
       if (findAnchor(header) && (answered || tries > 15) && (!loading || tries > 20)) {
         setSteps(orderTourStops(distinctAnchors(STEPS)));

@@ -4723,10 +4723,59 @@ describe('Keyless: the composer pin falls back to the project pin', () => {
     expect(injectCalls[0][6]).toBe(true);
   });
 
-  it('with no session and no project pin (a key exists) the pin stays disabled, as today', async () => {
-    await renderChat({ sessionId: undefined, agents: CODEX, project: { ...project, manager_ready: true, effective_pinned_target: null } });
+  // 2026-11-12: a brand-new project (key present, no session yet) used to
+  // hold the switcher disabled until 新建会话 — the first message could not
+  // go to a worker.
+  const keyed: Project = { ...project, manager_ready: true, default_pinned_target: null, effective_pinned_target: null };
+
+  it('with no session and no project pin (a key exists) the pin is enabled', async () => {
+    await renderChat({ sessionId: undefined, agents: CODEX, project: keyed });
     await flushEffects();
-    expect(pinTrigger().disabled).toBe(true);
+    expect(pinTrigger().disabled).toBe(false);
+    expect(pinnedHandle()).toBeNull();
+  });
+
+  it('with a key and no session, picking a worker then sending starts the session on that worker', async () => {
+    await renderChat({ sessionId: undefined, agents: CODEX, project: keyed });
+    await flushEffects();
+    await act(async () => { pinTrigger().click(); });
+    const option = Array.from(container.querySelectorAll('[role="option"]'))
+      .find((el) => el.textContent?.includes('Codex')) as HTMLButtonElement;
+    await act(async () => { option.click(); });
+    await flushEffects();
+    expect(pinnedHandle()).toBe('codex');
+    expect(projectPutCalls).toEqual([
+      { path: '/api/v2/projects/p1', body: { default_pinned_target: 'codex' } },
+    ]);
+
+    await send('first message');
+    expect(injectCalls).toHaveLength(1);
+    expect(injectCalls[0][2]).toBe('codex');
+    expect(injectCalls[0][5]).toBeUndefined();
+    expect(injectCalls[0][6]).toBe(true);
+  });
+
+  it('with a key and no session, picking Orbital again sends to Orbital', async () => {
+    await renderChat({ sessionId: undefined, agents: CODEX, project: keyed });
+    await flushEffects();
+    for (const name of ['Codex', 'Orbital']) {
+      await act(async () => { pinTrigger().click(); });
+      const option = Array.from(container.querySelectorAll('[role="option"]'))
+        .find((el) => el.textContent?.includes(name)) as HTMLButtonElement;
+      await act(async () => { option.click(); });
+      await flushEffects();
+    }
+    expect(pinnedHandle()).toBeNull();
+    expect(projectPutCalls.map((c) => c.body)).toEqual([
+      { default_pinned_target: 'codex' },
+      { default_pinned_target: null },
+    ]);
+
+    await send('first message');
+    expect(injectCalls).toHaveLength(1);
+    expect(injectCalls[0][2]).toBeUndefined();
+    expect(injectCalls[0][5]).toBeUndefined();
+    expect(injectCalls[0][6]).toBe(false);
   });
 
   it('picking a worker before any session exists writes the project sticky pin', async () => {
@@ -4744,6 +4793,20 @@ describe('Keyless: the composer pin falls back to the project pin', () => {
     ]);
     expect(onRefreshProject).toHaveBeenCalledWith('p1');
     expect(sessionsPatchCalls).toHaveLength(0);
+  });
+
+  it('marks a chat with messages open (the tour reads it as its left-off answer); an empty chat is not', async () => {
+    await renderChat({ sessionId: 's1', agents: CODEX, project: keyed });
+    await flushEffects();
+    expect(container.querySelector('[data-chat-state="open"]')).toBeNull();
+
+    chatInitialResponse = {
+      data: [{ role: 'user', content: 'hello', source: 'user', timestamp: '2026-11-12T02:00:00Z' }],
+      total: 1,
+    };
+    await renderChat({ sessionId: 's2', agents: CODEX, project: keyed });
+    await flushEffects();
+    expect(container.querySelector('[data-chat-state="open"]')).not.toBeNull();
   });
 
   it('a pin change on a session re-reads the project row (its sticky pin moved)', async () => {
@@ -4818,7 +4881,9 @@ describe('Keyless: the composer pin falls back to the project pin', () => {
     expect(container.querySelector('[data-testid="pin-orbital-key-required"]')).toBeNull();
     await renderChat({ sessionId: undefined, agents: CODEX, project });
     await flushEffects();
-    expect(pinTrigger().disabled).toBe(true);
+    // No session yet: the local pin steers the first send whatever the
+    // daemon makes of the sticky-pin write.
+    expect(pinTrigger().disabled).toBe(false);
   });
 });
 
