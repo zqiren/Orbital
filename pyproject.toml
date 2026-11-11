@@ -72,10 +72,9 @@ dev = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-# A test stuck past 120 s dumps every thread's stack instead of stalling the
-# run silently. The "thread" method also works where SIGALRM can't (Windows,
-# non-main threads), but it ends the whole pytest process on the first
-# timeout; pass `-o timeout_method=signal` to fail just that test and go on.
+# A test stuck past 120 s fails with a stack dump instead of stalling the run
+# silently. No timeout_method: the plugin uses signal where it can (fails just
+# that test) and thread on Windows.
 timeout = 120
 # Resource markers: tests carrying these are SKIPPED by default unless the
 # resource is present / explicitly opted into. See docs/TESTING-markers.md
