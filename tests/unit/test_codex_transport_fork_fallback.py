@@ -113,14 +113,17 @@ class TestForkOnHeldThread:
         t._request = _fake_request({
             "thread/resume": [CodexRpcError("thread/resume", WRITER_ERROR)],
             "thread/fork": [CodexRpcError("thread/fork", {"code": -32603, "message": "boom"})],
+            # Spec 172 B: the user's Codex config names no model here.
+            "config/read": [{"config": {"model": None}}],
             "model/list": [{"data": [{"id": "gpt-5.4-mini"}]}],
             "thread/start": [_thread_result("fresh-1")],
         }, calls)
         with caplog.at_level(logging.WARNING):
             await t._open_thread("/ws")
         methods = [c[0] for c in calls]
-        assert methods == ["thread/resume", "thread/fork", "model/list", "thread/start"]
-        start_params = calls[3][1]
+        assert methods == ["thread/resume", "thread/fork", "config/read",
+                           "model/list", "thread/start"]
+        start_params = calls[4][1]
         assert "threadId" not in start_params
         # A FRESH thread never opens on the unqualified server default.
         assert start_params["model"] == "gpt-5.4-mini"

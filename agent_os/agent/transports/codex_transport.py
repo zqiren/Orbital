@@ -846,6 +846,38 @@ class CodexTransport(AgentTransport):
             return "thread/resume", params
         return "thread/start", params
 
+    async def _pick_fresh_thread_model(self, workspace: str) -> None:
+        """The model a FRESH thread opens on when Orbital has no override.
+
+        Spec 172 B: when the user's own Codex config names a model, leave
+        ``self._model`` unset so ``thread/start`` omits it and Codex uses its
+        config (a custom provider's model, which OpenAI's catalog default
+        would override). Otherwise never open on the unqualified server
+        default (cold-start 400 on ChatGPT auth): pick from ``model/list``."""
+        configured = await self._configured_model(workspace)
+        if configured:
+            logger.info("CodexTransport: Codex config names model %s; "
+                        "thread/start leaves the model to Codex", configured)
+            return
+        self._model = await self._resolve_startup_model()
+        self._model_auto = True
+
+    async def _configured_model(self, workspace: str) -> str | None:
+        """The model the user's Codex config names, as the app-server itself
+        resolves it (``config/read``: ``$CODEX_HOME``, project layers from
+        ``cwd``, profiles). Read-only. None when it names none, and on any
+        failure (an older CLI without the method, a broken config.toml, a
+        timeout), which keeps the auto-pick: the same as before 172."""
+        try:
+            result = await self._request("config/read", {"cwd": workspace},
+                                         timeout=10.0)
+            model = (result.get("config") or {}).get("model")
+        except Exception as e:  # noqa: BLE001 — never fail the start on it
+            logger.info("CodexTransport: config/read failed (%s); picking "
+                        "the startup model from model/list", str(e) or type(e).__name__)
+            return None
+        return model.strip() if isinstance(model, str) and model.strip() else None
+
     async def _resolve_startup_model(self, exclude: set[str] | None = None) -> str:
         """Pick a known-good startup model from the account's live
         model/list. Fills ONLY the unset fresh-start case — a user override
@@ -966,12 +998,10 @@ class CodexTransport(AgentTransport):
         """Open the handle's thread: resume, fork when the resume is refused
         because another app-server holds the thread, else start."""
         if self._model is None and not self._resume_session_id:
-            # Never open a FRESH thread on the unqualified server default
-            # (cold-start 400 on ChatGPT auth). Resume stays omit-when-no-
-            # override: the thread inherits its OWN last-used model, which
-            # is qualified — not the server default this guards against.
-            self._model = await self._resolve_startup_model()
-            self._model_auto = True
+            # Resume stays omit-when-no-override: the thread inherits its OWN
+            # last-used model, which is qualified — not the server default
+            # the fresh-start pick guards against.
+            await self._pick_fresh_thread_model(workspace)
 
         method, params = self._thread_open_request(workspace)
         try:
@@ -1012,9 +1042,9 @@ class CodexTransport(AgentTransport):
                 "and thread/fork failed (%s) — starting a fresh thread", held, e)
             fresh = {k: v for k, v in params.items() if k != "threadId"}
             if not fresh.get("model"):
-                self._model = await self._resolve_startup_model()
-                self._model_auto = True
-                fresh["model"] = self._model
+                await self._pick_fresh_thread_model(fresh.get("cwd") or self._workspace)
+                if self._model:
+                    fresh["model"] = self._model
             result = await self._request("thread/start", fresh)
             self._resume_outcome = ("fresh", "resume_failed")
             return result

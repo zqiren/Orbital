@@ -1757,9 +1757,14 @@ class AgentLoop:
 
                 exit_outer = False
                 intercepted_tc_id = None
-                # Spec 134 Part B: a call asking to end the turn AFTER its
-                # batch (``yield_after_batch``, background jobs) lets its
-                # siblings run first, unlike ``yield_turn``.
+                # Both end the turn AFTER the whole batch, so every sibling
+                # runs: ``yield_turn`` (a dispatch delivered to a worker, so
+                # the manager cannot busy-poll it; spec 172 D — it used to
+                # break at the first dispatch and CANCEL the rest) and spec
+                # 134's ``yield_after_batch`` (background jobs). They keep
+                # separate exit labels: the queue dispatcher's continuation
+                # hold keys on ``yield_turn``.
+                yield_turn = False
                 yield_after_batch = False
                 _batch_token = _tool_batch.set(uuid4().hex[:12])
 
@@ -1927,18 +1932,14 @@ class AgentLoop:
                         tool_content = result.content
                         self._note_written_path(tc, tool_content)
 
-                        # yield_turn: a dispatch tool that delivered a task to a
-                        # sub-agent ends the management turn immediately so the
-                        # LLM cannot busy-poll it (which trips the ping-pong
-                        # guard). The result is already appended above
-                        # (tool_call_id paired), so resolve_pending_tool_calls
-                        # will not CANCEL it. The sub-agent's result is pushed
-                        # back later via on_completed and the loop restarts.
+                        # yield_turn: a dispatch tool delivered a task to a
+                        # sub-agent. The turn ends once this batch is done (see
+                        # below) so the LLM cannot busy-poll the worker (which
+                        # trips the ping-pong guard); the worker's result is
+                        # pushed back later via on_completed and the loop
+                        # restarts.
                         if result.meta and result.meta.get("yield_turn"):
-                            logger.info("yield_turn: dispatch tool ended the management turn")
-                            self._note_exit("yield_turn", iteration)
-                            exit_outer = True
-                            break
+                            yield_turn = True
                         if result.meta and result.meta.get("yield_after_batch"):
                             yield_after_batch = True
 
@@ -2049,6 +2050,18 @@ class AgentLoop:
 
                 # Check if we need to exit the outer loop
                 if exit_outer:
+                    break
+
+                # A dispatch in this batch ends the turn now that every
+                # sibling has run. Ahead of the queue signal on purpose: a
+                # mark_task_complete beside a dispatch is not honoured while
+                # the dispatched worker runs (unchanged from before 172); the
+                # dispatcher holds the slot and the worker's completion wakes
+                # the next turn.
+                if yield_turn:
+                    logger.info("yield_turn: dispatch tool ended the management "
+                                "turn after its tool batch")
+                    self._note_exit("yield_turn", iteration)
                     break
 
                 # Honor the deferred queue signal now that every sibling in

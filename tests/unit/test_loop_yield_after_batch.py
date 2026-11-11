@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """Spec 134 Part B (fix B7.3): ``yield_after_batch`` ends the turn after the
-WHOLE tool batch, so two background calls in one message both run — unlike
-``yield_turn``, which breaks the batch at the first call. Each batch also gets
+WHOLE tool batch, so two background calls in one message both run — and since
+spec 172 D so does ``yield_turn`` (a dispatch). Each batch also gets
 one id (``current_tool_batch``) so those calls form one job group."""
 
 import json
@@ -124,10 +124,26 @@ async def test_one_batch_has_one_id_and_the_next_batch_another(tmp_path):
     assert current_tool_batch() is None          # not leaked outside the batch
 
 
-async def test_yield_turn_still_breaks_the_batch_at_once(tmp_path):
+async def test_yield_turn_also_ends_the_turn_after_the_batch(tmp_path):
+    # Spec 172 D: a dispatch no longer breaks the batch at once (its siblings
+    # came back CANCELLED); it ends the turn after it, under its own label.
     llm = _LLM([_calls("disp", "other"), _reply("x")])
     tools = _Tools({"disp": {"yield_turn": True}, "other": None})
     session, loop = _loop(tmp_path, llm, tools)
     session.append({"role": "user", "content": "go"})
     await loop.run()
-    assert [n for n, _ in tools.ran] == ["disp"]
+    assert [n for n, _ in tools.ran] == ["disp", "other"]
+    assert llm.calls == 1
+    assert loop._loop_exit_path == "yield_turn"
+
+
+async def test_a_dispatch_beside_a_background_job_keeps_the_dispatch_label(tmp_path):
+    # The queue dispatcher's continuation hold keys on ``yield_turn``.
+    llm = _LLM([_calls("bg", "disp"), _reply("x")])
+    tools = _Tools({"bg": {"yield_after_batch": True}, "disp": {"yield_turn": True}})
+    session, loop = _loop(tmp_path, llm, tools)
+    session.append({"role": "user", "content": "go"})
+    await loop.run()
+    assert [n for n, _ in tools.ran] == ["bg", "disp"]
+    assert llm.calls == 1
+    assert loop._loop_exit_path == "yield_turn"
