@@ -387,11 +387,26 @@ jobs:
         # Codex on Windows also ships under a hash-versioned desktop path;
         # npm gives a stable %APPDATA%\npm\codex.cmd (on Orbital's auto-detect list).
         run: |
-          npm config set prefix "$env:APPDATA\npm"
-          "$env:APPDATA\npm" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          # Run 43006988898: `npm config set prefix` alone left codex.cmd
+          # outside %APPDATA%\npm on the hosted image (an image-level prefix
+          # setting wins). Set the env var too, which beats every npmrc, and
+          # keep it for later steps.
+          $prefix = "$env:APPDATA\npm"
+          New-Item -ItemType Directory -Force -Path $prefix | Out-Null
+          $env:NPM_CONFIG_PREFIX = $prefix
+          "NPM_CONFIG_PREFIX=$prefix" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $prefix | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          npm config set prefix $prefix
+          Write-Host "npm global prefix: $(npm prefix -g)"
           npm install -g @openai/codex
           npm install -g --allow-scripts=@deepseek-ai/dsh-subprocess-local,koffi,node-pty,protobufjs @deepseek-ai/dsh@0.2.2-rc.1
-          & "$env:APPDATA\npm\codex.cmd" --version
+          if (-not (Test-Path "$prefix\codex.cmd")) {
+            Write-Host "codex.cmd not in $prefix; npm put it here:"
+            Get-ChildItem -Path (npm prefix -g) -Filter 'codex*' -ErrorAction SilentlyContinue | Format-Table FullName
+            Get-Command codex -ErrorAction SilentlyContinue | Format-List Source
+            exit 1
+          }
+          & "$prefix\codex.cmd" --version
           & "$env:APPDATA\npm\dsh.cmd" -V
       - name: Scenario deps + Playwright Chromium (the app window is WebView2)
         working-directory: tests/fresh_install
