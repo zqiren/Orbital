@@ -275,3 +275,44 @@ describe('ImportProjectsStep — while the scan runs', () => {
     expect(retry).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('ImportProjectsStep — rows that arrive after the user started choosing (F2, 2026-11-11)', () => {
+  // The scan's first answer: one worked-in folder, no groups yet.
+  const FIRST: ImportableResponse = { status: 'scanning', candidates: [DATA.candidates[0]], groups: [] };
+  // The history scan lands: a new folder row and a group with a folder.
+  const NEW_FOLDER = { ...DATA.candidates[0], name: 'later', path: '/Users/x/later' };
+  const READY: ImportableResponse = {
+    status: 'ready',
+    candidates: [DATA.candidates[0], NEW_FOLDER],
+    groups: [DATA.groups![0]],
+  };
+
+  it('after an uncheck, rows that show up later arrive unchecked, and only what the user kept is imported', async () => {
+    const { rerender } = render(<ImportProjectsStep scan={scanOf({ settled: false, importable: FIRST })} onImported={vi.fn()} />);
+    fireEvent.click(check('import-check-/Users/x/orbital-test'));
+    expect(check('import-check-/Users/x/orbital-test').checked).toBe(false);
+
+    rerender(<ImportProjectsStep scan={scanOf({ importable: READY })} onImported={vi.fn()} />);
+    // The unchecked row stays unchecked; the two that were not on screen
+    // when the user chose come in unchecked too (the "5th row" re-checked).
+    expect(check('import-check-/Users/x/orbital-test').checked).toBe(false);
+    expect(check('import-check-/Users/x/later').checked).toBe(false);
+    expect(check('import-group-check-grp_decks').checked).toBe(false);
+    expect(submit().disabled).toBe(true);
+
+    // The user can still pick a late row on purpose.
+    fireEvent.click(check('import-check-/Users/x/later'));
+    await act(async () => { fireEvent.click(submit()); });
+    const body = JSON.parse(String(apiMock.mock.calls.find(([p]) => p === '/api/v2/onboarding/import')![1].body));
+    expect(body.folders).toEqual(['/Users/x/later']);
+    expect(body.groups).toEqual([]);
+  });
+
+  it('before the user touches anything, later rows arrive checked (everything offered checked)', () => {
+    const { rerender } = render(<ImportProjectsStep scan={scanOf({ settled: false, importable: FIRST })} onImported={vi.fn()} />);
+    rerender(<ImportProjectsStep scan={scanOf({ importable: READY })} onImported={vi.fn()} />);
+    expect(check('import-check-/Users/x/orbital-test').checked).toBe(true);
+    expect(check('import-check-/Users/x/later').checked).toBe(true);
+    expect(check('import-group-check-grp_decks').checked).toBe(true);
+  });
+});

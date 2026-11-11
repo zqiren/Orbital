@@ -25,13 +25,15 @@
  * The api client (web/src/config.ts `api`) is mocked — no network.
  */
 
-import { render, screen, waitFor, cleanup, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, cleanup, fireEvent, act } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { ProviderInfo, ProviderRegistry } from '../types';
 
 const apiMock = vi.hoisted(() => vi.fn());
 vi.mock('../config', () => ({ api: apiMock }));
 
+import { LocaleProvider } from '../i18n/LocaleContext';
+import { LOCALE_STORAGE_KEY } from '../i18n/locales';
 import LLMProviderSettings, {
   orderProviders,
   regionDefaultForProvider,
@@ -190,17 +192,18 @@ describe('orderProviders', () => {
 // ---- regionDefaultForProvider ----
 
 describe('regionDefaultForProvider', () => {
-  it('returns china for a provider with a china_base_url', () => {
-    expect(regionDefaultForProvider({ china_base_url: 'https://api.moonshot.cn/v1' })).toBe('china');
+  it('a dual-endpoint provider follows the UI language: zh → china, en → global (I3)', () => {
+    expect(regionDefaultForProvider({ china_base_url: 'https://api.moonshot.cn/v1' }, 'zh')).toBe('china');
+    expect(regionDefaultForProvider({ china_base_url: 'https://api.moonshot.cn/v1' }, 'en')).toBe('global');
+    expect(regionDefaultForProvider({ china_base_url: 'https://api.moonshot.cn/v1' })).toBe('global');
   });
 
-  it('returns global for a provider without one', () => {
-    expect(regionDefaultForProvider({ china_base_url: undefined })).toBe('global');
-    expect(regionDefaultForProvider({ china_base_url: null })).toBe('global');
-  });
-
-  it('returns global when info is undefined', () => {
-    expect(regionDefaultForProvider(undefined)).toBe('global');
+  it('returns global for a provider without one, in either language', () => {
+    for (const locale of ['en', 'zh'] as const) {
+      expect(regionDefaultForProvider({ china_base_url: undefined }, locale)).toBe('global');
+      expect(regionDefaultForProvider({ china_base_url: null }, locale)).toBe('global');
+      expect(regionDefaultForProvider(undefined, locale)).toBe('global');
+    }
   });
 });
 
@@ -255,21 +258,44 @@ describe('LLMProviderSettings — default provider resolution (Spec 17 §9)', ()
   });
 });
 
-// ---- Region defaults to China on new selection ----
+// ---- Region default on a new selection follows the UI language (I3) ----
 
-describe('LLMProviderSettings — region defaults to China on new selection (Spec 17 §9)', () => {
-  it('defaults the region toggle to China when switching to a dual-endpoint provider', async () => {
-    mockApi({ settings: { provider: '' } });
-    render(<LLMProviderSettings mode="global" />);
+describe('LLMProviderSettings — a new dual-endpoint provider takes the UI language\'s region', () => {
+  afterEach(() => localStorage.removeItem(LOCALE_STORAGE_KEY));
+
+  async function pickMoonshot() {
     const select = (await screen.findAllByRole('combobox'))[0] as HTMLSelectElement;
     await waitFor(() => expect(select.value).toBe('deepseek'));
-
     fireEvent.change(select, { target: { value: 'moonshot' } });
+  }
 
-    const chinaBtn = await screen.findByText('China');
-    const globalBtn = screen.getByText('Global');
-    expect(chinaBtn.className).toContain('bg-accent');
-    expect(globalBtn.className).not.toContain('bg-accent');
+  it('English UI: Global', async () => {
+    mockApi({ settings: { provider: '' } });
+    render(<LLMProviderSettings mode="global" />);
+    await pickMoonshot();
+    expect((await screen.findByText('Global')).className).toContain('bg-accent');
+    expect(screen.getByText('China').className).not.toContain('bg-accent');
+  });
+
+  it('Chinese UI: China (unchanged for zh users)', async () => {
+    localStorage.setItem(LOCALE_STORAGE_KEY, 'zh');
+    mockApi({ settings: { provider: '' } });
+    render(<LocaleProvider><LLMProviderSettings mode="global" /></LocaleProvider>);
+    await pickMoonshot();
+    expect((await screen.findByText('中国')).className).toContain('bg-accent');
+    expect(screen.getByText('全球').className).not.toContain('bg-accent');
+  });
+
+  it('a saved card\'s region wins over the UI language', async () => {
+    mockApi({ settings: { provider: '' } });
+    const card = {
+      id: 'card_mm', name: 'Moonshot', provider: 'moonshot', region: 'china' as const, base_url: null, sdk: null,
+      model: 'kimi-k2', created_at: '2026-09-04T10:00:00+00:00', verified_at: null, last_used_at: null,
+      last_error: null, key_set: true, key_masked: 'sk-m...1111', key_source: 'keychain' as const,
+      is_default: false, read_only: false,
+    };
+    render(<LLMProviderSettings mode="global" card={card} />);
+    expect((await screen.findByText('China')).className).toContain('bg-accent');
   });
 
   it('does not show a region toggle for a provider with no china_base_url', async () => {
@@ -1298,6 +1324,67 @@ describe('LLMProviderSettings — Test Connection is compulsory before Save; pas
     // No Save button in the wizard: the reason lives under Test Connection.
     expect(screen.getByTestId('card-save-gate').textContent).toContain('Test the connection');
     expect(postBodies()).toEqual([]);
+  });
+
+  it('the wizard\'s Next pressed while the test is still running waits for the verdict, then saves (F1, 2026-11-11)', async () => {
+    mockApiForGate();
+    const base = apiMock.getMockImplementation()!;
+    let finishTest: () => void = () => {};
+    apiMock.mockImplementation(async (path: string, reqOpts?: RequestInit) => {
+      if (path === '/api/v2/providers/test') {
+        await new Promise<void>((r) => { finishTest = r; });
+        return { status: 'ok' };
+      }
+      return base(path, reqOpts);
+    });
+    const saveRef = { current: null as (() => Promise<boolean>) | null };
+    render(<LLMProviderSettings mode="global" hideSaveButton saveRef={saveRef} />);
+    await screen.findByText('API Key');
+    fireEvent.change(screen.getByPlaceholderText(/sk-/), { target: { value: 'sk-good' } });
+    fireEvent.change(screen.getByPlaceholderText(/model name/i), { target: { value: 'deepseek-chat' } });
+    fireEvent.click(test());
+    await screen.findByText('Testing...');
+    // Next, while "Testing..." is on screen: it used to read the gate, find
+    // no verdict yet and return false with nothing drawn — the swallowed click.
+    const pressed = saveRef.current!();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(postBodies()).toEqual([]);
+    finishTest();
+    expect(await pressed).toBe(true);
+    expect(postBodies()).toEqual([expect.objectContaining({ model: 'deepseek-chat', api_key: 'sk-good' })]);
+  });
+
+  it('a refused Next turns the gate line red instead of doing nothing visible', async () => {
+    mockApiForGate();
+    const saveRef = { current: null as (() => Promise<boolean>) | null };
+    render(<LLMProviderSettings mode="global" hideSaveButton saveRef={saveRef} />);
+    await screen.findByText('API Key');
+    fireEvent.change(screen.getByPlaceholderText(/sk-/), { target: { value: 'sk-good' } });
+    fireEvent.change(screen.getByPlaceholderText(/model name/i), { target: { value: 'deepseek-chat' } });
+    await waitFor(() => expect(saveRef.current).toBeTruthy());
+    expect(screen.getByTestId('card-save-gate').className).not.toContain('text-error');
+    await act(async () => { expect(await saveRef.current!()).toBe(false); });
+    expect(screen.getByTestId('card-save-gate').className).toContain('text-error');
+    // One line, not two.
+    expect(screen.queryByTestId('card-save-error')).toBeNull();
+  });
+
+  it('a failed save in the wizard (no Save button) is drawn, not swallowed', async () => {
+    mockApiForGate();
+    const base = apiMock.getMockImplementation()!;
+    apiMock.mockImplementation(async (path: string, reqOpts?: RequestInit) => {
+      if (path === '/api/v2/settings/cards' && reqOpts?.method === 'POST') throw new Error('Keychain is locked');
+      return base(path, reqOpts);
+    });
+    const saveRef = { current: null as (() => Promise<boolean>) | null };
+    render(<LLMProviderSettings mode="global" hideSaveButton saveRef={saveRef} />);
+    await screen.findByText('API Key');
+    fireEvent.change(screen.getByPlaceholderText(/sk-/), { target: { value: 'sk-good' } });
+    fireEvent.change(screen.getByPlaceholderText(/model name/i), { target: { value: 'deepseek-chat' } });
+    fireEvent.click(test());
+    await screen.findByText(/Connected to/);
+    await act(async () => { expect(await saveRef.current!()).toBe(false); });
+    expect(screen.getByTestId('card-save-error').textContent).toBe('Keychain is locked');
   });
 
   it('renaming an existing card needs no test; changing its model does', async () => {

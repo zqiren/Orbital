@@ -259,6 +259,75 @@ describe('CredentialCards — row actions', () => {
     );
   });
 
+  it('a coded refusal reads as a sentence in the UI language, never as raw JSON (F5, G43)', async () => {
+    // What api() throws for a 400 with detail {code, message}: the detail
+    // JSON-stringified as the Error message.
+    mockCards([DEFAULT_CARD], (path, opts) => {
+      if (path === '/api/v2/settings/cards/card_default' && opts?.method === 'DELETE') {
+        throw new Error(JSON.stringify({
+          code: 'card_is_default',
+          message: 'This is the default card. Make another card the default first.',
+        }));
+      }
+      return undefined;
+    });
+    renderList();
+    fireEvent.click(await screen.findByTestId('card-delete-card_default'));
+    const line = (await screen.findByTestId('card-error-card_default')).textContent ?? '';
+    expect(line).toBe('Make another provider the default before deleting this one.');
+    expect(line).not.toContain('{');
+  });
+
+  it('deleting the LAST provider succeeds: says what follows, no error, list refreshed to empty (I5)', async () => {
+    let cards = [DEFAULT_CARD];
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    apiMock.mockImplementation(async (path: string, opts?: RequestInit) => {
+      if (path === '/api/v2/settings/cards/card_default' && opts?.method === 'DELETE') {
+        // Daemon contract (batch 1111): the only card may go; the install is
+        // then keyless (setup.api_key_skipped: true).
+        cards = [];
+        return { id: 'card_default', deleted: true, reassigned_projects: [] };
+      }
+      if (path === '/api/v2/settings') {
+        return {
+          credential_cards: cards,
+          default_card_id: cards.length ? 'card_default' : null,
+          setup: { api_key_skipped: cards.length === 0 },
+          llm: { api_key_set: cards.length > 0, api_key_masked: '', base_url: null, model: null, sdk: 'openai', provider: '' },
+        };
+      }
+      if (path === '/api/v2/providers') return PROVIDERS;
+      return {};
+    });
+    renderList();
+    fireEvent.click(await screen.findByTestId('card-delete-card_default'));
+    expect(confirmSpy.mock.calls.at(-1)![0]).toBe(
+      'Delete "OpenCode Go · deepseek-v4-flash"? It\'s your only provider: Orbital\'s agent stops working, your other agents still do.',
+    );
+    await waitFor(() => expect(screen.queryByTestId('card-row-card_default')).toBeNull());
+    expect(screen.queryByTestId('card-error-card_default')).toBeNull();
+  });
+
+  it('with other cards present, the ordinary confirm is used', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    mockCards([DEFAULT_CARD, BAD_CARD]);
+    renderList();
+    fireEvent.click(await screen.findByTestId('card-delete-card_bad'));
+    expect(confirmSpy.mock.calls.at(-1)![0]).toContain('fall back to the default provider');
+  });
+
+  it('an unmapped code shows the daemon\'s own sentence', async () => {
+    mockCards([DEFAULT_CARD, BAD_CARD], (path, opts) => {
+      if (path === '/api/v2/settings/cards/card_bad/test' && opts?.method === 'POST') {
+        throw new Error(JSON.stringify({ code: 'keychain_error', message: 'The Keychain is locked.' }));
+      }
+      return undefined;
+    });
+    renderList();
+    fireEvent.click(await screen.findByTestId('card-test-card_bad'));
+    expect((await screen.findByTestId('card-error-card_bad')).textContent).toBe('The Keychain is locked.');
+  });
+
   it('the list carries no rename affordance — renaming belongs to Edit', async () => {
     // Clicking a card is what selects it, so the name cannot also be a rename
     // trigger. The name field lives in the Edit form, one of the three actions.
@@ -352,6 +421,42 @@ describe('CredentialCards — Add card', () => {
     // No Done step: the dialog is gone and the list refreshed.
     await waitFor(() => expect(screen.queryByTestId('card-modal')).toBeNull());
     expect(screen.queryByTestId('card-modal-done')).toBeNull();
+  });
+
+  it('after a save the dialog stays open on a failed verdict showing the NEW key, and a second Save updates that card (F4)', async () => {
+    const saved = makeCard({ id: 'card_new', name: 'New card', key_masked: 'sk-n...9999' });
+    mockCards([DEFAULT_CARD], (path, opts) => {
+      if (path === '/api/v2/settings/cards' && opts?.method === 'POST') {
+        return { card: saved, test: { ok: false, status: 401, code: 'invalid_api_key', message: 'Invalid API key' } };
+      }
+      if (path === '/api/v2/settings/cards/card_new' && opts?.method === 'PUT') {
+        return { card: { ...saved, key_masked: 'sk-f...0000' }, test: { ok: false, status: 401, code: 'invalid_api_key', message: 'Invalid API key' } };
+      }
+      if (path === '/api/v2/providers/test') return { status: 'ok' };
+      return undefined;
+    });
+    renderList();
+    fireEvent.click(await screen.findByTestId('cards-add'));
+    await screen.findByTestId('card-modal');
+    fireEvent.change(await screen.findByPlaceholderText(/sk-/), { target: { value: 'sk-new-key-9999' } });
+    fireEvent.change(await screen.findByPlaceholderText(/model name/), { target: { value: 'deepseek-chat' } });
+    fireEvent.click(screen.getByTestId('card-test'));
+    await waitFor(() => expect((screen.getByTestId('card-save') as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByTestId('card-save'));
+    await screen.findByTestId('card-save-test');
+    // The current-key line is the key just saved.
+    expect(await screen.findByText(/sk-n\.\.\.9999/)).toBeTruthy();
+
+    // Fix the key and save again: the same card is updated, not a second one minted.
+    fireEvent.change(screen.getByPlaceholderText(/sk-|key/i), { target: { value: 'sk-fixed-0000' } });
+    fireEvent.click(screen.getByTestId('card-test'));
+    await waitFor(() => expect((screen.getByTestId('card-save') as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByTestId('card-save'));
+    await screen.findByText(/sk-f\.\.\.0000/);
+    const posts = apiMock.mock.calls.filter(([p, o]) => p === '/api/v2/settings/cards' && (o as RequestInit)?.method === 'POST');
+    const puts = apiMock.mock.calls.filter(([p, o]) => p === '/api/v2/settings/cards/card_new' && (o as RequestInit)?.method === 'PUT');
+    expect(posts).toHaveLength(1);
+    expect(puts).toHaveLength(1);
   });
 
   it('offers no vendor-specific sign-in of its own — only "Add provider"', async () => {

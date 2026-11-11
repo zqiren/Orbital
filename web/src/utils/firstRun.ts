@@ -33,6 +33,19 @@ export function wizardLandingProjectId(projects: readonly ProjectLike[]): string
 }
 
 /**
+ * The project the wizard's Finish opens, always on a new session: the import
+ * step's landing project when it is listed, else (the landing was lost, e.g. a
+ * reload mid-wizard) `wizardLandingProjectId`. `null` → open Create Project.
+ */
+export function wizardHandoffProjectId(
+  projects: readonly ProjectLike[],
+  imported: string | null,
+): string | null {
+  if (imported && projects.some((p) => p.project_id === imported)) return imported;
+  return wizardLandingProjectId(projects);
+}
+
+/**
  * The first-run gate App.tsx applies to GET /api/v2/settings: the wizard shows
  * until a key exists or the user skipped the key step. `null` (the daemon did
  * not answer) shows it, as before. An older daemon sends no `setup`, which

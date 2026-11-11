@@ -107,14 +107,17 @@ export function orderProviders(keys: string[], locale: Locale = 'en'): string[] 
   return [...known, ...unknown, ...custom];
 }
 
-/** Region default for a newly-selected provider (Spec 17 §9): dual-endpoint
- * providers default to 'china' (launch audience is the Chinese X community);
- * everyone else defaults to 'global'. Does NOT apply to saved-config
- * derivation (base_url === china_base_url), which is handled separately. */
+/** Region default for a newly-selected provider: a dual-endpoint provider
+ * follows the UI language (zh → China, en → Global), the same signal that
+ * ranks TokenDance first for zh. Region-locked keys (MiniMax) made the old
+ * China-for-everyone default read as "Invalid API key" to English users.
+ * Everyone else defaults to 'global'. Does NOT apply to a saved card or the
+ * saved-config derivation (base_url === china_base_url): those always win. */
 export function regionDefaultForProvider(
   info: Pick<ProviderInfo, 'china_base_url'> | undefined,
+  locale: Locale = 'en',
 ): 'global' | 'china' {
-  return info?.china_base_url ? 'china' : 'global';
+  return info?.china_base_url && locale === 'zh' ? 'china' : 'global';
 }
 
 /** Collapsed-by-default wrapper for the long explanatory hint paragraphs
@@ -227,6 +230,11 @@ export default function LLMProviderSettings({
     }
   }, [credentialFingerprint, testedFingerprint, testStatus]);
   const [testMessage, setTestMessage] = useState('');
+  // The connection test in flight, and the inputs it runs against. A save
+  // pressed meanwhile (the wizard's Next right after Test) waits for this
+  // verdict instead of reading the gate before the verdict lands, which
+  // refused the press with nothing on screen (2026-11-11 smoke, F1).
+  const testRunRef = useRef<{ fingerprint: string; done: Promise<void> } | null>(null);
 
   const modelComboRef = useRef<HTMLDivElement>(null);
 
@@ -422,10 +430,10 @@ export default function LLMProviderSettings({
       setShowAdvanced(true);
     } else {
       const info: ProviderInfo | undefined = providers[key];
-      // Spec 17: a newly-selected dual-endpoint provider defaults to the China
-      // region (no saved base_url for it yet). Saved-config derivation (the
+      // A newly-selected dual-endpoint provider takes the region of the UI
+      // language (no saved base_url for it yet). Saved-config derivation (the
       // base_url === china_base_url check in the init effect) is untouched.
-      const defaultRegion = regionDefaultForProvider(info);
+      const defaultRegion = regionDefaultForProvider(info, locale);
       setRegion(defaultRegion);
       if (info) {
         setBaseUrl(resolveBaseUrl(info, defaultRegion));
@@ -587,8 +595,16 @@ export default function LLMProviderSettings({
   }
 
   // Test connection
-  async function handleTestConnection() {
+  function handleTestConnection(): Promise<void> {
     const fingerprint = credentialFingerprint;
+    const done = runTestConnection(fingerprint).finally(() => {
+      if (testRunRef.current?.done === done) testRunRef.current = null;
+    });
+    testRunRef.current = { fingerprint, done };
+    return done;
+  }
+
+  async function runTestConnection(fingerprint: string) {
     setTestStatus('testing');
     setTestMessage('');
     try {
@@ -727,7 +743,13 @@ export default function LLMProviderSettings({
    * green or red, so a provider outage can never block saving.
    */
   async function doSave(): Promise<boolean> {
-    if (!connectionTested) {
+    const running = testRunRef.current;
+    if (!connectionTested && running?.fingerprint === credentialFingerprint) {
+      // The test for exactly these inputs is still running: once it lands,
+      // the test has run, which is all the gate asks (passing is not).
+      setSaveError('');
+      await running.done;
+    } else if (!connectionTested) {
       // Same reason the form shows under Test Connection; the wizard's Next
       // reads the false and lets this line explain.
       setSaveError(saveGateReason);
@@ -850,6 +872,8 @@ export default function LLMProviderSettings({
   const showSaveGate =
     !connectionTested && !card?.read_only && canTestConnection
     && savedFingerprint !== credentialFingerprint;
+  const gateShown = canTestConnection && showSaveGate && testStatus !== 'error';
+  const gateRefused = saveError === saveGateReason;
 
   // ---- Wizard mode: the create-project modal only wants a heads-up when the
   // agent CAN'T start (no global API key) — the happy-path "using global
@@ -1234,12 +1258,25 @@ export default function LLMProviderSettings({
               {testMessage}
             </p>
           )}
-          {showSaveGate && testStatus !== 'error' && (
-            <p className="text-xs text-secondary mt-2" data-testid="card-save-gate">
+          {gateShown && (
+            // A refused save turns this same line red rather than adding a
+            // second one: the wizard has no Save button to put it beside.
+            <p
+              className={`text-xs mt-2 ${gateRefused ? 'text-error' : 'text-secondary'}`}
+              data-testid="card-save-gate"
+            >
               {saveGateReason}
             </p>
           )}
         </div>
+      )}
+
+      {/* The wizard hides Save, so its errors were never drawn and a failed
+          save read as a dead Next button. */}
+      {hideSaveButton && saveError && !(gateShown && gateRefused) && (
+        <p className="text-xs text-error" role="alert" data-testid="card-save-error">
+          {saveError}
+        </p>
       )}
 
       {/* Save = create/update the card. The daemon records the Test Connection

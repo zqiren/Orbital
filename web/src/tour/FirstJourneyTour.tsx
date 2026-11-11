@@ -42,21 +42,24 @@ const STEPS: TourStep[] = [
   { id: 'leftOff', anchors: ['left-off'], titleKey: 'tour.leftOff.title', bodyKey: 'tour.leftOff.body', interactive: true },
   { id: 'project', anchors: ['project-header'], titleKey: 'tour.project.title', bodyKey: 'tour.project.body' },
   { id: 'agents', anchors: ['pin-select'], titleKey: 'tour.agents.title', bodyKey: 'tour.agents.body' },
-  { id: 'panel', anchors: ['workspace-panel', 'panel-handle'], titleKey: 'tour.panel.title', bodyKey: 'tour.panel.body' },
+  // A stop points at the thing it talks about, or is skipped. The collapsed
+  // panel's handle is not "here" for "show up here": it left the coachmark on
+  // an empty screen edge (2026-11-11 smoke), so a collapsed panel has no
+  // panel stop and no files stop.
+  { id: 'panel', anchors: ['workspace-panel'], titleKey: 'tour.panel.title', bodyKey: 'tour.panel.body' },
   // Spec 137: no Files tab any more. The project's files are the panel at
-  // full width — its maximize control when the panel is open, the panel
-  // handle when it is collapsed, the header button below the dock threshold.
-  // When that lands on the same control as the panel stop, the stop is
-  // dropped rather than shown twice (see `distinctAnchors`).
-  { id: 'files', anchors: ['panel-maximize', 'panel-handle', 'panel-button'], titleKey: 'tour.files.title', bodyKey: 'tour.files.body' },
+  // full width — its maximize control when the panel is open, the header
+  // button below the dock threshold.
+  { id: 'files', anchors: ['panel-maximize', 'panel-button'], titleKey: 'tour.files.title', bodyKey: 'tour.files.body' },
   // The status line under the title is the only way into Tasks; it always
   // renders (a teaching line when nothing is scheduled), so the stop is
   // always there.
   { id: 'tasks', anchors: ['status-line'], titleKey: 'tour.tasks.title', bodyKey: 'tour.tasks.body' },
   { id: 'settings', anchors: ['project-settings'], titleKey: 'tour.settings.title', bodyKey: 'tour.settings.body' },
-  // Inside a project the project list is collapsed to the edge strip, so the
-  // Quick Tasks row itself is usually not on screen — the strip is where it lives.
-  { id: 'quickTasks', anchors: ['quick-tasks-row', 'edge-strip'], titleKey: 'tour.quickTasks.title', bodyKey: 'tour.quickTasks.body' },
+  // Only the Quick Tasks row itself: inside a project the list is usually
+  // collapsed to the edge strip, and a coachmark on that thin strip named a
+  // row nobody could see — so then the stop is skipped.
+  { id: 'quickTasks', anchors: ['quick-tasks-row'], titleKey: 'tour.quickTasks.title', bodyKey: 'tour.quickTasks.body' },
 ];
 
 const CARD_WIDTH = 320;
@@ -89,8 +92,7 @@ function findAnchor(step: TourStep): HTMLElement | null {
 }
 
 /** The stops whose anchor is on screen, minus any that would spotlight the
- * same element as an earlier stop (a collapsed panel: the panel stop and the
- * files stop both resolve to the handle — one coachmark is enough). */
+ * same element as an earlier stop (one coachmark per control). */
 function distinctAnchors(steps: TourStep[]): TourStep[] {
   const seen = new Set<HTMLElement>();
   const out: TourStep[] = [];

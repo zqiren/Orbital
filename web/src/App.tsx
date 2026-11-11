@@ -38,7 +38,7 @@ import CreateProject from './components/CreateProject';
 import FirstRunHome from './components/FirstRunHome';
 import ImportProjectsDialog from './components/ImportProjectsDialog';
 import { markFreshSession } from './utils/freshSession';
-import { isFirstRun, needsSetupWizard, wizardLandingProjectId } from './utils/firstRun';
+import { isFirstRun, needsSetupWizard, wizardHandoffProjectId, wizardLandingProjectId } from './utils/firstRun';
 import FirstJourneyTour from './tour/FirstJourneyTour';
 import {
   decideTourState, readTourState, shouldStartTour, writeTourState, type TourState,
@@ -666,13 +666,12 @@ export default function App() {
           // session; otherwise the Create Project dialog. A new user was
           // never told that creating a project is the next step — so make it
           // the next step. Closing the dialog falls back to the first-run home.
+          // Always a new session: the project's newest one after an import is
+          // its background read, which may be a failure (2026-11-11).
           const loaded = await listProjects();
-          const imported = outcome?.landingProjectId ?? null;
-          const landing = wizardLandingProjectId(loaded);
-          if (imported && loaded.some((p) => p.project_id === imported)) {
-            await openProjectOnNewSession(imported);
-          } else if (landing) {
-            setRoute({ name: 'project', projectId: landing, sessionId: undefined });
+          const landing = wizardHandoffProjectId(loaded, outcome?.landingProjectId ?? null);
+          if (landing) {
+            await openProjectOnNewSession(landing);
           } else {
             setRoute({ name: 'create' });
           }

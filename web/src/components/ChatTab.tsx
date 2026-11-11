@@ -54,6 +54,7 @@ import SessionHeading from './SessionHeading';
 import { useWorkspaceUpload } from '../hooks/useWorkspaceUpload';
 import {
   eventAsMessage,
+  isFailedToolResult,
   latestScreenshot,
   pathForEvent,
   touchedFiles,
@@ -242,6 +243,8 @@ export default function ChatTab({
   // in the socket callback rather than from a rendered `lastEvent`, so a burst
   // of events in one tick cannot swallow the file path of all but the last.
   const handleActivityRef = useRef<(event: WebSocketEvent) => void>(() => {});
+  // Reads waiting for their result: tool_call_id → path.
+  const pendingReadsRef = useRef(new Map<string, string>());
   // Written in an effect, not during render: render must stay pure, and the
   // socket can only reach the ref after the first commit anyway.
   useEffect(() => {
@@ -259,13 +262,27 @@ export default function ChatTab({
           ),
         }));
       }
+      // A read moves the panel when its result comes back and only if it
+      // succeeded: following the call opened paths the agent merely guessed,
+      // and the panel sat on "Unable to load file" (2026-11-11, E33).
+      if (activity.category === 'tool_result') {
+        const read = activity.tool_call_id ? pendingReadsRef.current.get(activity.tool_call_id) : undefined;
+        if (read === undefined) return;
+        pendingReadsRef.current.delete(activity.tool_call_id!);
+        if (isFailedToolResult(activity)) return;
+        expandForEvent('files');
+        setPanelFile(read);
+        return;
+      }
       const view = viewForEvent(activity);
       if (view === null) return; // command-only turns do not move the panel (§13.3)
-      expandForEvent(view);
-      if (view === 'files') {
-        const path = pathForEvent(activity);
-        if (path) setPanelFile(path);
+      const path = view === 'files' ? pathForEvent(activity) : null;
+      if (activity.category === 'file_read' && path && activity.tool_call_id) {
+        pendingReadsRef.current.set(activity.tool_call_id, path);
+        return;
       }
+      expandForEvent(view);
+      if (path) setPanelFile(path);
     };
   });
 

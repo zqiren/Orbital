@@ -942,6 +942,88 @@ describe('transformChatHistory — FE-A2 sub-agent lifecycle markers', () => {
     }
   });
 
+  it('the Orbital agent\'s own stop marker renders the same neutral stopped row (I4, E33)', () => {
+    const items = transformChatHistory([sys('[cancelled by user]', TS)]);
+    expect(items.length).toBe(1);
+    const a = items[0];
+    expect(a.type).toBe('sub_agent_activity');
+    if (a.type === 'sub_agent_activity') {
+      expect(a.action).toBe('stopped');
+      expect(a.handle).toBe('orbital');
+      expect(a.count).toBeUndefined();
+    }
+  });
+
+  // 2026-11-11: a run that ended on an LLM error left only its system row,
+  // which was dropped — a failed background read (no user message) rendered
+  // "No messages yet", and an ordinary failed run showed nothing once the
+  // in-memory error banner was gone. The persisted row is now the failed row.
+  it('a non-recoverable LLM error row renders the Orbital agent\'s failed row', () => {
+    const items = transformChatHistory([
+      sys('LLM error (non-recoverable): invalid x-api-key. Stopping.', TS),
+    ]);
+    expect(items.length).toBe(1);
+    const a = items[0];
+    expect(a.type).toBe('sub_agent_activity');
+    if (a.type === 'sub_agent_activity') {
+      expect(a.action).toBe('failed');
+      expect(a.handle).toBe('orbital');
+      expect(a.error).toBe('invalid x-api-key');
+    }
+  });
+
+  it('keeps the auth note of a non-recoverable error and drops only "Stopping."', () => {
+    const items = transformChatHistory([
+      sys(
+        'LLM error (non-recoverable): bad key. The API key was rejected and the ' +
+          'global default was also rejected. Stopping.',
+        TS,
+      ),
+    ]);
+    const a = items[0];
+    expect(a.type).toBe('sub_agent_activity');
+    if (a.type === 'sub_agent_activity') {
+      expect(a.error).toBe('bad key. The API key was rejected and the global default was also rejected');
+    }
+  });
+
+  it('an exhausted-retries LLM error (429) and an internal run failure render the failed row', () => {
+    const items = transformChatHistory([
+      sys('LLM error after 3 retries: rate limited. Stopping.', TS),
+      sys('Run failed (KeyError): \'x\'. Stopping.', TS2),
+    ]);
+    expect(items.map((i) => i.type === 'sub_agent_activity' && [i.action, i.handle, i.error])).toEqual([
+      ['failed', 'orbital', 'rate limited'],
+      ['failed', 'orbital', "KeyError: 'x'"],
+    ]);
+  });
+
+  it('a start_failed row renders the failed row with its detail', () => {
+    const items = transformChatHistory([
+      {
+        role: 'system',
+        content:
+          '[The agent could not be started for this message — RuntimeError: no provider. ' +
+          'Your message was saved; send it again or retry once the problem is fixed.]',
+        source: 'daemon',
+        timestamp: TS,
+        _meta: { event: 'start_failed' },
+      },
+    ]);
+    expect(items.length).toBe(1);
+    const a = items[0];
+    expect(a.type).toBe('sub_agent_activity');
+    if (a.type === 'sub_agent_activity') {
+      expect(a.action).toBe('failed');
+      expect(a.handle).toBe('orbital');
+      expect(a.error).toBe('RuntimeError: no provider');
+    }
+  });
+
+  it('other management system rows stay dropped', () => {
+    expect(transformChatHistory([sys('Maximum iteration limit reached. Save your current state and stop.', TS)])).toEqual([]);
+  });
+
   it('#27: a user stop that killed background work carries the count and commands', () => {
     const items = transformChatHistory([
       sys(

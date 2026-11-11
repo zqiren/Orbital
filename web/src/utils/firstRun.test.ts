@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { describe, it, expect } from 'vitest';
-import { isFirstRun, needsSetupWizard, wizardLandingProjectId } from './firstRun';
+import { isFirstRun, needsSetupWizard, wizardHandoffProjectId, wizardLandingProjectId } from './firstRun';
 
 const scratch = { project_id: 'proj-scratch', is_scratch: true };
 const own = (id: string) => ({ project_id: id, is_scratch: false });
@@ -34,6 +34,23 @@ describe('wizardLandingProjectId', () => {
 
   it('lands in the most recently added own project when the wizard imported some', () => {
     expect(wizardLandingProjectId([scratch, own('a'), own('b')])).toBe('b');
+  });
+});
+
+// The wizard's Finish opens this project on a new session (never its newest
+// one, which after an import is the background read).
+describe('wizardHandoffProjectId', () => {
+  it('opens the imported landing project when it is in the list', () => {
+    expect(wizardHandoffProjectId([scratch, own('a'), own('b')], 'a')).toBe('a');
+  });
+
+  it('falls back to the most recently added own project (landing lost, e.g. a reload mid-wizard)', () => {
+    expect(wizardHandoffProjectId([scratch, own('a'), own('b')], null)).toBe('b');
+    expect(wizardHandoffProjectId([scratch, own('a'), own('b')], 'gone')).toBe('b');
+  });
+
+  it('is null when there is no own project (→ open Create Project)', () => {
+    expect(wizardHandoffProjectId([scratch], null)).toBeNull();
   });
 });
 

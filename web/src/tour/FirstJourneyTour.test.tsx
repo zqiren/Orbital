@@ -32,7 +32,7 @@ function mountAnchors(ids: string[], leftOffAnswered = true) {
 
 // Spec 137: no tab bar. Files anchors on the panel's maximize control (panel
 // open), Tasks on the status line under the title.
-const ALL = ['project-header', 'pin-select', 'workspace-panel', 'panel-maximize', 'status-line', 'project-settings', 'edge-strip'];
+const ALL = ['project-header', 'pin-select', 'workspace-panel', 'panel-maximize', 'status-line', 'project-settings', 'quick-tasks-row'];
 
 beforeEach(() => {
   Object.defineProperty(window, 'innerWidth', { value: 1280, configurable: true });
@@ -83,7 +83,7 @@ describe('FirstJourneyTour', () => {
   it('skips stops whose anchor is not on screen — no sub-agents, panel not docked — and counts only the rest', async () => {
     // A narrow window: no docked panel and no handle; the header's panel
     // button is where the files are.
-    mountAnchors(['project-header', 'panel-button', 'status-line', 'project-settings', 'edge-strip']);
+    mountAnchors(['project-header', 'panel-button', 'status-line', 'project-settings', 'quick-tasks-row']);
     render(<FirstJourneyTour folderName="x" agentNames={[]} onClose={vi.fn()} />);
 
     await waitFor(() => expect(screen.getByTestId('tour-card')).toBeTruthy());
@@ -111,15 +111,20 @@ describe('FirstJourneyTour', () => {
     expect(stepId()).toBe('tasks');
   });
 
-  it('a collapsed panel gets one stop, not two: the files stop does not repeat the handle', async () => {
-    mountAnchors(['project-header', 'panel-handle', 'status-line']);
+  it('a collapsed panel and a collapsed project list get no stop: nothing to point at (F6, 2026-11-11)', async () => {
+    // What a new user lands on: the panel folded to its handle and the
+    // project list folded to the edge strip. Stops 4 and 7 used to sit on
+    // those empty edges.
+    mountAnchors(['project-header', 'panel-handle', 'status-line', 'project-settings', 'edge-strip']);
     render(<FirstJourneyTour folderName="x" agentNames={[]} onClose={vi.fn()} />);
     await waitFor(() => expect(screen.getByTestId('tour-card')).toBeTruthy());
     expect(screen.getByTestId('tour-counter').textContent).toBe('1 of 3');
-    fireEvent.click(screen.getByTestId('tour-next'));
-    expect(stepId()).toBe('panel');
-    fireEvent.click(screen.getByTestId('tour-next'));
-    expect(stepId()).toBe('tasks');
+    const seen = [stepId()];
+    for (let i = 0; i < 2; i++) {
+      fireEvent.click(screen.getByTestId('tour-next'));
+      seen.push(stepId());
+    }
+    expect(seen).toEqual(['project', 'tasks', 'settings']);
   });
 
   it('with left-off cards showing, opens on them and goes to the agents stop next', async () => {
@@ -172,14 +177,6 @@ describe('FirstJourneyTour', () => {
     expect(stepId()).toBe('project');
   });
 
-  it('falls back to the panel handle when the panel is collapsed', async () => {
-    mountAnchors(['project-header', 'panel-handle']);
-    render(<FirstJourneyTour folderName="x" agentNames={[]} onClose={vi.fn()} />);
-    await waitFor(() => expect(screen.getByTestId('tour-card')).toBeTruthy());
-    fireEvent.click(screen.getByTestId('tour-next'));
-    expect(stepId()).toBe('panel');
-  });
-
   it('ignores an anchor that is painted but invisible (the closed project-list flyout keeps its Quick Tasks row at opacity 0)', async () => {
     // EdgeStrip hides its flyout with opacity, not display:none (a WKWebView
     // compositor workaround), so the row inside still measures a real box.
@@ -196,10 +193,8 @@ describe('FirstJourneyTour', () => {
 
     render(<FirstJourneyTour folderName="x" agentNames={[]} onClose={vi.fn()} />);
     await waitFor(() => expect(screen.getByTestId('tour-card')).toBeTruthy());
-    fireEvent.click(screen.getByTestId('tour-next'));
-    expect(stepId()).toBe('quickTasks');
-    // Spotlight sits on the edge strip (100,100), not the hidden row (500,500).
-    expect(screen.getByTestId('tour-spotlight').style.left).toBe('94px');
+    // The row is hidden and the strip is not the row: no Quick Tasks stop.
+    expect(screen.getByTestId('tour-counter').textContent).toBe('1 of 1');
   });
 
   it('Skip tour and Escape both close it', async () => {

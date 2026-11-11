@@ -744,6 +744,27 @@ describe('T5 ChatView: per-session history load', () => {
     expect(chatCalls[1]).toContain('session_id=s2');
   });
 
+  it('a session holding only a failed run\'s row shows the failure, not "No messages yet"', async () => {
+    // An import's background read whose key was rejected: the file holds
+    // only the loop's LLM-error row, and the banner's in-memory event is
+    // gone after a daemon restart (run-status answers none).
+    chatInitialResponse = {
+      data: [{
+        role: 'system',
+        content: 'LLM error (non-recoverable): invalid x-api-key. Stopping.',
+        source: 'management',
+        timestamp: '2026-11-11T10:00:00Z',
+      }],
+      total: 1,
+    };
+    await renderChat({ sessionId: 's1' });
+    await flushEffects();
+    expect(container.textContent ?? '').not.toContain('No messages yet');
+    const row = container.querySelector('[data-testid="sub-agent-activity"]');
+    expect(row?.getAttribute('data-action')).toBe('failed');
+    expect(row?.textContent ?? '').toContain('invalid x-api-key');
+  });
+
   it('does NOT fetch /chat history when no session is resolved (sessionId undefined)', async () => {
     await renderChat({ sessionId: undefined });
     await flushEffects();
@@ -2823,6 +2844,32 @@ describe('credential-error surfacing (AgentErrorNotice)', () => {
     expect(notice).not.toBeNull();
     expect(notice!.textContent).toMatch(/API key/i);
     expect(notice!.textContent).toContain('No LLM API key configured');
+  });
+
+  it('Open Settings lands on the LLM providers section, not the top of Settings (F3)', async () => {
+    const opened: CustomEvent[] = [];
+    const listener = (e: Event) => opened.push(e as CustomEvent);
+    window.addEventListener('open-global-settings', listener);
+    try {
+      await act(async () => {
+        root.render(
+          <ChatView projectId="p1" project={project} agentStatus="idle" agents={[]} sessionId="s1" />,
+        );
+      });
+      await flushEffects();
+      await act(async () => {
+        emitWs('agent.status', {
+          type: 'agent.status', project_id: 'p1', status: 'error', reason: 'Invalid credential',
+          error_code: 'invalid_api_key', session_id: 's1', source: 'management',
+        });
+      });
+      await act(async () => {
+        (container.querySelector('[data-testid="agent-error-notice-settings"]') as HTMLButtonElement).click();
+      });
+      expect(opened.map((e) => e.detail)).toEqual([{ section: 'llm' }]);
+    } finally {
+      window.removeEventListener('open-global-settings', listener);
+    }
   });
 
   it('clears the notice when a new run starts (non-error status)', async () => {
