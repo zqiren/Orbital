@@ -27,6 +27,9 @@ class _StubScanner:
     def start(self):
         pass
 
+    def refresh(self):
+        return False  # still scanning: nothing to re-read yet
+
     def status(self):
         return {"status": "scanning", "sessions_total": 0, "by_agent": {}}
 

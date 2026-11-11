@@ -149,6 +149,11 @@ async def importable_projects():
     raises: an unreadable or missing source contributes nothing."""
     scanner = get_scanner()
     scanner.start()
+    # The history scan runs once per daemon life; a folder the user worked in
+    # since then reaches the list when Import opens (1111 keyed smoke D28).
+    # Incremental, ~0.3 s warm on a 900-session history; a no-op while the
+    # first scan still runs.
+    await asyncio.to_thread(scanner.refresh)
     try:
         candidates = await asyncio.to_thread(
             lambda: scan_importable_projects(existing_workspaces=_existing_workspaces()))

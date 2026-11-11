@@ -82,7 +82,8 @@ OFF = "off"
 # Round 4: a wizard import (``defer_scan``) waits for the key step's Save or
 # Skip (spec 167: Skip with the switch on stamps it ``pending``, off turns it
 # ``off``) — a daemon restart in between must not start it. Picked by a real
-# trigger, never by the startup resume.
+# trigger, never by the startup resume; the trigger that queues it stamps it
+# ``pending``, so a restart after that resumes it.
 DEFERRED = "deferred"
 
 CONCURRENCY = 2
@@ -518,6 +519,11 @@ class ImportScanQueue:
                 continue
             if not wants_scan(p, include_deferred=include_deferred):
                 continue
+            if p.get(STATE_FIELD) == DEFERRED:
+                # Its trigger has fired: it now waits on the queue, and a
+                # restart before its turn must resume it (1111 keyed D25: a
+                # third wizard import stayed ``deferred`` past a restart).
+                self._mark(pid, PENDING)
             self._waiting.append(pid)
             added.append(pid)
         # Newest activity first; unknown last; creation order breaks ties.

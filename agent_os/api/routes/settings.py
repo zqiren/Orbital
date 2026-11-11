@@ -276,7 +276,8 @@ async def create_card(req: CreateCardRequest):
     # Pi borrows a card key for its configured model's provider.
     _refresh_agents_in_background(_model_provider_slugs())
     _import_scan_switch(req.import_scan)
-    _import_scan_kick("card_created")
+    if _default_card_passed(card.id, test):
+        _import_scan_kick("card_created")
     return {"card": _masked(card.id), "test": test}
 
 
@@ -308,7 +309,7 @@ async def update_card(card_id: str, req: UpdateCardRequest):
     if retest:
         _refresh_agents_in_background(_model_provider_slugs())
     _import_scan_switch(req.import_scan)
-    if "api_key" in fields:
+    if _default_card_passed(card_id, test):
         _import_scan_kick("card_updated")
     return {"card": _masked(card_id), "test": test}
 
@@ -317,13 +318,17 @@ async def update_card(card_id: str, req: UpdateCardRequest):
 async def delete_card(card_id: str):
     """Delete a card, re-pointing everything that referenced it.
 
-    The default card cannot be deleted while it is the default (D5): every
+    The default card cannot be deleted while other cards exist (D5): every
     project on ``card_id=null`` follows it, so removing it would silently
-    move the whole install onto nothing.
+    move the whole install onto nothing. The last card can go (1111 D2): the
+    install is then keyless, exactly as after the wizard's Skip.
     """
     _reject_read_only(card_id)
     card = _card_or_404(card_id)
-    if card_id == _settings_store.effective_default_card_id():
+    # 1111 D2: the last card may go. The install then runs keyless (the
+    # wizard's own Skip state, set below); every project on it follows.
+    others = [c for c in _settings_store.stored_cards() if c.id != card_id]
+    if card_id == _settings_store.effective_default_card_id() and others:
         raise _card_error(
             "card_is_default",
             "This is the default card. Make another card the default first.",
@@ -355,6 +360,12 @@ async def delete_card(card_id: str):
         _settings_store.update(current)
 
     _settings_store.delete_card(card_id)
+    if _settings_store.default_card() is None:
+        # No key left: the keyless mode the wizard's Skip leaves, so the
+        # first-run gate (no key and not skipped) never shows the wizard again.
+        current = _settings_store.get()
+        current.setup_api_key_skipped = True
+        _settings_store.update(current)
     _refresh_agents_in_background(_model_provider_slugs())
     return {"id": card_id, "deleted": True, "reassigned_projects": reassigned}
 
@@ -373,7 +384,8 @@ async def set_default_card(card_id: str):
     if card_id != ENV_CARD_ID:
         _settings_store.set_default_card(card_id)
     effective = _settings_store.effective_default_card_id()
-    _import_scan_kick("default_card_changed")
+    if _card_verified(effective):
+        _import_scan_kick("default_card_changed")
     return {"default_card_id": effective, "applied": effective == card_id}
 
 
@@ -382,7 +394,26 @@ async def test_card(card_id: str):
     """Re-test a saved card and write its health. 200 even when it fails."""
     _card_or_404(card_id)
     test = await _test_and_record(card_id)
+    if _default_card_passed(card_id, test):
+        _import_scan_kick("card_tested")
     return {"card": _masked(card_id), "test": test}
+
+
+def _default_card_passed(card_id: str | None, test: dict | None) -> bool:
+    """1111 D1: the imported projects' one read starts only on a key that
+    works. A card save is allowed with a failing test, but it must not burn
+    every waiting read into a final failure; the default card's next passing
+    test (a re-test or a corrected save) starts them. Only the default
+    counts: the waiting imports read with it."""
+    return (bool(test and test.get("ok"))
+            and card_id == _settings_store.effective_default_card_id())
+
+
+def _card_verified(card_id: str | None) -> bool:
+    """The card's last connection test passed (its recorded health)."""
+    card = _settings_store.resolve_card(card_id) if card_id else None
+    return (card is not None and bool(getattr(card, "verified_at", None))
+            and getattr(card, "last_error", None) is None)
 
 
 def _import_scan_switch(on: bool | None) -> None:

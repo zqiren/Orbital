@@ -4203,8 +4203,9 @@ async def run_connection_test(provider: str, model: str, api_key: str,
         if "ModelProtocolUnsupported" in (e.message or ""):
             return {"ok": False, "status": status, "code": "provider_error",
                     "message": _describe_protocol_mismatch(model, sdk)}
+        # The provider's sentence, not the SDK envelope (1111 keyed B8).
         return {"ok": False, "status": status, "code": "provider_error",
-                "message": e.message}
+                "message": unwrap_provider_message(e.message)}
     except Exception as e:  # noqa: BLE001 — an SDK constructor can raise anything
         return {"ok": False, "status": 500, "code": "provider_error",
                 "message": str(e) or type(e).__name__}

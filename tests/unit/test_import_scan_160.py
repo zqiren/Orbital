@@ -613,7 +613,9 @@ def test_an_import_that_creates_nothing_does_not_kick(tmp_path, kicks):
 def _settings_app(tmp_path, monkeypatch):
     from agent_os.api.routes import settings as settings_routes
 
-    card = SimpleNamespace(id="c1", provider="opencode-go", model="m", name="n", base_url=None)
+    # Last test passed (D1: only a verified default card starts the reads).
+    card = SimpleNamespace(id="c1", provider="opencode-go", model="m", name="n", base_url=None,
+                           verified_at="2026-11-11T00:00:00+00:00", last_error=None)
     fake = MagicMock()
     fake.create_card = MagicMock(return_value=card)
     fake.resolve_card = MagicMock(return_value=card)
@@ -1711,3 +1713,116 @@ def test_a_prefilled_change_answer_is_still_the_guarded_change_turn():
     rec_en = {"yes": "Yes", "change": "Needs changes"}
     assert classify_answer(rec_en, "Needs changes: it is a shop, not a blog", "en") == "change"
     assert classify_answer(rec_en, "Needs changes to the README", "en") == "message"
+
+
+def test_a_wizard_import_a_trigger_queued_resumes_after_a_restart(store, tmp_path):
+    """1111 keyed smoke D25: the key step's Save queued three wizard imports;
+    two started, the daemon was killed, and the third, still ``deferred`` on
+    disk, was left out by the startup resume until another key Save. Queued
+    by a real trigger, it waits on the queue: ``pending``, which a restart
+    resumes. Nothing is read twice: the two cut-off runs resume once each."""
+    from agent_os.onboarding.import_scan import DEFERRED
+
+    a, _ = _imported(store, tmp_path, "a", activity="2026-11-03T00:00:00Z", state=DEFERRED)
+    b, _ = _imported(store, tmp_path, "b", activity="2026-11-02T00:00:00Z", state=DEFERRED)
+    c, _ = _imported(store, tmp_path, "c", activity="2026-11-01T00:00:00Z", state=DEFERRED)
+
+    async def before_restart():
+        runner = FakeRunner(store, hold=True)
+        q = ImportScanQueue(store, runner)
+        q.kick("card_created")           # the key step's Save
+        for _ in range(50):
+            await asyncio.sleep(0)
+        assert set(runner.started) == {a, b}
+        for t in list(q._tasks) + [q._pump]:  # the kill
+            if t is not None:
+                t.cancel()
+
+    _run(before_restart())
+    states = {pid: ProjectStore(str(tmp_path / "data")).get_project(pid)[import_scan.STATE_FIELD]
+              for pid in (a, b, c)}
+    assert states == {a: RUNNING, b: RUNNING, c: PENDING}
+
+    store2 = ProjectStore(str(tmp_path / "data"))
+
+    async def after_restart():
+        runner = FakeRunner(store2)
+        q = ImportScanQueue(store2, runner)
+        q.resume()                       # daemon start, no new trigger
+        await q.idle()
+        return runner
+
+    runner = _run(after_restart())
+    assert sorted(runner.started) == sorted([a, b, c])
+    for pid in (a, b, c):
+        assert store2.get_project(pid)[import_scan.STATE_FIELD] == DONE
+
+
+# ---------------------------------------------------------------------------
+# 1111 D1: the reads start only on a passing connection test
+# ---------------------------------------------------------------------------
+
+
+def _test_result(monkeypatch, ok):
+    from agent_os.api.routes import settings as settings_routes
+
+    async def tested(card_id, *, reuse_recent=False):
+        return {"ok": ok, "status": None if ok else 401,
+                "code": None if ok else "invalid_api_key"}
+
+    monkeypatch.setattr(settings_routes, "_test_and_record", tested)
+
+
+def test_a_card_saved_with_a_failing_test_starts_no_read(tmp_path, monkeypatch, kicks):
+    """A bad key used to burn every waiting read into a permanent failure:
+    the save kicked the queue whatever its test said. The save itself still
+    succeeds (the test must run, it need not pass)."""
+    from agent_os.api.routes import settings as settings_routes
+    from agent_os.onboarding.import_scan import DEFERRED
+
+    client = _settings_app(tmp_path, monkeypatch)
+    store = settings_routes._project_store
+    w, _ = _imported(store, tmp_path, "wiz", state=DEFERRED)
+    _test_result(monkeypatch, False)
+    r = client.post("/api/v2/settings/cards",
+                    json={"provider": "opencode-go", "model": "m", "api_key": "sk-bad"})
+    assert r.status_code == 201, r.text
+    r = client.put("/api/v2/settings/cards/c1", json={"api_key": "sk-bad2"})
+    assert r.status_code == 200, r.text
+    r = client.post("/api/v2/settings/cards/c1/test")
+    assert r.status_code == 200, r.text
+    assert kicks == []
+    assert store.get_project(w)[import_scan.STATE_FIELD] == DEFERRED
+
+
+def test_a_passing_test_of_the_default_card_starts_the_reads(tmp_path, monkeypatch, kicks):
+    client = _settings_app(tmp_path, monkeypatch)
+    _test_result(monkeypatch, True)
+    client.post("/api/v2/settings/cards/c1/test")              # a re-test
+    client.put("/api/v2/settings/cards/c1", json={"model": "m2"})  # a corrected save
+    assert kicks == [("card_tested", True), ("card_updated", True)]
+
+
+def test_a_passing_card_that_is_not_the_default_starts_no_read(tmp_path, monkeypatch, kicks):
+    """The waiting imports read with the default card; another card passing
+    says nothing about it."""
+    from agent_os.api.routes import settings as settings_routes
+
+    client = _settings_app(tmp_path, monkeypatch)
+    settings_routes._settings_store.effective_default_card_id.return_value = "c0"
+    _test_result(monkeypatch, True)
+    client.post("/api/v2/settings/cards",
+                json={"provider": "opencode-go", "model": "m", "api_key": "sk-x"})
+    client.post("/api/v2/settings/cards/c1/test")
+    assert kicks == []
+
+
+def test_making_a_failing_card_the_default_starts_no_read(tmp_path, monkeypatch, kicks):
+    from agent_os.api.routes import settings as settings_routes
+
+    client = _settings_app(tmp_path, monkeypatch)
+    card = settings_routes._settings_store.resolve_card.return_value
+    card.last_error = {"code": "invalid_api_key"}
+    r = client.put("/api/v2/settings/cards/c1/default")
+    assert r.status_code == 200, r.text
+    assert kicks == []

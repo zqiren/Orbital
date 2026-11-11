@@ -165,6 +165,26 @@ class HistoryScanner:
                 except Exception:
                     logger.warning("history scan: on_ready hook failed", exc_info=True)
 
+    def refresh(self) -> bool:
+        """Re-read what changed since the last pass and re-analyze, once the
+        first scan is done (before that, the running scan is the fresh read).
+        Incremental: every session file is stat'ed, only new or changed ones
+        are parsed (~0.1 s on 900 sessions), then the notes (~0.2 s) and the
+        analysis (~10 ms). Blocking — call off the event loop. Returns
+        whether it ran; a failure keeps serving the last result."""
+        if not self._ready.is_set():
+            return False
+        try:
+            sessions = self.collect()
+            self.collect_notes()
+            analysis = analyze(sessions, self.env())
+        except Exception:
+            logger.warning("history refresh failed", exc_info=True)
+            return False
+        with self._lock:
+            self._analysis = analysis
+        return True
+
     def wait(self, timeout: float | None = None) -> bool:
         self.start()
         return self._ready.wait(timeout)

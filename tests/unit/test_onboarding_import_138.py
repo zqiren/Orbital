@@ -186,3 +186,22 @@ def test_create_project_seeds_disabled_sub_agents_from_hidden(app_env, tmp_path)
     r2 = app_env.client.post("/api/v2/projects", json={
         "name": "plain2", "workspace": str(ws2), "disabled_sub_agents": []})
     assert app_env.store.get_project(r2.json()["project_id"])["disabled_sub_agents"] == []
+
+
+def test_a_folder_with_history_from_after_the_scan_is_listed_when_import_opens(app_env):
+    """1111 keyed smoke D28: the history scan ran once per daemon life, so a
+    folder the user worked in with Claude Code after the daemon started never
+    reached the sidebar Import. Opening Import re-reads what changed."""
+    _ready(app_env.client)
+    first = app_env.client.get("/api/v2/onboarding/importable-projects").json()
+    fresh = app_env.home / "code" / "later"
+    fresh.mkdir(parents=True)
+    _transcript(app_env.home / ".claude" / "projects" / "later" / "l1.jsonl", "l1",
+                str(fresh), "draft the onboarding email", ts="2026-11-10T10:00:00Z")
+    assert str(fresh) not in {c["path"] for c in first["candidates"]}
+
+    body = app_env.client.get("/api/v2/onboarding/importable-projects").json()
+    assert body["status"] == "ready"
+    rows = {c["path"]: c for c in body["candidates"]}
+    assert str(fresh) in rows and rows[str(fresh)]["session_count"] == 1
+    assert app_env.client.get("/api/v2/onboarding/history").json()["sessions_total"] == 4
