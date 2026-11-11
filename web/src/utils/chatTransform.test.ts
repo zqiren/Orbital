@@ -942,6 +942,18 @@ describe('transformChatHistory — FE-A2 sub-agent lifecycle markers', () => {
     }
   });
 
+  it('the Orbital agent\'s own stop marker renders the same neutral stopped row (I4, E33)', () => {
+    const items = transformChatHistory([sys('[cancelled by user]', TS)]);
+    expect(items.length).toBe(1);
+    const a = items[0];
+    expect(a.type).toBe('sub_agent_activity');
+    if (a.type === 'sub_agent_activity') {
+      expect(a.action).toBe('stopped');
+      expect(a.handle).toBe('orbital');
+      expect(a.count).toBeUndefined();
+    }
+  });
+
   it('#27: a user stop that killed background work carries the count and commands', () => {
     const items = transformChatHistory([
       sys(

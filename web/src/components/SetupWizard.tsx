@@ -47,7 +47,7 @@ import ImportProjectsStep from './ImportProjectsStep';
 import WizardAgentsStep from './WizardAgentsStep';
 import { useSubAgentList } from '../hooks/useSubAgentList';
 import { useOnboardingScan } from '../hooks/useOnboardingScan';
-import { hasImportables, importIntro } from '../utils/onboarding';
+import { hasImportables, importIntro, NO_CHOICES, type ImportChoices } from '../utils/onboarding';
 import { sendTelemetry } from '../utils/telemetry';
 import { isFirstRun } from '../utils/firstRun';
 import { readTourState, writeTourState } from '../tour/tourLogic';
@@ -249,6 +249,9 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
   const [keyCompulsory, setKeyCompulsory] = useState(false);
   // The project Finish lands in, from the import.
   const landingRef = useRef<string | null>(null);
+  // The Projects step's ticks, held here: Back to Agents unmounts that step,
+  // and coming forward again must not re-check what the user unchecked.
+  const importChoices = useState<ImportChoices>(NO_CHOICES);
 
   const reportedRef = useRef(new Set<WizardStep>());
   useEffect(() => {
@@ -512,10 +515,14 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
               // Save or Skip (each with its sign); with one, the key step is skipped and the import
               // itself starts it.
               deferScan={!keySet}
+              choices={importChoices}
               onBack={() => setStep('agents')}
               onSkip={afterProjects}
               onImported={(_result, landing) => {
                 landingRef.current = landing;
+                // Re-read the list so a Back from the key step shows these as
+                // already imported rather than offering them again.
+                scan.retry();
                 afterProjects();
               }}
             />
@@ -551,7 +558,19 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
             </p>
 
             <div className="mt-6 flex flex-col items-end">
-              <div className="flex items-center gap-2.5">
+              <div className="flex w-full items-center gap-2.5">
+                {/* Back: the Projects step's own control and wording. To
+                    Projects when that step had something to offer, else to
+                    Agents. Nothing is kept across a reload, by choice. */}
+                <button
+                  type="button"
+                  onClick={() => setStep(nothingToImport ? 'agents' : 'projects')}
+                  disabled={checkingKey || skippingKey}
+                  data-testid="wizard-key-back"
+                  className="mr-auto text-sm font-medium text-secondary transition-colors duration-150 hover:text-primary disabled:opacity-50 max-md:min-h-[44px]"
+                >
+                  {t('global.back')}
+                </button>
                 {/* Spec 160 §5.3: saving the key reads the imported projects
                     once; the count says so, the sentence waits for a hover. */}
                 <TokenCostSign n={unscannedImports} scan={scanOn} onScanChange={setScanOn} />

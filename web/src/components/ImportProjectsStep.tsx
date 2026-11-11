@@ -20,7 +20,7 @@
  * decide whether to show this step before it does.
  */
 
-import { useState } from 'react';
+import { useState, type Dispatch, type SetStateAction } from 'react';
 import { Check, ChevronDown, ChevronRight, FolderOpen, Loader2 } from 'lucide-react';
 import { api } from '../config';
 import { useT } from '../i18n/useT';
@@ -37,12 +37,15 @@ import {
   isFolderChecked,
   isGroupChecked,
   landingProjectId,
+  rowKeys,
   uncheckedCount,
+  withLateRowsUnchecked,
+  NO_CHOICES,
   type GroupReason,
+  type ImportChoices,
   type ImportCandidate,
   type ImportGroup,
   type ImportResult,
-  type TickOverrides,
 } from '../utils/onboarding';
 import { sendTelemetry } from '../utils/telemetry';
 import type { OnboardingScan } from '../hooks/useOnboardingScan';
@@ -68,6 +71,8 @@ interface ImportProjectsStepProps {
   /** The wizard: its import comes before the key step, so the read waits
    *  for that step's Save or Skip (``defer_scan`` on the request). */
   deferScan?: boolean;
+  /** Controlled choices (the wizard's), so they outlive this step's mount. */
+  choices?: [ImportChoices, Dispatch<SetStateAction<ImportChoices>>];
 }
 
 const basename = (p: string) => p.replace(/\\/g, '/').split('/').filter(Boolean).pop() ?? p;
@@ -104,11 +109,16 @@ export default function ImportProjectsStep({
   scrollable = false,
   scanRunner,
   deferScan = false,
+  choices,
 }: ImportProjectsStepProps) {
   const t = useT();
   const { locale } = useLocale();
-  const [ticks, setTicks] = useState<TickOverrides>({});
-  const [chosen, setChosen] = useState<Record<string, string>>({});
+  // The user's choices. The wizard holds them itself so they survive Back to
+  // Agents and forward again (this step remounts); the dialog keeps its own.
+  const ownChoices = useState<ImportChoices>(NO_CHOICES);
+  const [{ ticks: userTicks, offered, chosen }, setChoices] = choices ?? ownChoices;
+  const setChosen = (update: (prev: Record<string, string>) => Record<string, string>) =>
+    setChoices((prev) => ({ ...prev, chosen: update(prev.chosen) }));
   const [showMinor, setShowMinor] = useState(false);
   const [browsingGroup, setBrowsingGroup] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
@@ -121,18 +131,28 @@ export default function ImportProjectsStep({
   const groups = data?.groups ?? [];
   const major = candidates.filter((c) => !c.minor);
   const minor = candidates.filter((c) => c.minor);
+  const ticks = data ? withLateRowsUnchecked(data, userTicks, offered) : userTicks;
   const request = data ? buildImportRequest(data, ticks, chosen) : { folders: [], groups: [] };
   const count = request.folders.length + request.groups.length;
   const scanning = !scan.settled && data?.status === 'scanning';
 
-  const toggle = (key: string, checked: boolean) =>
-    setTicks((prev) => ({ ...prev, [key]: checked }));
+  // The first change fixes which rows the user was choosing from; rows that
+  // arrive later come in unchecked (withLateRowsUnchecked). Computed here,
+  // not inside the updater, from the list on screen at the click.
+  const toggle = (key: string, checked: boolean) => {
+    const firstChoice = offered === null && data ? rowKeys(data) : null;
+    setChoices((prev) => ({
+      ...prev,
+      offered: prev.offered ?? firstChoice,
+      ticks: { ...prev.ticks, [key]: checked },
+    }));
+  };
 
   async function handleImport() {
     if (!data || count === 0 || importing) return;
     setImporting(true);
     setImportError(false);
-    sendTelemetry('projects_unchecked', { n: uncheckedCount(data, ticks) });
+    sendTelemetry('projects_unchecked', { n: uncheckedCount(data, userTicks) });
     try {
       const result = await api<ImportResult>('/api/v2/onboarding/import', {
         method: 'POST',

@@ -50,8 +50,21 @@ export function providerErrorKey(code: string | undefined): StringKey {
  */
 export function parseProviderError(err: unknown): ProviderErrorInfo | null {
   if (!(err instanceof ApiError) || typeof err.detail !== 'string') return null;
+  return codedFromText(err.detail);
+}
+
+/**
+ * The same `{code, message}` read off any thrown Error's text (an ApiError's
+ * message IS its detail). For surfaces whose routes always answer with a code
+ * — the credential-card routes — so a refusal is never shown as raw JSON.
+ */
+export function codedErrorOf(err: unknown): ProviderErrorInfo | null {
+  return err instanceof Error ? codedFromText(err.message) : null;
+}
+
+function codedFromText(text: string): ProviderErrorInfo | null {
   try {
-    const parsed: unknown = JSON.parse(err.detail);
+    const parsed: unknown = JSON.parse(text);
     if (
       parsed !== null &&
       typeof parsed === 'object' &&
@@ -64,7 +77,7 @@ export function parseProviderError(err: unknown): ProviderErrorInfo | null {
       };
     }
   } catch {
-    // detail was not structured JSON — not a classified provider error
+    // not structured JSON — not a coded error
   }
   return null;
 }

@@ -52,10 +52,18 @@ import type {
 } from '../types';
 import { api } from '../config';
 import { cardHealth } from '../utils/cardHealth';
+import { codedErrorOf } from '../utils/providerError';
+import type { StringKey } from '../i18n/strings';
 import type { CardHealth } from '../utils/cardHealth';
 import { useT, translate } from '../i18n/useT';
 import { useLocale } from '../i18n/LocaleContext';
 import LLMProviderSettings from './LLMProviderSettings';
+
+/** Card-route refusals a user can reach from the list, in the UI language. */
+const CARD_ERROR_KEY: Record<string, StringKey> = {
+  card_is_default: 'cards.error.card_is_default',
+  card_not_found: 'cards.error.card_not_found',
+};
 
 /**
  * Provider display names, fetched once per page load and shared by every
@@ -147,6 +155,13 @@ export default function CardList({
   const [adding, setAdding] = useState(false);
 
   function errorText(err: unknown): string {
+    // Card routes answer {code, message}: show the catalog line for a code
+    // the user can hit here, else the daemon's sentence — never the JSON.
+    const coded = codedErrorOf(err);
+    if (coded) {
+      const key = CARD_ERROR_KEY[coded.code];
+      return key ? t(key) : coded.message || t('cards.action.failed');
+    }
     return err instanceof Error && err.message ? err.message : t('cards.action.failed');
   }
 
@@ -205,7 +220,15 @@ export default function CardList({
   }
 
   async function deleteCard(card: CredentialCard) {
-    if (!confirm(t('cards.delete.confirm', { name: card.name }))) return;
+    // The last provider: there is no default to fall back to. The daemon
+    // deletes it and puts the install in keyless mode (the wizard's Skip),
+    // so the confirm says what actually follows. Leaving Settings re-reads
+    // the project rows, which brings back the "API key required" pill.
+    const last = !card.read_only && cards.filter((c) => !c.read_only).length === 1;
+    const question = last
+      ? t('cards.delete.confirmLast', { name: card.name })
+      : t('cards.delete.confirm', { name: card.name });
+    if (!confirm(question)) return;
     setBusy({ id: card.id, kind: 'delete' });
     clearRow();
     try {
@@ -624,6 +647,10 @@ export function CardFormModal({
 }) {
   const t = useT();
   const [savedOnce, setSavedOnce] = useState(false);
+  // The card as it stands after the last save in this dialog. The dialog
+  // stays open on a failed verdict, and editing the stale prop kept showing
+  // the old "Current key" (and an Add dialog saved twice made two cards).
+  const [current, setCurrent] = useState<CredentialCard | null>(card);
 
   return createPortal(
     <div
@@ -657,8 +684,9 @@ export function CardFormModal({
         <div className="flex-1 overflow-y-auto min-h-0 px-5 py-4">
           <LLMProviderSettings
             mode="global"
-            card={card}
+            card={current}
             onCardSaved={(result) => {
+              setCurrent(result.card);
               onSaved(result);
               if (!result.test || result.test.ok) {
                 onClose();

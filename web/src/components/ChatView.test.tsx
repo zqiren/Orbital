@@ -2825,6 +2825,32 @@ describe('credential-error surfacing (AgentErrorNotice)', () => {
     expect(notice!.textContent).toContain('No LLM API key configured');
   });
 
+  it('Open Settings lands on the LLM providers section, not the top of Settings (F3)', async () => {
+    const opened: CustomEvent[] = [];
+    const listener = (e: Event) => opened.push(e as CustomEvent);
+    window.addEventListener('open-global-settings', listener);
+    try {
+      await act(async () => {
+        root.render(
+          <ChatView projectId="p1" project={project} agentStatus="idle" agents={[]} sessionId="s1" />,
+        );
+      });
+      await flushEffects();
+      await act(async () => {
+        emitWs('agent.status', {
+          type: 'agent.status', project_id: 'p1', status: 'error', reason: 'Invalid credential',
+          error_code: 'invalid_api_key', session_id: 's1', source: 'management',
+        });
+      });
+      await act(async () => {
+        (container.querySelector('[data-testid="agent-error-notice-settings"]') as HTMLButtonElement).click();
+      });
+      expect(opened.map((e) => e.detail)).toEqual([{ section: 'llm' }]);
+    } finally {
+      window.removeEventListener('open-global-settings', listener);
+    }
+  });
+
   it('clears the notice when a new run starts (non-error status)', async () => {
     await act(async () => {
       root.render(

@@ -259,6 +259,57 @@ describe('SetupWizard — spec 138 step flow', () => {
     expect(screen.getByText('The Orbital agent')).toBeTruthy();
   });
 
+  it('Back to Agents and forward again keeps what the user unchecked on Projects (F2)', async () => {
+    mockApi({ apiKeySet: false, importable: SOME_PROJECTS });
+    render(<SetupWizard onComplete={vi.fn()} />);
+    await continueFromAgents();
+    const box = () => screen.getByTestId('import-check-/Users/x/orbital-test') as HTMLInputElement;
+    await waitFor(() => expect(box().checked).toBe(true));
+    fireEvent.click(box());
+    expect(box().checked).toBe(false);
+
+    fireEvent.click(screen.getByTestId('import-back'));
+    await continueFromAgents();
+    await waitFor(() => expect(screen.getByText('Your projects')).toBeTruthy());
+    expect(box().checked).toBe(false);
+  });
+
+  it('the key step has Back: to Projects when it had rows, keeping the unchecks (I2)', async () => {
+    mockApi({ apiKeySet: false, importable: SOME_PROJECTS });
+    render(<SetupWizard onComplete={vi.fn()} />);
+    await continueFromAgents();
+    const box = () => screen.getByTestId('import-check-/Users/x/orbital-test') as HTMLInputElement;
+    await waitFor(() => expect(box().checked).toBe(true));
+    fireEvent.click(box());
+    fireEvent.click(screen.getByTestId('import-skip'));
+    await waitFor(() => expect(screen.getByText('The Orbital agent')).toBeTruthy());
+
+    // Same wording as the Projects step's Back.
+    expect(screen.getByTestId('wizard-key-back').textContent).toBe('Back');
+    fireEvent.click(screen.getByTestId('wizard-key-back'));
+    await waitFor(() => expect(screen.getByText('Your projects')).toBeTruthy());
+    expect(box().checked).toBe(false);
+  });
+
+  it('the key step\'s Back goes to Agents when there was nothing to import', async () => {
+    mockApi({ apiKeySet: false });
+    await renderAtKey();
+    fireEvent.click(screen.getByTestId('wizard-key-back'));
+    expect(screen.getByText('Welcome to Orbital')).toBeTruthy();
+  });
+
+  it('after an import, the list is re-read so Back shows the imported folder as imported', async () => {
+    mockApi({ apiKeySet: false, importable: SOME_PROJECTS });
+    render(<SetupWizard onComplete={vi.fn()} />);
+    await continueFromAgents();
+    await waitFor(() => expect(screen.getByTestId('import-submit')).toBeTruthy());
+    const before = calledPaths().filter((p) => p === '/api/v2/onboarding/importable-projects').length;
+    await act(async () => { fireEvent.click(screen.getByTestId('import-submit')); });
+    await waitFor(() => expect(screen.getByText('The Orbital agent')).toBeTruthy());
+    await waitFor(() =>
+      expect(calledPaths().filter((p) => p === '/api/v2/onboarding/importable-projects').length).toBeGreaterThan(before));
+  });
+
   it('skips the key step when a key already exists', async () => {
     mockApi({ apiKeySet: true });
     await renderAtAccounts();

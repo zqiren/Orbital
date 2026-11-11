@@ -4732,8 +4732,10 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
           <AgentErrorNotice
             code={agentError.code}
             message={agentError.message}
+            // Every non-internal code here is about the provider/key: land
+            // on the LLM providers section, as the pin switcher's pill does.
             onOpenSettings={() =>
-              window.dispatchEvent(new CustomEvent('open-global-settings'))
+              window.dispatchEvent(new CustomEvent('open-global-settings', { detail: { section: 'llm' } }))
             }
             onDismiss={() => setAgentError(null)}
           />

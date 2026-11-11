@@ -192,6 +192,44 @@ export function buildImportRequest(
   return { folders, groups };
 }
 
+/** What the user chose on the list: their tick changes, the rows on screen at
+ *  their first change (null before it), and the folders picked for groups. */
+export interface ImportChoices {
+  ticks: TickOverrides;
+  offered: string[] | null;
+  chosen: Record<string, string>;
+}
+
+export const NO_CHOICES: ImportChoices = { ticks: {}, offered: null, chosen: {} };
+
+/** Every row key on the list (folders not yet imported, and groups). */
+export function rowKeys(data: ImportableResponse): string[] {
+  return [
+    ...data.candidates.filter((c) => !c.already_imported).map((c) => folderKey(c.path)),
+    ...(data.groups ?? []).map((g) => groupKey(g.id)),
+  ];
+}
+
+/**
+ * The list keeps filling in after it first shows (groups and the rebuilt
+ * folder rows arrive with the history scan). Everything is offered checked,
+ * but once the user has started choosing, a row that was not on screen when
+ * they did is not part of what they chose: it arrives unchecked, so a folder
+ * they never saw is not imported behind their back. `offered` is the row keys
+ * on the list at the user's first change; null until they make one.
+ */
+export function withLateRowsUnchecked(
+  data: ImportableResponse,
+  ticks: TickOverrides,
+  offered: readonly string[] | null,
+): TickOverrides {
+  if (offered === null) return ticks;
+  const seen = new Set(offered);
+  const late: TickOverrides = {};
+  for (const key of rowKeys(data)) if (!seen.has(key)) late[key] = false;
+  return { ...late, ...ticks };
+}
+
 /** Items that were offered checked and the user unchecked. */
 export function uncheckedCount(data: ImportableResponse, ticks: TickOverrides): number {
   const folders = data.candidates.filter(

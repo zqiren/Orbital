@@ -611,6 +611,8 @@ const SUB_AGENT_QUEUE_DROPPED_RE =
 // producer's trailing prose is ever reworded, the row degrades to a
 // less-detailed row instead of silently vanishing again — which is the whole
 // failure mode these rules exist to end.
+/** The marker the daemon appends when the user stops the Orbital agent. */
+const CANCELLED_BY_USER = '[cancelled by user]';
 const SUB_AGENT_USER_STOPPED_RE = /^\[Sub-agent\]\s+([\w.-]+)\s+stopped by user\.\s*([\s\S]*)$/;
 const SUB_AGENT_INTERRUPTED_RE = /^\[Sub-agent\]\s+([\w.-]+)\s+was stopped before completing its current task\b/;
 const SUB_AGENT_BACKGROUND_LOST_RE =
@@ -1628,6 +1630,15 @@ export function transformChatHistory(
       // is the clean marker text and is what SUB_AGENT_COMPLETED_RE parses
       // (its capture group is greedy to end-of-string, so parsing the full
       // content would leak the guidance into the rendered summary).
+      // The Orbital agent's own stop (loop.py / agent_manager write this
+      // marker). Same neutral row a stopped worker gets, so a stopped turn
+      // no longer just ends mid-capsule (2026-11-11, E33).
+      if (msg.content === CANCELLED_BY_USER) {
+        finalizeCapsule();
+        items.push({ type: 'sub_agent_activity', action: 'stopped', handle: 'orbital', timestamp: msg.timestamp });
+        i++;
+        continue;
+      }
       const activityContent =
         typeof msg._meta?.display_content === 'string'
           ? (msg._meta.display_content as string)

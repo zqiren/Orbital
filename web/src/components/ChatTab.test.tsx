@@ -811,6 +811,23 @@ describe('ChatTab — the panel follows the agent (D8)', () => {
     expect(lastFilesViewProps.file).toBe('src/a.ts');
   });
 
+  it('a read opens its file only once the read succeeded; a failed read moves nothing (I4, E33)', async () => {
+    await act(async () => {
+      renderChatTab();
+    });
+    // The call alone does not move the panel any more.
+    emitActivity({ category: 'file_read', tool_name: 'read', tool_call_id: 'c1', arguments: { path: 'orbital/project_goals.md' } });
+    expect(screen.queryByTestId('workspace-panel-column')).toBeNull();
+    // It failed: still nothing — no "Unable to load file" preview.
+    emitActivity({ category: 'tool_result', tool_name: 'c1', tool_call_id: 'c1', result_preview: 'Error: file not found: orbital/project_goals.md' });
+    expect(screen.queryByTestId('workspace-panel-column')).toBeNull();
+
+    emitActivity({ category: 'file_read', tool_name: 'read', tool_call_id: 'c2', arguments: { path: 'README.md' } });
+    emitActivity({ category: 'tool_result', tool_name: 'c2', tool_call_id: 'c2', result_preview: '# Hello' });
+    expect(screen.getByTestId('workspace-panel-column')).toBeInTheDocument();
+    expect(lastFilesViewProps.file).toBe('README.md');
+  });
+
   it('a command-only turn does not open the panel (§13.3)', async () => {
     await act(async () => {
       renderChatTab();

@@ -122,6 +122,12 @@ export function viewForEvent(event: ActivityEvent): PanelView | null {
   return null;
 }
 
+/** A tool_result whose text is a tool's refusal. Orbital's file tools answer
+ *  a failed call with "Error: …" (agent_os/agent/tools/read.py). */
+export function isFailedToolResult(event: ActivityEvent): boolean {
+  return event.is_error === true || (event.result_preview ?? '').startsWith('Error:');
+}
+
 /**
  * The workspace path a file activity event refers to, when the daemon shipped
  * parsed `arguments` alongside the event. Null for browser/command events and
