@@ -29,12 +29,15 @@ from agent_os.utils.text_io import read_text_lenient, read_text_lenient_raising
 
 # Layer 1 workspace file keys (matching WorkspaceFileManager.FILE_NAMES)
 # paired with their on-disk filenames, in the order they should appear
-# in the context window.
+# in the context window. PROJECT_STATE.md goes last (spec 171 A5): the record
+# turn rewrites it at every run's end, so in front it would move the prefix
+# off the cache for the three stable files behind it. Every user of this
+# tuple keys by filename, never by position.
 _LAYER1_FILES: tuple[tuple[str, str], ...] = (
-    ("state", "PROJECT_STATE.md"),
     ("decisions", "DECISIONS.md"),
     ("lessons", "LESSONS.md"),
     ("index", "INDEX.md"),
+    ("state", "PROJECT_STATE.md"),
 )
 
 

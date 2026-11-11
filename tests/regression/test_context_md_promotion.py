@@ -93,8 +93,10 @@ class TestIndexMdInLayer1:
         keys = [k for k, _ in context_mod._LAYER1_FILES]
         assert "index" in keys
         assert "context" not in keys
-        # index must be last (broadest / least urgent navigation map)
-        assert keys[-1] == "index"
+        # Spec 171 A5: state goes last (rewritten every run, so it must not
+        # sit in front of the three stable files); index is last of those.
+        assert keys[-1] == "state"
+        assert keys[-2] == "index"
 
 
 # ---------------------------------------------------------------------------

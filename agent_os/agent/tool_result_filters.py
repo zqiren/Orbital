@@ -15,6 +15,28 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# Tools whose results are structured API responses, safe to re-serialize.
+# Everything else (``read``, ``grep``, ``glob``, worker replies…) can carry
+# file bytes the model later quotes to ``edit``, which matches exactly, so it
+# must reach the model as-is. An allowlist on purpose: a tool missing here
+# costs a few tokens; a file tool wrongly compacted breaks edits.
+_JSON_API_TOOLS = frozenset({
+    "browser",
+    "calendar_read",
+    "list_sessions",
+    "read_session",
+    "create_trigger",
+    "list_triggers",
+    "update_trigger",
+    "delete_trigger",
+})
+
+
+def _is_json_api_tool(tool_name: str) -> bool:
+    # Connector shims are named "<connector_id>.<tool>" (connectors/reflection.py);
+    # no built-in tool name has a dot.
+    return tool_name in _JSON_API_TOOLS or "." in tool_name
+
 
 def dispatch_prefilter(tool_name: str, arguments: dict, content: str | list) -> str | list:
     """Apply the appropriate pre-filter based on tool type.
@@ -36,11 +58,11 @@ def dispatch_prefilter(tool_name: str, arguments: dict, content: str | list) -> 
     if tool_name == "shell":
         return _prefilter_shell(content)
 
-    # JSON API responses → compact whitespace
-    # Detect by checking if content looks like JSON
-    stripped = content.lstrip()
-    if stripped and stripped[0] in ('{', '['):
-        return _prefilter_json(content)
+    # JSON API responses → compact whitespace (API-style tools only)
+    if _is_json_api_tool(tool_name):
+        stripped = content.lstrip()
+        if stripped and stripped[0] in ('{', '['):
+            return _prefilter_json(content)
 
     return content
 

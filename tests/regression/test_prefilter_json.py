@@ -2,10 +2,14 @@
 # Copyright (C) 2026 Orbital Contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Regression: JSON pre-filter compacts pretty-printed JSON responses.
+"""Regression: JSON pre-filter compacts API responses, never file content.
 
-Removes whitespace from pretty-printed JSON API responses, reducing
-token count by 30-50%.
+Pretty-printed JSON from API-style tools (connector shims, triggers,
+calendar, sessions, browser) is compacted to save tokens. Content that came
+from a file or from another agent (``read``, ``grep``, ``glob``,
+``agent_message``, ``fanout``…) is passed through byte-identical: ``edit``
+matches text exactly, so a compacted ``read`` made the model copy an
+``old_text`` that does not exist on disk (spec 171 A4).
 """
 
 import json
@@ -86,15 +90,38 @@ class TestPrefilterJSON:
         filtered = _prefilter_json(pretty)
         assert json.loads(filtered) == arr
 
-    def test_dispatch_routes_json_content(self):
-        """dispatch_prefilter auto-detects JSON content and compacts it."""
-        # JSON content from a non-browser, non-shell tool
-        filtered = dispatch_prefilter("web_fetch", {}, PRETTY_JSON)
+    def test_dispatch_compacts_connector_api_response(self):
+        """A connector shim's JSON response is compacted."""
+        filtered = dispatch_prefilter("google-calendar.list_events", {}, PRETTY_JSON)
         assert "\n" not in filtered
         assert json.loads(filtered) == json.loads(PRETTY_JSON)
+
+    @pytest.mark.parametrize("tool", [
+        "list_triggers", "create_trigger", "update_trigger", "delete_trigger",
+        "calendar_read", "list_sessions", "read_session",
+    ])
+    def test_dispatch_compacts_builtin_api_tools(self, tool):
+        filtered = dispatch_prefilter(tool, {}, PRETTY_JSON)
+        assert "\n" not in filtered
+        assert json.loads(filtered) == json.loads(PRETTY_JSON)
+
+    def test_read_of_pretty_json_is_byte_identical(self):
+        """read returns the file exactly as on disk, so edit can match it."""
+        package_json = '{\n  "name": "demo",\n  "version": "1.0.0",\n  "private": true\n}\n'
+        assert dispatch_prefilter("read", {"path": "package.json"}, package_json) == package_json
+
+    @pytest.mark.parametrize("tool", [
+        "read", "grep", "glob", "agent_message", "fanout", "edit", "write",
+        "notify", "checkpoint_state",
+    ])
+    def test_file_and_agent_content_never_compacted(self, tool):
+        """Tools that return file bytes or another agent's words keep them."""
+        assert dispatch_prefilter(tool, {}, PRETTY_JSON) == PRETTY_JSON
+        line = '[1, 2, 3]'
+        assert dispatch_prefilter(tool, {}, line) == line
 
     def test_dispatch_does_not_compact_non_json(self):
         """dispatch_prefilter does not apply JSON filter to non-JSON content."""
         plain = "Exit code: 0\nSome output here"
-        filtered = dispatch_prefilter("read", {"path": "file.txt"}, plain)
-        assert filtered == plain
+        assert dispatch_prefilter("list_triggers", {}, plain) == plain
+        assert dispatch_prefilter("read", {"path": "file.txt"}, plain) == plain

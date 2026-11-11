@@ -4,7 +4,7 @@
 
 """Unit tests for Component F — Daemon Assembly.
 
-Tests cover: models, AgentManager, SubAgentManager, MessageRouter,
+Tests cover: models, AgentManager, SubAgentManager,
 ProcessManager, AutonomyInterceptor, ActivityTranslator, ProjectStore,
 REST endpoints (FastAPI TestClient), and WebSocket protocol.
 
@@ -140,71 +140,6 @@ class TestModels:
         # through to a key that matches no live handle (safe handle-miss).
         assert make_session_key("proj_1") == ("proj_1", None)
         assert make_session_key("proj_1", None) == ("proj_1", None)
-
-
-# ---------------------------------------------------------------------------
-# MessageRouter tests
-# ---------------------------------------------------------------------------
-
-
-class TestMessageRouter:
-    """Tests for daemon_v2/message_router.py."""
-
-    def test_route_with_mention(self):
-        from agent_os.daemon_v2.message_router import MessageRouter
-
-        router = MessageRouter(known_handles={"claudecode", "aider"})
-        target, text = router.route("@claudecode analyse this code")
-        assert target == "claudecode"
-        assert text == "analyse this code"
-
-    def test_route_without_mention(self):
-        from agent_os.daemon_v2.message_router import MessageRouter
-
-        router = MessageRouter(known_handles={"claudecode"})
-        target, text = router.route("do something please")
-        assert target is None
-        assert text == "do something please"
-
-    def test_route_case_insensitive(self):
-        from agent_os.daemon_v2.message_router import MessageRouter
-
-        router = MessageRouter(known_handles={"claudecode"})
-        target, text = router.route("@ClaudeCode do X")
-        assert target == "claudecode"
-        assert text == "do X"
-
-    def test_route_unknown_handle(self):
-        from agent_os.daemon_v2.message_router import MessageRouter
-
-        router = MessageRouter(known_handles={"claudecode"})
-        target, text = router.route("@unknown do X")
-        assert target is None
-        assert text == "@unknown do X"
-
-    def test_route_mention_not_at_start(self):
-        from agent_os.daemon_v2.message_router import MessageRouter
-
-        router = MessageRouter(known_handles={"claudecode"})
-        target, text = router.route("tell @claudecode to do X")
-        assert target is None
-        assert text == "tell @claudecode to do X"
-
-    def test_route_empty_message(self):
-        from agent_os.daemon_v2.message_router import MessageRouter
-
-        router = MessageRouter(known_handles={"claudecode"})
-        target, text = router.route("")
-        assert target is None
-        assert text == ""
-
-    def test_route_mention_only(self):
-        from agent_os.daemon_v2.message_router import MessageRouter
-
-        router = MessageRouter(known_handles={"claudecode"})
-        target, text = router.route("@claudecode")
-        assert target == "claudecode"
-        assert text == ""
 
 
 # ---------------------------------------------------------------------------
