@@ -3909,29 +3909,42 @@ async def tokendance_signin(req: TokenDanceSigninRequest | None = None):
     }
 
 
-async def _test_and_record(card_id: str, *, reuse_recent: bool = False) -> dict:
-    """Run the connection test for a saved card and write its health.
-
-    The shared tail of every card write: save first, then test, then record —
-    so a provider outage produces a red card, never a lost one (D9).
-
-    ``reuse_recent`` (card create/update): record the verdict Test Connection
-    just produced for these exact inputs instead of calling the provider a
-    second time. The form cannot save before that test has run, so re-testing
-    only made Save slow. No remembered verdict ⇒ a real test, as before.
-    """
+def _card_inputs(card, api_key: str) -> tuple:
+    """``(provider, model, api_key, base_url, sdk)`` for a card's test."""
     from agent_os.daemon_v2.settings_store import resolve_card_endpoint
 
+    base_url, sdk = resolve_card_endpoint(card)
+    return (card.provider, card.model, api_key, base_url, sdk)
+
+
+async def test_card_candidate(card, api_key: str) -> dict:
+    """The connection test for a card as it WOULD be stored, before it is.
+
+    Card create/update and the legacy key routes store a credential only when
+    this passes (owner rule 2026-11-12). The verdict Test Connection just
+    produced for these exact inputs is used instead of calling the provider a
+    second time; no remembered verdict ⇒ a real test.
+    """
+    inputs = _card_inputs(card, api_key)
+    result = _take_recent_test(_test_fingerprint(*inputs))
+    if result is None:
+        result = await run_connection_test(*inputs)
+    return result
+
+
+async def _test_and_record(card_id: str) -> dict:
+    """Run the connection test for a STORED card and write its health.
+
+    For a card that already exists: the per-card Test action, and one-click
+    sign-in (whose minted key is stored before it is tested, so a provider
+    outage produces a red card, never a lost one).
+    """
     card = _settings_store.resolve_card(card_id)
     if card is None:
         return {"ok": False, "status": None, "code": "card_not_found",
                 "message": "That credential card no longer exists."}
-    base_url, sdk = resolve_card_endpoint(card)
-    inputs = (card.provider, card.model, _settings_store.key_for(card.id),
-              base_url, sdk)
-    result = _take_recent_test(_test_fingerprint(*inputs)) if reuse_recent else None
-    if result is None:
-        result = await run_connection_test(*inputs)
+    result = await run_connection_test(
+        *_card_inputs(card, _settings_store.key_for(card.id)))
     if result["ok"]:
         _settings_store.record_card_health(card.id, verified=True)
     else:

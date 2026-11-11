@@ -624,11 +624,11 @@ function IconAction({
 
 /**
  * The Add/Edit dialog. It wraps the existing provider form unchanged. Save
- * is the last step: the form only lets a card be saved after its own key
- * passed Test Connection, so a successful save simply closes the dialog and
- * the card appears in the list. It stays open only when the save-time test
- * failed (the provider went away between Test and Save), so the red verdict
- * the form renders is readable; the user closes it when they have read it.
+ * is the last step and only lands on a passing connection test (a failing
+ * one stores nothing and the form shows why), so a successful save simply
+ * closes the dialog and the card appears in the list. It stays open only
+ * when a one-click sign-in stored its card with a failing verdict, so the
+ * red line the form renders is readable; the user closes it when done.
  *
  * Portaled to <body>: project settings is one big <form>, and a <form>
  * nested inside another never reaches React — WebKit and Chromium stop a

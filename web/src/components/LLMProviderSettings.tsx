@@ -13,6 +13,7 @@ import type {
   TokendanceSigninResponse,
 } from '../types';
 import { api } from '../config';
+import { codedErrorOf } from '../utils/providerError';
 import { useT } from '../i18n/useT';
 import { useLocale } from '../i18n/LocaleContext';
 import type { Locale } from '../i18n/locales';
@@ -175,9 +176,9 @@ export default function LLMProviderSettings({
   const [region, setRegion] = useState<'global' | 'china'>('global');
   const [showAdvanced, setShowAdvanced] = useState(false);
 
-  // Card save state. `saveTest` is the connection test the save ran (spec 082
-  // D9): a failed test still saves the card, so the result is shown here
-  // rather than turned into a save failure.
+  // Card save state. `saveTest` is the passing connection test the save
+  // recorded; a failing one refuses the save (owner rule 2026-11-12) and is
+  // shown as the Test Connection verdict instead.
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [saveError, setSaveError] = useState('');
@@ -201,13 +202,14 @@ export default function LLMProviderSettings({
 
   // Test connection state
   const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
-  // The exact credential inputs the last PASSING test exercised. Save is
-  // allowed only while the form still matches it (or nothing credential-
-  // related changed on an existing card). The test is compulsory, PASSING it
-  // is not: a balance or outage verdict is information the user saves with
-  // open eyes (spec 082 D9 — a failed test still saves, the card carries the
-  // error). Requiring a pass turned an empty TokenDance balance into a dead
-  // Next button (9.png, 2026-09-08).
+  // The exact credential inputs the last test ran against (`testStatus` holds
+  // its verdict). Save is allowed only while the form still matches inputs
+  // that PASSED (or nothing credential-related changed on an existing card):
+  // a key is saved only when its test passes (owner rule 2026-11-12; the
+  // daemon refuses the rest too). A failing verdict stays on screen as the
+  // reason, which is what keeps the wizard's Next from reading as dead
+  // (9.png, 2026-09-08). One-click sign-in stores its card daemon-side and
+  // never passes through this gate.
   const [testedFingerprint, setTestedFingerprint] = useState<string | null>(null);
   const fingerprintWithKey = (key: string) => JSON.stringify([
     card?.id ?? null, provider, sdk, region, baseUrl.trim(),
@@ -234,7 +236,7 @@ export default function LLMProviderSettings({
   // pressed meanwhile (the wizard's Next right after Test) waits for this
   // verdict instead of reading the gate before the verdict lands, which
   // refused the press with nothing on screen (2026-11-11 smoke, F1).
-  const testRunRef = useRef<{ fingerprint: string; done: Promise<void> } | null>(null);
+  const testRunRef = useRef<{ fingerprint: string; done: Promise<boolean> } | null>(null);
 
   const modelComboRef = useRef<HTMLDivElement>(null);
 
@@ -595,7 +597,7 @@ export default function LLMProviderSettings({
   }
 
   // Test connection
-  function handleTestConnection(): Promise<void> {
+  function handleTestConnection(): Promise<boolean> {
     const fingerprint = credentialFingerprint;
     const done = runTestConnection(fingerprint).finally(() => {
       if (testRunRef.current?.done === done) testRunRef.current = null;
@@ -604,7 +606,8 @@ export default function LLMProviderSettings({
     return done;
   }
 
-  async function runTestConnection(fingerprint: string) {
+  /** Resolves true only on a pass, so a save waiting on it knows the verdict. */
+  async function runTestConnection(fingerprint: string): Promise<boolean> {
     setTestStatus('testing');
     setTestMessage('');
     try {
@@ -636,17 +639,18 @@ export default function LLMProviderSettings({
             ? t('llm.test.customProvider')
             : providers[provider]?.display_name || provider;
         setTestMessage(t('llm.test.success', { provider: displayProvider, model }));
-      } else {
-        setTestStatus('error');
-        setTestMessage(result.error || result.message || t('llm.test.failed'));
+        return true;
       }
+      setTestStatus('error');
+      setTestMessage(result.error || result.message || t('llm.test.failed'));
+      return false;
     } catch (err: unknown) {
-      // The attempt completed with a verdict the user can read; that is what
-      // the gate asks for.
+      // A failing verdict the user can read; it keeps Save locked.
       setTestedFingerprint(fingerprint);
       setTestStatus('error');
       const msg = err instanceof Error ? err.message : t('llm.test.failedAlt');
       setTestMessage(msg);
+      return false;
     }
   }
 
@@ -737,21 +741,26 @@ export default function LLMProviderSettings({
   }
 
   /**
-   * Save = create or update a credential card, and the daemon runs the
-   * connection test as part of it (spec 082 D9). A failed test is NOT a save
-   * failure: the card is stored either way and the result is surfaced here in
-   * green or red, so a provider outage can never block saving.
+   * Save = create or update a credential card. Only inputs whose connection
+   * test passed are sent, and the daemon refuses a failing credential change
+   * itself (it reuses the form's verdict, or tests again). A refusal is shown
+   * as the Test Connection verdict, and nothing is stored.
    */
   async function doSave(): Promise<boolean> {
     const running = testRunRef.current;
     if (!connectionTested && running?.fingerprint === credentialFingerprint) {
-      // The test for exactly these inputs is still running: once it lands,
-      // the test has run, which is all the gate asks (passing is not).
+      // The test for exactly these inputs is still running: wait for it. A
+      // fail is drawn under Test Connection; that line is the reason.
       setSaveError('');
-      await running.done;
+      if (!(await running.done)) return false;
     } else if (!connectionTested) {
-      // Same reason the form shows under Test Connection; the wizard's Next
-      // reads the false and lets this line explain.
+      // These inputs already failed: the red verdict on screen is the reason.
+      if (testStatus === 'error' && testedFingerprint === credentialFingerprint) {
+        setSaveError('');
+        return false;
+      }
+      // Not tested yet: same reason the form shows under Test Connection;
+      // the wizard's Next reads the false and lets this line explain.
       setSaveError(saveGateReason);
       return false;
     }
@@ -804,7 +813,19 @@ export default function LLMProviderSettings({
       onCardSaved?.(res);
       return true;
     } catch (err: unknown) {
-      setSaveError(err instanceof Error ? err.message : t('llm.saveError'));
+      const coded = codedErrorOf(err);
+      if (coded?.code === 'connection_test_failed') {
+        // The daemon tested again and it failed: that is the verdict for
+        // these inputs now, in the one place a verdict is drawn.
+        setTestedFingerprint(credentialFingerprint);
+        setTestStatus('error');
+        setTestMessage(coded.message || t('llm.test.failed'));
+        return false;
+      }
+      setSaveError(
+        coded?.message
+          || (err instanceof Error && err.message ? err.message : t('llm.saveError')),
+      );
       return false;
     } finally {
       setSaving(false);
@@ -867,7 +888,9 @@ export default function LLMProviderSettings({
     return (baseUrl.trim() || registryUrl) !== (card.base_url || registryUrl);
   })();
   const connectionTested =
-    !credentialsDirty || (testedFingerprint !== null && testedFingerprint === credentialFingerprint);
+    !credentialsDirty
+    || (testStatus === 'success' && testedFingerprint !== null
+        && testedFingerprint === credentialFingerprint);
   const saveGateReason = hasTestableKey ? t('cards.save.testFirst') : t('cards.save.keyFirst');
   const showSaveGate =
     !connectionTested && !card?.read_only && canTestConnection
@@ -1312,28 +1335,15 @@ export default function LLMProviderSettings({
               </span>
             )}
           </div>
-          {/* The save-test verdict, shown inline BEFORE the modal closes. A
-              failed test is red but the card is saved either way (D9), so the
-              line says both things rather than reading as a lost edit. */}
-          {saveTest && (
+          {/* The save-test verdict, shown inline before the modal closes. A
+              save only lands on a passing test, so it is always green. */}
+          {saveTest?.ok && (
             <p
               data-testid="card-save-test"
-              className={`flex items-start gap-1.5 text-sm mt-2 ${
-                saveTest.ok ? 'text-success' : 'text-error'
-              }`}
+              className="flex items-start gap-1.5 text-sm mt-2 text-success"
             >
-              {saveTest.ok ? (
-                <Check className="w-4 h-4 shrink-0 mt-0.5" />
-              ) : (
-                <X className="w-4 h-4 shrink-0 mt-0.5" />
-              )}
-              <span>
-                {saveTest.ok
-                  ? saveTest.message || t('cards.save.verified')
-                  : t('cards.save.savedWithError', {
-                      message: saveTest.message || t('cards.health.genericError'),
-                    })}
-              </span>
+              <Check className="w-4 h-4 shrink-0 mt-0.5" />
+              <span>{saveTest.message || t('cards.save.verified')}</span>
             </p>
           )}
         </div>

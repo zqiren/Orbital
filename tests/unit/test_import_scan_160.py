@@ -632,10 +632,14 @@ def _settings_app(tmp_path, monkeypatch):
     settings_routes.configure(fake, credential_store=creds,
                               project_store=ProjectStore(str(tmp_path / "d")))
 
-    async def tested(card_id, *, reuse_recent=False):
+    async def tested(card_id):
+        return {"ok": True}
+
+    async def candidate_tested(candidate, api_key):
         return {"ok": True}
 
     monkeypatch.setattr(settings_routes, "_test_and_record", tested)
+    monkeypatch.setattr(settings_routes, "_test_candidate", candidate_tested)
     monkeypatch.setattr(settings_routes, "_refresh_agents_in_background", lambda *a: None)
     monkeypatch.setattr(settings_routes, "_model_provider_slugs", lambda: [])
     monkeypatch.setattr(settings_routes, "_validate_card_shape", lambda *a: None)
@@ -1766,17 +1770,25 @@ def test_a_wizard_import_a_trigger_queued_resumes_after_a_restart(store, tmp_pat
 def _test_result(monkeypatch, ok):
     from agent_os.api.routes import settings as settings_routes
 
-    async def tested(card_id, *, reuse_recent=False):
-        return {"ok": ok, "status": None if ok else 401,
-                "code": None if ok else "invalid_api_key"}
+    result = {"ok": ok, "status": None if ok else 401,
+              "code": None if ok else "invalid_api_key",
+              "message": "ok" if ok else "Invalid API key"}
+
+    async def tested(card_id):
+        return result
+
+    async def candidate_tested(candidate, api_key):
+        return result
 
     monkeypatch.setattr(settings_routes, "_test_and_record", tested)
+    monkeypatch.setattr(settings_routes, "_test_candidate", candidate_tested)
 
 
-def test_a_card_saved_with_a_failing_test_starts_no_read(tmp_path, monkeypatch, kicks):
+def test_a_failing_credential_save_is_refused_and_starts_no_read(tmp_path, monkeypatch, kicks):
     """A bad key used to burn every waiting read into a permanent failure:
-    the save kicked the queue whatever its test said. The save itself still
-    succeeds (the test must run, it need not pass)."""
+    the save kicked the queue whatever its test said. Now the save itself is
+    refused (owner rule 2026-11-12: the test must PASS), nothing is stored,
+    and a failing re-test of a stored card still starts nothing."""
     from agent_os.api.routes import settings as settings_routes
     from agent_os.onboarding.import_scan import DEFERRED
 
@@ -1786,9 +1798,12 @@ def test_a_card_saved_with_a_failing_test_starts_no_read(tmp_path, monkeypatch, 
     _test_result(monkeypatch, False)
     r = client.post("/api/v2/settings/cards",
                     json={"provider": "opencode-go", "model": "m", "api_key": "sk-bad"})
-    assert r.status_code == 201, r.text
+    assert r.status_code == 400, r.text
+    assert r.json()["detail"]["code"] == "connection_test_failed"
     r = client.put("/api/v2/settings/cards/c1", json={"api_key": "sk-bad2"})
-    assert r.status_code == 200, r.text
+    assert r.status_code == 400, r.text
+    settings_routes._settings_store.create_card.assert_not_called()
+    settings_routes._settings_store.update_card.assert_not_called()
     r = client.post("/api/v2/settings/cards/c1/test")
     assert r.status_code == 200, r.text
     assert kicks == []
