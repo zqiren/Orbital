@@ -5,7 +5,9 @@ rem runner. It asks for ONE UAC prompt (VirtualBox install), then builds the
 rem VM unelevated: unattended Windows 11 zh-CN install, provisioning, snapshot
 rem `clean`. Takes about an hour. Log: %LOCALAPPDATA%\orbital-fresh-install\logs
 rem
-rem   bootstrap.cmd [cache dir, default D:\orbital-winvm-cache]
+rem   bootstrap.cmd [cache dir, default D:\orbital-winvm-cache] [extra prepare-vm args]
+rem Image 1 = "Windows 11 Home" (EditionID Core) on Microsoft's zh-cn consumer
+rem ISO, build 26300 (it has no Home China image); a later -ImageIndex wins.
 setlocal
 set "HERE=%~dp0"
 set "CACHE=%~1"
@@ -23,6 +25,6 @@ for %%F in ("%CACHE%\vbox\VBoxGuestAdditions_*.iso") do set "GA=%%~fF"
 for %%F in ("%CACHE%\node\node-v24*-x64.msi") do set "NODEMSI=%%~fF"
 for %%F in ("%CACHE%\openssh\OpenSSH-Win64-*.msi") do set "SSHMSI=%%~fF"
 
-powershell -NoProfile -ExecutionPolicy Bypass -File "%HERE%prepare-vm.ps1" -Iso "%ISO%" -AdditionsIso "%GA%" -NodeMsi "%NODEMSI%" -OpenSshMsi "%SSHMSI%" %2 %3 %4 %5
+powershell -NoProfile -ExecutionPolicy Bypass -File "%HERE%prepare-vm.ps1" -Iso "%ISO%" -AdditionsIso "%GA%" -NodeMsi "%NODEMSI%" -OpenSshMsi "%SSHMSI%" -ImageIndex 1 %2 %3 %4 %5
 if errorlevel 1 ( echo prepare-vm failed: see %LOCALAPPDATA%\orbital-fresh-install\logs & exit /b 1 )
 echo VM orbital-fresh-win with snapshot clean is ready.

@@ -95,7 +95,7 @@ keychain password is unknown); the app's keyring backend is not touched.
 
 The Windows twin of the Tart rig, in `vbox/`. Never on the host PC itself:
 Orbital only ever runs inside VM `orbital-fresh-win` (Windows 11 x64 from the
-**Simplified Chinese** ISO, Home China edition, unactivated; EFI + TPM 2.0,
+**Simplified Chinese** ISO, Home edition (image 1, `Core`), unactivated; EFI + TPM 2.0,
 4 vCPU, 8 GB, 64 GB dynamic disk), which is rolled back to snapshot `clean`
 before and after every run. Chinese Home is the point: it matches the users
 and catches locale bugs (code page 936, translated group names) that
