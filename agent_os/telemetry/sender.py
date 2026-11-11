@@ -110,7 +110,11 @@ def is_temp_path(path: str | Path) -> bool:
 async def _httpx_post(url: str, payload: dict, headers: dict) -> int:
     import httpx
 
-    async with httpx.AsyncClient(timeout=15.0) as client:
+    # Building the client loads the CA bundle (ssl.create_default_context),
+    # which hang.log caught blocking the event loop (spec 171 A1). Build it
+    # in a worker thread; the request itself is async as before.
+    client = await asyncio.to_thread(httpx.AsyncClient, timeout=15.0)
+    async with client:
         resp = await client.post(url, json=payload, headers=headers)
         return resp.status_code
 
@@ -156,8 +160,11 @@ class TelemetrySender:
             if not self._is_enabled():
                 return
             async with self._cycle_lock:
-                self._rebuild_past_days()
-                self._snapshot_today()
+                # Both rebuild from the spool and write pending/*.json: file
+                # I/O that once held the event loop 17.8 s (spec 171 A1).
+                # The cycle lock still keeps them from interleaving.
+                await asyncio.to_thread(self._rebuild_past_days)
+                await asyncio.to_thread(self._snapshot_today)
                 await self._flush_pending()
         except Exception:
             logger.debug("telemetry cycle failed", exc_info=True)

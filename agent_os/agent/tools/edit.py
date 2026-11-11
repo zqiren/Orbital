@@ -10,13 +10,6 @@ import os
 from ._path_utils import resolve_safe
 from .base import Tool, ToolResult
 
-# Errors caused by correctable model INPUT (bad path, file missing, old_text not
-# found / not unique) carry meta={"recoverable": True}. The agent loop's circuit
-# breaker reads this to avoid disabling the tool over mistakes the model can fix
-# by re-reading and retrying (see loop.py circuit breaker). A fresh dict is built
-# at each return site — never a shared module-level constant — because the meta
-# is stored by reference into the session message and must not be aliased.
-
 
 class EditTool(Tool):
     """Surgical find and replace within a file in the workspace."""
@@ -48,10 +41,10 @@ class EditTool(Tool):
 
             resolved = resolve_safe(self._workspace, path)
             if resolved is None:
-                return ToolResult(content=f"Error: path outside workspace: {path}", meta={"recoverable": True})
+                return ToolResult(content=f"Error: path outside workspace: {path}")
 
             if not os.path.isfile(resolved):
-                return ToolResult(content=f"Error: file not found: {path}", meta={"recoverable": True})
+                return ToolResult(content=f"Error: file not found: {path}")
 
             with open(resolved, "r", encoding="utf-8") as f:
                 content = f.read()
@@ -85,10 +78,10 @@ class EditTool(Tool):
                     f"edited since you last read it, or truncated from context. "
                     f"Re-read {path} now, then retry the edit using the exact "
                     f"current text.\n\nThe old_text that was not found:\n{old_text}"
-                ), meta={"recoverable": True})
+                ))
 
             if count > 1:
-                return ToolResult(content="Error: multiple matches found (expected exactly 1)", meta={"recoverable": True})
+                return ToolResult(content="Error: multiple matches found (expected exactly 1)")
 
             # Exactly one match — replace it
             new_content = content.replace(old_text, new_text, 1)

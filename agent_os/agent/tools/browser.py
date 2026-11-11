@@ -608,7 +608,8 @@ class BrowserTool(Tool):
 
     async def _action_navigate(self, args: dict) -> ToolResult:
         url = args.get("url", "")
-        error = validate_url_pre_navigation(url)
+        # getaddrinfo blocks; off the event loop (spec 171 A1).
+        error = await asyncio.to_thread(validate_url_pre_navigation, url)
         if error:
             return ToolResult(content=error)
 
@@ -617,7 +618,7 @@ class BrowserTool(Tool):
         await self._wait_for_stable(page, timeout_ms=10000)
 
         final_url = page.url
-        error = validate_url_post_navigation(final_url)
+        error = await asyncio.to_thread(validate_url_post_navigation, final_url)
         if error:
             await page.goto("about:blank")
             return ToolResult(content=error)
@@ -1134,7 +1135,8 @@ class BrowserTool(Tool):
         if not url:
             return ToolResult(content="Error: url is required for fetch action.")
 
-        error = validate_url_pre_navigation(url)
+        # getaddrinfo blocks; off the event loop (spec 171 A1, 3 of 6 hang dumps).
+        error = await asyncio.to_thread(validate_url_pre_navigation, url)
         if error:
             return ToolResult(content=f"Error: URL blocked: {error}")
 

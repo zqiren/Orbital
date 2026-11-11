@@ -341,6 +341,6 @@ def test_layer1_roster():
     from agent_os.agent.context import _LAYER1_FILES
     keys = [k for k, _ in _LAYER1_FILES]
     names = [n for _, n in _LAYER1_FILES]
-    assert keys == ["state", "decisions", "lessons", "index"]
+    assert keys == ["decisions", "lessons", "index", "state"]
     assert "INDEX.md" in names and "CONTEXT.md" not in names
     assert "session_log" not in keys

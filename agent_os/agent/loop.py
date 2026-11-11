@@ -1253,10 +1253,6 @@ class AgentLoop:
             _pair_hashes: deque = deque(maxlen=20)
             _prev_action_hash: str | None = None
 
-            # Circuit breaker state (reset per run / new user message)
-            error_tracker: dict[str, dict] = {}  # tool_name -> {"error": str, "count": int}
-            blocked_tools: set[str] = set()
-
             # Diagnostics: row count at run start (the injector's user row is
             # already in the session — see the #59 note above) — the
             # run_terminal disposition compares against this to detect a turn
@@ -1274,9 +1270,6 @@ class AgentLoop:
                     # synchronous drain above — no cancel_turn can interleave
                     # without an await, and the appends never read this flag.)
                     self._cancellation_marker_appended_this_turn = False
-                    # Reset circuit breaker on new user messages
-                    error_tracker.clear()
-                    blocked_tools.clear()
 
                 # Check iteration cap (0 = unlimited)
                 if self._max_iterations and iteration >= self._max_iterations:
@@ -1904,16 +1897,6 @@ class AgentLoop:
                             exit_outer = True
                             break
 
-                    # Circuit breaker: block tool if it has repeated errors
-                    if tc["name"] in blocked_tools:
-                        blocked_msg = (
-                            f"[SYSTEM] The {tc['name']} tool is currently unavailable "
-                            f"(repeated error: {error_tracker[tc['name']]['error']}). "
-                            f"Work with the tools that are available or ask the user for help."
-                        )
-                        self._session.append_tool_result(tc["id"], blocked_msg)
-                        continue
-
                     # Execute tool (async-aware)
                     self._run_tool_calls += 1
                     self.last_run_stats["tool_calls"] += 1
@@ -1942,8 +1925,6 @@ class AgentLoop:
                             context_limit=self._context_manager.model_context_limit,
                         )
                         tool_content = result.content
-                        # Store result for observation-aware hash
-                        _exec_result = result
                         self._note_written_path(tc, tool_content)
 
                         # yield_turn: a dispatch tool that delivered a task to a
@@ -1993,7 +1974,6 @@ class AgentLoop:
                         self._session.append_tool_result(
                             tc["id"], tool_content
                         )
-                        _exec_result = None
 
                     # Observation-aware repetition detection (post-execution)
                     # Browser tools: skip hash detection (handled by advisory counter in browser tool)
@@ -2031,38 +2011,6 @@ class AgentLoop:
                                 exit_outer = True
                                 break
                         _prev_action_hash = action_hash
-
-                    # Circuit breaker: trip only on genuine tool/infra failures,
-                    # never on recoverable input errors the model can correct
-                    # (e.g. edit old_text-not-found — the agent should re-read and
-                    # retry, not lose the tool). Recoverability is read from the
-                    # structured ToolResult marker, not by string-sniffing; a
-                    # raised exception (_exec_result is None) is never recoverable.
-                    # Identity is compared on the FULL error string so two
-                    # genuinely different failures are not collapsed.
-                    is_error = isinstance(tool_content, str) and tool_content.startswith("Error")
-                    is_recoverable = bool(
-                        _exec_result is not None
-                        and _exec_result.meta
-                        and _exec_result.meta.get("recoverable")
-                    )
-                    if is_error and not is_recoverable:
-                        prev = error_tracker.get(tc["name"])
-                        if prev and prev["error"] == tool_content:
-                            prev["count"] += 1
-                        else:
-                            error_tracker[tc["name"]] = {"error": tool_content, "count": 1}
-                        if error_tracker[tc["name"]]["count"] >= 2:
-                            blocked_tools.add(tc["name"])
-                            self._session.append_system(
-                                f"[SYSTEM] The {tc['name']} tool is currently unavailable "
-                                f"(repeated error: {tool_content}). "
-                                f"Work with the tools that are available or ask the user for help."
-                            )
-                    else:
-                        # Successful execution OR a recoverable input error clears
-                        # error tracking for this tool.
-                        error_tracker.pop(tc["name"], None)
 
                 _tool_batch.reset(_batch_token)
                 self._note_ask_changes()

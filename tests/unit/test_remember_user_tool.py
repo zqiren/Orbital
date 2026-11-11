@@ -215,9 +215,10 @@ class TestLayer1NonInterference:
 
     def test_layer1_files_unchanged(self):
         from agent_os.agent.context import _LAYER1_FILES
+        # Spec 171 A5: PROJECT_STATE (rewritten every run) goes last.
         assert _LAYER1_FILES == (
-            ("state", "PROJECT_STATE.md"),
             ("decisions", "DECISIONS.md"),
             ("lessons", "LESSONS.md"),
             ("index", "INDEX.md"),
+            ("state", "PROJECT_STATE.md"),
         )

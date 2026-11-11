@@ -314,6 +314,25 @@ def test_layer1_row_is_byte_identical_within_a_run_and_the_tail_names_the_drift(
             assert other not in drift_line
 
 
+def test_project_state_row_is_injected_after_the_other_three(tmp_path):
+    """Spec 171 A5: the record turn rewrites PROJECT_STATE.md every run, so
+    its row sits after DECISIONS/LESSONS/INDEX — the next run's prefix then
+    still matches through the three stable files."""
+    session, ws, mgr = _snap_rig(tmp_path)
+    for key in ("state", "decisions", "lessons", "index"):
+        ws.write(key, f"# {key}\n- a {key} fact\n")
+    mgr.begin_run()
+    out = mgr.prepare()
+    order = [
+        name for m in out
+        if m.get("role") == "system" and isinstance(m.get("content"), str)
+        for name in ("DECISIONS.md", "LESSONS.md", "INDEX.md", "PROJECT_STATE.md")
+        if m["content"].startswith(f"[{name}")
+    ]
+    assert order == ["DECISIONS.md", "LESSONS.md", "INDEX.md", "PROJECT_STATE.md"]
+    assert [f for f, _ in mgr.layer1_snapshot()] == order
+
+
 def test_no_drift_line_when_nothing_changed_between_calls(tmp_path):
     session, ws, mgr = _snap_rig(tmp_path)
     ws.write("state", "# S\n- a fact\n")
@@ -359,7 +378,7 @@ def test_layer1_snapshot_accessor_exposes_the_injected_rows(tmp_path):
     mgr.begin_run()
     prepared = mgr.prepare()
     snap = mgr.layer1_snapshot()
-    assert [name for name, _ in snap] == ["PROJECT_STATE.md", "INDEX.md"]
+    assert [name for name, _ in snap] == ["INDEX.md", "PROJECT_STATE.md"]  # injection order (spec 171 A5)
     for filename, row_text in snap:
         assert _layer1_rows(prepared, filename) == [row_text]
     ws.write("state", "# S\n- changed on disk\n")

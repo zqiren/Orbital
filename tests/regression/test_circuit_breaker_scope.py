@@ -2,17 +2,13 @@
 # Copyright (C) 2026 Orbital Contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Regression: the circuit breaker must trip only on genuine tool/infra
-failures — never on recoverable input errors the model can correct.
+"""Regression: a failing tool is never taken away from the agent (spec 171 B3).
 
-Before: two errors whose content matched → the tool was added to blocked_tools
-and the agent saw '[SYSTEM] The <tool> tool is currently unavailable…'. But an
-edit 'old_text not found' is recoverable bad INPUT, not a tool outage, so
-disabling the tool is the wrong response (the agent should re-read and retry).
-
-Fix: recoverable failures (ToolResult.meta['recoverable'] is True) never count
-toward the breaker. Genuine failures (raised exceptions, unmarked errors) still
-trip it after two identical occurrences, compared on the full error string.
+Before: two identical errors from one tool added it to ``blocked_tools`` for
+the rest of the run and wrote '[SYSTEM] The <tool> tool is currently
+unavailable…'. Two ``read``s of one missing path removed ``read``. That
+breaker is gone; the observation-aware repetition cap (5 identical
+call+result hashes) is the single guard against a loop.
 """
 
 from __future__ import annotations
@@ -127,33 +123,6 @@ class _EditRegistry:
         return self.execute(name, args)
 
 
-class _SequenceRegistry:
-    """Returns successive ToolResults from a list (the last one repeats)."""
-
-    def __init__(self, results):
-        self._results = list(results)
-        self._i = 0
-        self.executions = []
-
-    def reset_run_state(self):
-        pass
-
-    def schemas(self):
-        return []
-
-    def is_async(self, name):
-        return False
-
-    def execute(self, name, args):
-        self.executions.append((name, args))
-        r = self._results[min(self._i, len(self._results) - 1)]
-        self._i += 1
-        return r
-
-    async def execute_async(self, name, args):
-        return self.execute(name, args)
-
-
 def _make_loop(session, provider, registry):
     return AgentLoop(
         session=session,
@@ -171,48 +140,44 @@ def _was_disabled(session, tool_name):
     return False
 
 
+def _repetition_stopped(session):
+    return any(
+        isinstance(m.get("content"), str)
+        and ("Repetitive action detected" in m["content"]
+             or "Ping-pong pattern detected" in m["content"])
+        for m in session.get_messages()
+    )
+
+
 # --- Tests -------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_recoverable_errors_do_not_disable_tool(tmp_path):
-    """Two identical recoverable errors must NOT disable the tool."""
-    session = Session.new("breaker_recoverable", str(tmp_path))
-    registry = _ResultRegistry(result=ToolResult(
-        content="Error: old_text not found in x.md",
-        meta={"recoverable": True},
-    ))
-    provider = _ToolThenDoneProvider("edit", {"path": "x.md", "old_text": "a", "new_text": "b"})
+async def test_tool_stays_available_after_two_identical_error_results(tmp_path):
+    """read of a missing path, three times: every call really executes."""
+    session = Session.new("breaker_gone_result", str(tmp_path))
+    registry = _ResultRegistry(result=ToolResult(content="Error: file not found: missing.md"))
+    provider = _ToolThenDoneProvider("read", {"path": "missing.md"}, n_tool_turns=3)
     loop = _make_loop(session, provider, registry)
-    persist_user_row(loop._session, "try an edit")
+    persist_user_row(loop._session, "read the file")
     await loop.run()
 
-    assert not _was_disabled(session, "edit")
+    assert len(registry.executions) == 3
+    assert not _was_disabled(session, "read")
+    assert not _repetition_stopped(session)
 
 
 @pytest.mark.asyncio
-async def test_genuine_failures_still_disable_tool(tmp_path):
-    """Two identical genuine tool failures (raised) STILL trip the breaker."""
-    session = Session.new("breaker_infra", str(tmp_path))
+async def test_tool_stays_available_after_two_identical_raised_failures(tmp_path):
+    """A tool that raises the same exception twice is still executed again."""
+    session = Session.new("breaker_gone_raise", str(tmp_path))
     registry = _ResultRegistry(raises=OSError("disk on fire"))
-    provider = _ToolThenDoneProvider("shell", {"command": "ls"})
+    provider = _ToolThenDoneProvider("shell", {"command": "ls"}, n_tool_turns=3)
     loop = _make_loop(session, provider, registry)
     persist_user_row(loop._session, "run a command")
     await loop.run()
 
-    assert _was_disabled(session, "shell")
-
-
-@pytest.mark.asyncio
-async def test_unmarked_error_results_still_disable_tool(tmp_path):
-    """An error result WITHOUT a recoverable marker is treated as a failure."""
-    session = Session.new("breaker_unmarked", str(tmp_path))
-    registry = _ResultRegistry(result=ToolResult(content="Error: backend exploded"))
-    provider = _ToolThenDoneProvider("shell", {"command": "ls"})
-    loop = _make_loop(session, provider, registry)
-    persist_user_row(loop._session, "run a command")
-    await loop.run()
-
-    assert _was_disabled(session, "shell")
+    assert len(registry.executions) == 3
+    assert not _was_disabled(session, "shell")
 
 
 @pytest.mark.asyncio
@@ -223,53 +188,28 @@ async def test_real_edit_not_found_does_not_disable_edit(tmp_path):
     registry = _EditRegistry(str(tmp_path))
     provider = _ToolThenDoneProvider(
         "edit", {"path": "doc.md", "old_text": "not in the file", "new_text": "x"},
+        n_tool_turns=3,
     )
     loop = _make_loop(session, provider, registry)
     persist_user_row(loop._session, "edit the doc")
     await loop.run()
 
-    # The edit really ran twice and really failed both times...
-    assert len(registry.executions) >= 2
-    # ...but the tool was never disabled.
+    assert len(registry.executions) == 3
     assert not _was_disabled(session, "edit")
 
 
 @pytest.mark.asyncio
-async def test_distinct_nonrecoverable_errors_sharing_50char_prefix_not_collapsed(tmp_path):
-    """Two non-recoverable errors identical in their first 50 chars but different
-    overall must NOT be treated as identical: the breaker compares the FULL error
-    string, so it never reaches count>=2 and the tool stays enabled. Guards
-    against a regression to preview-based comparison."""
-    session = Session.new("breaker_fullstring", str(tmp_path))
-    prefix = "Error: " + "Z" * 50  # 57 chars; first 50 identical across both
-    registry = _SequenceRegistry([
-        ToolResult(content=prefix + "_alpha"),
-        ToolResult(content=prefix + "_beta"),
-    ])
-    provider = _ToolThenDoneProvider("shell", {"command": "ls"})
+async def test_repetition_cap_still_stops_an_identical_error_loop(tmp_path):
+    """The remaining guard ends the run: the same failing call repeated trips
+    the repetition detection (its pair check fires on the 4th identical
+    call, the 5-hash cap would on the 5th)."""
+    session = Session.new("breaker_gone_cap", str(tmp_path))
+    registry = _ResultRegistry(result=ToolResult(content="Error: file not found: missing.md"))
+    provider = _ToolThenDoneProvider("read", {"path": "missing.md"}, n_tool_turns=50)
     loop = _make_loop(session, provider, registry)
-    persist_user_row(loop._session, "run a command")
+    persist_user_row(loop._session, "read the file")
     await loop.run()
 
-    assert len(registry.executions) >= 2
-    assert not _was_disabled(session, "shell")
-
-
-def test_edit_not_found_is_marked_recoverable(tmp_path):
-    """EditTool tags its input-validation errors recoverable so the breaker
-    can classify them deterministically (not by string-sniffing)."""
-    from agent_os.agent.tools.edit import EditTool
-
-    (tmp_path / "doc.md").write_text("hello world\n", encoding="utf-8")
-    tool = EditTool(workspace=str(tmp_path))
-
-    not_found = tool.execute(path="doc.md", old_text="absent", new_text="x")
-    assert not_found.meta is not None and not_found.meta.get("recoverable") is True
-
-    (tmp_path / "dup.md").write_text("foo foo", encoding="utf-8")
-    multi = tool.execute(path="dup.md", old_text="foo", new_text="bar")
-    assert multi.meta is not None and multi.meta.get("recoverable") is True
-
-    success = tool.execute(path="doc.md", old_text="hello world", new_text="hi")
-    # Successful edits carry no recoverable marker.
-    assert success.meta is None or not success.meta.get("recoverable")
+    assert len(registry.executions) <= 5
+    assert _repetition_stopped(session)
+    assert not _was_disabled(session, "read")
