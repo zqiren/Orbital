@@ -140,6 +140,8 @@ class TriggerManager:
         self.first_tick_delay_s = first_tick_delay_s
         self._schedule_ids: set[str] = set()  # trigger_ids evaluated each tick
         self._held: set[str] = set()  # trigger_ids currently holding on agent_busy
+        # Spec 171 A2: trigger_ids whose fire is in progress (``_fire_trigger``).
+        self._firing: set[str] = set()
         self._file_observers: dict[str, Observer] = {}
         self._debounce_timers: dict[str, asyncio.TimerHandle] = {}
         self._debounce_buffers: dict[str, list[str]] = {}
@@ -672,7 +674,25 @@ class TriggerManager:
 
     async def _fire_trigger(self, project_id: str, trigger_id: str,
                              changed_files: list[str] | None = None) -> None:
-        """Execute a trigger: start the agent with the trigger's task."""
+        """Execute a trigger: start the agent with the trigger's task.
+
+        One fire per trigger at a time (spec 171 A2). The busy gate below only
+        sees a run whose handle is stored; a fire awaits the config build and
+        the start's setup before that, so two file-watch flushes (each its own
+        task) could both pass it and start the automation twice.
+        """
+        firing = self.__dict__.setdefault("_firing", set())
+        if trigger_id in firing:
+            logger.info("Trigger %s: a fire is already in progress, skipping", trigger_id)
+            return
+        firing.add(trigger_id)
+        try:
+            await self._fire_trigger_once(project_id, trigger_id, changed_files)
+        finally:
+            firing.discard(trigger_id)
+
+    async def _fire_trigger_once(self, project_id: str, trigger_id: str,
+                                 changed_files: list[str] | None) -> None:
         project = self._project_store.get_project(project_id)
         if project is None:
             logger.warning("Trigger %s: project %s not found, unregistering", trigger_id, project_id)
@@ -759,7 +779,11 @@ class TriggerManager:
         # tests/unit/test_agent_config_parity.py.
         chosen_agent = (trigger.get("agent") or "").strip() or None
         try:
-            config = self._agent_manager._build_agent_config_from_project(project_id)
+            # Off the loop (spec 171 A2). No other fire of this trigger can
+            # start meanwhile (``_fire_trigger``); the start below mints its
+            # own session, so no other request can have started it either.
+            config = await asyncio.to_thread(
+                self._agent_manager._build_agent_config_from_project, project_id)
             if chosen_agent:
                 # Spec 079 §3.3: the user assigned this automation to a worker.
                 # Same mechanism as a pinned chat send and as an assigned queue

@@ -313,6 +313,9 @@ class AgentManager:
         # loaded the same JSONL 28 ms apart, 2026-10-22). See
         # ``_hydration_lock``.
         self._hydration_locks: dict[SessionKey, asyncio.Lock] = {}
+        # Spec 171 A2: the sessions whose ``start_agent`` is past its guard
+        # but has not registered its handle yet. See ``_start_reservations``.
+        self._starting: dict[SessionKey, asyncio.Event] = {}
         # Strong references for fire-and-forget tasks this manager starts
         # (the event loop only holds tasks weakly — an unreferenced task can
         # be garbage-collected mid-flight with "Task was destroyed but it is
@@ -1154,7 +1157,61 @@ class AgentManager:
                 raise ValueError("Agent already running for this project")
             # Stale handle: clean up
             del self._handles[sk]
+        # Spec 171 A2: the setup below awaits (the folder grant, connector
+        # reflection) before the handle is stored, so the guard above alone
+        # let a second start of this session through and both registered —
+        # two loops on one session. The reservation is taken before the first
+        # await and held until the handle is stored (or the start failed).
+        starting = self._start_reservations()
+        if sk in starting:
+            raise ValueError("Agent already running for this project")
+        reservation = starting[sk] = asyncio.Event()
+        try:
+            await self._start_agent_reserved(
+                project_id, config, session_id=session_id, sk=sk,
+                initial_message=initial_message, trigger_source=trigger_source,
+                trigger_name=trigger_name, initial_nonce=initial_nonce,
+                queue_state=queue_state, session=session,
+                cold_start=cold_start, cold_start_skeleton=cold_start_skeleton,
+                layer1_rows=layer1_rows, cache_session_id=cache_session_id,
+            )
+        finally:
+            if starting.get(sk) is reservation:
+                del starting[sk]
+            reservation.set()
 
+    def _start_reservations(self) -> dict[SessionKey, asyncio.Event]:
+        """Starts in flight, by session key (``start_agent``). Lazily built
+        so an AgentManager constructed without ``__init__`` (tests) has it."""
+        starting = getattr(self, "_starting", None)
+        if starting is None:
+            starting = self._starting = {}
+        return starting
+
+    async def _wait_for_start_in_flight(self, sk: SessionKey) -> bool:
+        """Wait out a ``start_agent`` of ``sk`` that is in flight. True when
+        there was one: the caller then re-reads the handle (it is live now,
+        or the start failed and the session is free again)."""
+        reservation = self._start_reservations().get(sk)
+        if reservation is None:
+            return False
+        await reservation.wait()
+        return True
+
+    async def _start_agent_reserved(self, project_id: str, config: AgentConfig, *,
+                                    session_id: str, sk: SessionKey,
+                                    initial_message: str | None,
+                                    trigger_source: str | None,
+                                    trigger_name: str | None,
+                                    initial_nonce: str | None,
+                                    queue_state: str,
+                                    session: "Session | None",
+                                    cold_start: bool,
+                                    cold_start_skeleton: str | None,
+                                    layer1_rows: list[tuple[str, str]] | None,
+                                    cache_session_id: str | None) -> None:
+        """The body of ``start_agent``, run while it holds the session's
+        start reservation."""
         # Spec 155: sessions of one project run in parallel — there is no
         # cross-session slot any more. The only guard is "already running for
         # this session" above. Spec 124 §3.7: the Memory session (origin
@@ -3202,8 +3259,11 @@ class AgentManager:
         row. Spec 155: the only rejection left is "already running for this
         session"; other sessions of the project never block a start.
         """
-        handle = self._handles.get(make_session_key(project_id, session_id))
+        sk = make_session_key(project_id, session_id)
+        handle = self._handles.get(sk)
         if handle is not None and handle.task is not None and not handle.task.done():
+            return ValueError("Agent already running for this project")
+        if sk in self._start_reservations():
             return ValueError("Agent already running for this project")
         return None
 
@@ -3414,10 +3474,12 @@ class AgentManager:
             # (loaded.session_id) for display/back-compat; it is simply no
             # longer the routing key. See REPORT-streaming-status-frontend.md.
             loaded = await self._hydrate_session(project_id, session_id)
-            if self._handles.get(sk) is not None:
+            if (self._handles.get(sk) is not None
+                    or await self._wait_for_start_in_flight(sk)):
                 # Another request started this session while we were off the
-                # loop: take the live-handle path (queue / hot resume) rather
-                # than racing it with a second hydrated copy.
+                # loop (or is starting it: wait for its handle): take the
+                # live-handle path (queue / hot resume) rather than racing it
+                # with a second hydrated copy.
                 return await self.inject_message(
                     project_id, content, nonce=nonce, session_id=session_id,
                     queue_state=queue_state)
@@ -3571,7 +3633,8 @@ class AgentManager:
             # this path is reached when the original handle existed but the
             # session was stopped, so we need a fresh AgentConfig.
             config = await self._abuild_agent_config_from_project(project_id)
-            if self._handles.get(sk) is not None:
+            if (self._handles.get(sk) is not None
+                    or await self._wait_for_start_in_flight(sk)):
                 return await self.inject_message(
                     project_id, content, nonce=nonce, session_id=session_id,
                     queue_state=queue_state)
@@ -3659,31 +3722,71 @@ class AgentManager:
         "Memory"): the live handle's session, else the one on disk, else a
         freshly minted one (materialised on its first row). None when the
         project has no workspace."""
-        project = self._project_store.get_project(project_id) if self._project_store else None
-        workspace = (project or {}).get("workspace", "") if project else ""
+        workspace = self._memory_workspace(project_id)
         if not workspace:
             return None
-        for (pid, _sid), handle in self._handles.items():
+        live = self._live_memory_session(project_id)
+        if live is not None:
+            return live
+        on_disk, identity = self._memory_session_on_disk(project_id)
+        return on_disk or self._mint_memory_session(project_id, workspace, identity)
+
+    async def _amemory_session(self, project_id: str) -> "Session | None":
+        """``memory_session`` with its disk reads and config build off the
+        event loop (spec 171 A2: the config build blocks for seconds on a
+        cold agent check or a Keychain read). After the await the live
+        handles are read again: a user message may have started the Memory
+        session meanwhile, and its live copy wins over the disk one."""
+        workspace = self._memory_workspace(project_id)
+        if not workspace:
+            return None
+        live = self._live_memory_session(project_id)
+        if live is not None:
+            return live
+        on_disk, identity = await asyncio.to_thread(
+            self._memory_session_on_disk, project_id)
+        live = self._live_memory_session(project_id)
+        if live is not None:
+            return live
+        return on_disk or self._mint_memory_session(project_id, workspace, identity)
+
+    def _memory_workspace(self, project_id: str) -> str:
+        project = self._project_store.get_project(project_id) if self._project_store else None
+        return (project or {}).get("workspace", "") if project else ""
+
+    def _live_memory_session(self, project_id: str) -> "Session | None":
+        for (pid, _sid), handle in list(self._handles.items()):
             if pid == project_id and _is_memory_session(handle.session):
                 return handle.session
+        return None
+
+    def _memory_session_on_disk(self, project_id: str
+                                ) -> "tuple[Session | None, tuple[str, str, str]]":
+        """The Memory session on disk, else None plus the identity a fresh
+        one is stamped with. Reads only (session files, project row,
+        settings, Keychain), so it may run in a worker thread."""
         for entry in self.list_sessions(project_id, include_memory=True):
             if entry.get("origin") != "memory" or not entry.get("session_uuid"):
                 continue
-            # Spec 129 §5E: a bounded blocking retry — this lookup is sync
-            # and the Memory session's file is rarely contended (the pass
-            # and the user chatting in it), so a short pause beats dropping
-            # the pass.
+            # Spec 129 §5E: a bounded blocking retry — the Memory session's
+            # file is rarely contended (the pass and the user chatting in
+            # it), so a short pause beats dropping the pass.
             loaded = retry_session_lock_sync(
                 lambda: self._load_session_from_disk(project_id, entry["session_uuid"]))
             if loaded is not None:
-                return loaded
-        uuid = self._mint_session_uuid(project_id)
+                return loaded, ("unknown", "unknown", "unknown")
         provider = model = sdk = "unknown"
         try:
             cfg = self._build_agent_config_from_project(project_id)
             provider, model, sdk = cfg.provider, cfg.model, cfg.sdk
         except Exception:  # noqa: BLE001 — identity meta is best effort
             pass
+        return None, (provider, model, sdk)
+
+    def _mint_memory_session(self, project_id: str, workspace: str,
+                             identity: tuple[str, str, str]) -> "Session":
+        provider, model, sdk = identity
+        uuid = self._mint_session_uuid(project_id)
         session = Session.new(
             uuid, workspace, session_id=uuid, provider=provider, model=model,
             sdk=sdk, origin="memory",
@@ -3793,7 +3896,7 @@ class AgentManager:
         is busy (the user is mid-turn there) or the project has none."""
         from agent_os.agent import memory_editor as _memory_editor
 
-        session = self.memory_session(project_id)
+        session = await self._amemory_session(project_id)
         if session is None:
             return None
         sk = make_session_key(project_id, session.session_uuid)

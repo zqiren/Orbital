@@ -783,13 +783,14 @@ def _scratch_project() -> dict | None:
     return next((p for p in _project_store.list_projects() if p.get("is_scratch")), None)
 
 
-def _route_provider(scratch_pid: str):
+async def _route_provider(scratch_pid: str):
     """Quick Tasks' utility provider when its credential has a key, else
-    None (phase A: keyless routes to Quick Tasks)."""
+    None (phase A: keyless routes to Quick Tasks). The config build runs off
+    the loop (spec 171 A2); nothing is started, so nothing to re-check."""
     am = _agent_manager
     if am is None or not am.manager_ready(scratch_pid):
         return None
-    config = am._build_agent_config_from_project(scratch_pid)
+    config = await asyncio.to_thread(am._build_agent_config_from_project, scratch_pid)
     _provider, _fallbacks, utility, _info = am._build_llm_providers(config)
     return utility
 
@@ -854,7 +855,7 @@ async def pick_project(text: str | None) -> dict:
     if fallback_pid is None:
         return fallback("no Quick Tasks project")
     try:
-        provider = _route_provider(fallback_pid)
+        provider = await _route_provider(fallback_pid)
     except Exception as e:
         return fallback(f"no provider: {type(e).__name__}")
     if provider is None:

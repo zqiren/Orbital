@@ -117,6 +117,9 @@ class SubAgentManager:
         # active sub-agents. Single-loop callers route through
         # ``DEFAULT_SESSION_ID`` via ``_resolve_session_id``.
         self._adapters: dict[SessionKey, dict[str, object]] = {}
+        # Spec 171 A3: one start at a time per (session, worker); see
+        # ``_start_from_registry_once``.
+        self._inflight_starts: dict[tuple[SessionKey, str], asyncio.Future] = {}
         # Piece 3 Part E (keying fix): transcripts are SESSION-scoped —
         # (project_id, session_id, handle) -> SubAgentTranscript. Two chat
         # sessions running the same handle must not clobber each other's
@@ -331,7 +334,7 @@ class SubAgentManager:
 
         # New path: use registry + setup_engine if available
         if self._registry is not None and self._setup_engine is not None:
-            return await self._start_from_registry(
+            return await self._start_from_registry_once(
                 project_id, handle, session_id=session_id, announce=announce,
                 fresh=fresh, pinned=pinned, initiator=initiator,
             )
@@ -630,7 +633,10 @@ class SubAgentManager:
         if kind not in ("sdk", "codex-appserver") or self._setup_engine is None:
             return None
         try:
-            config = self._setup_engine.get_adapter_config(
+            # Off the loop: resolving the binary can probe it by subprocess,
+            # and the env reads keys from the Keychain (spec 171 A3).
+            config = await asyncio.to_thread(
+                self._setup_engine.get_adapter_config,
                 slug=slug, project_workspace=workspace)
         except Exception as exc:  # noqa: BLE001 — not configured: nothing to probe
             logger.info("worker commands: no config for %s (%s)", slug, exc)
@@ -1220,6 +1226,37 @@ class SubAgentManager:
                     f"open Settings → Sub-agents")
         return None
 
+    async def _start_from_registry_once(self, project_id: str, handle: str, *,
+                                        session_id: str, **kwargs) -> str:
+        """``_start_from_registry``, single-flight per (session, worker).
+
+        The start awaits before it registers the adapter (the config build,
+        session params, resume record, the pre-dispatch gate), so two sends
+        to one worker in one session used to spawn it twice, the second
+        registration orphaning the first process. A start that arrives while
+        one is in flight now waits for it and returns its answer; if that
+        start raised or was cancelled, the waiter starts afresh.
+        """
+        flights = getattr(self, "_inflight_starts", None)
+        if flights is None:   # built without __init__ (test doubles)
+            flights = self._inflight_starts = {}
+        key = (make_session_key(project_id, session_id), handle)
+        while (inflight := flights.get(key)) is not None:
+            answer = await asyncio.shield(inflight)
+            if answer is not None:
+                return answer
+        flight = asyncio.get_running_loop().create_future()
+        flights[key] = flight
+        answer = None
+        try:
+            answer = await self._start_from_registry(
+                project_id, handle, session_id=session_id, **kwargs)
+            return answer
+        finally:
+            if flights.get(key) is flight:
+                del flights[key]
+            flight.set_result(answer)
+
     async def _start_from_registry(self, project_id: str, handle: str, depth: int = 0,
                                    *, session_id: str | None = None,
                                    announce: bool = True,
@@ -1265,7 +1302,12 @@ class SubAgentManager:
         workspace = project.get("workspace", "") if project else ""
 
         try:
-            config_dict = self._setup_engine.get_adapter_config(
+            # Off the loop: resolving the binary can probe it by subprocess,
+            # and the env reads keys from the Keychain (spec 171 A3). A second
+            # start of this worker in this session meanwhile waits in
+            # ``start`` (single-flight), so it cannot spawn a second process.
+            config_dict = await asyncio.to_thread(
+                self._setup_engine.get_adapter_config,
                 slug=handle,
                 project_workspace=workspace,
             )
@@ -1851,9 +1893,9 @@ class SubAgentManager:
 
         # Spawn-on-demand pre-step, OUTSIDE the dispatch lock: start() takes
         # the same per-session lifecycle lock internally (non-reentrant), so
-        # spawning under it would deadlock. A concurrent double-send race here
-        # mirrors the pre-existing @mention try/start/retry race — last
-        # registration wins, same as before this change.
+        # spawning under it would deadlock. A concurrent second send waits for
+        # the first send's start (``_start_from_registry_once``) and then
+        # dispatches into the same worker, so the worker is spawned once.
         spawn_clause = ""
         if handle not in self._adapters.get(sk, {}):
             start_result = await self.start(

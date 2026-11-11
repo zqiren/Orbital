@@ -241,14 +241,22 @@ async def _test_and_record(card_id: str, *, reuse_recent: bool = False) -> dict:
     return await _impl(card_id, reuse_recent=reuse_recent)
 
 
-def _masked(card_id: str) -> dict:
+def _masked_sync(card_id: str) -> dict:
     return _settings_store.masked_card(_settings_store.get_card(card_id))
+
+
+async def _masked(card_id: str) -> dict:
+    """The card's wire shape, read off the event loop: masking reads the
+    card's key, a Keychain call that can take seconds (spec 171 A1)."""
+    return await asyncio.to_thread(_masked_sync, card_id)
 
 
 @router.get("/settings/cards")
 async def list_cards():
     """Every card, env card first then recency order (spec 082 §3.1)."""
-    return {"credential_cards": _settings_store.masked_cards(),
+    # Off the loop: one Keychain read per card (spec 171 A1).
+    cards = await asyncio.to_thread(_settings_store.masked_cards)
+    return {"credential_cards": cards,
             "default_card_id": _settings_store.effective_default_card_id()}
 
 
@@ -278,7 +286,7 @@ async def create_card(req: CreateCardRequest):
     _import_scan_switch(req.import_scan)
     if _default_card_passed(card.id, test):
         _import_scan_kick("card_created")
-    return {"card": _masked(card.id), "test": test}
+    return {"card": await _masked(card.id), "test": test}
 
 
 @router.put("/settings/cards/{card_id}")
@@ -311,7 +319,7 @@ async def update_card(card_id: str, req: UpdateCardRequest):
     _import_scan_switch(req.import_scan)
     if _default_card_passed(card_id, test):
         _import_scan_kick("card_updated")
-    return {"card": _masked(card_id), "test": test}
+    return {"card": await _masked(card_id), "test": test}
 
 
 @router.delete("/settings/cards/{card_id}")
@@ -396,7 +404,7 @@ async def test_card(card_id: str):
     test = await _test_and_record(card_id)
     if _default_card_passed(card_id, test):
         _import_scan_kick("card_tested")
-    return {"card": _masked(card_id), "test": test}
+    return {"card": await _masked(card_id), "test": test}
 
 
 def _default_card_passed(card_id: str | None, test: dict | None) -> bool:
@@ -436,7 +444,9 @@ def _import_scan_kick(reason: str) -> None:
 async def get_settings():
     from agent_os.onboarding.import_scan import unscanned_count
 
-    out = _settings_store.get_masked()
+    # Off the loop: one Keychain read per card. hang.log caught this read
+    # holding the loop (spec 171 A1).
+    out = await asyncio.to_thread(_settings_store.get_masked)
     # Spec 160 §5.3: how many imported projects a key saved now would read
     # once (the token sign beside the key form's Save).
     if isinstance(out, dict):
@@ -591,7 +601,7 @@ async def update_settings(req: UpdateSettingsRequest):
             turn_off_deferred(_project_store)
             _import_scan_switch(req.import_scan)
 
-    return _settings_store.get_masked()
+    return await asyncio.to_thread(_settings_store.get_masked)
 
 
 class UiLanguageRequest(BaseModel):
@@ -1621,7 +1631,7 @@ async def _credentials_now_configured(slug: str) -> bool:
     if manifest is None:
         return False
     try:
-        binary = _setup_engine.resolve_binary(manifest)
+        binary = await asyncio.to_thread(_setup_engine.resolve_binary, manifest)
         configured, _missing = await asyncio.to_thread(
             _setup_engine.check_credentials, manifest, binary
         )
@@ -1982,7 +1992,9 @@ async def trigger_sub_agent_login(slug: str):
     Agents that ship no such store use ``/credential`` instead, which holds the
     key in a dedicated keychain service.
     """
-    command = _resolve_setup_command(slug, "login")
+    # Off the loop: resolving the CLI path can probe it by subprocess
+    # (spec 171 A3).
+    command = await asyncio.to_thread(_resolve_setup_command, slug, "login")
     if not command:
         raise HTTPException(
             status_code=400,
@@ -2024,7 +2036,9 @@ async def trigger_sub_agent_update(slug: str):
     version reached the manifest floor (D3). 400 when the manifest declares
     no ``update_command``; 409 while a worker of this agent is running (D8).
     """
-    command = _resolve_setup_command(slug, "update")
+    # Off the loop: resolving the CLI path can probe it by subprocess
+    # (spec 171 A3).
+    command = await asyncio.to_thread(_resolve_setup_command, slug, "update")
     if not command:
         raise HTTPException(
             status_code=400,
@@ -2084,7 +2098,9 @@ async def trigger_sub_agent_logout(slug: str):
     Synchronous: returns the CLI's exit code and any stderr text. The CLI
     is responsible for clearing its own stored credentials.
     """
-    command = _resolve_setup_command(slug, "logout")
+    # Off the loop: resolving the CLI path can probe it by subprocess
+    # (spec 171 A3).
+    command = await asyncio.to_thread(_resolve_setup_command, slug, "logout")
     if not command:
         raise HTTPException(
             status_code=400,
@@ -2256,7 +2272,8 @@ async def set_sub_agent_api_key(slug: str, req: SetSubAgentApiKeyRequest):
     manifest = registry.get(slug)
     if manifest is None:
         raise HTTPException(status_code=404, detail=f"Unknown agent: {slug}")
-    binary = _setup_engine.resolve_binary(manifest)
+    # Off the loop: a cache miss probes the CLI by subprocess (spec 171 A3).
+    binary = await asyncio.to_thread(_setup_engine.resolve_binary, manifest)
     if not binary:
         raise HTTPException(status_code=400,
                             detail=f"sub-agent '{slug}' is not installed")
