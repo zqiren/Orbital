@@ -33,11 +33,13 @@ attach to an embedded WKWebView/WebView2.
 
 ### Things a Go user has to do by hand (and the scenario does)
 
-- **Codex model.** Orbital picks Codex's catalog default (`isDefault` from
-  `model/list`, today `gpt-6-astra`) whenever no model is chosen in Orbital,
-  which overrides `model` in `~/.codex/config.toml`. OpenCode Go answers that
-  id with "Model is unavailable", so the scenario sets `gpt-6-luna` in
-  Settings → Sub-agents → Codex → Model (`--codex-model ''` skips it).
+- **Codex model.** Up to v0.21.1 Orbital picked Codex's catalog default
+  (`gpt-6-astra`) whenever no model was chosen in Orbital, overriding `model`
+  in `~/.codex/config.toml`; OpenCode Go answers that id with "Model is
+  unavailable". Fixed in v0.22.0 (spec 172 B): the new build must answer from
+  `config.toml`'s `gpt-6-luna` alone, and "Model is unavailable" there is a
+  real bug. The scenario therefore sets the model in Settings → Sub-agents →
+  Codex only on the OLD build of the upgrade run.
 - **dsh session header.** Go rejects any request without
   `x-opencode-session`; dsh's `DEEPSEEK_BASE_URL` route cannot add headers, so
   `rig/go-header-proxy.mjs` (test rig only, never product code) adds it and

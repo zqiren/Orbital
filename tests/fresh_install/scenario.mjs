@@ -220,7 +220,9 @@ async function stepLaunch(id = '3-launch', needs = ['2-install']) {
   );
 }
 
-async function stepKeyless({ id = '4-keyless', projectName = 'Fresh Keyless', prompt, needs = ['3-launch'] } = {}) {
+// uiModel: only for a build older than v0.22.0 (spec 172 B): those override
+// ~/.codex/config.toml's model, so a Go user had to choose it in Orbital.
+async function stepKeyless({ id = '4-keyless', projectName = 'Fresh Keyless', prompt, needs = ['3-launch'], uiModel = '' } = {}) {
   return run.step(
     id,
     'Keyless: skip the key in onboarding, pin Codex, get a real reply',
@@ -234,12 +236,9 @@ async function stepKeyless({ id = '4-keyless', projectName = 'Fresh Keyless', pr
       await ui.createProject(page, { name: projectName, folder: workspace(projectName) }, note);
       const pid = await projectId(projectName);
       await ui.walkTourIfShown(page, note);
-      if (opts.codexModel) {
-        // Orbital overrides ~/.codex/config.toml's `model` with Codex's own
-        // catalog default (gpt-6-astra), which a non-OpenAI provider rejects,
-        // so a Go user must choose the model in Orbital (see README).
+      if (uiModel) {
         await ui.openGlobalSettings(page);
-        await ui.setSubAgentModel(page, 'codex', opts.codexModel, note);
+        await ui.setSubAgentModel(page, 'codex', uiModel, note);
         await run.shot(`${id}-codex-model`);
         await ui.leaveGlobalSettings(page);
         await ui.openProject(page, projectName);
@@ -448,7 +447,7 @@ async function stepUpgrade() {
   await stepInstall(opts.oldInstaller, '7a-install-old');
   await stepLaunch('7b-launch-old', ['7a-install-old']);
   const prompt = 'Reply with the single word PONG and nothing else.';
-  await stepKeyless({ id: '7c-old-history', projectName: 'Upgrade Check', prompt, needs: ['7b-launch-old'] });
+  await stepKeyless({ id: '7c-old-history', projectName: 'Upgrade Check', prompt, needs: ['7b-launch-old'], uiModel: opts.codexModel });
   await run.step(
     '7d-record',
     'Record the old build\'s project + history, then quit',
