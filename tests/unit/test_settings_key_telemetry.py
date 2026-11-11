@@ -109,6 +109,9 @@ class TestGlobalSettingsKeyTelemetry:
                     "message": "Invalid API key"}
 
         monkeypatch.setattr(agents_v2, "run_connection_test", bad)
+        # The gate guards the STORED key. With AGENT_OS_API_KEY set (CI sets a
+        # dummy one) this route persists nothing and skips the gate.
+        monkeypatch.delenv("AGENT_OS_API_KEY", raising=False)
         resp = client.put("/api/v2/settings",
                           json={"llm_api_key": "sk-test-1234567890"})
         assert resp.status_code == 400
