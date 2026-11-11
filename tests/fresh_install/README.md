@@ -91,14 +91,65 @@ scrub check passes. On macOS the job creates an unlocked default keychain for
 the runner user (a logged-in user's keychain is unlocked; the runner's login
 keychain password is unknown); the app's keyring backend is not touched.
 
-## Adding the Windows host (local VirtualBox VM, later)
+## Run it locally (VirtualBox Windows VM)
 
-The scenario is already OS-agnostic (`lib/platform.mjs` has the Windows
-install/launch/quit/paths). A Windows host script needs to mirror
-`tart/run.sh`: restore a clean snapshot (Node 24 with npm prefix
-`%APPDATA%\npm`, `npm i -g @openai/codex @deepseek-ai/dsh@0.2.2-rc.1`,
-`npx playwright install chromium`, no Orbital), copy the `.exe` and this
-directory in over SSH (Tailscale), pipe the key on stdin, run
-`node scenario.mjs --installer <exe> --evidence <dir> --require-key`, copy the
-evidence out, run `node scrub.mjs <dir> --require-key` on the host, and revert
-the snapshot.
+The Windows twin of the Tart rig, in `vbox/`. Never on the host PC itself:
+Orbital only ever runs inside VM `orbital-fresh-win` (Windows 11 x64 from the
+**Simplified Chinese** ISO, Home China edition, unactivated; EFI + TPM 2.0,
+4 vCPU, 8 GB, 64 GB dynamic disk), which is rolled back to snapshot `clean`
+before and after every run. Chinese Home is the point: it matches the users
+and catches locale bugs (code page 936, translated group names) that
+GitHub's English Server image misses.
+
+The guest has one local admin `tester` with auto-logon to the desktop, no
+sleep/lock/screen saver, Windows Update paused (Defender on), Win32-OpenSSH
+with **key-only** login (the rig key goes in
+`C:\ProgramData\ssh\administrators_authorized_keys`, ACL set by SID), Node 24
+with npm prefix `%APPDATA%\npm` (and `NPM_CONFIG_PREFIX`, as ci.yml does),
+`@openai/codex`, `@deepseek-ai/dsh@0.2.2-rc.1` and Playwright 1.60.0's
+Chromium; no Orbital, no `~\.codex` / `~\.dsh`. NAT with one port forward,
+`127.0.0.1:2222 -> 22`, on the host's loopback only.
+
+```powershell
+# once, as the Windows user that will own the VM and the runner (one UAC prompt
+# for VirtualBox, then about an hour unattended):
+tests\fresh_install\vbox\bootstrap.cmd D:\orbital-winvm-cache
+#   = install-host.ps1 (elevated: VirtualBox 7.2 + Extension Pack, checksums verified)
+#   + prepare-vm.ps1   (VBoxManage unattended install with autounattend-template.xml,
+#                       guest-firstlogon.ps1, guest-provision.ps1 over SSH, snapshot clean)
+
+# each run (Windows PowerShell 5.1; key in the env, never on a command line)
+.\tests\fresh_install\vbox\run.ps1 -Installer <new .exe> -Mode fresh -Out <evidence dir>
+.\tests\fresh_install\vbox\run.ps1 -Installer <new .exe> -Mode upgrade -OldInstaller <old .exe> -Out <dir>
+.\tests\fresh_install\vbox\run.ps1 -RunId <CI run id> -Out <dir>      # or -Tag vX.Y.Z; downloads with gh
+```
+
+**Why a scheduled task.** Anything started over SSH on Windows runs outside
+the logged-in desktop, so the Orbital window would never appear and the
+scenario's desktop screenshot / window check (`desktopScreenshot`,
+`nativeWindowFacts`) would come back empty. So `run.ps1` pipes the key over
+SSH stdin into `guest-start.ps1`, which writes it to a file only `tester`
+(and SYSTEM) can read and starts `guest-run.ps1` as a scheduled task in
+tester's interactive session at the highest run level (the Inno installer
+needs admin). `guest-run.ps1` reads the key into its env, deletes the file,
+runs `npm ci` and `node scenario.mjs --require-key` with
+`AGENT_OS_TELEMETRY_DISABLED=1`, and writes `console.log`, `exitcode` and
+`done` into `C:\fi\state`; the host polls and streams `console.log`. The
+evidence (scrubbed inside by the scenario) is copied to `-Out`, scrubbed
+again on the host (`scrub.mjs --require-key`; a surviving key deletes the
+copy, exit 4), and the VM is powered off and restored to `clean` whatever
+happened (`-Keep` leaves a failed run's VM up for debugging).
+
+Exit codes: the scenario's (0 pass, 1 a step failed), 3 `npm ci` in the
+guest failed, 4 key found after scrub, 5 guest wrapper error, 6 timeout
+(`-TimeoutMin`, default 75), 7 rig error (VM, SSH, copy).
+
+State lives in `%LOCALAPPDATA%\orbital-fresh-install` (rig key, `tester`'s
+password, logs, installer cache), never in the repo.
+
+**CI.** The private repo `zqiren/orbital-vm-ci` runs `run.ps1` from its
+`fresh-install-winvm.yml` on a self-hosted runner on the PC (label
+`orbital-winvm`, running as the VM's owner, started at logon;
+`vbox/setup-runner.ps1`), once per mode, for every `v*` tag and manual
+build. Private so that pull requests to this public repo can never reach the
+runner. Report only: a release does not wait on it.
