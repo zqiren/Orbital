@@ -161,6 +161,7 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple:,codesign: \
             -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH" >/dev/null
           # Prepend our keychain to the search list so codesign finds the identity.
+          # shellcheck disable=SC2046
           security list-keychains -d user -s "$KEYCHAIN_PATH" \
             $(security list-keychains -d user | sed 's/"//g')
 
@@ -249,3 +250,188 @@ jobs:
           name: Orbital-Windows-installer
           path: installer/Output/Orbital-Setup-*.exe
           if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # Fresh-install test (tests/fresh_install/README.md): replay a brand-new
+  # user's first minutes against THIS run's installer artifact — never a local
+  # build — on a runner VM that has never seen Orbital (GitHub-hosted runners
+  # are a new VM per job). `fresh` = install, keyless Codex reply, OpenCode Go
+  # card through Settings, manager reply, dispatch to Codex + dsh, browser
+  # tool. `upgrade` = previous published release first, a chat turn, then this
+  # build installed over it; the project and its history must survive.
+  #
+  # v* tags and manual dispatch ONLY: it spends a real (capped) OpenCode Go key
+  # (repo secret OPENCODE_GO_TEST_KEY) and ~15 min of runner time, and secrets
+  # must never reach pull_request runs. Evidence is scrubbed of the key and
+  # uploaded only when the scrub check passes (artifacts are public).
+  # AGENT_OS_TELEMETRY_DISABLED stays in force via the workflow-level env.
+  fresh-install-macos:
+    name: Fresh install (macOS, ${{ matrix.scenario }})
+    needs: [build-macos]
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    runs-on: macos-15
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario: [fresh, upgrade]
+    env:
+      ORBITAL_TEST_OPENCODE_KEY: ${{ secrets.OPENCODE_GO_TEST_KEY }}
+      GH_TOKEN: ${{ github.token }}
+      EVIDENCE: ${{ github.workspace }}/fresh-evidence
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download this run's DMG
+        uses: actions/download-artifact@v4
+        with:
+          name: Orbital-macOS-dmg
+          path: ${{ runner.temp }}/installer
+      - name: Download the previous release's DMG (upgrade)
+        if: matrix.scenario == 'upgrade'
+        run: |
+          set -euo pipefail
+          OLD=$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --exclude-pre-releases \
+            --limit 50 --json tagName -q '.[].tagName' | grep -vx "$GITHUB_REF_NAME" | head -1)
+          echo "Upgrading from $OLD"
+          gh release download "$OLD" --repo "$GITHUB_REPOSITORY" -p 'Orbital-*-macOS.dmg' -D "$RUNNER_TEMP/old"
+      - name: An unlocked default keychain (what a logged-in user has)
+        # The installed app keeps keys in the real Keychain (no backend swap).
+        # A hosted runner's login keychain password is unknown, so give the
+        # runner user a fresh default keychain, unlocked with no auto-lock.
+        run: |
+          set -euo pipefail
+          KC="$RUNNER_TEMP/orbital-user.keychain-db"
+          PW="$(openssl rand -hex 16)"
+          security create-keychain -p "$PW" "$KC"
+          security set-keychain-settings "$KC"
+          security unlock-keychain -p "$PW" "$KC"
+          # shellcheck disable=SC2046
+          security list-keychains -d user -s "$KC" $(security list-keychains -d user | sed 's/"//g')
+          security default-keychain -d user -s "$KC"
+      - name: Install Node + worker CLIs the way a user does (Homebrew node, npm -g)
+        # /opt/homebrew/bin is on Orbital's auto-detect list and the login
+        # PATH a GUI-launched app inherits; setup-node's toolcache is neither.
+        run: |
+          set -euo pipefail
+          export HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1
+          brew install node@24
+          brew link --overwrite --force node@24
+          /opt/homebrew/bin/npm install -g @openai/codex
+          # npm 11 holds back install scripts unless allowed (dsh's spawn helper, node-pty).
+          /opt/homebrew/bin/npm install -g --allow-scripts=@deepseek-ai/dsh-subprocess-local,koffi,node-pty,protobufjs @deepseek-ai/dsh@0.2.2-rc.1
+          /opt/homebrew/bin/codex --version
+          /opt/homebrew/bin/dsh -V
+      - name: Scenario deps + Playwright WebKit (the app window is WKWebView)
+        working-directory: tests/fresh_install
+        run: |
+          /opt/homebrew/bin/npm ci --no-audit --no-fund
+          /opt/homebrew/bin/npx playwright install webkit
+      - name: Run the fresh-install scenario
+        working-directory: tests/fresh_install
+        run: |
+          set -euo pipefail
+          NEW=("$RUNNER_TEMP"/installer/Orbital-*-macOS.dmg)
+          ARGS=(--installer "${NEW[0]}" --evidence "$EVIDENCE" --require-key)
+          if [ "${{ matrix.scenario }}" = upgrade ]; then
+            OLD=("$RUNNER_TEMP"/old/Orbital-*-macOS.dmg)
+            ARGS+=(--mode upgrade --old-installer "${OLD[0]}")
+          fi
+          /opt/homebrew/bin/node scenario.mjs "${ARGS[@]}"
+      - name: Scrub check (fails the job if the key is in the evidence)
+        id: scrub
+        if: always()
+        run: /opt/homebrew/bin/node tests/fresh_install/scrub.mjs "$EVIDENCE" --require-key
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.scrub.outcome == 'success'
+        with:
+          name: fresh-install-evidence-macos-${{ matrix.scenario }}
+          path: ${{ env.EVIDENCE }}
+          if-no-files-found: warn
+          retention-days: 14
+
+  fresh-install-windows:
+    name: Fresh install (Windows, ${{ matrix.scenario }})
+    needs: [build-windows]
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario: [fresh, upgrade]
+    env:
+      ORBITAL_TEST_OPENCODE_KEY: ${{ secrets.OPENCODE_GO_TEST_KEY }}
+      GH_TOKEN: ${{ github.token }}
+      EVIDENCE: ${{ github.workspace }}\fresh-evidence
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Download this run's installer
+        uses: actions/download-artifact@v4
+        with:
+          name: Orbital-Windows-installer
+          path: ${{ runner.temp }}\installer
+      - name: Download the previous release's installer (upgrade)
+        if: matrix.scenario == 'upgrade'
+        run: |
+          $tags = gh release list --repo $env:GITHUB_REPOSITORY --exclude-drafts --exclude-pre-releases --limit 50 --json tagName -q '.[].tagName'
+          $old = $tags | Where-Object { $_ -ne $env:GITHUB_REF_NAME } | Select-Object -First 1
+          Write-Host "Upgrading from $old"
+          gh release download $old --repo $env:GITHUB_REPOSITORY -p 'Orbital-Setup-*.exe' -D "$env:RUNNER_TEMP\old"
+      - name: Install worker CLIs the way a user does (npm -g into %APPDATA%\npm)
+        # Codex on Windows also ships under a hash-versioned desktop path;
+        # npm gives a stable %APPDATA%\npm\codex.cmd (on Orbital's auto-detect list).
+        run: |
+          # Run 43006988898: `npm config set prefix` alone left codex.cmd
+          # outside %APPDATA%\npm on the hosted image (an image-level prefix
+          # setting wins). Set the env var too, which beats every npmrc, and
+          # keep it for later steps.
+          $prefix = "$env:APPDATA\npm"
+          New-Item -ItemType Directory -Force -Path $prefix | Out-Null
+          $env:NPM_CONFIG_PREFIX = $prefix
+          "NPM_CONFIG_PREFIX=$prefix" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $prefix | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          npm config set prefix $prefix
+          Write-Host "npm global prefix: $(npm prefix -g)"
+          npm install -g @openai/codex
+          npm install -g --allow-scripts=@deepseek-ai/dsh-subprocess-local,koffi,node-pty,protobufjs @deepseek-ai/dsh@0.2.2-rc.1
+          if (-not (Test-Path "$prefix\codex.cmd")) {
+            Write-Host "codex.cmd not in $prefix; npm put it here:"
+            Get-ChildItem -Path (npm prefix -g) -Filter 'codex*' -ErrorAction SilentlyContinue | Format-Table FullName
+            Get-Command codex -ErrorAction SilentlyContinue | Format-List Source
+            exit 1
+          }
+          & "$prefix\codex.cmd" --version
+          & "$env:APPDATA\npm\dsh.cmd" -V
+      - name: Scenario deps + Playwright Chromium (the app window is WebView2)
+        working-directory: tests/fresh_install
+        run: |
+          npm ci --no-audit --no-fund
+          npx playwright install chromium
+      - name: Run the fresh-install scenario
+        working-directory: tests/fresh_install
+        run: |
+          $new = (Get-ChildItem "$env:RUNNER_TEMP\installer\Orbital-Setup-*.exe" | Select-Object -First 1).FullName
+          $scenarioArgs = @('--installer', $new, '--evidence', $env:EVIDENCE, '--require-key')
+          if ('${{ matrix.scenario }}' -eq 'upgrade') {
+            $old = (Get-ChildItem "$env:RUNNER_TEMP\old\Orbital-Setup-*.exe" | Select-Object -First 1).FullName
+            $scenarioArgs += @('--mode', 'upgrade', '--old-installer', $old)
+          }
+          node scenario.mjs @scenarioArgs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Scrub check (fails the job if the key is in the evidence)
+        id: scrub
+        if: always()
+        run: node tests/fresh_install/scrub.mjs "$env:EVIDENCE" --require-key
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.scrub.outcome == 'success'
+        with:
+          name: fresh-install-evidence-windows-${{ matrix.scenario }}
+          path: ${{ env.EVIDENCE }}
+          if-no-files-found: warn
+          retention-days: 14
