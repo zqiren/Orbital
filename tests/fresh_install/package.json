@@ -1,0 +1,17 @@
+{
+  "name": "orbital-fresh-install",
+  "private": true,
+  "description": "Replays a brand-new user's first minutes against an installed Orbital (CI-built installer). See README.md.",
+  "type": "module",
+  "license": "GPL-3.0-or-later",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "scenario": "node scenario.mjs",
+    "scrub": "node scrub.mjs"
+  },
+  "dependencies": {
+    "playwright": "1.60.0"
+  }
+}
