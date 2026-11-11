@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Orbital Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import { memo } from 'react';
 import MarkdownContent from './MarkdownContent';
 import MessageAvatar from './MessageAvatar';
 import { useT } from '../i18n/useT';
@@ -20,7 +21,7 @@ function nowTime(): string {
   return `${hh}:${mm}`;
 }
 
-export default function StreamingMessage({
+function StreamingMessage({
   text,
   source,
   isComplete,
@@ -57,3 +58,8 @@ export default function StreamingMessage({
     </div>
   );
 }
+
+// Spec 171 A7: the props are three primitives, so a ChatView render that
+// leaves the stream unchanged (a keystroke, a status tick) skips the
+// markdown parse of the whole growing text.
+export default memo(StreamingMessage);
