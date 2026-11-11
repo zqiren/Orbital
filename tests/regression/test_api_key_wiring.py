@@ -28,7 +28,7 @@ class TestApiKeyEndpoints:
     """Verify all three api-key endpoints exist and accept correct schemas."""
 
     @pytest.mark.requires_keychain
-    def test_put_api_key_accepts_body(self, client):
+    def test_put_api_key_accepts_body(self, client, monkeypatch):
         """PUT /api/v2/settings/api-key accepts {api_key: string}.
 
         requires_keychain: the route 500s when the credential store's keyring
@@ -36,6 +36,13 @@ class TestApiKeyEndpoints:
         (triage 2026-06-12; the BaseException guard below only catches
         in-process raises, not the 500 path).
         """
+        from agent_os.api.routes import agents_v2
+
+        async def ok(*_a):
+            # A key is stored only on a passing connection test (2026-11-12).
+            return {"ok": True, "status": 200, "code": None, "message": "ok"}
+
+        monkeypatch.setattr(agents_v2, "run_connection_test", ok)
         try:
             resp = client.put("/api/v2/settings/api-key", json={
                 "api_key": "sk-test-key-12345",

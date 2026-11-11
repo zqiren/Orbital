@@ -44,15 +44,23 @@ const MockApiError = vi.hoisted(() => {
 });
 vi.mock('../config', () => ({ api: apiMock, ApiError: MockApiError }));
 const stubUnscanned = vi.hoisted(() => ({ n: 0, agent: null as string | null, silent: false }));
+const stubSave = vi.hoisted(() => ({ fn: null as (() => Promise<boolean>) | null }));
 vi.mock('./LLMProviderSettings', async () => {
   const { useEffect } = await import('react');
   return {
     // Spec 160: the real form reports the unscanned-imports count it read.
-    default: ({ onUnscannedImports }: { onUnscannedImports?: (n: number, agent: string | null) => void }) => {
+    default: ({ onUnscannedImports, saveRef }: {
+      onUnscannedImports?: (n: number, agent: string | null) => void;
+      saveRef?: { current: (() => Promise<boolean>) | null };
+    }) => {
       useEffect(() => {
         if (stubUnscanned.silent) return;
         onUnscannedImports?.(stubUnscanned.n, stubUnscanned.agent);
       }, [onUnscannedImports]);
+      // The real form's save: true only when its key passed and was stored.
+      useEffect(() => {
+        if (saveRef) saveRef.current = stubSave.fn;
+      });
       return <div data-testid="llm-provider-settings-stub" />;
     },
   };
@@ -322,6 +330,41 @@ describe('SetupWizard — spec 138 step flow', () => {
     mockApi({ apiKeySet: true });
     fireEvent.click(screen.getByText('Next →'));
     await waitFor(() => expect(screen.getByText('Connect Your Accounts')).toBeTruthy());
+  });
+
+  it('Next stays on the key step when the form refuses the key (its test failed), with no second line', async () => {
+    mockApi({ apiKeySet: false });
+    const save = vi.fn(async () => false);
+    stubSave.fn = save;
+    await renderAtKey();
+    try {
+      fireEvent.click(screen.getByText('Next →'));
+      await waitFor(() => expect(save).toHaveBeenCalled());
+      await new Promise((r) => setTimeout(r, 20));
+      // The form draws the test's verdict; the wizard adds nothing over it.
+      expect(screen.getByTestId('llm-provider-settings-stub')).toBeTruthy();
+      expect(screen.queryByText('Connect Your Accounts')).toBeNull();
+      expect(screen.queryByTestId('wizard-next-error')).toBeNull();
+      expect(screen.getByText('Next →')).toBeTruthy();
+    } finally {
+      stubSave.fn = null;
+    }
+  });
+
+  it('one Next during a running test waits for the form, then advances on a pass', async () => {
+    mockApi({ apiKeySet: false });
+    let pass: (ok: boolean) => void = () => {};
+    stubSave.fn = () => new Promise<boolean>((r) => { pass = r; });
+    await renderAtKey();
+    try {
+      fireEvent.click(screen.getByText('Next →'));
+      await screen.findByText('Checking...');
+      mockApi({ apiKeySet: true });
+      pass(true);
+      await waitFor(() => expect(screen.getByText('Connect Your Accounts')).toBeTruthy());
+    } finally {
+      stubSave.fn = null;
+    }
   });
 
   it('reports each step reached once, and done at Finish', async () => {

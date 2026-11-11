@@ -1114,25 +1114,26 @@ describe('LLMProviderSettings — card save (spec 082 §3.2)', () => {
     expect(verdict.textContent).toContain('Connected to DeepSeek');
   });
 
-  it('a failed test still saves the card and says so, in red', async () => {
-    mockCardApi(async () => ({
-      card: { ...CARD, last_error: { status: 401, code: 'invalid_api_key', message: 'Invalid API key', at: '2026-09-04T10:00:00+00:00' } },
-      test: { ok: false, status: 401, code: 'invalid_api_key', message: 'Invalid API key' },
-    }));
+  it('a Save the daemon refuses (its own test failed) stores nothing and shows the verdict where verdicts go (2026-11-12)', async () => {
+    mockCardApi(async () => {
+      throw new Error(JSON.stringify({
+        code: 'connection_test_failed',
+        message: 'Upstream request failed: Model is unavailable.',
+        test: { ok: false, status: 400, code: 'provider_error', message: 'Upstream request failed: Model is unavailable.' },
+      }));
+    });
     const onCardSaved = vi.fn();
     render(<LLMProviderSettings mode="global" onCardSaved={onCardSaved} />);
-    // The pre-save test passed; the provider went away between Test and Save.
+    // The pre-save test passed; the daemon tested again and it failed.
     await fillAndVerifyNewCard();
     fireEvent.click(saveButton());
 
-    const verdict = await screen.findByTestId('card-save-test');
-    // D9: an outage must never cost the user a saved card — the card exists,
-    // and the failure is where the user will look for it.
-    expect(verdict.textContent).toContain('Saved, but the connection test failed');
-    expect(verdict.textContent).toContain('Invalid API key');
-    expect(verdict.className).toContain('text-error');
-    expect(onCardSaved).toHaveBeenCalled();
+    await screen.findByText('Upstream request failed: Model is unavailable.');
+    expect(onCardSaved).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('card-save-test')).toBeNull();
+    // One red line (the verdict), not a JSON save error beside it.
     expect(screen.queryByTestId('card-save-error')).toBeNull();
+    expect(saveButton().disabled).toBe(true);
   });
 
   it('editing an existing card PUTs to that card id and populates from it', async () => {
@@ -1184,7 +1185,7 @@ describe('LLMProviderSettings — card save (spec 082 §3.2)', () => {
   });
 });
 
-describe('LLMProviderSettings — Test Connection is compulsory before Save; passing is not (8.png 2026-09-07, 9.png 2026-09-08)', () => {
+describe('LLMProviderSettings — Save needs a PASSING Test Connection (8.png 2026-09-07; owner rule 2026-11-12)', () => {
   const CARD_TB = {
     id: 'card_tb',
     name: 'DeepSeek',
@@ -1289,7 +1290,7 @@ describe('LLMProviderSettings — Test Connection is compulsory before Save; pas
     await screen.findByTestId('card-save-gate');
   });
 
-  it('a failed test unlocks Save too — the user saw the verdict they are saving', async () => {
+  it('a failed test keeps Save locked — its red verdict is the reason', async () => {
     mockApiForGate();
     render(<LLMProviderSettings mode="global" />);
     await screen.findByText('API Key');
@@ -1298,18 +1299,60 @@ describe('LLMProviderSettings — Test Connection is compulsory before Save; pas
     expect(save().disabled).toBe(true);
     fireEvent.click(test());
     await screen.findByText('Invalid API key');
-    // A balance or outage verdict is information, not a lock (spec 082 D9:
-    // a failed test still saves, and the card carries the error).
-    expect(save().disabled).toBe(false);
+    expect(save().disabled).toBe(true);
+    // One line: the verdict, not the "test before saving" prompt beside it.
     expect(screen.queryByTestId('card-save-gate')).toBeNull();
-    fireEvent.click(save());
-    await waitFor(() => expect(postBodies().length).toBe(1));
-    expect(postBodies()[0]).toMatchObject({ model: 'deepseek-chat', api_key: 'sk-bad' });
-    // Editing the key after a failed test re-locks Save until it is re-tested.
-    fireEvent.change(screen.getByPlaceholderText(/sk-/), { target: { value: 'sk-bad-2' } });
-    await waitFor(() => expect(save().disabled).toBe(true));
-    expect(screen.queryByText('Invalid API key')).toBeNull();
+    fireEvent.submit(save().closest('form')!);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(postBodies()).toEqual([]);
+    // Editing the key clears the stale verdict and asks for a test again.
+    fireEvent.change(screen.getByPlaceholderText(/sk-/), { target: { value: 'sk-good' } });
+    await waitFor(() => expect(screen.queryByText('Invalid API key')).toBeNull());
     expect(screen.getByTestId('card-save-gate').textContent).toContain('Test the connection before saving');
+    fireEvent.click(test());
+    await waitFor(() => expect(save().disabled).toBe(false));
+  });
+
+  it('the wizard\'s Next after a failed test saves nothing; the verdict stays the one reason', async () => {
+    mockApiForGate();
+    const saveRef = { current: null as (() => Promise<boolean>) | null };
+    render(<LLMProviderSettings mode="global" hideSaveButton saveRef={saveRef} />);
+    await screen.findByText('API Key');
+    fireEvent.change(screen.getByPlaceholderText(/sk-/), { target: { value: 'sk-bad' } });
+    fireEvent.change(screen.getByPlaceholderText(/model name/i), { target: { value: 'deepseek-chat' } });
+    fireEvent.click(test());
+    await screen.findByText('Invalid API key');
+    await act(async () => { expect(await saveRef.current!()).toBe(false); });
+    expect(postBodies()).toEqual([]);
+    expect(screen.getByText('Invalid API key')).toBeTruthy();
+    expect(screen.queryByTestId('card-save-gate')).toBeNull();
+    expect(screen.queryByTestId('card-save-error')).toBeNull();
+  });
+
+  it('the wizard\'s Next pressed while a failing test runs waits, then stays with the verdict', async () => {
+    mockApiForGate();
+    const base = apiMock.getMockImplementation()!;
+    let finishTest: () => void = () => {};
+    apiMock.mockImplementation(async (path: string, reqOpts?: RequestInit) => {
+      if (path === '/api/v2/providers/test') {
+        await new Promise<void>((r) => { finishTest = r; });
+        throw new Error('Invalid API key');
+      }
+      return base(path, reqOpts);
+    });
+    const saveRef = { current: null as (() => Promise<boolean>) | null };
+    render(<LLMProviderSettings mode="global" hideSaveButton saveRef={saveRef} />);
+    await screen.findByText('API Key');
+    fireEvent.change(screen.getByPlaceholderText(/sk-/), { target: { value: 'sk-bad' } });
+    fireEvent.change(screen.getByPlaceholderText(/model name/i), { target: { value: 'deepseek-chat' } });
+    fireEvent.click(test());
+    await screen.findByText('Testing...');
+    const pressed = saveRef.current!();
+    await new Promise((r) => setTimeout(r, 20));
+    finishTest();
+    expect(await pressed).toBe(false);
+    await screen.findByText('Invalid API key');
+    expect(postBodies()).toEqual([]);
   });
 
   it('the wizard\'s saveRef refuses an untested new card and says why', async () => {

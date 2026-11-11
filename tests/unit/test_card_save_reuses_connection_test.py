@@ -15,6 +15,9 @@ effective inputs, for a short while; card create/update take that verdict
 (single use) and only fall back to a real test when there is none — an older
 client that never tested, a different key or model, or a stale entry. The
 per-card "test" action always runs a real test: that is what it is for.
+
+Since 2026-11-12 the verdict also decides whether anything is stored: a
+failing one refuses the save (``tests/unit/test_card_save_requires_pass.py``).
 """
 
 import pytest
@@ -79,16 +82,20 @@ async def test_save_after_test_records_that_verdict_without_a_second_call(env):
     assert store.health == [(res["card"]["id"], True, None)]
 
 
-async def test_a_failed_test_verdict_is_recorded_on_the_card_too(env):
+async def test_a_failed_test_verdict_refuses_the_save_without_a_second_call(env):
+    """Owner rule 2026-11-12: a key is saved only when its test passes. The
+    form's failing verdict is reused, so the refusal costs no second call."""
     store, calls = env
     await _form_test("glm-5.3-flash", key="sk-bad")
-    res = await _save("glm-5.3-flash", key="sk-bad")
+    with pytest.raises(agents_v2.HTTPException) as exc:
+        await _save("glm-5.3-flash", key="sk-bad")
 
     assert len(calls) == 1
-    assert res["test"]["ok"] is False
-    (card_id, verified, error) = store.health[0]
-    assert card_id == res["card"]["id"] and verified is False
-    assert error["code"] == "invalid_api_key"
+    assert exc.value.status_code == 400
+    assert exc.value.detail["code"] == "connection_test_failed"
+    assert exc.value.detail["message"] == "Invalid API key"
+    assert exc.value.detail["test"]["code"] == "invalid_api_key"
+    assert store.cards == [] and store.health == []
 
 
 async def test_different_inputs_still_get_a_real_test(env):

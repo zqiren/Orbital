@@ -234,11 +234,79 @@ def _validate_card_shape(provider: str, model: str, base_url: str | None) -> Non
         raise _card_error("unknown_provider", f"Unknown provider '{provider}'.")
 
 
-async def _test_and_record(card_id: str, *, reuse_recent: bool = False) -> dict:
-    """Save-then-test-then-record — the shared tail of every card write (D9)."""
+async def _test_and_record(card_id: str) -> dict:
+    """Test a STORED card and write its health (the per-card Test action)."""
     from agent_os.api.routes.agents_v2 import _test_and_record as _impl
 
-    return await _impl(card_id, reuse_recent=reuse_recent)
+    return await _impl(card_id)
+
+
+async def _test_candidate(candidate, api_key: str) -> dict:
+    """The connection test for a card as it would be stored, before it is."""
+    from agent_os.api.routes.agents_v2 import test_card_candidate
+
+    return await test_card_candidate(candidate, api_key)
+
+
+async def _store_only_if_passed(candidate, api_key: str) -> dict:
+    """A credential is stored only when its connection test PASSES (owner
+    rule 2026-11-12, replacing spec 082 D9's "a failed test still saves").
+
+    Every failure kind refuses — a rejected key, an unavailable model, no
+    balance, a rate limit, an unreachable endpoint — and nothing is written:
+    no card on an add, the stored card untouched on an edit. The test's own
+    verdict rides in the refusal so the form can draw it where it draws any
+    verdict. Returns the passing test.
+    """
+    test = await _test_candidate(candidate, api_key)
+    if not test.get("ok"):
+        raise HTTPException(status_code=400, detail={
+            "code": "connection_test_failed",
+            "message": test.get("message") or "The connection test failed.",
+            "test": test,
+        })
+    return test
+
+
+def _candidate_card(base=None, **fields):
+    """A card as it would stand after ``fields`` land on ``base`` — never
+    stored, only tested."""
+    from agent_os.daemon_v2.settings_store import CredentialCard
+
+    def pick(name, default):
+        return fields[name] if name in fields else getattr(base, name, default)
+
+    return CredentialCard(
+        id=getattr(base, "id", "") or "",
+        provider=pick("provider", "custom") or "custom",
+        region=pick("region", "global") or "global",
+        base_url=pick("base_url", None) or None,
+        sdk=pick("sdk", None) or None,
+        model=pick("model", "") or "",
+    )
+
+
+def _test_target(card) -> tuple:
+    """What a connection test of ``card`` would call, key aside."""
+    from agent_os.daemon_v2.settings_store import resolve_card_endpoint
+
+    return (card.provider, (card.model or "").strip(), *resolve_card_endpoint(card))
+
+
+def _default_card_or_blank():
+    """The stored default card, or the blank one ``ensure_default_card``
+    would create for a legacy key write (built, not stored)."""
+    from agent_os.daemon_v2.settings_store import region_for_base_url
+
+    card = _settings_store.stored_default_card()
+    if card is not None:
+        return card
+    llm = _settings_store.get().llm
+    provider = llm.provider or "custom"
+    region, base = region_for_base_url(provider, llm.base_url)
+    return _candidate_card(provider=provider, model=llm.model or "",
+                           region=region, base_url=base,
+                           sdk=llm.sdk if provider == "custom" else None)
 
 
 def _masked_sync(card_id: str) -> dict:
@@ -262,14 +330,18 @@ async def list_cards():
 
 @router.post("/settings/cards", status_code=201)
 async def create_card(req: CreateCardRequest):
-    """Create a card and verify it.
+    """Create a card — only when its connection test passes.
 
-    The card is saved FIRST and the test runs after: a failed test still
-    leaves a saved card carrying the error (D9), so a provider outage can
-    never cost the user the credential they just typed. The form's own Test
-    Connection on these inputs stands in for that test when there was one.
+    The test runs FIRST, on the card as it would be stored; a failing one
+    refuses with ``connection_test_failed`` and creates nothing. The form's
+    own Test Connection on these inputs stands in for that test when there
+    was one.
     """
     _validate_card_shape(req.provider, req.model, req.base_url)
+    test = await _store_only_if_passed(
+        _candidate_card(provider=req.provider, model=req.model,
+                        region=req.region, base_url=req.base_url, sdk=req.sdk),
+        req.api_key or "")
     try:
         card = _settings_store.create_card(
             provider=req.provider, model=req.model, name=(req.name or "").strip(),
@@ -280,7 +352,7 @@ async def create_card(req: CreateCardRequest):
         raise _card_error("keychain_error", str(exc), 500)
     telemetry.emit("key_set", {"provider": req.provider})
     telemetry.latch("key_set")
-    test = await _test_and_record(card.id, reuse_recent=True)
+    _settings_store.record_card_health(card.id, verified=True)
     # Pi borrows a card key for its configured model's provider.
     _refresh_agents_in_background(_model_provider_slugs())
     _import_scan_switch(req.import_scan)
@@ -293,8 +365,12 @@ async def create_card(req: CreateCardRequest):
 async def update_card(card_id: str, req: UpdateCardRequest):
     """Patch a card. Re-tests only when the CREDENTIAL changed.
 
-    A rename is not a reason to spend a completion call — and on a rate-limited
-    account it is not a reason to paint a working card red.
+    A credential change is tested on the card as it would stand afterwards
+    and stored only when that passes: a failing one refuses with
+    ``connection_test_failed`` and the stored card is left exactly as it was.
+    A rename is not a reason to spend a completion call — and on a
+    rate-limited account it is not a reason to refuse or paint a working card
+    red.
     """
     _reject_read_only(card_id)
     card = _card_or_404(card_id)
@@ -307,14 +383,28 @@ async def update_card(card_id: str, req: UpdateCardRequest):
     base_url = fields.get("base_url", card.base_url)
     if "model" in fields or "provider" in fields or "base_url" in fields:
         _validate_card_shape(provider, model, base_url)
-    retest = any(f in fields for f in
-                 ("api_key", "model", "region", "provider", "base_url", "sdk"))
+    # A credential change is a new key, or an endpoint/model that resolves
+    # differently. The form sends provider/region/model/sdk with every save,
+    # so their mere presence is not a change: comparing presence re-tested
+    # (and would now refuse) a plain rename of a card whose key has since
+    # stopped working.
+    candidate = _candidate_card(card, **{
+        k: v for k, v in fields.items()
+        if k in ("provider", "region", "base_url", "sdk", "model")})
+    new_key = fields.get("api_key")
+    retest = (new_key is not None
+              or _test_target(candidate) != _test_target(_candidate_card(card)))
+    test = None
+    if retest:
+        test = await _store_only_if_passed(
+            candidate,
+            new_key if new_key is not None else _settings_store.key_for(card_id))
     try:
         _settings_store.update_card(card_id, **fields)
     except (RuntimeError, ValueError) as exc:
         raise _card_error("keychain_error", str(exc), 500)
-    test = await _test_and_record(card_id, reuse_recent=True) if retest else None
     if retest:
+        _settings_store.record_card_health(card_id, verified=True)
         _refresh_agents_in_background(_model_provider_slugs())
     _import_scan_switch(req.import_scan)
     if _default_card_passed(card_id, test):
@@ -409,10 +499,10 @@ async def test_card(card_id: str):
 
 def _default_card_passed(card_id: str | None, test: dict | None) -> bool:
     """1111 D1: the imported projects' one read starts only on a key that
-    works. A card save is allowed with a failing test, but it must not burn
-    every waiting read into a final failure; the default card's next passing
-    test (a re-test or a corrected save) starts them. Only the default
-    counts: the waiting imports read with it."""
+    works. A credential save now needs a passing test, but a rename (no
+    test) or a failing re-test must not burn every waiting read into a final
+    failure; the default card's next passing test starts them. Only the
+    default counts: the waiting imports read with it."""
     return (bool(test and test.get("ok"))
             and card_id == _settings_store.effective_default_card_id())
 
@@ -473,11 +563,24 @@ def _apply_legacy_llm_fields(req: UpdateSettingsRequest) -> None:
                req.llm_sdk, req.llm_api_key]
     if all(v is None for v in touched):
         return
+    card = _settings_store.ensure_default_card()
+    fields = _legacy_card_fields(req, card)
+    try:
+        _settings_store.update_card(card.id, **fields)
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    if "api_key" in fields:
+        # Stored only because it passed (``_legacy_key_gate``).
+        _settings_store.record_card_health(card.id, verified=True)
+
+
+def _legacy_card_fields(req: UpdateSettingsRequest, card) -> dict:
+    """The default-card fields a legacy ``PUT /settings`` writes onto
+    ``card``. Pure: the key gate tests the same result before it is stored."""
     from agent_os.daemon_v2.settings_store import (
         default_card_name, region_for_base_url,
     )
 
-    card = _settings_store.ensure_default_card()
     fields: dict = {}
     provider = req.llm_provider if req.llm_provider is not None else card.provider
     if req.llm_provider is not None:
@@ -517,14 +620,29 @@ def _apply_legacy_llm_fields(req: UpdateSettingsRequest) -> None:
             fields.get("provider", card.provider),
             fields.get("model", card.model),
         )
-    try:
-        _settings_store.update_card(card.id, **fields)
-    except (RuntimeError, ValueError) as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+    return fields
+
+
+async def _legacy_key_gate(req: UpdateSettingsRequest) -> None:
+    """The legacy ``llm_api_key`` write obeys the card rule: the default card
+    as it would stand afterwards must pass its test, or nothing in this PUT
+    is stored. Nothing to test when the key would not be persisted (the
+    ``AGENT_OS_API_KEY`` case)."""
+    if req.llm_api_key is None:
+        return
+    from agent_os.daemon_v2.credential_store import _ENV_VAR
+
+    if os.environ.get(_ENV_VAR):
+        return
+    base = _default_card_or_blank()
+    fields = _legacy_card_fields(req, base)
+    key = fields.pop("api_key", "")
+    await _store_only_if_passed(_candidate_card(base, **fields), key)
 
 
 @router.put("/settings")
 async def update_settings(req: UpdateSettingsRequest):
+    await _legacy_key_gate(req)
     _apply_legacy_llm_fields(req)
     current = _settings_store.get()
     if req.llm_fallback_models is not None:
@@ -641,11 +759,21 @@ async def set_api_key(req: SetApiKeyRequest):
     """
     if _credential_store is None:
         raise HTTPException(status_code=501, detail="Credential store not available")
+    from agent_os.daemon_v2.credential_store import _ENV_VAR
+
+    stored = None
+    if not os.environ.get(_ENV_VAR):
+        # Same rule as a card: the default card with this key must pass its
+        # test before the key is stored (a default with no model cannot).
+        stored = _default_card_or_blank()
+        await _store_only_if_passed(stored, req.api_key)
     try:
         result = _credential_store.set_api_key(req.api_key)
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
     card = _settings_store.default_card()
+    if stored is not None and result.get("card_id"):
+        _settings_store.record_card_health(result["card_id"], verified=True)
     telemetry.emit("key_set",
                    {"provider": card.provider if card else "custom"})
     telemetry.latch("key_set")

@@ -62,6 +62,19 @@ def client(tmp_path, monkeypatch):
         yield c
 
 
+@pytest.fixture
+def passing_test(monkeypatch):
+    """A key is stored only when its connection test passes (owner rule
+    2026-11-12); these tests are about telemetry, so the test passes."""
+    from agent_os.api.routes import agents_v2
+
+    async def ok(provider, model, api_key, base_url, sdk):
+        return {"ok": True, "status": 200, "code": None, "message": "ok"}
+
+    monkeypatch.setattr(agents_v2, "run_connection_test", ok)
+
+
+@pytest.mark.usefixtures("passing_test")
 class TestGlobalSettingsKeyTelemetry:
 
     def test_put_settings_with_a_key_emits_key_set(self, client, recorder):
@@ -86,6 +99,21 @@ class TestGlobalSettingsKeyTelemetry:
         })
 
         assert recorder.fields_for("key_set") == [{"provider": "moonshot"}]
+
+    def test_a_key_whose_test_fails_is_not_stored_and_emits_nothing(
+            self, client, recorder, monkeypatch):
+        from agent_os.api.routes import agents_v2
+
+        async def bad(provider, model, api_key, base_url, sdk):
+            return {"ok": False, "status": 401, "code": "invalid_api_key",
+                    "message": "Invalid API key"}
+
+        monkeypatch.setattr(agents_v2, "run_connection_test", bad)
+        resp = client.put("/api/v2/settings",
+                          json={"llm_api_key": "sk-test-1234567890"})
+        assert resp.status_code == 400
+        assert resp.json()["detail"]["code"] == "connection_test_failed"
+        assert recorder.fields_for("key_set") == []
 
     def test_put_settings_without_a_key_emits_nothing(self, client, recorder):
         resp = client.put("/api/v2/settings", json={"llm_model": "kimi-k2"})

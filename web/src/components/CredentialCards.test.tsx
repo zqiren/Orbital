@@ -359,23 +359,17 @@ describe('CredentialCards — row actions', () => {
 });
 
 describe('CredentialCards — Add card', () => {
-  it('opens the provider form in a modal and keeps it open on the save verdict', async () => {
-    mockCards([DEFAULT_CARD], (path, opts) => {
-      if (path === '/api/v2/settings/cards' && opts?.method === 'POST') {
-        return {
-          card: makeCard({ id: 'card_new', name: 'New card' }),
-          test: { ok: false, status: 401, code: 'invalid_api_key', message: 'Invalid API key' },
-        };
-      }
+  it('a failing test in the Add dialog stores nothing; the reason stays in the dialog (2026-11-12)', async () => {
+    mockCards([DEFAULT_CARD], (path) => {
       if (path === '/api/v2/settings/api-key/status') return { configured: true, source: 'keychain' };
-      if (path === '/api/v2/providers/test') return { status: 'ok' };
+      if (path === '/api/v2/providers/test') return { status: 'error', error: 'Invalid API key' };
       return undefined;
     });
     renderList();
     fireEvent.click(await screen.findByTestId('cards-add'));
     await screen.findByTestId('card-modal');
 
-    // A new card is saved only after its own key passed Test Connection —
+    // A new card is saved only after its own key PASSED Test Connection —
     // the Add form never borrows the default card's key (8.png).
     fireEvent.change(await screen.findByPlaceholderText(/sk-/), {
       target: { value: 'sk-new-key' },
@@ -384,17 +378,44 @@ describe('CredentialCards — Add card', () => {
       target: { value: 'deepseek-chat' },
     });
     fireEvent.click(screen.getByTestId('card-test'));
+    const modal = screen.getByTestId('card-modal');
+    await waitFor(() => expect(modal.textContent).toContain('Invalid API key'));
+    expect((screen.getByTestId('card-save') as HTMLButtonElement).disabled).toBe(true);
+    const posts = apiMock.mock.calls.filter(([p, o]) => p === '/api/v2/settings/cards' && (o as RequestInit)?.method === 'POST');
+    expect(posts).toHaveLength(0);
+    expect(screen.getByTestId('card-modal')).toBeTruthy();
+  });
+
+  it('a Save the daemon refuses (its own test failed) shows that verdict and keeps the dialog open', async () => {
+    mockCards([DEFAULT_CARD], (path, opts) => {
+      if (path === '/api/v2/settings/cards' && opts?.method === 'POST') {
+        throw new Error(JSON.stringify({
+          code: 'connection_test_failed',
+          message: 'Insufficient balance',
+          test: { ok: false, status: 402, code: 'insufficient_credits', message: 'Insufficient balance' },
+        }));
+      }
+      if (path === '/api/v2/providers/test') return { status: 'ok' };
+      return undefined;
+    });
+    renderList();
+    fireEvent.click(await screen.findByTestId('cards-add'));
+    await screen.findByTestId('card-modal');
+    fireEvent.change(await screen.findByPlaceholderText(/sk-/), { target: { value: 'sk-new-key' } });
+    fireEvent.change(await screen.findByPlaceholderText(/model name/), { target: { value: 'deepseek-chat' } });
+    fireEvent.click(screen.getByTestId('card-test'));
     await waitFor(() =>
       expect((screen.getByTestId('card-save') as HTMLButtonElement).disabled).toBe(false),
     );
     fireEvent.click(screen.getByTestId('card-save'));
 
-    // The verdict is the thing the user opened the modal for, so the modal
-    // does not close itself over it (D9: the card is saved regardless).
-    expect((await screen.findByTestId('card-save-test')).textContent).toContain('Invalid API key');
-    expect(screen.getByTestId('card-modal')).toBeTruthy();
-    fireEvent.click(screen.getByTestId('card-modal-done'));
-    await waitFor(() => expect(screen.queryByTestId('card-modal')).toBeNull());
+    // The refusal is the form's verdict now: red, under Test Connection, and
+    // Save locks again until something changes and passes.
+    await waitFor(() => expect(screen.getByTestId('card-modal').textContent).toContain('Insufficient balance'));
+    expect(screen.getByTestId('card-modal').textContent).not.toContain('{');
+    expect((screen.getByTestId('card-save') as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByTestId('card-save-test')).toBeNull();
+    expect(screen.queryByTestId('card-modal-done')).toBeNull();
   });
 
   it('a successful save closes the modal by itself — Save means saved and done', async () => {
@@ -423,14 +444,15 @@ describe('CredentialCards — Add card', () => {
     expect(screen.queryByTestId('card-modal-done')).toBeNull();
   });
 
-  it('after a save the dialog stays open on a failed verdict showing the NEW key, and a second Save updates that card (F4)', async () => {
-    const saved = makeCard({ id: 'card_new', name: 'New card', key_masked: 'sk-n...9999' });
+  it('after a refused Save, fixing the key and saving creates exactly one card and closes the dialog (F4)', async () => {
+    const saved = makeCard({ id: 'card_new', name: 'New card', key_masked: 'sk-f...0000' });
     mockCards([DEFAULT_CARD], (path, opts) => {
       if (path === '/api/v2/settings/cards' && opts?.method === 'POST') {
-        return { card: saved, test: { ok: false, status: 401, code: 'invalid_api_key', message: 'Invalid API key' } };
-      }
-      if (path === '/api/v2/settings/cards/card_new' && opts?.method === 'PUT') {
-        return { card: { ...saved, key_masked: 'sk-f...0000' }, test: { ok: false, status: 401, code: 'invalid_api_key', message: 'Invalid API key' } };
+        const body = JSON.parse(String(opts.body));
+        if (body.api_key === 'sk-new-key-9999') {
+          throw new Error(JSON.stringify({ code: 'connection_test_failed', message: 'Invalid API key' }));
+        }
+        return { card: saved, test: { ok: true, status: 200, code: null, message: 'ok' } };
       }
       if (path === '/api/v2/providers/test') return { status: 'ok' };
       return undefined;
@@ -443,20 +465,20 @@ describe('CredentialCards — Add card', () => {
     fireEvent.click(screen.getByTestId('card-test'));
     await waitFor(() => expect((screen.getByTestId('card-save') as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(screen.getByTestId('card-save'));
-    await screen.findByTestId('card-save-test');
-    // The current-key line is the key just saved.
-    expect(await screen.findByText(/sk-n\.\.\.9999/)).toBeTruthy();
+    await waitFor(() => expect(screen.getByTestId('card-modal').textContent).toContain('Invalid API key'));
 
-    // Fix the key and save again: the same card is updated, not a second one minted.
+    // Fix the key and save again: the refused attempt stored nothing, so this
+    // is the one card, and a passing save closes the dialog.
     fireEvent.change(screen.getByPlaceholderText(/sk-|key/i), { target: { value: 'sk-fixed-0000' } });
     fireEvent.click(screen.getByTestId('card-test'));
     await waitFor(() => expect((screen.getByTestId('card-save') as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(screen.getByTestId('card-save'));
-    await screen.findByText(/sk-f\.\.\.0000/);
+    await waitFor(() => expect(screen.queryByTestId('card-modal')).toBeNull());
     const posts = apiMock.mock.calls.filter(([p, o]) => p === '/api/v2/settings/cards' && (o as RequestInit)?.method === 'POST');
-    const puts = apiMock.mock.calls.filter(([p, o]) => p === '/api/v2/settings/cards/card_new' && (o as RequestInit)?.method === 'PUT');
-    expect(posts).toHaveLength(1);
-    expect(puts).toHaveLength(1);
+    const puts = apiMock.mock.calls.filter(([p, o]) => String(p).startsWith('/api/v2/settings/cards/') && (o as RequestInit)?.method === 'PUT');
+    expect(posts).toHaveLength(2);
+    expect(JSON.parse(String((posts[1][1] as RequestInit).body)).api_key).toBe('sk-fixed-0000');
+    expect(puts).toHaveLength(0);
   });
 
   it('offers no vendor-specific sign-in of its own — only "Add provider"', async () => {
