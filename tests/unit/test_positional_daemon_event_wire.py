@@ -177,42 +177,45 @@ class TestEventRowRemap:
         row = [m for m in prepared if m.get("content") == f"[Sub-agent] worker {kind}."]
         assert row and row[0]["role"] == "user"
 
-    def test_untagged_system_row_is_left_alone(self, tmp_path):
-        """Narrow scope (#37 Q1a): loop nudges and other untagged system rows
-        keep their role. Only `_meta.event`-tagged rows are remapped."""
+    def test_untagged_system_row_is_a_framed_user_turn(self, tmp_path):
+        """Spec 171 B1 widened #37's narrow scope: loop nudges and other
+        untagged system rows ride positionally too, framed as runtime notes."""
         nudge = "Repetitive action detected. Try a different approach."
-        mgr, _ = _mgr(tmp_path, [
+        mgr, _ = _remap_mgr(tmp_path, [
             {"role": "user", "content": "go", "source": "user"},
             {"role": "system", "content": nudge, "source": "management"},
         ])
         prepared = mgr.prepare()
-        row = [m for m in prepared if m.get("content") == nudge]
+        row = [m for m in prepared if nudge in str(m.get("content"))]
         assert len(row) == 1
-        assert row[0]["role"] == "system"
+        assert row[0]["role"] == "user"
+        assert row[0]["content"] == f"{_RUNTIME_MARKER}\n{nudge}"
 
-    def test_meta_without_event_tag_is_left_alone(self, tmp_path):
-        """A `_meta` that carries no `event` key (e.g. a tool-result stub or a
-        display split alone) must not be swept up by the remap."""
+    def test_meta_without_event_tag_is_framed_not_raw(self, tmp_path):
+        """A `_meta` that carries no `event` key is not one of the three raw
+        positional events: it rides framed (spec 171 B1)."""
         content = "[Sub-agent] some untagged daemon note."
-        mgr, _ = _mgr(tmp_path, [
+        mgr, _ = _remap_mgr(tmp_path, [
             {"role": "user", "content": "go", "source": "user"},
             {"role": "system", "content": content, "source": "daemon",
              "_meta": {"display_content": "trimmed"}},
         ])
         prepared = mgr.prepare()
-        row = [m for m in prepared if m.get("content") == content]
-        assert row[0]["role"] == "system"
+        row = [m for m in prepared if content in str(m.get("content"))]
+        assert row[0]["role"] == "user"
+        assert row[0]["content"] == f"{_RUNTIME_MARKER}\n{content}"
 
-    def test_unknown_event_tag_is_left_alone(self, tmp_path):
+    def test_unknown_event_tag_is_framed_not_raw(self, tmp_path):
         content = "[Queue] some future event kind."
-        mgr, _ = _mgr(tmp_path, [
+        mgr, _ = _remap_mgr(tmp_path, [
             {"role": "user", "content": "go", "source": "user"},
             {"role": "system", "content": content, "source": "daemon",
              "_meta": {"event": "queue_item_started"}},
         ])
         prepared = mgr.prepare()
-        row = [m for m in prepared if m.get("content") == content]
-        assert row[0]["role"] == "system"
+        row = [m for m in prepared if content in str(m.get("content"))]
+        assert row[0]["role"] == "user"
+        assert row[0]["content"] == f"{_RUNTIME_MARKER}\n{content}"
         assert "queue_item_started" not in _POSITIONAL_EVENT_TAGS
 
     def test_window_ordering_is_preserved(self, tmp_path):
@@ -502,14 +505,16 @@ class TestAnthropicWireShape:
         assert out["messages"][3]["content"].startswith(_TERMINAL_CONTENT)
         assert out["messages"][3]["content"].endswith(_framed())
 
-    def test_untagged_system_rows_still_hoist(self, tmp_path):
-        """Narrow scope: everything else keeps today's Anthropic behavior."""
+    def test_untagged_system_rows_are_not_hoisted(self, tmp_path):
+        """Spec 171 B1: no mid-conversation row reaches the system param."""
         mgr, _ = _mgr(tmp_path, [
             {"role": "user", "content": "go", "source": "user"},
             {"role": "system", "content": "Max iterations reached.", "source": "management"},
         ])
         out = translate_messages_to_anthropic(mgr.prepare())
-        assert "Max iterations reached." in out["system"]
+        assert out["system"] == "CACHED\nSEMI"
+        assert out["messages"][-1]["content"].startswith(
+            f"{_RUNTIME_MARKER}\nMax iterations reached.")
 
 
 # ── Golden regression: same bytes, different role/position ───────────────

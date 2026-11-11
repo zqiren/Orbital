@@ -150,6 +150,12 @@ def translate_messages_to_anthropic(
         messages -- list of Anthropic-format message dicts
         tools    -- list of Anthropic-format tool schemas
     """
+    # A row written inside a tool batch (a cancel lands mid-batch) must not sit
+    # between tool_use and its tool_result; the API requires the results to
+    # come straight after. Same reorder-only pass the OpenAI path runs.
+    from agent_os.agent.providers.openai_compat import _ensure_tool_result_contiguity
+    messages = _ensure_tool_result_contiguity(messages)
+
     system_parts: list[str] = []
     anthropic_messages: list[dict] = []
     leading_system = 0

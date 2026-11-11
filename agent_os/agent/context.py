@@ -46,8 +46,9 @@ _LAYER1_FILES: tuple[tuple[str, str], ...] = (
 # API's system-message *position* is not portable — our own Anthropic adapter
 # hoists every system row into the top-level `system` param, and DeepSeek's
 # serving stack does the equivalent server-side — so these rows ride the wire
-# as positional `user` turns instead (backlog #37). Deliberately narrow:
-# untagged system rows (loop nudges, corrective turns) keep today's encoding.
+# as positional `user` turns instead (backlog #37), content as written. Every
+# other system row after the leading prompt rides the same way, framed with
+# the runtime marker (spec 171 B1, ``_remap_system_rows``).
 _POSITIONAL_EVENT_TAGS: frozenset[str] = frozenset({
     "sub_agent_terminal",
     "interaction_required",
@@ -754,6 +755,11 @@ class ContextManager:
         # Apply tool result pruning on old messages
         sliding_window = self._prune_old_tool_results(sliding_window)
 
+        # Spec 171 B1: every other system row rides where it sits, framed.
+        # After strip_turn_notes, so a notice never takes a typed message's
+        # one-turn note.
+        sliding_window = self._remap_system_rows(sliding_window)
+
         # Assemble final context
         result: list[dict] = []
 
@@ -916,8 +922,8 @@ class ContextManager:
         manager goes back to waiting forever (backlog #37).
 
         Provider-independent on purpose: one wire shape, both adapters inherit
-        it. Narrow on purpose: only ``_meta.event``-tagged rows move — loop
-        nudges and other untagged system rows keep today's encoding.
+        it. These rows go out as written; every other system row is handled by
+        ``_remap_system_rows`` (spec 171 B1).
 
         The session row is never touched; only the copy bound for the provider.
         """
@@ -931,6 +937,39 @@ class ContextManager:
             ):
                 msg = {**msg, "role": "user"}
             remapped.append(msg)
+        return remapped
+
+    @staticmethod
+    def _remap_system_rows(messages: list[dict]) -> list[dict]:
+        """Send every system row left in the window as a framed ``user`` turn.
+
+        A mid-conversation system row (``[cancelled by user]``, the
+        unsandboxed-run output, approval-dismissed, the loop's notices) is
+        hoisted into the preamble by our Anthropic adapter and by DeepSeek, so
+        it loses its place and changes the preamble: the whole conversation
+        misses the prompt cache once per row (spec 171 B1). As a ``user`` turn
+        it stays where it happened and only the tail is new.
+
+        The ``[runtime]`` frame says the daemon wrote it, not the user. A row
+        written inside a tool batch stays where it is here; each adapter moves
+        it after the batch's results (``_ensure_tool_result_contiguity``).
+        Kept as system: the compaction summary, which always leads the window.
+        Dropped: rows with no text (shutdown marker, budget event), which
+        carry nothing for the model. The session row is never touched.
+        """
+        remapped: list[dict] = []
+        for msg in messages:
+            if msg.get("role") != "system" or msg.get("_compaction"):
+                remapped.append(msg)
+                continue
+            content = msg.get("content")
+            if isinstance(content, str) and content.strip():
+                content = f"{_RUNTIME_MARKER}\n{content}"
+            elif isinstance(content, list) and content:
+                content = [{"type": "text", "text": _RUNTIME_MARKER}, *content]
+            else:
+                continue
+            remapped.append({**msg, "role": "user", "content": content})
         return remapped
 
     @staticmethod
