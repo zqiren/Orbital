@@ -106,10 +106,13 @@ interface MockSettings {
 
 function mockApi(opts: {
   settings?: MockSettings; providers?: ProviderRegistry; unscannedImports?: number;
+  /** The daemon's `credential_cards`; omitted = not in the response. */
+  cards?: unknown[];
 } = {}) {
   apiMock.mockImplementation(async (path: string) => {
     if (path === '/api/v2/settings') {
       return {
+        ...(opts.cards !== undefined ? { credential_cards: opts.cards } : {}),
         unscanned_imports: opts.unscannedImports,
         llm: {
           api_key_set: false,
@@ -255,6 +258,93 @@ describe('LLMProviderSettings — default provider resolution (Spec 17 §9)', ()
 
     const baseUrlInput = await screen.findByDisplayValue(REGISTRY.deepseek.base_url!);
     expect(baseUrlInput).toBeTruthy();
+  });
+});
+
+// ---- Fresh install against the real daemon shape (2026-11-12) ----
+// With no card stored, GET /api/v2/settings derives `llm.provider = "custom"`
+// (settings_store._derived_llm), so the empty-provider default above never
+// fired and a new user's key step opened on Custom with an empty model box.
+
+describe('LLMProviderSettings — fresh install: the daemon\'s "custom" with no card means nothing chosen', () => {
+  afterEach(() => localStorage.removeItem(LOCALE_STORAGE_KEY));
+  const FRESH = { provider: 'custom', model: '', base_url: null, api_key_set: false };
+  const SAVED_CUSTOM_CARD = {
+    id: 'card_c', name: 'Custom', provider: 'custom', region: 'global', base_url: 'https://my-llm.example/v1',
+    sdk: 'openai', model: 'my-model', created_at: '2026-09-04T10:00:00+00:00', verified_at: null,
+    last_used_at: null, last_error: null, key_set: false, key_masked: '', key_source: 'none',
+    is_default: true, read_only: false,
+  };
+  const providerSelect = () => screen.getAllByRole('combobox')[0] as HTMLSelectElement;
+
+  it('English UI: opens on DeepSeek with its endpoint, not Custom', async () => {
+    mockApi({ settings: FRESH, cards: [] });
+    render(<LLMProviderSettings mode="global" />);
+    await waitFor(() => expect(providerSelect().value).toBe('deepseek'));
+    fireEvent.click(screen.getByRole('button', { name: /Advanced/ }));
+    expect(await screen.findByDisplayValue(REGISTRY.deepseek.base_url!)).toBeTruthy();
+  });
+
+  it('Chinese UI: the same default (TokenDance only sorts first)', async () => {
+    localStorage.setItem(LOCALE_STORAGE_KEY, 'zh');
+    mockApi({ settings: FRESH, cards: [] });
+    render(<LocaleProvider><LLMProviderSettings mode="global" /></LocaleProvider>);
+    await waitFor(() => expect(providerSelect().value).toBe('deepseek'));
+  });
+
+  it('the wizard\'s searchable picker opens on DeepSeek too', async () => {
+    mockApi({ settings: FRESH, cards: [] });
+    render(<LLMProviderSettings mode="global" hideSaveButton providerPicker="cards" />);
+    await waitFor(() => {
+      const el = screen.getByTestId('provider-combobox') as HTMLInputElement;
+      expect(el.value).toBe('DeepSeek');
+    });
+    expect(screen.getByTestId('card-test')).toBeTruthy();
+  });
+
+  it('a really saved custom card still opens on Custom', async () => {
+    mockApi({
+      settings: { provider: 'custom', model: 'my-model', base_url: 'https://my-llm.example/v1' },
+      cards: [SAVED_CUSTOM_CARD],
+    });
+    render(<LLMProviderSettings mode="global" />);
+    await waitFor(() => expect(providerSelect().value).toBe(CUSTOM_PROVIDER_KEY));
+    expect(screen.getByDisplayValue('https://my-llm.example/v1')).toBeTruthy();
+  });
+
+  it('Test Connection is on screen from the start, disabled until a key and a model are in', async () => {
+    mockApi({ settings: FRESH, cards: [] });
+    render(<LLMProviderSettings mode="global" />);
+    await waitFor(() => expect(providerSelect().value).toBe('deepseek'));
+    const test = () => screen.getByTestId('card-test') as HTMLButtonElement;
+    expect(test().disabled).toBe(true);
+    fireEvent.change(screen.getByPlaceholderText(/sk-/), { target: { value: 'sk-good' } });
+    expect(test().disabled).toBe(true);
+    fireEvent.change(screen.getByPlaceholderText(/model name/i), { target: { value: 'deepseek-chat' } });
+    expect(test().disabled).toBe(false);
+  });
+
+  it('for Custom it also waits for the endpoint', async () => {
+    mockApi({ settings: FRESH, cards: [] });
+    render(<LLMProviderSettings mode="global" />);
+    await waitFor(() => expect(providerSelect().value).toBe('deepseek'));
+    fireEvent.change(providerSelect(), { target: { value: CUSTOM_PROVIDER_KEY } });
+    const test = () => screen.getByTestId('card-test') as HTMLButtonElement;
+    fireEvent.change(screen.getByPlaceholderText(/model name/i), { target: { value: 'my-model' } });
+    expect(test().disabled).toBe(true);
+    fireEvent.change(screen.getByPlaceholderText(/https?:\/\//i), { target: { value: 'http://localhost:1234/v1' } });
+    expect(test().disabled).toBe(false);
+  });
+
+  it('picking a provider whose registry entry names a default model fills it in', async () => {
+    mockApi({ settings: FRESH, cards: [] });
+    render(<LLMProviderSettings mode="global" />);
+    await waitFor(() => expect(providerSelect().value).toBe('deepseek'));
+    fireEvent.change(providerSelect(), { target: { value: 'tokendance' } });
+    expect((await screen.findByDisplayValue('deepseek-v4-flash'))).toBeTruthy();
+    // One without a default leaves the model to the user.
+    fireEvent.change(providerSelect(), { target: { value: 'openai' } });
+    expect(screen.queryByDisplayValue('deepseek-v4-flash')).toBeNull();
   });
 });
 

@@ -28,6 +28,8 @@ interface LLMSettingsResponse {
   /** Spec 160 §5.3: imported projects a saved key would read once. */
   unscanned_imports?: number;
   import_scan_agent?: { slug: string; name: string } | null;
+  /** The stored cards (masked); only their count is read here. */
+  credential_cards?: unknown[];
   llm: {
     api_key_set: boolean;
     api_key_masked: string;
@@ -249,7 +251,13 @@ export default function LLMProviderSettings({
       try {
         const data = await api<LLMSettingsResponse>('/api/v2/settings');
         if (!cancelled) {
-          setGlobalSettings(data.llm);
+          // No card stored: the daemon still derives an `llm` block, reading
+          // provider "custom" (settings_store._derived_llm). That is nobody's
+          // choice, so the form treats it as nothing saved and the default
+          // provider applies. Only an explicit empty card list counts.
+          const noCard = Array.isArray(data.credential_cards)
+            && data.credential_cards.length === 0 && !data.llm?.api_key_set;
+          setGlobalSettings(noCard ? null : data.llm);
           setApiKeySkipped(!!data.setup?.api_key_skipped);
           const n = typeof data.unscanned_imports === 'number' ? data.unscanned_imports : 0;
           setUnscannedImports(n);
@@ -418,8 +426,10 @@ export default function LLMProviderSettings({
 
   function handleProviderChange(key: string) {
     setProvider(key);
-    setModel('');
-    setModelInputValue('');
+    // The registry's own pick for this provider, where it names one.
+    const pickedModel = (key !== CUSTOM_PROVIDER_KEY && providers[key]?.default_model) || '';
+    setModel(pickedModel);
+    setModelInputValue(pickedModel);
     setFreetextPinned(false);
     setTestStatus('idle');
     setTestMessage('');
@@ -862,7 +872,9 @@ export default function LLMProviderSettings({
     : provisionedKeyMasked;
   const storedKeySource = card ? card.key_source : apiKeyStatus?.source;
 
-  const canTestConnection = !!model.trim();
+  // What a test call needs besides a key: a model, and Custom's endpoint.
+  const canTestConnection =
+    !!model.trim() && (provider !== CUSTOM_PROVIDER_KEY || !!baseUrl.trim());
   // A test needs a key it can call with: the one typed, or the edited card's
   // own. Without either the daemon would fall back to the default card's key
   // and vouch for a card that will be saved with none.
@@ -1250,49 +1262,47 @@ export default function LLMProviderSettings({
         )}
       </div>
 
-      {/* Test Connection */}
-      {canTestConnection && (
-        <div>
-          <button
-            type="button"
-            onClick={handleTestConnection}
-            disabled={testStatus === 'testing' || !hasTestableKey}
-            data-testid="card-test"
-            className="inline-flex items-center gap-2 text-sm font-medium text-secondary border border-border rounded-lg px-4 py-2 hover:border-secondary/40 hover:text-primary transition-all duration-150 disabled:opacity-50 max-md:w-full max-md:min-h-[44px] max-md:justify-center"
+      {/* Test Connection: always on screen, live once a model and a key are in. */}
+      <div>
+        <button
+          type="button"
+          onClick={handleTestConnection}
+          disabled={testStatus === 'testing' || !hasTestableKey || !canTestConnection}
+          data-testid="card-test"
+          className="inline-flex items-center gap-2 text-sm font-medium text-secondary border border-border rounded-lg px-4 py-2 hover:border-secondary/40 hover:text-primary transition-all duration-150 disabled:opacity-50 max-md:w-full max-md:min-h-[44px] max-md:justify-center"
+        >
+          {testStatus === 'testing' ? (
+            <>
+              <Loader2 className="w-4 h-4 animate-spin" />
+              {t('llm.testing')}
+            </>
+          ) : (
+            t('llm.test')
+          )}
+        </button>
+        {testStatus === 'success' && (
+          <p className="flex items-center gap-1.5 text-sm text-success mt-2">
+            <Check className="w-4 h-4" />
+            {testMessage}
+          </p>
+        )}
+        {testStatus === 'error' && (
+          <p className="flex items-center gap-1.5 text-sm text-error mt-2">
+            <X className="w-4 h-4" />
+            {testMessage}
+          </p>
+        )}
+        {gateShown && (
+          // A refused save turns this same line red rather than adding a
+          // second one: the wizard has no Save button to put it beside.
+          <p
+            className={`text-xs mt-2 ${gateRefused ? 'text-error' : 'text-secondary'}`}
+            data-testid="card-save-gate"
           >
-            {testStatus === 'testing' ? (
-              <>
-                <Loader2 className="w-4 h-4 animate-spin" />
-                {t('llm.testing')}
-              </>
-            ) : (
-              t('llm.test')
-            )}
-          </button>
-          {testStatus === 'success' && (
-            <p className="flex items-center gap-1.5 text-sm text-success mt-2">
-              <Check className="w-4 h-4" />
-              {testMessage}
-            </p>
-          )}
-          {testStatus === 'error' && (
-            <p className="flex items-center gap-1.5 text-sm text-error mt-2">
-              <X className="w-4 h-4" />
-              {testMessage}
-            </p>
-          )}
-          {gateShown && (
-            // A refused save turns this same line red rather than adding a
-            // second one: the wizard has no Save button to put it beside.
-            <p
-              className={`text-xs mt-2 ${gateRefused ? 'text-error' : 'text-secondary'}`}
-              data-testid="card-save-gate"
-            >
-              {saveGateReason}
-            </p>
-          )}
-        </div>
-      )}
+            {saveGateReason}
+          </p>
+        )}
+      </div>
 
       {/* The wizard hides Save, so its errors were never drawn and a failed
           save read as a dead Next button. */}
