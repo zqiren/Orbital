@@ -1578,7 +1578,9 @@ async def start_agent(req: StartAgentRequest):
     # crosses-provider guard but not the provider-tracks-model rule — so a
     # project inheriting the global model while pinning its own stale provider
     # reached the wrong endpoint. See tests/unit/test_agent_config_parity.py.
-    config = _agent_manager._build_agent_config_from_project(req.project_id)
+    # Off the loop (spec 171 A2). No re-check needed here: start_agent's own
+    # guard runs after this await and refuses a session started meanwhile.
+    config = await _agent_manager._abuild_agent_config_from_project(req.project_id)
 
     try:
         await _agent_manager.start_agent(
@@ -1599,7 +1601,9 @@ async def _start_manager_scan(project_id: str, skeleton: str, *,
     """The manager half of the import scan: validate, mint, start a
     content-less loop. ``flavour`` is ``"guess"`` / ``"guess:<lang>"``, spec
     160's read → write the guess → ask (``PromptContext.cold_start``)."""
-    config = _agent_manager._build_agent_config_from_project(project_id)
+    # Off the loop (spec 171 A2). The session is minted after this await, so
+    # no other request can have started it meanwhile.
+    config = await _agent_manager._abuild_agent_config_from_project(project_id)
     # Validate the provider BEFORE minting: a credential failure must surface
     # as a structured 400 the frontend can translate, and must not leave an
     # orphan session per click (the silent-error bug minted one per attempt).
@@ -3775,7 +3779,9 @@ async def agent_status(slug: str):
     if _setup_engine is None:
         raise HTTPException(status_code=503, detail="Setup engine not available")
     try:
-        s = _setup_engine.check_agent(slug)
+        # Off the loop: the check runs the CLI's version and sign-in probes
+        # by subprocess (spec 171 A3).
+        s = await asyncio.to_thread(_setup_engine.check_agent, slug)
     except ValueError:
         raise HTTPException(status_code=404, detail=f"Unknown agent: {slug}")
     return {
@@ -5041,7 +5047,9 @@ def _get_lan_ip() -> str | None:
 @router.get("/network/lan-url")
 async def get_lan_url():
     """Return the machine's LAN IP address for direct access."""
-    ip = _get_lan_ip()
+    # Off the loop: getaddrinfo(gethostname()) can block for tens of seconds
+    # when the hostname does not resolve (a fresh VM froze ~34 s per call).
+    ip = await asyncio.to_thread(_get_lan_ip)
     if not ip:
         return {"ip": None, "error": "No LAN network detected"}
     return {"ip": ip}

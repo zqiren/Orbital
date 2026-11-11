@@ -197,8 +197,14 @@ class PinnedConsolidationCoordinator:
             )
             return
 
-        config = self._agent_manager._build_agent_config_from_project(
-            project_id)
+        # Off the loop (spec 171 A2). The pass is single-flight per session
+        # (``_running``); what can change during the await is the session
+        # being hydrated by a user message, so read the live copy again.
+        config = await asyncio.to_thread(
+            self._agent_manager._build_agent_config_from_project, project_id)
+        live = self._agent_manager.get_session(project_id, session_id=session_id)
+        if live is not None:
+            session = live
         provider, _fallbacks, utility_provider, _info = (
             self._agent_manager._build_llm_providers(config)
         )

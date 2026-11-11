@@ -955,7 +955,19 @@ class QueueDispatcher:
         already have one and go straight to the send.
         """
         try:
-            self._persist_queue_user_row(session_id, wrapped_content)
+            # The config build off the loop (spec 171 A2), then a re-check:
+            # the session was minted a moment ago and is the dispatcher's, but
+            # a chat send into it during the await would have started a loop
+            # there; a second session object must not write beside it.
+            mgr = self._agent_manager
+            config = await asyncio.to_thread(
+                mgr._build_agent_config_from_project, self._project_id)
+            from agent_os.daemon_v2.models import make_session_key
+            handles = getattr(mgr, "_handles", None)
+            if (isinstance(handles, dict)
+                    and make_session_key(self._project_id, session_id) in handles):
+                raise RuntimeError(f"session {session_id} was started meanwhile")
+            self._persist_queue_user_row(session_id, wrapped_content, config=config)
         except Exception:
             logger.exception(
                 "dispatcher(%s): could not materialize session %s for item %s; "
@@ -1203,7 +1215,8 @@ class QueueDispatcher:
         )
         await self._await_and_handle(item, session_id, awaiting_worker=True)
 
-    def _persist_queue_user_row(self, session_id: str, content: str) -> None:
+    def _persist_queue_user_row(self, session_id: str, content: str, *,
+                                config) -> None:
         """Materialize the item's session on disk with its user row, no turn.
 
         Mirrors ``AgentManager._start_with_persisted_message`` up to (and NOT
@@ -1222,7 +1235,6 @@ class QueueDispatcher:
         from agent_os.agent.session import persist_user_row
 
         mgr = self._agent_manager
-        config = mgr._build_agent_config_from_project(self._project_id)
         session = mgr._new_session_object(
             config, session_id, queue_state="running",
         )
