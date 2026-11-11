@@ -46,9 +46,12 @@ function AgentRow({
   breakdown = [],
   onToggle,
   onChanged,
+  locked = false,
 }: {
   entry: SubAgentListEntry;
   checked: boolean;
+  /** Continue is saving the ticks: a change now would not be saved. */
+  locked?: boolean;
   /** null = this agent has no history reader (no count shown). */
   conversations: number | null;
   /** Spec 153: private notes only this agent can use; null hides the segment. */
@@ -120,9 +123,10 @@ function AgentRow({
           type="checkbox"
           checked={checked}
           onChange={(e) => onToggle(e.target.checked)}
+          disabled={locked}
           aria-label={entry.name}
           data-testid={`wizard-agent-check-${entry.slug}`}
-          className="h-4 w-4 shrink-0 cursor-pointer accent-accent"
+          className="h-4 w-4 shrink-0 cursor-pointer accent-accent disabled:cursor-default"
         />
         <MessageAvatar variant="agent" agentHandle={entry.slug} />
         <div className="min-w-0 flex-1">
@@ -202,9 +206,11 @@ interface WizardAgentsStepProps {
   ticks: Record<string, boolean>;
   onToggle: (slug: string, checked: boolean) => void;
   reload: (refresh?: boolean) => Promise<void>;
+  /** Continue is saving: the ticks are locked until it settles. */
+  locked?: boolean;
 }
 
-export default function WizardAgentsStep({ entries, history, ticks, onToggle, reload }: WizardAgentsStepProps) {
+export default function WizardAgentsStep({ entries, history, ticks, onToggle, reload, locked = false }: WizardAgentsStepProps) {
   const t = useT();
   const installed = entries.filter((e) => e.installed);
   const missing = entries.filter((e) => !e.installed);
@@ -297,6 +303,7 @@ export default function WizardAgentsStep({ entries, history, ticks, onToggle, re
               breakdown={notesBreakdown(history, e.slug)}
               onToggle={(c) => onToggle(e.slug, c)}
               onChanged={() => { void reload(); }}
+              locked={locked}
             />
           ))}
         </ul>

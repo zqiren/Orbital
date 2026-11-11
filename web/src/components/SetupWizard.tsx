@@ -479,6 +479,7 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
                 ticks={Object.fromEntries(installedAgents.map((e) => [e.slug, agentChecked(e.slug)]))}
                 onToggle={(slug, checked) => setAgentTicks((prev) => ({ ...prev, [slug]: checked }))}
                 reload={reloadAgents}
+                locked={savingAgents}
               />
             )}
             <div className="mt-6 flex flex-col items-end">

@@ -37,6 +37,7 @@ import { ChevronLeft } from 'lucide-react';
 import { api } from '../config';
 import { useAgent } from '../hooks/useAgent';
 import { useT } from '../i18n/useT';
+import { formatCapsuleDuration, formatToolBreakdown } from '../utils/toolBreakdown';
 import type { ChatMessage as ChatMessageType, SubAgentTranscriptResult } from '../types';
 import type { StringKey } from '../i18n/strings';
 import { transformChatHistory, type DisplayItem } from '../utils/chatTransform';
@@ -61,24 +62,6 @@ type WorkerMessageItem = Extract<
 >;
 type Translator = (key: StringKey, vars?: Record<string, string | number>) => string;
 
-function formatToolBreakdown(counts: Record<string, number>): string {
-  const entries = Object.entries(counts);
-  if (entries.length === 0) return '';
-  entries.sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
-  return entries.map(([n, c]) => (c === 1 ? n : `${c} ${n}s`)).join(', ');
-}
-
-function formatCapsuleDuration(startedAt: number, endedAt: number | null, lessThan1s: string): string {
-  if (!endedAt || endedAt <= startedAt) return lessThan1s;
-  const ms = endedAt - startedAt;
-  if (ms < 1000) return lessThan1s;
-  const s = Math.round(ms / 1000);
-  if (s < 60) return `${s}s`;
-  const m = Math.floor(s / 60);
-  const rs = s % 60;
-  return rs ? `${m}m ${rs}s` : `${m}m`;
-}
-
 /**
  * Compact, read-only rendering of an `agent_run` capsule inside the
  * chat-shaped worker view. Duplicates ChatView's capsule class strings and
@@ -90,8 +73,8 @@ function formatCapsuleDuration(startedAt: number, endedAt: number | null, lessTh
  * shared-renderer refactor (same note the plan calls out).
  */
 function WorkerCapsule({ capsule, t }: { capsule: WorkerCapsuleItem; t: Translator }) {
-  const breakdown = formatToolBreakdown(capsule.tool_call_count_by_name);
-  const duration = formatCapsuleDuration(capsule.started_at, capsule.ended_at, t('duration.lessThan1s'));
+  const breakdown = formatToolBreakdown(capsule.tool_call_count_by_name, t);
+  const duration = formatCapsuleDuration(capsule.started_at, capsule.ended_at, t);
   const head = breakdown || (capsule.has_thinking ? t('chat.capsule.thinking') : t('chat.capsule.agentStep'));
   let summary = `${head} · ${duration}`;
   if (capsule.status === 'error' || capsule.status === 'stopped') {

@@ -124,7 +124,7 @@ def guess_first_instruction(workspace: str, *, lang: str = "en",
         "  with what you have.\n\n"
         "STAGE 3 — WRITE YOUR GUESS → ASK:\n"
         "- Do not wait for a confirmation before writing; the guess is the point. With the\n"
-        "  `write` tool, in this order:\n"
+        "  `write` tool, in the same language as your reply, in this order:\n"
         "  (1) orbital/PROJECT_STATE.md (current focus, in-progress work, and under a\n"
         "  `## Next steps` heading (exactly that heading, whatever the language) 1-3 concrete\n"
         "  next steps, never more than 3, as `- ` bullets, best first, each grounded in what\n"

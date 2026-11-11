@@ -109,6 +109,21 @@ def test_worker_text_carries_the_same_bullet_only_when_asked():
     assert "never Orbital's or your own operating rules" in " ".join(asked.split())
 
 
+def test_goals_draft_is_written_in_the_users_language(tmp_path):
+    """Pass 2b (E36): the draft asked to *note* the user's language, so
+    4 of 8 drafts from Chinese messages came out in English ("The user works
+    in Chinese"), and the card's next-step lines with them. The draft — goals
+    and the state lines the card lists — follows the language the user
+    writes in. Manager row and worker text carry the same words."""
+    for text in (build_memory_record_text(str(tmp_path), [], []),
+                 build_worker_memory_record_text([], goals_missing=True)):
+        flat = " ".join(text.split())
+        assert ("Write the goals and PROJECT_STATE.md, headings included, in the "
+                "language the user writes in") in flat
+        # No English heading to copy: a zh draft came back headed "First draft".
+        assert "'First draft'" not in flat
+
+
 def test_shape_rules_carry_the_one_supersedes_line():
     assert "supersedes: " in MEMORY_SHAPE_RULES
     assert "project_goals.md" in MEMORY_SHAPE_RULES

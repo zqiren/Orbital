@@ -760,6 +760,16 @@ def test_guess_reply_language_follows_the_system(tmp_path, monkeypatch):
     assert "这样理解对吗" not in flat
 
 
+def test_guess_files_follow_the_reply_language(tmp_path, en_locale):
+    """Pass 2b (E36): the reply followed the language rule but the files did
+    not, so a zh card showed a Chinese summary over English next steps
+    (spring-budget, trail-notes). The three files are written in the reply's
+    language, with or without a LANGUAGE section."""
+    for cold in ("guess:zh", "guess"):
+        flat = _flat(_section(tmp_path, cold_start=cold))
+        assert "in the same language as your reply" in flat
+
+
 def test_shared_memory_line_only_with_more_than_one_agent(tmp_path, en_locale):
     from agent_os.agent import onboarding_prompts as op
 

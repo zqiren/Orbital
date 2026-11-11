@@ -73,6 +73,7 @@ import { StopGlyph } from './StopGlyph';
 import ContextStrip from './ContextStrip';
 import { useContextUsage } from '../hooks/useContextUsage';
 import { useT, translate } from '../i18n/useT';
+import { formatCapsuleDuration, formatToolBreakdown } from '../utils/toolBreakdown';
 import { useLocale } from '../i18n/LocaleContext';
 import type { StringKey } from '../i18n/strings';
 import type { BuiltinSkillKey } from '../route';
@@ -88,13 +89,6 @@ import { forkSessionName, rebuildEditedContent, splitUserWire, stashForkSend, ta
 
 type AgentRunItem = Extract<DisplayItem, { type: 'agent_run' }>;
 type CapsuleChild = AgentRunItem['items'][number];
-
-function formatToolBreakdown(counts: Record<string, number>): string {
-  const entries = Object.entries(counts);
-  if (entries.length === 0) return '';
-  entries.sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
-  return entries.map(([n, c]) => (c === 1 ? n : `${c} ${n}s`)).join(', ');
-}
 
 // Example prompts offered in a project's empty chat (see the empty state).
 const EMPTY_CHAT_EXAMPLES: { key: StringKey; icon: LucideIcon }[] = [
@@ -134,16 +128,6 @@ function tsToMsSafe(ts: string): number {
   return Number.isFinite(n) ? n : Date.now();
 }
 
-function formatDuration(startedAt: number, endedAt: number | null, tr: CapsuleTr = EN_CAPSULE): string {
-  if (!endedAt || endedAt <= startedAt) return tr('duration.lessThan1s');
-  const ms = endedAt - startedAt;
-  if (ms < 1000) return tr('duration.lessThan1s');
-  const s = Math.round(ms / 1000);
-  if (s < 60) return `${s}s`;
-  const m = Math.floor(s / 60);
-  const rs = s % 60;
-  return rs ? `${m}m ${rs}s` : `${m}m`;
-}
 
 export function capsuleSummaryText(
   capsule: AgentRunItem,
@@ -168,8 +152,9 @@ export function capsuleSummaryText(
     opts.stripFileEdits
       ? stripFileEditCounts(capsule.tool_call_count_by_name)
       : capsule.tool_call_count_by_name,
+    tr,
   );
-  const dur = formatDuration(capsule.started_at, capsule.ended_at, tr);
+  const dur = formatCapsuleDuration(capsule.started_at, capsule.ended_at, tr);
   // Spec 112 A6: the memory record turn's capsule says what it is.
   const head = capsule.memory_record
     ? (breakdown ? `${tr('chat.capsule.memoryRecord')} · ${breakdown}` : tr('chat.capsule.memoryRecord'))
