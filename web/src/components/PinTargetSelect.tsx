@@ -38,7 +38,7 @@
 // closes the menu while the panel shows. Phones have no side card, so the
 // panel opens inline under its row.
 
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { memo, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { ChevronDown } from 'lucide-react';
 import MessageAvatar from './MessageAvatar';
 import {
@@ -660,7 +660,7 @@ function useNow(active: boolean): number {
   return active ? now : Date.now();
 }
 
-export default function PinTargetSelect({
+function PinTargetSelect({
   agents,
   value,
   onChange,
@@ -1136,3 +1136,8 @@ export default function PinTargetSelect({
     </div>
   );
 }
+
+// Spec 171 A8: ChatView renders on every keystroke and stream frame; with
+// stable props from there this control skips those renders. Its own state,
+// context (locale) and the availability store still re-render it.
+export default memo(PinTargetSelect);

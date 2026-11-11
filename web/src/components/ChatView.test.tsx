@@ -301,6 +301,38 @@ vi.mock('./ChatMessage', async (importOriginal) => {
   return { ...actual, default: CountingChatMessage };
 });
 
+// Spec 171 A7/A8: render counters for two memoised components. The counter
+// goes INSIDE the real React.memo (same memo object, inner function wrapped),
+// so it counts renders the memo let through — what the tests assert on. A
+// component that is not memoised is counted on every parent render.
+const memoRenders = { pin: 0, stream: 0, streamTexts: [] as string[] };
+type AnyComponent = (props: never) => unknown;
+function countInsideMemo<T>(real: T, count: (props: never) => void): T {
+  const memoObj = real as unknown as { $$typeof?: symbol; type?: AnyComponent };
+  const inner = (memoObj.$$typeof === Symbol.for('react.memo') ? memoObj.type : real) as AnyComponent;
+  function Counting(props: never) {
+    count(props);
+    return inner(props);
+  }
+  return (memoObj.$$typeof === Symbol.for('react.memo')
+    ? { ...memoObj, type: Counting }
+    : Counting) as unknown as T;
+}
+vi.mock('./PinTargetSelect', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./PinTargetSelect')>();
+  return { ...actual, default: countInsideMemo(actual.default, () => { memoRenders.pin += 1; }) };
+});
+vi.mock('./StreamingMessage', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./StreamingMessage')>();
+  return {
+    ...actual,
+    default: countInsideMemo(actual.default, (props: never) => {
+      memoRenders.stream += 1;
+      memoRenders.streamTexts.push((props as { text: string }).text);
+    }),
+  };
+});
+
 import { __resetFileHistoryStores } from '../hooks/useFileHistory';
 import ChatView, {
   appendLiveReasoning,
@@ -384,6 +416,13 @@ beforeEach(() => {
   document.body.appendChild(container);
   root = createRoot(container);
 });
+
+/** Spec 171 A7: manager stream text commits on the next animation frame. */
+async function nextAnimationFrame() {
+  await act(async () => {
+    await new Promise((r) => requestAnimationFrame(() => r(null)));
+  });
+}
 
 async function flushEffects() {
   // useEffect runs after commit; awaiting a microtask + a macrotask is
@@ -935,6 +974,7 @@ describe('ChatView: strict session_id event routing (seam 3 / Phase 3)', () => {
         is_final: false,
       });
     });
+    await nextAnimationFrame();
 
     expect(container.textContent ?? '').toContain('streamed-token-XYZ');
   });
@@ -958,6 +998,7 @@ describe('ChatView: strict session_id event routing (seam 3 / Phase 3)', () => {
         is_final: false,
       });
     });
+    await nextAnimationFrame();
 
     expect(container.textContent ?? '').toContain('window-token-ABC');
   });
@@ -1091,6 +1132,7 @@ describe('ChatView: strict session_id event routing (seam 3 / Phase 3)', () => {
         timestamp: new Date().toISOString(),
       });
     });
+    await nextAnimationFrame();
 
     const afterS2 = container.textContent ?? '';
     expect(afterS2).not.toContain('LEAK-DELTA-s2');
@@ -1117,6 +1159,7 @@ describe('ChatView: strict session_id event routing (seam 3 / Phase 3)', () => {
         timestamp: new Date().toISOString(),
       });
     });
+    await nextAnimationFrame();
 
     const afterS1 = container.textContent ?? '';
     expect(afterS1).toContain('SHOW-DELTA-s1');
@@ -5974,5 +6017,199 @@ describe("Spec 166: the / picker offers the pinned worker's own commands", () =>
     await frame();
     expect(textarea().value).toBe('$imagegen ');
     expect(composerChip()).toBeNull();
+  });
+});
+
+// ─── Spec 171 A7: manager stream deltas commit at most once per frame ──────
+describe('ChatView: manager stream deltas coalesce per frame (spec 171 A7)', () => {
+  // A hand-driven frame clock: queued callbacks run only when the test says.
+  const frames = new Map<number, FrameRequestCallback>();
+  let nextFrame = 1;
+  let rafSpy: ReturnType<typeof vi.spyOn>;
+  let cafSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    frames.clear();
+    rafSpy = vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb: FrameRequestCallback) => {
+      const id = nextFrame++;
+      frames.set(id, cb);
+      return id;
+    });
+    cafSpy = vi.spyOn(window, 'cancelAnimationFrame').mockImplementation((id: number) => {
+      frames.delete(id);
+    });
+    memoRenders.stream = 0;
+    memoRenders.streamTexts = [];
+  });
+
+  afterEach(() => {
+    rafSpy.mockRestore();
+    cafSpy.mockRestore();
+  });
+
+  async function runFrame() {
+    await act(async () => {
+      const due = [...frames.values()];
+      frames.clear();
+      due.forEach((cb) => cb(performance.now()));
+    });
+  }
+
+  function delta(text: string, extra: Record<string, unknown> = {}) {
+    emitWs('chat.stream_delta', {
+      type: 'chat.stream_delta',
+      project_id: 'p1',
+      session_id: 's1',
+      text,
+      source: 'management',
+      is_final: false,
+      ...extra,
+    });
+  }
+
+  async function startStreaming() {
+    await renderChat({ agentStatus: 'running', sessionId: 's1' });
+    await flushEffects();
+    await runFrame(); // settle mount-time frames (textarea sizing etc.)
+    memoRenders.stream = 0;
+    memoRenders.streamTexts = [];
+  }
+
+  it('N deltas within one frame render once, with the full text', async () => {
+    await startStreaming();
+    const parts = ['## Plan', '\n\n- one', '\n- two', '\n\n```js\nx', ' = 1;\n```'];
+    // One act per delta: each WebSocket message is its own task in the app.
+    for (const p of parts) await act(async () => { delta(p); });
+    expect(memoRenders.stream).toBe(0);
+
+    await runFrame();
+    expect(memoRenders.stream).toBe(1);
+    expect(memoRenders.streamTexts).toEqual([parts.join('')]);
+    expect(container.textContent ?? '').toContain('two');
+  });
+
+  it('deltas across frames render once per frame and lose nothing', async () => {
+    await startStreaming();
+    // One act per delta: each WebSocket message is its own task in the app.
+    const send = (t: string) => act(async () => { delta(t); });
+    await send('alpha '); await send('beta ');
+    await runFrame();
+    await send('gamma ');
+    await runFrame();
+    await runFrame(); // an idle frame renders nothing
+    await send('delta '); await send('epsilon');
+    await runFrame();
+
+    expect(memoRenders.streamTexts).toEqual([
+      'alpha beta ',
+      'alpha beta gamma ',
+      'alpha beta gamma delta epsilon',
+    ]);
+    expect(container.textContent ?? '').toContain('alpha beta gamma delta epsilon');
+  });
+
+  it('the final delta flushes buffered text first: the message is the full concatenation', async () => {
+    await startStreaming();
+    await act(async () => { delta('first-part '); });
+    await act(async () => { delta('second-part '); });
+    await act(async () => {
+      emitWs('chat.stream_delta', {
+        type: 'chat.stream_delta', project_id: 'p1', session_id: 's1',
+        text: 'last-part', source: 'management', is_final: true,
+      });
+    });
+    await flushEffects();
+    await runFrame();
+
+    const text = container.textContent ?? '';
+    expect(text).toContain('first-part second-part last-part');
+    // The streaming bubble is gone: the text lives in the transcript now.
+    expect(container.querySelector('.streaming-cursor')).toBeNull();
+    expect(chatMessageRenders.has('first-part second-part last-part')).toBe(true);
+  });
+
+  it('a session switch before the frame drops the old session\'s buffered text', async () => {
+    await startStreaming();
+    await act(async () => { delta('S1-BUFFERED-TEXT'); });
+    await renderChat({ agentStatus: 'running', sessionId: 's2' });
+    await flushEffects();
+    await runFrame();
+    expect(container.textContent ?? '').not.toContain('S1-BUFFERED-TEXT');
+
+    // The new session's own deltas still stream.
+    await act(async () => { delta('S2-TEXT', { session_id: 's2' }); });
+    await runFrame();
+    expect(container.textContent ?? '').toContain('S2-TEXT');
+    expect(container.textContent ?? '').not.toContain('S1-BUFFERED-TEXT');
+  });
+
+  it('switching away and back within the frame still drops the stale text', async () => {
+    // The commit-time session check alone would let this through (s1 is viewed
+    // again); the reset that clears the stream must clear the buffer too.
+    await startStreaming();
+    await act(async () => { delta('STALE-S1-TEXT'); });
+    await renderChat({ agentStatus: 'running', sessionId: 's2' });
+    await flushEffects();
+    await renderChat({ agentStatus: 'running', sessionId: 's1' });
+    await flushEffects();
+    await runFrame();
+    expect(container.textContent ?? '').not.toContain('STALE-S1-TEXT');
+  });
+
+  it('unmount cancels the pending flush', async () => {
+    await startStreaming();
+    await act(async () => { delta('never-shown'); });
+    expect(frames.size).toBeGreaterThan(0);
+    await act(async () => { root.unmount(); });
+    expect(frames.size).toBe(0);
+    await runFrame();
+    expect(memoRenders.stream).toBe(0);
+    // A fresh root for the shared afterEach-less teardown.
+    root = createRoot(container);
+  });
+
+  it('a keystroke during the stream does not re-render the streaming message', async () => {
+    await startStreaming();
+    await act(async () => { delta('streaming body'); });
+    await runFrame();
+    const after = memoRenders.stream;
+    await act(async () => { typeInComposer('h'); });
+    await act(async () => { typeInComposer('hi'); });
+    expect((container.querySelector('textarea') as HTMLTextAreaElement).value).toBe('hi');
+    expect(memoRenders.stream).toBe(after);
+  });
+});
+
+// ─── Spec 171 A8: PinTargetSelect skips ChatView renders it is not part of ──
+describe('ChatView: PinTargetSelect is memoised (spec 171 A8)', () => {
+  const WORKERS = [{ slug: 'claude-code', name: 'Claude Code' }, { slug: 'codex', name: 'Codex' }];
+
+  it('typing in the composer does not re-render PinTargetSelect', async () => {
+    await renderChat({ sessionId: 's1', agents: WORKERS });
+    await flushEffects();
+    const before = memoRenders.pin;
+    expect(before).toBeGreaterThan(0);
+
+    await act(async () => { typeInComposer('h'); });
+    await act(async () => { typeInComposer('he'); });
+    await act(async () => { typeInComposer('hel'); });
+    expect((container.querySelector('textarea') as HTMLTextAreaElement).value).toBe('hel');
+    expect(memoRenders.pin).toBe(before);
+  });
+
+  it('a pin change still re-renders it with the new value', async () => {
+    await renderChat({ sessionId: 's1', agents: WORKERS });
+    await flushEffects();
+    const before = memoRenders.pin;
+    await act(async () => {
+      (container.querySelector('[data-testid="pin-target-select"] > button') as HTMLButtonElement).click();
+    });
+    const option = Array.from(container.querySelectorAll('[role="option"], [role="menuitemradio"], li, button'))
+      .find((el) => (el.textContent ?? '').includes('Codex')) as HTMLElement | undefined;
+    expect(option).toBeDefined();
+    await act(async () => { option!.click(); });
+    await flushEffects();
+    expect(memoRenders.pin).toBeGreaterThan(before);
+    expect(sessionsPatchCalls.length).toBeGreaterThan(0);
   });
 });

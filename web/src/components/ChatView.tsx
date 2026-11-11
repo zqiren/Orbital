@@ -29,6 +29,7 @@ import {
 } from '../utils/chatTransform';
 import type { DisplayItem, ResultTotals } from '../utils/chatTransform';
 import { isWorkerHandle } from '../utils/subAgentHandle';
+import { createFrameTextBuffer, type FrameTextBuffer } from '../utils/frameTextBuffer';
 import type { ChatMessage as ChatMessageRow, AgentStatusEvent } from '../types';
 import AgentErrorNotice from './AgentErrorNotice';
 import { parseProviderError } from '../utils/providerError';
@@ -956,6 +957,10 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   // Spec 100: worker thinking waiting for the next frame, per worker handle.
   const workerReasoningRef = useRef(new Map<string, string>());
   const workerFrameRef = useRef<number | null>(null);
+  // Spec 171 A7: the manager's reply text waiting for the next frame. Lives
+  // as long as the component (not the WS effect, which can re-run mid-stream);
+  // the session-reset paths discard it.
+  const streamBufferRef = useRef<FrameTextBuffer<string, string> | null>(null);
   useEffect(() => { localeRef.current = locale; }, [locale]);
   // One live sub-agent status pipeline for this session (spec 099): the
   // status bar's chips and the pin control's running dot both read it.
@@ -1101,6 +1106,29 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   // (a worker is then the only way to talk at all). Otherwise, as before,
   // the control waits for a session.
   const pinDisabled = sessionId === undefined && projectPin === null && managerReady;
+  // Spec 171 A8: a stable handler, so the memoised pin control skips the
+  // renders a keystroke or a stream frame cause.
+  const handlePinChange = useCallback((slug: string | null) => {
+    if (leftOffOpenedRef.current !== null && leftOffOpenedRef.current === sessionId && slug !== pinnedTarget) {
+      leftOffOpenedRef.current = null;
+      sendTelemetry('agent_switch_after_open');
+    }
+    setLocalPin({ sessionId, slug });
+    if (sessionId === undefined) {
+      // No session yet: the choice is the project's sticky pin, which the
+      // first send's session then starts on. Best effort — an older daemon
+      // ignores or rejects the field and the local pin still steers that
+      // first send.
+      void api(`/api/v2/projects/${encodeURIComponent(projectId)}`, {
+        method: 'PUT',
+        body: JSON.stringify({ default_pinned_target: slug }),
+      })
+        .then(() => onRefreshProject?.(projectId))
+        .catch(() => {});
+      return;
+    }
+    persistPin(sessionId, slug);
+  }, [sessionId, pinnedTarget, projectId, onRefreshProject, persistPin]);
   const pinnedAgentName = pinnedTarget
     ? (agents.find((a) => a.slug === pinnedTarget)?.name ?? pinnedTarget)
     : null;
@@ -1656,6 +1684,34 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     reset: resetAutoScroll,
   } = useAutoScroll(scrollRef);
 
+  // Spec 171 A7: the manager's visible reply, joined per frame and committed
+  // once (one render, one markdown parse) instead of once per delta. Keyed by
+  // session; a commit for a session no longer viewed is dropped. Unmount
+  // cancels the pending frame.
+  const scrollToBottomRef = useRef(scrollToBottom);
+  useEffect(() => { scrollToBottomRef.current = scrollToBottom; }, [scrollToBottom]);
+  useEffect(() => {
+    const buffer = createFrameTextBuffer<string, string>(
+      (sid, text, source) => {
+        if (sid !== sessionIdRef.current) return;
+        setShowThinking(false);
+        setStream((prev) => ({
+          text: (prev?.text ?? '') + text,
+          source,
+          isComplete: false,
+        }));
+        scrollToBottomRef.current();
+      },
+      requestFrame,
+      cancelFrame,
+    );
+    streamBufferRef.current = buffer;
+    return () => {
+      buffer.discard();
+      if (streamBufferRef.current === buffer) streamBufferRef.current = null;
+    };
+  }, []);
+
   // On session switch (and mount), snap to the newest message and re-arm
   // auto-follow — a freshly opened conversation should start pinned to the
   // bottom, not wherever the previous session's scroll happened to be.
@@ -1981,6 +2037,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       // Clearing rawMessages re-seeds `items` to [] via the history memo.
       setRawMessages([]);
       setItems([]);
+      streamBufferRef.current?.discard();
       setStream(null);
       setApprovals(new Map());
       setTotalMessages(0);
@@ -2004,6 +2061,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     if (consumeFreshSession(projectId, sessionId)) {
       setRawMessages([]);
       setItems([]);
+      streamBufferRef.current?.discard();
       setStream(null);
       setApprovals(new Map());
       setTotalMessages(0);
@@ -2055,6 +2113,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         setLoading(true);
       }
       // Clear prior session's live state so it never bleeds into the new one.
+      streamBufferRef.current?.discard();
       setStream(null);
       setApprovals(new Map());
       try {
@@ -2521,6 +2580,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         urgency: 'low' as const,
         timestamp: new Date().toISOString(),
       }]);
+      streamBufferRef.current?.discard();
       setStream(null);
       setApprovals(new Map());
       setShowThinking(false);
@@ -2690,6 +2750,9 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       wasRunningRef.current = true;
 
       if (e.is_final) {
+        // Text still waiting for its frame lands first, so the final message
+        // is the whole concatenation.
+        streamBufferRef.current?.flush();
         setStream((prev) => {
           if (!prev) {
             return null;
@@ -2739,14 +2802,9 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         setItems((prev) => appendLiveReasoning(prev, reasoning, new Date().toISOString(), e.source));
       }
 
-      // Visible answer text has begun — transition out of the thinking phase.
-      setShowThinking(false);
-      setStream((prev) => ({
-        text: (prev?.text ?? '') + e.text,
-        source: e.source,
-        isComplete: false,
-      }));
-      scrollToBottom();
+      // Visible answer text has begun — the next frame's commit leaves the
+      // thinking phase and appends it.
+      streamBufferRef.current?.push(e.session_id, e.text, e.source);
     }
 
     function handleActivity(event: WebSocketEvent) {
@@ -4885,27 +4943,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
               runningSlugs={runningSubAgents}
               managerReady={managerReady}
               models={pinModels}
-              onChange={(slug) => {
-                if (leftOffOpenedRef.current !== null && leftOffOpenedRef.current === sessionId && slug !== pinnedTarget) {
-                  leftOffOpenedRef.current = null;
-                  sendTelemetry('agent_switch_after_open');
-                }
-                setLocalPin({ sessionId, slug });
-                if (sessionId === undefined) {
-                  // No session yet: the choice is the project's sticky pin,
-                  // which the first send's session then starts on. Best
-                  // effort — an older daemon ignores or rejects the field
-                  // and the local pin still steers that first send.
-                  void api(`/api/v2/projects/${encodeURIComponent(projectId)}`, {
-                    method: 'PUT',
-                    body: JSON.stringify({ default_pinned_target: slug }),
-                  })
-                    .then(() => onRefreshProject?.(projectId))
-                    .catch(() => {});
-                  return;
-                }
-                persistPin(sessionId, slug);
-              }}
+              onChange={handlePinChange}
               disabled={pinDisabled}
             />}
             <input
