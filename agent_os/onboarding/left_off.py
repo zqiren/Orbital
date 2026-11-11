@@ -239,6 +239,11 @@ def _read_orbital(path: str) -> OrbitalSession | None:
                     reply_text = None
                 elif row.get("source") == "management":
                     if content.startswith("LLM error") or "API key was rejected" in content:
+                        # The loop's own failure row ends the run. It counts
+                        # as the session's row like ``start_failed`` does: a
+                        # manager import read dies on its first call with no
+                        # user row before it (1111 keyed smoke D24).
+                        any_row = True
                         probe.ended_at = ts or probe.ended_at
                         turn.error(content, ts)
                         reply_text = None

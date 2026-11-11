@@ -387,3 +387,27 @@ def test_a_send_that_could_not_start_is_a_card_with_its_stop(tmp_path):
     for r in out:
         assert r["result_line"] is None
         assert r["stop"] is not None and r["stop"]["cause"]
+
+
+def test_an_import_read_that_died_on_a_rejected_key_is_a_card_with_its_cause(tmp_path):
+    """1111 keyed smoke D24: the manager's import read (no user row) that hit
+    a 401 on its first call showed on the Workbench as a plain unread row with
+    no cause. Its "LLM error" row is the reply; the card names the stop."""
+    from agent_os.daemon_v2 import session_index as si
+    proj = _project(tmp_path, "proj_s")
+    t_fail = "2026-11-04T08:00:01+00:00"
+    _write_session(proj, "s_scan", [
+        {"role": "system", "source": "management", "timestamp": T_USER,
+         "content": "[WORKSPACE SKELETON] 3 files, ~201 bytes shown.\nREADME.md\t85"},
+        {"role": "system", "source": "management", "timestamp": t_fail,
+         "content": "LLM error (non-recoverable): Invalid credential. The API key was "
+                    "rejected and the global default is not available as a separate "
+                    "fallback (not configured, or the same key). Stopping."},
+    ])
+    path = os.path.join(proj["workspace"], "orbital", "sessions", "s_scan.jsonl")
+    entry = si.derive_disk_entry(path, "s_scan")
+    assert entry["last_reply_at"] == t_fail
+    out = wb.feed_rows(proj, [_row("s_scan", user=entry["last_user_at"],
+                                   reply=entry["last_reply_at"])], NOW)
+    assert [r["session_id"] for r in out] == ["s_scan"]
+    assert out[0]["stop"] is not None and out[0]["stop"]["cause"] == "network_auth"

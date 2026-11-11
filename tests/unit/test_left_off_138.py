@@ -428,3 +428,41 @@ def test_a_session_of_daemon_rows_without_a_failure_is_still_no_session(world):
          "_meta": {"event": "worker_onboarding", "handle": "codex", "mode": "scan"}},
     ])
     assert lo.read_orbital_session(os.path.join(ws, "orbital", "sessions", "scan_n.jsonl")) is None
+
+
+# 1111 keyed smoke D24: an import read the manager started (no user row: the
+# cold-start mint) that died on its first LLM call leaves the loop's own
+# "LLM error" row — the same row an ordinary failed run leaves — and must read
+# as stopped, with its cause, like a run the user started.
+_SCAN_SKELETON = {"role": "system", "source": "management",
+                  "content": "[WORKSPACE SKELETON] 3 files, ~201 bytes shown.\nREADME.md\t85"}
+
+
+@pytest.mark.parametrize("content, cause", [
+    # 401: the loop's text names no status code, only Orbital's own words.
+    ("LLM error (non-recoverable): Invalid credential. The API key was rejected and the "
+     "global default is not available as a separate fallback (not configured, or the "
+     "same key). Stopping.", "network_auth"),
+    # 400: a model the key cannot use.
+    ("LLM error (non-recoverable): Upstream request failed: Model is unavailable.. "
+     "Stopping.", "model_unavailable"),
+    # 429 with no fallback: retries exhausted. Names no cause: "didn't finish".
+    ("LLM error after 3 retries: Error code: 429 - Too many requests. Stopping.",
+     "interrupted"),
+])
+def test_a_scan_whose_manager_died_on_an_llm_error_reads_as_stopped(world, content, cause):
+    _home, ws, _desk, _scanner = world
+    orbital_session(ws, "scan_llm", [
+        {**_SCAN_SKELETON, "timestamp": iso(1)},
+        {"role": "system", "source": "management", "timestamp": iso(1), "content": content},
+    ])
+    parsed = lo.read_orbital_session(os.path.join(ws, "orbital", "sessions", "scan_llm.jsonl"))
+    assert parsed is not None
+    assert parsed.entry.stop is not None and parsed.entry.stop.cause == cause
+    assert parsed.reply_text is None
+
+
+def test_a_scan_with_only_its_skeleton_row_is_still_no_session(world):
+    _home, ws, _desk, _scanner = world
+    orbital_session(ws, "scan_sk", [{**_SCAN_SKELETON, "timestamp": iso(1)}])
+    assert lo.read_orbital_session(os.path.join(ws, "orbital", "sessions", "scan_sk.jsonl")) is None

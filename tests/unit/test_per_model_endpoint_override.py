@@ -524,3 +524,29 @@ def test_a_protocol_mismatch_names_the_protocol_and_the_fix(
     assert "'grok-4.7'" in detail, detail
     assert "OpenAI chat/completions" in detail, detail
     assert "Responses API" in detail, detail
+
+
+def test_a_provider_400_reads_as_the_providers_sentence(route_client, monkeypatch):
+    """1111 keyed smoke B8: a key whose model the provider refuses showed the
+    raw SDK envelope "Error code: 400 - {'error': {...}}" in red on the key
+    step. The test result carries the provider's own sentence; the route's
+    detail stays a plain string."""
+    import agent_os.agent.providers.openai_compat as oc
+    from agent_os.agent.providers.types import LLMError
+    from unittest.mock import AsyncMock
+
+    raw = ("Error code: 400 - {'error': {'type': 'server_error', "
+           "'message': 'Upstream request failed: Model is unavailable.'}}")
+
+    def ctor(model, api_key, base_url, **kw):
+        inst = MagicMock()
+        inst.complete = AsyncMock(side_effect=LLMError(raw, status_code=400))
+        return inst
+
+    monkeypatch.setattr(oc, "LLMProvider", ctor)
+    resp = route_client.post(
+        "/api/v2/providers/test",
+        json={"provider": "router", "model": "oai-model", "api_key": "sk-valid"},
+    )
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "Upstream request failed: Model is unavailable."

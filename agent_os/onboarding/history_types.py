@@ -118,6 +118,8 @@ _NETWORK_AUTH_RE = re.compile(
     r"ECONNRESET|ETIMEDOUT|ENOTFOUND|socket hang up|network error|connection (?:reset|refused|error)"
     r"|\b40[13]\b|failed to authenticate|authentication (?:failed|error)|invalid api key"
     r"|unauthori[sz]ed|forbidden|please (?:run )?/?login"
+    # Orbital's loop on a rejected key (its row names no status code).
+    r"|api key was rejected"
     # Spec 167: a signed-out worker's could-not-start row.
     r"|authentication required|not signed in|not logged in", re.IGNORECASE)
 
