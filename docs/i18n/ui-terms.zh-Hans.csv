@@ -3,14 +3,14 @@ app.loading,Loading...,status,App.tsx,Full-screen loading state while setup/wiza
 app.mobileBack,Back,button,App.tsx — mobile content header,Mobile-only back button that returns from content pane to sidebar,返回,
 app.sandboxWarning.title,⚠ Agent sandbox is not configured.,message_error,App.tsx — top warning banner,Warning shown when platform sandbox is not set up; agents run unsandboxed,⚠ 尚未配置Agent沙箱。,"Keep the ⚠ symbol. """"Agent"""" = AI Agent."
 app.sandboxWarning.body,"Agents will run with your full system permissions. Reinstall Orbital to set up the sandbox, or run Orbital.exe --setup-sandbox as administrator.",description,App.tsx — top warning banner,Explains the risk and remediation for missing sandbox,Agent将有你的全部系统权限。请重新安装 Orbital 以配置沙箱，或以管理员身份运行 Orbital.exe --setup-sandbox。,"Do not translate ""Orbital"", ""Orbital.exe"", ""--setup-sandbox""."
-app.list.empty,No projects yet. Create your first one.,empty_state,App.tsx — main empty list view,Shown in the content area when there are zero projects,尚未创建项目空间,
-app.list.selectPrompt,Select a project from the sidebar.,empty_state,App.tsx — main list view,Shown when projects exist but none is selected,左侧选择项目空间,
-app.newProject,+ New Project,button,App.tsx; Sidebar.tsx,Primary create-project button (also in sidebar bottom),+ 新建项目空间,"Keep leading """"+ """". Recovered from Excel #NAME? corruption."
+app.list.empty,No projects yet. Create your first one.,empty_state,App.tsx — main empty list view,Shown in the content area when there are zero projects,尚未创建项目,
+app.list.selectPrompt,Select a project from the sidebar.,empty_state,App.tsx — main list view,Shown when projects exist but none is selected,左侧选择项目,
+app.newProject,+ New Project,button,App.tsx; Sidebar.tsx,Primary create-project button (also in sidebar bottom),+ 新建项目,"Keep leading """"+ """". Recovered from Excel #NAME? corruption."
 app.notify.approval,Orbital: {name} needs your approval,message_error,App.tsx — browser Notification,Desktop browser notification when a project needs approval and tab is unfocused,Orbital：{name} 需要批准,"{name} is a project name placeholder; keep it. Do not translate ""Orbital""."
-app.notify.fallbackName,A project,misc,App.tsx — notification fallback,Fallback project name used in the approval notification when name is missing,某个项目空间,
+app.notify.fallbackName,A project,misc,App.tsx — notification fallback,Fallback project name used in the approval notification when name is missing,某个项目,
 sidebar.wordmark,Orbital,heading,Sidebar.tsx — wordmark,App brand wordmark at top of sidebar,Orbital,DO NOT TRANSLATE — brand name.
-sidebar.allProjects,All projects,nav,Sidebar.tsx,Nav row that clears project selection and shows the all-projects view,所有项目空间,
-sidebar.projects,Projects,heading,Sidebar.tsx — section header,Uppercase section header above the project list,项目空间,Rendered uppercase; Chinese has no case so just 项目空间.
+sidebar.allProjects,All projects,nav,Sidebar.tsx,Nav row that clears project selection and shows the all-projects view,所有项目,
+sidebar.projects,Projects,heading,Sidebar.tsx — section header,Uppercase section header above the project list,项目,Rendered uppercase; Chinese has no case so just 项目.
 sidebar.blocked,Blocked,nav,Sidebar.tsx (BlockedBadge.tsx),Cross-project nav row showing count of sessions awaiting approval,待处理,"Per code, pending_approval is labeled ""Blocked"" everywhere. Could also be 已阻塞/受阻. Keep consistent with status.pendingApproval."
 sidebar.settings,Settings,nav,Sidebar.tsx,Settings nav row at bottom of sidebar,设置,
 sidebar.conn.connected,Connected,status,Sidebar.tsx — connection indicator,WebSocket connected and daemon online,已连接,
@@ -37,7 +37,7 @@ sessionStatus.starting,Starting,status,sessionStatus.ts,Session glyph label: new
 sessionStatus.error,Error,status,sessionStatus.ts,Session glyph label: error,错误,
 sessionGlyph.errored.withDetails,Session errored: {details},tooltip,SessionStatusGlyph.tsx,Hover title on amber error glyph with backend detail,会话错误：{details},
 sessionGlyph.errored,Session errored,tooltip,SessionStatusGlyph.tsx,aria-label / title for a session that errored,会话错误,
-createProject.title,New Project,heading,CreateProject.tsx,Page heading for the create-project form,新建项目空间,
+createProject.title,New Project,heading,CreateProject.tsx,Page heading for the create-project form,新建项目,
 createProject.cancel,Cancel,button,CreateProject.tsx; many,Cancel button on create form,取消,Dedupe target — appears in many forms.
 createProject.name.label,Project Name,label,CreateProject.tsx,Field label for the project name,项目名称,
 createProject.name.placeholder,"e.g., Refactor Auth Module",placeholder,CreateProject.tsx,Example placeholder for project name,例如：认证模块重构,Keep example feel; can localize the example text.
@@ -60,7 +60,7 @@ createProject.budget.hint,Leave empty for no limit. Agent pauses when spend reac
 createProject.deploy,Deploy Agent,button,CreateProject.tsx,Submit button that creates the project / deploys the agent,部署,
 createProject.advanced.label,Advanced options,heading,CreateProject.tsx,Disclosure toggle revealing Agent Name/Instructions/Autonomy/Budget,高级选项,New in backlog #25 (progressive disclosure).
 createProject.workspace.hideBrowse,Hide,button,CreateProject.tsx,Toggle label for collapsing the inline folder browser once expanded,收起,New in backlog #25 — pairs with createProject.browse.
-createProject.submitError,Couldn't create the project. Please try again.,message_error,CreateProject.tsx,Generic fallback shown when project creation fails for a reason other than an agent-name conflict,创建项目空间失败，请重试。,New in backlog #25.
+createProject.submitError,Couldn't create the project. Please try again.,message_error,CreateProject.tsx,Generic fallback shown when project creation fails for a reason other than an agent-name conflict,创建项目失败，请重试。,New in backlog #25.
 autonomy.level.label,Autonomy Level,label,CreateProject.tsx; SettingsView.tsx,Section label for autonomy mode selection,Agent权限级别,
 autonomy.handsOff.title,Hands-off,label,CreateProject.tsx; SettingsView.tsx,Autonomy option: agent works freely,全自动,
 autonomy.handsOff.desc,Agent works freely. Asks only for new access.,description,CreateProject.tsx; SettingsView.tsx,Description of hands-off autonomy,Agent自主工作，仅在重要权限申请时询问用户。,
@@ -69,8 +69,8 @@ autonomy.checkIn.desc,Pauses for shell commands and file writes.,description,Cre
 autonomy.supervised.title,Supervised,label,CreateProject.tsx; SettingsView.tsx,Autonomy option: pauses for most actions,监督模式,
 autonomy.supervised.desc,Pauses for most actions. Most cautious.,description,CreateProject.tsx; SettingsView.tsx,Description of supervised autonomy,在工具调用前暂停请求用户审批。最稳妥。,
 settingsModal.back,Back to {project},button,SettingsModalPage.tsx,Back link in project settings header to the project,返回 {project},{project} is the project name; keep placeholder.
-settingsModal.title,Project settings — {project},heading,SettingsModalPage.tsx,Project settings page title,项目空间设置 — {project},Keep em dash or use ：.
-settingsModal.subtitle,"Configure agent behaviour, LLM provider, autonomy, and more for this project.",description,SettingsModalPage.tsx,Subtitle under the project settings header,配置该项目空间的Agent行为模式、模型商、权限级别等。,"Keep ""LLM"". behaviour (British) → 行为."
+settingsModal.title,Project settings — {project},heading,SettingsModalPage.tsx,Project settings page title,项目设置 — {project},Keep em dash or use ：.
+settingsModal.subtitle,"Configure agent behaviour, LLM provider, autonomy, and more for this project.",description,SettingsModalPage.tsx,Subtitle under the project settings header,配置该项目的Agent行为模式、模型商、权限级别等。,"Keep ""LLM"". behaviour (British) → 行为."
 settings.agentName.placeholder,Display name for this agent,placeholder,SettingsView.tsx,Placeholder for agent name in project settings,Agent显示名称,
 settings.projectGoals.label,Project Goals,label,SettingsView.tsx,Field label for project goals,项目目标,
 settings.projectGoals.placeholder,"Define the agent's mission, scope, and rules...",placeholder,SettingsView.tsx,Placeholder for project goals textarea,定义Agent的任务、权职和行为准则…,
@@ -88,10 +88,10 @@ settings.subAgents.installHint,Install an agent's CLI on your machine to use it 
 settings.subAgents.loading,Checking installed sub-agents…,status,SettingsView.tsx,Shown while GET /settings/sub-agents is in flight (bug #36 — the empty state used to stand in for this),正在检查已安装的子Agent…,
 settings.subAgents.saveReminder,Remember to Save enablement and deployment-instruction changes below. Memory edits save immediately.,description,SettingsView.tsx,Italic reminder describing form-save and immediate-save behavior,请在下方保存启用状态和派发指示的更改。记忆编辑会立即保存。,
 settings.subAgentMemories.label,Sub-Agent Memories,label,SettingsView.tsx,Section label for per-sub-agent memory,子Agent记忆,
-settings.subAgentMemories.labelSuffix,— long-term memory per sub-agent for this project,label,SettingsView.tsx,Inline secondary label,— 本项目空间中每个子Agent的长期记忆,
+settings.subAgentMemories.labelSuffix,— long-term memory per sub-agent for this project,label,SettingsView.tsx,Inline secondary label,— 本项目中每个子Agent的长期记忆,
 settings.subAgentMemories.hint,Each sub-agent maintains its own memory across dispatches. Edit here to curate what they remember.,description,SettingsView.tsx,Explains sub-agent memory,每个子Agent将自动维护自己的项目记忆。在此编辑以管理它们记住的内容。,
 settings.subAgentMemories.loadError,Failed to load sub-agent memories,message_error,SettingsView.tsx,Error when memory list fails to load,项目记忆加载失败,
-settings.subAgentMemories.empty,No sub-agents enabled for this project.,empty_state,SettingsView.tsx,Shown when no sub-agents are enabled,本项目空间未启用任何子Agent。,
+settings.subAgentMemories.empty,No sub-agents enabled for this project.,empty_state,SettingsView.tsx,Shown when no sub-agents are enabled,本项目未启用任何子Agent。,
 settings.skills.label,Skills,label,SettingsView.tsx,Section label for skills,技能,
 settings.skills.hint,Operational patterns the agent follows. Skills are read before each task.,description,SettingsView.tsx,Explains skills,Agent执行任务的标准流程。每次任务前都会读取技能。,
 settings.skills.deleteError,Failed to delete skill,message_error,SettingsView.tsx,Error deleting a skill,删除技能失败,
@@ -123,7 +123,7 @@ settings.budget.hint.total,Counts from {date},description,BudgetSection.tsx,Peri
 settings.budget.reset,Reset (counting since {date}),button,BudgetSection.tsx,Total-mode reset link labelled with the anchor date,重置（自 {date} 起累计）,
 settings.budget.resetConfirm,Reset the budget window? Spend before now stops counting.,confirm,BudgetSection.tsx,Confirm dialog for the total-mode anchor reset,重置预算窗口？此刻之前的花费将不再计入。,
 settings.budget.behavior.label,When the limit is reached,label,BudgetSection.tsx,Label above the pause/stop behavior cards,达到上限时,
-settings.budget.behavior.pause.title,Pause project,option,BudgetSection.tsx,Behavior card title (default),暂停项目空间,
+settings.budget.behavior.pause.title,Pause project,option,BudgetSection.tsx,Behavior card title (default),暂停项目,
 settings.budget.behavior.pause.desc,Pauses the queue. Resumes automatically when you raise the limit or the period rolls over.,description,BudgetSection.tsx,Behavior card body for pause,暂停队列。当你提高上限或周期滚动时会自动恢复。,
 settings.budget.behavior.stop.title,Stop,option,BudgetSection.tsx,Behavior card title (hard stop),停止,
 settings.budget.behavior.stop.desc,Hard stop. Never resumes on its own — you restart it manually.,description,BudgetSection.tsx,Behavior card body for stop,硬性停止。不会自动恢复——需手动重启。,
@@ -150,8 +150,8 @@ settings.budget.editPricing,Edit pricing table,link,BudgetSection.tsx,Link to th
 settings.save,Save,button,SettingsView.tsx; GlobalSettings.tsx; LLMProviderSettings.tsx; many,Generic save button,保存,Dedupe target — appears widely.
 settings.saved,Saved,message_success,SettingsView.tsx; GlobalSettings.tsx; many,Inline success indicator after save,已保存,Dedupe target.
 settings.danger.title,Danger Zone,heading,SettingsView.tsx,Heading for destructive actions,危险区域,
-settings.danger.body,"Delete this project? Orbital data (sessions, screenshots, logs) will be removed. Files you saved in your workspace folder will be kept.",description,SettingsView.tsx,Explains what deleting a project removes,删除此项目空间？Orbital 数据（会话、截图、日志）将被移除。保存在工作目录文件夹中的文件会保留。,Do not translate Orbital.
-settings.danger.delete,Delete Project,button,SettingsView.tsx,Delete-project button (first state),删除项目空间,
+settings.danger.body,"Delete this project? Orbital data (sessions, screenshots, logs) will be removed. Files you saved in your workspace folder will be kept.",description,SettingsView.tsx,Explains what deleting a project removes,删除此项目？Orbital 数据（会话、截图、日志）将被移除。保存在工作目录文件夹中的文件会保留。,Do not translate Orbital.
+settings.danger.delete,Delete Project,button,SettingsView.tsx,Delete-project button (first state),删除项目,
 settings.danger.confirmDelete,Confirm Delete,button,SettingsView.tsx,Confirm destructive delete,确认删除,
 settings.danger.cancel,Cancel,button,SettingsView.tsx,Cancel the delete confirmation,取消,Dedupe target.
 subAgentMemory.timestamp.never,never written,status,SubAgentMemoryCard.tsx,Shown when a sub-agent memory has never been saved,未写入,
@@ -169,9 +169,9 @@ subAgentToggle.empty,No sub-agents installed. Install them from global Settings 
 global.title,Global Settings,heading,GlobalSettings.tsx,Page title for global settings,全局设置,
 global.language,Language,label,GlobalSettings.tsx,Label for the UI language dropdown,语言,
 global.back,Back,button,GlobalSettings.tsx; SubAgentSettings.tsx,Back button in global settings,返回,Dedupe target.
-global.intro,"Defaults used when a project doesn't set its own API key, model, or base URL.",description,GlobalSettings.tsx,Intro paragraph for global settings,当项目空间未设置自己的 API 密钥、模型或 Base URL 时使用的默认值。,"Keep LLM, API, Base URL."
+global.intro,"Defaults used when a project doesn't set its own API key, model, or base URL.",description,GlobalSettings.tsx,Intro paragraph for global settings,当项目未设置自己的 API 密钥、模型或 Base URL 时使用的默认值。,"Keep LLM, API, Base URL."
 global.aboutYou.label,About You,label,GlobalSettings.tsx,Field label for user preferences,你的偏好,
-global.aboutYou.hint,"Applies to all projects. E.g. ""senior Python dev"", ""prefer concise replies"".",description,GlobalSettings.tsx,Helper text for the About You field,适用于所有项目空间。例如「资深 Python 开发者」「偏好简洁回复」。,Keep Python.
+global.aboutYou.hint,"Applies to all projects. E.g. ""senior Python dev"", ""prefer concise replies"".",description,GlobalSettings.tsx,Helper text for the About You field,适用于所有项目。例如「资深 Python 开发者」「偏好简洁回复」。,Keep Python.
 global.aboutYou.placeholder,Tell your agents about yourself...,placeholder,GlobalSettings.tsx,Placeholder for the About You textarea,向你的Agent介绍一下你自己…,
 global.scratch.label,Quick Tasks Workspace,label,GlobalSettings.tsx,Field label for the scratch workspace path,快速任务工作目录,
 global.scratch.hint,Where Quick Tasks stores files,description,GlobalSettings.tsx,Helper for scratch workspace,快速任务存储文件的位置,
@@ -183,14 +183,14 @@ llm.checking,Checking LLM configuration...,status,LLMProviderSettings.tsx — wi
 llm.provider.heading,LLM Provider,heading,LLMProviderSettings.tsx,Collapsible/section header for LLM provider,模型提供方,Keep LLM.
 llm.wizard.usingDefaults,Using global defaults: {provider} / {model},description,LLMProviderSettings.tsx — wizard,Shows configured provider/model in create flow,使用全局默认值：{provider} / {model},Placeholders are provider/model names.
 llm.wizard.changeIn,Change defaults in Global Settings.,description,LLMProviderSettings.tsx — wizard,Hint pointing to Global Settings,在全局设置中更改默认值。,"Global Settings"""" links to global.title — keep consistent."
-llm.wizard.notConfigured,No LLM provider configured yet. Set up your API key and model in Global Settings before creating a project.,description,LLMProviderSettings.tsx — wizard,Warning when no provider configured,尚未配置大模型。请在创建项目空间前于全局设置中配置 API 密钥和模型。,
+llm.wizard.notConfigured,No LLM provider configured yet. Set up your API key and model in Global Settings before creating a project.,description,LLMProviderSettings.tsx — wizard,Warning when no provider configured,尚未配置大模型。请在创建项目前于全局设置中配置 API 密钥和模型。,
 llm.wizard.notSet,not set,status,LLMProviderSettings.tsx,Shown when model is unset in wizard summary,未设置,
 llm.loading,Loading LLM settings...,status,LLMProviderSettings.tsx,Loading state for the settings panel,正在加载大模型配置…,
 llm.project.usingDefault,(using {provider} default),misc,LLMProviderSettings.tsx — project collapsed header,Collapsed header note showing inherited provider,（使用 {provider} 默认值）,"{provider} may be a display name or """"global""""."
 llm.project.globalFallback,global,misc,LLMProviderSettings.tsx,Fallback word when no specific provider name,全局,
 llm.global.heading,Default LLM Settings,heading,LLMProviderSettings.tsx — global header,Header for global default LLM section,默认大模型设置,
-llm.global.subhead,Used by all projects unless overridden in project settings.,description,LLMProviderSettings.tsx,Subhead under default LLM settings,除非在项目空间中额外配置，否则所有项目空间都将使用这些设置。,
-llm.project.overrideHint,Leave blank to use global defaults. Only fill in to override for this project.,description,LLMProviderSettings.tsx — project mode,Hint above project LLM fields,留空以使用全局默认值。仅在需要为本项目空间覆盖时填写。,
+llm.global.subhead,Used by all projects unless overridden in project settings.,description,LLMProviderSettings.tsx,Subhead under default LLM settings,除非在项目中额外配置，否则所有项目都将使用这些设置。,
+llm.project.overrideHint,Leave blank to use global defaults. Only fill in to override for this project.,description,LLMProviderSettings.tsx — project mode,Hint above project LLM fields,留空以使用全局默认值。仅在需要为本项目覆盖时填写。,
 llm.field.provider,Provider,label,LLMProviderSettings.tsx; FallbackModelsEditor.tsx,Field label for the LLM provider dropdown,模型厂商,
 llm.provider.custom,Custom / Self-Hosted,menu,LLMProviderSettings.tsx,Provider dropdown option for custom endpoints,自定义 / 本地模型,
 llm.field.region,Region,label,LLMProviderSettings.tsx,Region toggle label (global/china base URL),API所属地域,
@@ -403,7 +403,7 @@ wizard.sandboxComplete.title,Your Agents Are Sandboxed,heading,SetupWizard.tsx,H
 wizard.sandboxComplete.item1,Isolated user account created,description,SetupWizard.tsx,Checklist item: isolated account,已创建隔离用户账户,
 wizard.sandboxComplete.item2,Agents cannot access your personal files,description,SetupWizard.tsx,Checklist item: file isolation,Agent无法访问你的个人文件,
 wizard.sandboxComplete.item3,Network traffic is filtered,description,SetupWizard.tsx,Checklist item: network filtering,网络流量已过滤,
-wizard.sandboxComplete.body,AI agents run in a restricted environment separate from your personal data. They can only access project files you explicitly grant.,description,SetupWizard.tsx,Explains sandbox benefits,AI Agent在与你的个人数据隔离的受限环境中运行。它们只能访问你明确授权的项目空间文件。,
+wizard.sandboxComplete.body,AI agents run in a restricted environment separate from your personal data. They can only access project files you explicitly grant.,description,SetupWizard.tsx,Explains sandbox benefits,AI Agent在与你的个人数据隔离的受限环境中运行。它们只能访问你明确授权的项目文件。,
 wizard.sandboxIncomplete.title,Sandbox Not Configured,heading,SetupWizard.tsx,Heading when sandbox setup failed,沙箱未配置,
 wizard.sandboxIncomplete.body,Agent sandbox setup did not complete during installation. Agents will run with your full system permissions.,description,SetupWizard.tsx,Explains the incomplete sandbox,安装期间未完成Agent沙箱配置。Agent将有你的完整系统权限。,
 wizard.sandboxIncomplete.howto,To set up the sandbox later:,description,SetupWizard.tsx,Intro to the manual setup steps,稍后配置沙箱：,
@@ -422,7 +422,7 @@ wizard.getStarted,Get Started →,button,SetupWizard.tsx,Finishes the wizard,开
 wizard.browser.opening,Browser open — sign in and close it...,status,SetupWizard.tsx,Button/status while warmup browser is open,浏览器已打开——请登录需要agent访问的帐号并关闭…,
 wizard.openBrowser,Open Browser,button,SetupWizard.tsx,Launches the warmup browser,打开浏览器,
 subAgentSettings.title,Sub-agents,heading,SubAgentSettings.tsx,Standalone page title,子Agent,
-subAgentSettings.intro,How Orbital invokes each sub-agent CLI. Daemon-level — applies to every project.,description,SubAgentSettings.tsx,Intro paragraph (embedded mode),Orbital 如何调用各子 Agent CLI。守护进程级——适用于所有项目空间。,Do not translate Orbital; CLI as-is.
+subAgentSettings.intro,How Orbital invokes each sub-agent CLI. Daemon-level — applies to every project.,description,SubAgentSettings.tsx,Intro paragraph (embedded mode),Orbital 如何调用各子 Agent CLI。守护进程级——适用于所有项目。,Do not translate Orbital; CLI as-is.
 subAgentSettings.refreshing,Refreshing...,status,SubAgentSettings.tsx,Button label while refreshing,刷新中…,
 subAgentSettings.refresh,Refresh,button,SubAgentSettings.tsx,Refreshes the sub-agent list,刷新,
 subAgentSettings.installHint,"Don't see an agent? Install its CLI, then Refresh.",description,SubAgentSettings.tsx,Explains how to make an installed CLI appear,没有看到所需Agent？安装其 CLI 后点击刷新。,Keep CLI.
@@ -495,7 +495,7 @@ pairPhone.relay.phone,Phone · {id},status,PairPhone.tsx,Label for a paired phon
 pairPhone.relay.linkedAt,Linked {date} at {time},status,PairPhone.tsx,When a device was paired,链接于 {date} {time},Dates/times come from locale formatting.
 pairPhone.relay.unlink,Unlink,button,PairPhone.tsx,Removes a paired device,解除链接,
 pairPhone.relay.unlinkTitle,Unlink this device,tooltip,PairPhone.tsx,Title on the unlink button,解除此设备的链接,
-claudemd.banner,Your workspace CLAUDE.md may conflict with Orbital's project-state inheritance. Sub-agents may behave unexpectedly.,message_error,ClaudemdWarningBanner.tsx,Warning banner about CLAUDE.md conflicts,工作目录中的 CLAUDE.md 可能与 Orbital 的项目空间子agent记忆冲突。子Agent可能表现异常。,Do not translate CLAUDE.md or Orbital.
+claudemd.banner,Your workspace CLAUDE.md may conflict with Orbital's project-state inheritance. Sub-agents may behave unexpectedly.,message_error,ClaudemdWarningBanner.tsx,Warning banner about CLAUDE.md conflicts,工作目录中的 CLAUDE.md 可能与 Orbital 的项目子agent记忆冲突。子Agent可能表现异常。,Do not translate CLAUDE.md or Orbital.
 claudemd.viewFile,view CLAUDE.md,button,ClaudemdWarningBanner.tsx,Link to open the CLAUDE.md file,查看 CLAUDE.md,Keep CLAUDE.md.
 claudemd.dismiss,dismiss,button,ClaudemdWarningBanner.tsx,Dismisses the warning banner,忽略,
 claudemd.matched,"(matched: """"{token}"""")",misc,ClaudemdWarningBanner.tsx,Shows which token triggered the warning,"（匹配到：""""{token}""""）",
@@ -515,7 +515,7 @@ subAgentBar.confirm.background,"The turn is finished, but tracked background wor
 subAgentBar.confirm.warning,Work the agent detached via a raw shell '&'/'nohup' runs outside its process tree and cannot be guaranteed stopped.,description,SubAgentStatusBar.tsx,Warning about detached background work,Agent通过原始 shell 的 '&'/'nohup' 分离出的工作运行在其进程树之外，无法保证被停止。,Keep '&'/'nohup' literal.
 subAgentBar.confirm.cancel,Cancel,button,SubAgentStatusBar.tsx,Cancels the stop confirmation,取消,Dedupe target.
 subAgentBar.confirm.stop,Stop,button,SubAgentStatusBar.tsx,Confirms stopping the sub-agent,停止,
-refreshTurn.inProgress,Checkpointing project state…,status,RefreshTurnStatus.tsx,State-refresh indicator: in progress,检查点 - 保存项目状态中…,Checkpoint → 检查点/存档. Consider 正在保存项目空间状态存档.
+refreshTurn.inProgress,Checkpointing project state…,status,RefreshTurnStatus.tsx,State-refresh indicator: in progress,检查点 - 保存项目状态中…,Checkpoint → 检查点/存档. Consider 正在保存项目状态存档.
 refreshTurn.done,Project state saved,status,RefreshTurnStatus.tsx,State-refresh indicator: done,项目状态已保存,
 refreshTurn.failed,Checkpoint failed,status,RefreshTurnStatus.tsx,State-refresh indicator: failed,检查点保存失败,
 refreshTurn.skipped,Checkpoint skipped,status,RefreshTurnStatus.tsx,State-refresh indicator: skipped,已跳过检查点,
@@ -618,9 +618,9 @@ activityGroup.messagesSent,{n} messages sent,status,activityGroup.ts,Summary cou
 activityGroup.requestsBlocked,{n} requests blocked,status,activityGroup.ts,Summary count label: requests blocked,已拦截 {n} 个请求,
 activityGroup.toolCalls,{n} tool calls,status,activityGroup.ts,Summary count label: generic tool calls,{n} 次工具调用,
 duration.lessThan1s,<1s,misc,activityGroup.ts; ChatView.tsx,Duration shown when under one second,<1秒,
-errorBoundary.message,Something went wrong displaying this project.,message_error,ErrorBoundary.tsx,Fallback shown when a project view crashes,显示该项目空间时出错。,
+errorBoundary.message,Something went wrong displaying this project.,message_error,ErrorBoundary.tsx,Fallback shown when a project view crashes,显示该项目时出错。,
 errorBoundary.retry,Try again,button,ErrorBoundary.tsx,Re-mounts the crashed subtree,重试,
-settingsIcon.aria,Project settings,tooltip,SettingsIcon.tsx,aria-label/title for the gear icon,项目空间设置,
+settingsIcon.aria,Project settings,tooltip,SettingsIcon.tsx,aria-label/title for the gear icon,项目设置,
 api.invalidJson,Invalid JSON response ({n} bytes),message_error,config.ts,Error surfaced when the API returns non-JSON,无效的 JSON 响应（{n} 字节）,Rarely user-visible; technical. Keep JSON.
 budget.corner.normal,≈ {spent} {window},status,ProjectDetail.tsx (BudgetCorner),Header corner: converted window spend next to the model name (no limit / under 80%),{window} ≈ {spent},zh word order: window word leads. {window} is a localized word like today/本周.
 budget.corner.warn,≈ {spent} / {limit} {window},status,ProjectDetail.tsx (BudgetCorner),Header corner at >=80% of limit (warning color); spend over limit with window word,{window} ≈ {spent} / {limit},zh word order: window word leads.
@@ -631,8 +631,8 @@ queue.banner.budget.title,Budget limit reached — queue paused,status,QueueHead
 queue.banner.budget.detail,Spent {spent} of {limit} {window},status,QueueHeader.tsx,Banner detail line with current spend/limit under the budget-pause title,{window}已花费 {spent} / {limit},zh word order: window word leads.
 queue.banner.budget.noLimit,Spent {spent} {window},status,QueueHeader.tsx,Banner detail when the queue is budget-paused but no numeric limit is resolvable,{window}已花费 {spent},zh word order: window word leads.
 blocked.budget.marker,{n} budget,nav,BlockedBadge.tsx,Sidebar Blocked row sub-marker counting budget-paused projects (distinct from approval count),{n} 个预算,
-blocked.budget.aria,{n} project paused for budget,tooltip,BlockedBadge.tsx — aria-label,Accessible label (singular) for budget-paused projects in the Blocked surface,有 {n} 个项目空间因预算暂停,EN pluralization handled in code (one/other).
-blocked.budget.aria.other,{n} projects paused for budget,tooltip,BlockedBadge.tsx — aria-label,Accessible label (plural) for budget-paused projects in the Blocked surface,有 {n} 个项目空间因预算暂停,EN pluralization handled in code (one/other).
+blocked.budget.aria,{n} project paused for budget,tooltip,BlockedBadge.tsx — aria-label,Accessible label (singular) for budget-paused projects in the Blocked surface,有 {n} 个项目因预算暂停,EN pluralization handled in code (one/other).
+blocked.budget.aria.other,{n} projects paused for budget,tooltip,BlockedBadge.tsx — aria-label,Accessible label (plural) for budget-paused projects in the Blocked surface,有 {n} 个项目因预算暂停,EN pluralization handled in code (one/other).
 budget.timeline.blocked.pause,Budget limit reached — queue paused (spent ≈ {spent} of {limit} {window}),status,ChatView.tsx timeline,Timeline row rendered from a source=budget event=budget_blocked row with action=pause,已达预算上限 — 队列已暂停（{window}已花费 ≈ {spent} / {limit}）,zh word order: window word leads inside the parenthetical.
 budget.timeline.blocked.stop,Budget limit reached — queue stopped (spent ≈ {spent} of {limit} {window}),status,ChatView.tsx timeline,Timeline row rendered from a source=budget event=budget_blocked row with action=stop,已达预算上限 — 队列已停止（{window}已花费 ≈ {spent} / {limit}）,zh word order: window word leads inside the parenthetical.
 budget.timeline.blocked.noLimit,Budget limit reached — queue paused (spent ≈ {spent} {window}),status,ChatView.tsx timeline,Timeline row when the payload carries no numeric limit,已达预算上限 — 队列已暂停（{window}已花费 ≈ {spent}）,zh word order: window word leads.

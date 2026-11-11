@@ -371,6 +371,22 @@ describe('SetupWizard — Agents step', () => {
     expect(settingsPuts()).toEqual([{ sub_agents_hidden: ['aider', 'codex'] }]);
   });
 
+  it('ticks are locked while Continue saves, so an uncheck cannot be dropped (pass 2b)', async () => {
+    mockApi({ apiKeySet: false });
+    const base = apiMock.getMockImplementation()!;
+    let release: (v: unknown) => void = () => {};
+    apiMock.mockImplementation((path: string, opts?: { method?: string }) =>
+      path === '/api/v2/settings' && opts?.method === 'PUT'
+        ? new Promise((r) => { release = r; })
+        : base(path, opts));
+    render(<SetupWizard onComplete={vi.fn()} />);
+    await waitFor(() => expect(screen.getByTestId('wizard-agent-check-codex')).toBeTruthy());
+    await continueFromAgents();
+    const codex = screen.getByTestId('wizard-agent-check-codex') as HTMLInputElement;
+    expect(codex.disabled).toBe(true);
+    await act(async () => { release({}); });
+  });
+
   it('an agent with no login flow says where its key goes instead of offering Sign in', async () => {
     mockApi({
       apiKeySet: false,
