@@ -744,6 +744,27 @@ describe('T5 ChatView: per-session history load', () => {
     expect(chatCalls[1]).toContain('session_id=s2');
   });
 
+  it('a session holding only a failed run\'s row shows the failure, not "No messages yet"', async () => {
+    // An import's background read whose key was rejected: the file holds
+    // only the loop's LLM-error row, and the banner's in-memory event is
+    // gone after a daemon restart (run-status answers none).
+    chatInitialResponse = {
+      data: [{
+        role: 'system',
+        content: 'LLM error (non-recoverable): invalid x-api-key. Stopping.',
+        source: 'management',
+        timestamp: '2026-11-11T10:00:00Z',
+      }],
+      total: 1,
+    };
+    await renderChat({ sessionId: 's1' });
+    await flushEffects();
+    expect(container.textContent ?? '').not.toContain('No messages yet');
+    const row = container.querySelector('[data-testid="sub-agent-activity"]');
+    expect(row?.getAttribute('data-action')).toBe('failed');
+    expect(row?.textContent ?? '').toContain('invalid x-api-key');
+  });
+
   it('does NOT fetch /chat history when no session is resolved (sessionId undefined)', async () => {
     await renderChat({ sessionId: undefined });
     await flushEffects();

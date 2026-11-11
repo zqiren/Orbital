@@ -770,6 +770,39 @@ function applyDispatchFailureReason(
   };
 }
 
+// The Orbital agent's terminal failure rows (agent/loop.py append_system:
+// a non-recoverable or retries-exhausted LLM error, an internal crash).
+const MANAGER_RUN_FAILED_RE =
+  /^(?:LLM error \(non-recoverable\)|LLM error after \d+ retries): ([\s\S]*?)\.?\s+Stopping\.$/;
+const MANAGER_RUN_CRASHED_RE = /^Run failed \(([\w.]+)\): ([\s\S]*?)\.?\s+Stopping\.$/;
+// agent_manager._record_start_failure's row (`_meta.event: start_failed`).
+const START_FAILED_DETAIL_RE = /—\s+([\s\S]*?)\.?\s+Your message was saved/;
+
+/**
+ * The persisted row a failed run of the Orbital agent leaves, as the same
+ * failed row a worker's failure gets (2026-11-11). Without it a failed run is
+ * legible only through the in-memory error banner, which a daemon restart
+ * clears — and a session whose only row is the failure (an import's
+ * background read) read "No messages yet". The detail is the backend's own
+ * text, shown untranslated like a worker's error.
+ */
+function managerFailureRow(msg: ChatMessage): SubAgentActivity | null {
+  const content = typeof msg.content === 'string' ? msg.content : '';
+  let error: string | null = null;
+  let m: RegExpMatchArray | null;
+  if (msg._meta?.event === 'start_failed') {
+    error = (m = content.match(START_FAILED_DETAIL_RE))
+      ? m[1].trim()
+      : content.replace(/^\[|\]$/g, '').trim();
+  } else if ((m = content.match(MANAGER_RUN_FAILED_RE))) {
+    error = m[1].trim();
+  } else if ((m = content.match(MANAGER_RUN_CRASHED_RE))) {
+    error = `${m[1]}: ${m[2].trim()}`;
+  }
+  if (error === null) return null;
+  return { type: 'sub_agent_activity', action: 'failed', handle: 'orbital', error, timestamp: msg.timestamp };
+}
+
 /** The keyless-onboarding / import dividers, keyed on `_meta.event`. */
 function parseDaemonRow(msg: ChatMessage): DisplayItem | null {
   const meta = msg._meta;
@@ -1636,6 +1669,13 @@ export function transformChatHistory(
       if (msg.content === CANCELLED_BY_USER) {
         finalizeCapsule();
         items.push({ type: 'sub_agent_activity', action: 'stopped', handle: 'orbital', timestamp: msg.timestamp });
+        i++;
+        continue;
+      }
+      const managerFailure = managerFailureRow(msg);
+      if (managerFailure) {
+        finalizeCapsule();
+        items.push(managerFailure);
         i++;
         continue;
       }
