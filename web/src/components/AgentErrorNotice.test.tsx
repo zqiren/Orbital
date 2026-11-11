@@ -23,6 +23,32 @@ describe('AgentErrorNotice', () => {
     expect(screen.getByText('No LLM API key configured')).toBeTruthy();
   });
 
+  it('shows the provider sentence, not the raw SDK payload (1111 pass 2, D24)', () => {
+    const { unmount } = render(
+      <AgentErrorNotice
+        code="provider_error"
+        message="Error code: 400 - {'error': {'type': 'server_error', 'message': 'Upstream request failed: Model is unavailable.'}}"
+        onOpenSettings={vi.fn()}
+        onDismiss={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId('agent-error-notice').textContent).toBe(
+      'The agent stopped due to a provider error.Upstream request failed: Model is unavailable.Open SettingsDismiss',
+    );
+    unmount();
+    render(
+      <AgentErrorNotice
+        code="invalid_api_key"
+        message="Error code: 401 - {'error': {...}}"
+        onOpenSettings={vi.fn()}
+        onDismiss={vi.fn()}
+      />,
+    );
+    const text = screen.getByTestId('agent-error-notice').textContent ?? '';
+    expect(text).not.toMatch(/Error code|\{/);
+    expect(text).toMatch(/^The provider rejected the API key\./);
+  });
+
   it('falls back to the generic provider-error headline for unknown codes', () => {
     render(
       <AgentErrorNotice

@@ -62,6 +62,70 @@ export function codedErrorOf(err: unknown): ProviderErrorInfo | null {
   return err instanceof Error ? codedFromText(err.message) : null;
 }
 
+/**
+ * The provider's own sentence from an error detail. SDK errors arrive as
+ * ``Error code: 400 - {'error': {'message': '…'}}`` (a Python repr); this
+ * returns the innermost ``message`` the way the daemon's
+ * ``unwrap_provider_message`` does, and '' when the envelope holds no
+ * readable message (the payload itself is never shown). Plain sentences pass
+ * through unchanged.
+ */
+export function readableProviderDetail(raw: string): string {
+  const m = /^\s*Error code:\s*\d+\s+-\s+([[{][\s\S]*)$/.exec(raw);
+  const body = m ? m[1] : /^\s*[[{]/.test(raw) ? raw : null;
+  if (body === null) return raw;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(pythonReprToJson(body.trim()));
+  } catch {
+    return '';
+  }
+  for (let i = 0; i < 4; i++) {
+    if (typeof parsed === 'string') return parsed;
+    if (parsed === null || typeof parsed !== 'object') break;
+    const p = parsed as { message?: unknown; error?: unknown };
+    if (typeof p.message === 'string' && p.message) return p.message;
+    if (p.error === undefined) break;
+    parsed = p.error;
+  }
+  return '';
+}
+
+/** A Python literal's repr as JSON: quoted strings re-quoted, True/False/None
+ *  mapped. Anything else is left for JSON.parse to reject. */
+function pythonReprToJson(src: string): string {
+  let out = '';
+  let i = 0;
+  while (i < src.length) {
+    const ch = src[i];
+    if (ch === "'" || ch === '"') {
+      let s = '';
+      i++;
+      while (i < src.length && src[i] !== ch) {
+        if (src[i] === '\\' && i + 1 < src.length) {
+          const e = src[i + 1];
+          s += e === 'n' ? '\n' : e === 't' ? '\t' : e;
+          i += 2;
+        } else {
+          s += src[i++];
+        }
+      }
+      i++;
+      out += JSON.stringify(s);
+      continue;
+    }
+    const word = /^(True|False|None)\b/.exec(src.slice(i));
+    if (word) {
+      out += word[1] === 'True' ? 'true' : word[1] === 'False' ? 'false' : 'null';
+      i += word[1].length;
+      continue;
+    }
+    out += ch;
+    i++;
+  }
+  return out;
+}
+
 function codedFromText(text: string): ProviderErrorInfo | null {
   try {
     const parsed: unknown = JSON.parse(text);

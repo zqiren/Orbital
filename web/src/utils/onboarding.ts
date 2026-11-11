@@ -211,12 +211,37 @@ export function rowKeys(data: ImportableResponse): string[] {
 }
 
 /**
+ * One tick change. The first one pins every row on the list to the tick it
+ * shows at that moment, so from then on a row's tick changes only by the
+ * user's click: a row's default can flip when the analysed list replaces the
+ * first one (a minor folder gains conversations, 1111 pass 2), and a default
+ * that flips would import a folder the user saw unchecked. `data` is the list
+ * on screen at the click.
+ */
+export function withTickChange(
+  prev: ImportChoices,
+  data: ImportableResponse | null,
+  key: string,
+  checked: boolean,
+): ImportChoices {
+  if (prev.offered !== null || !data) {
+    return { ...prev, ticks: { ...prev.ticks, [key]: checked } };
+  }
+  const pinned: TickOverrides = {};
+  for (const c of data.candidates) {
+    if (!c.already_imported) pinned[folderKey(c.path)] = isFolderChecked(c, prev.ticks);
+  }
+  for (const g of data.groups ?? []) pinned[groupKey(g.id)] = isGroupChecked(g, prev.ticks);
+  return { ...prev, offered: rowKeys(data), ticks: { ...pinned, [key]: checked } };
+}
+
+/**
  * The list keeps filling in after it first shows (groups and the rebuilt
- * folder rows arrive with the history scan). Everything is offered checked,
- * but once the user has started choosing, a row that was not on screen when
- * they did is not part of what they chose: it arrives unchecked, so a folder
- * they never saw is not imported behind their back. `offered` is the row keys
- * on the list at the user's first change; null until they make one.
+ * folder rows arrive with the history scan, and may replace the first rows
+ * under new paths or ids). Everything is offered checked, but once the user
+ * has started choosing (`offered` set by withTickChange), every row without
+ * a tick of its own is unchecked, so a folder they never chose is not
+ * imported behind their back.
  */
 export function withLateRowsUnchecked(
   data: ImportableResponse,
@@ -224,9 +249,8 @@ export function withLateRowsUnchecked(
   offered: readonly string[] | null,
 ): TickOverrides {
   if (offered === null) return ticks;
-  const seen = new Set(offered);
   const late: TickOverrides = {};
-  for (const key of rowKeys(data)) if (!seen.has(key)) late[key] = false;
+  for (const key of rowKeys(data)) if (!(key in ticks)) late[key] = false;
   return { ...late, ...ticks };
 }
 
