@@ -37,9 +37,9 @@ import {
   isFolderChecked,
   isGroupChecked,
   landingProjectId,
-  rowKeys,
   uncheckedCount,
   withLateRowsUnchecked,
+  withTickChange,
   NO_CHOICES,
   type GroupReason,
   type ImportChoices,
@@ -136,16 +136,11 @@ export default function ImportProjectsStep({
   const count = request.folders.length + request.groups.length;
   const scanning = !scan.settled && data?.status === 'scanning';
 
-  // The first change fixes which rows the user was choosing from; rows that
-  // arrive later come in unchecked (withLateRowsUnchecked). Computed here,
-  // not inside the updater, from the list on screen at the click.
+  // The first change pins every row to the tick it shows; after it only the
+  // user's clicks check a row (withTickChange, withLateRowsUnchecked). `data`
+  // is the list on screen at the click.
   const toggle = (key: string, checked: boolean) => {
-    const firstChoice = offered === null && data ? rowKeys(data) : null;
-    setChoices((prev) => ({
-      ...prev,
-      offered: prev.offered ?? firstChoice,
-      ticks: { ...prev.ticks, [key]: checked },
-    }));
+    setChoices((prev) => withTickChange(prev, data, key, checked));
   };
 
   async function handleImport() {

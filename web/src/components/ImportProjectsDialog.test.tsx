@@ -78,3 +78,20 @@ describe('ImportProjectsDialog — cost sign (spec 160 round 2)', () => {
     expect(screen.queryByTestId('token-cost-sign')).toBeNull();
   });
 });
+
+describe('ImportProjectsDialog — rows that arrive after the user chose (1111 pass 2, N2)', () => {
+  it('a replacement list after an uncheck brings nothing checked', () => {
+    const original = scan.importable;
+    const rows = original!.candidates;
+    scan.importable = { status: 'scanning', candidates: rows.slice(0, 3).map((c, i) => ({ ...c, minor: i === 2 })), groups: [] };
+    const { rerender } = render(<ImportProjectsDialog onClose={vi.fn()} onImported={vi.fn()} />);
+    fireEvent.click(screen.getByTestId('import-check-/w/proj-0'));
+    fireEvent.click(screen.getByTestId('import-check-/w/proj-1'));
+    scan.importable = { status: 'ready', candidates: rows, groups: [] };
+    rerender(<ImportProjectsDialog onClose={vi.fn()} onImported={vi.fn()} />);
+    const checked = screen.getAllByRole('checkbox').filter((el) => (el as HTMLInputElement).checked);
+    expect(checked).toHaveLength(0);
+    expect(screen.getByTestId('import-submit').textContent).toBe('Import 0 projects');
+    scan.importable = original;
+  });
+});

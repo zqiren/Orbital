@@ -18,6 +18,11 @@ import {
   showNotesCard,
   parseLeftOff,
   uncheckedCount,
+  withLateRowsUnchecked,
+  withTickChange,
+  isFolderChecked,
+  isGroupChecked,
+  NO_CHOICES,
   type ImportCandidate,
   type ImportGroup,
   type ImportableResponse,
@@ -105,6 +110,51 @@ describe('uncheckedCount — projects_unchecked telemetry', () => {
         [folderKey('/Users/x/beta')]: false,
       }),
     ).toBe(2);
+  });
+});
+
+describe('withTickChange + withLateRowsUnchecked — after the first change only clicks check a row (1111 pass 2)', () => {
+  const shown = (data: ImportableResponse, choices: { ticks: Record<string, boolean>; offered: string[] | null }) => {
+    const ticks = withLateRowsUnchecked(data, choices.ticks, choices.offered);
+    return {
+      folders: Object.fromEntries(data.candidates.filter((c) => !c.already_imported).map((c) => [c.path, isFolderChecked(c, ticks)])),
+      groups: Object.fromEntries((data.groups ?? []).map((g) => [g.id, isGroupChecked(g, ticks)])),
+    };
+  };
+
+  it('a row offered unchecked (minor) whose default later flips to checked stays unchecked', () => {
+    const first: ImportableResponse = { status: 'scanning', candidates: [cand(), cand({ name: 'beta', path: '/Users/x/beta', minor: true })], groups: [] };
+    const choices = withTickChange(NO_CHOICES, first, folderKey('/Users/x/alpha'), false);
+    // The analysed list: beta now has 3+ conversations, so its default is checked.
+    const ready: ImportableResponse = { status: 'ready', candidates: [cand(), cand({ name: 'beta', path: '/Users/x/beta', minor: false })], groups: [] };
+    expect(shown(ready, choices).folders).toEqual({ '/Users/x/alpha': false, '/Users/x/beta': false });
+  });
+
+  it('rows left checked keep their tick under the same identity; new and renamed rows come in unchecked', () => {
+    const first: ImportableResponse = { status: 'scanning', candidates: [cand(), cand({ name: 'beta', path: '/Users/x/beta' })], groups: [group({ id: 'grp_1' })] };
+    const choices = withTickChange(NO_CHOICES, first, folderKey('/Users/x/alpha'), false);
+    const ready: ImportableResponse = {
+      status: 'ready',
+      candidates: [cand(), cand({ name: 'beta', path: '/Users/x/beta', minor: true }), cand({ name: 'beta2', path: '/Users/x/beta/' })],
+      groups: [group({ id: 'grp_1' }), group({ id: 'grp_9' })],
+    };
+    expect(shown(ready, choices)).toEqual({
+      folders: { '/Users/x/alpha': false, '/Users/x/beta': true, '/Users/x/beta/': false },
+      groups: { grp_1: true, grp_9: false },
+    });
+  });
+
+  it('before any change, everything is offered by its default', () => {
+    expect(withLateRowsUnchecked(DATA, {}, null)).toEqual({});
+  });
+
+  it('later changes only set the clicked row', () => {
+    const first: ImportableResponse = { status: 'scanning', candidates: [cand()], groups: [] };
+    const a = withTickChange(NO_CHOICES, first, folderKey('/Users/x/alpha'), false);
+    const ready: ImportableResponse = { status: 'ready', candidates: [cand(), cand({ name: 'late', path: '/Users/x/late' })], groups: [] };
+    const b = withTickChange(a, ready, folderKey('/Users/x/late'), true);
+    expect(b.offered).toEqual(a.offered);
+    expect(shown(ready, b).folders).toEqual({ '/Users/x/alpha': false, '/Users/x/late': true });
   });
 });
 

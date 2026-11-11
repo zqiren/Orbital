@@ -22,7 +22,7 @@
 import { useState } from 'react';
 import { AlertCircle } from 'lucide-react';
 import { useT } from '../i18n/useT';
-import { isInternalError, providerErrorKey } from '../utils/providerError';
+import { isInternalError, providerErrorKey, readableProviderDetail } from '../utils/providerError';
 import { SendFeedbackDialog } from './SendFeedback';
 
 export interface AgentErrorNoticeProps {
@@ -44,6 +44,9 @@ export default function AgentErrorNotice({
   const t = useT();
   const internal = isInternalError(code);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
+  // The provider's sentence, not the SDK payload around it (1111 pass 2).
+  // Send feedback still carries the raw detail.
+  const detail = message ? readableProviderDetail(message) : '';
   return (
     <div
       data-testid="agent-error-notice"
@@ -55,8 +58,8 @@ export default function AgentErrorNotice({
         <AlertCircle size={14} className="mt-0.5 shrink-0 text-error" />
         <div className="min-w-0">
           <p className="text-sm text-primary">{t(providerErrorKey(code))}</p>
-          {message && (
-            <p className="mt-1 text-xs text-secondary break-words">{message}</p>
+          {detail && (
+            <p className="mt-1 text-xs text-secondary break-words">{detail}</p>
           )}
         </div>
       </div>

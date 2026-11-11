@@ -13,7 +13,8 @@
 import { render, screen, cleanup, fireEvent, waitFor, act } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { OnboardingScan } from '../hooks/useOnboardingScan';
-import type { ImportableResponse } from '../utils/onboarding';
+import { useState } from 'react';
+import { NO_CHOICES, type ImportableResponse, type ImportChoices } from '../utils/onboarding';
 
 const apiMock = vi.hoisted(() => vi.fn());
 vi.mock('../config', () => ({ api: apiMock }));
@@ -314,5 +315,68 @@ describe('ImportProjectsStep — rows that arrive after the user started choosin
     expect(check('import-check-/Users/x/orbital-test').checked).toBe(true);
     expect(check('import-check-/Users/x/later').checked).toBe(true);
     expect(check('import-group-check-grp_decks').checked).toBe(true);
+  });
+});
+
+describe('ImportProjectsStep — the feed replaces the list after the user chose (1111 pass 2, N2)', () => {
+  const folder = (name: string, over: Partial<ImportableResponse['candidates'][number]> = {}) => ({
+    ...DATA.candidates[0], name, path: `/Users/x/${name}`, by_agent: { 'claude-code': 4 }, session_count: 4, ...over,
+  });
+  // The folder scan's instant first answer: a few rows, some of them minor.
+  const FIRST: ImportableResponse = {
+    status: 'scanning',
+    candidates: [folder('a'), folder('b'), folder('c'), folder('tiny', { minor: true, session_count: 1, is_git: false })],
+    groups: [],
+  };
+  // The analysed list replaces it: more rows, a row under a new path, the
+  // minor row now a worked-in folder, groups.
+  const REPLACED: ImportableResponse = {
+    status: 'scanning',
+    candidates: [
+      folder('a'), folder('b-renamed', { path: '/Users/x/b/' }), folder('c'), folder('tiny'),
+      ...Array.from({ length: 20 }, (_, i) => folder(`new-${i}`)),
+    ],
+    groups: [DATA.groups![0]],
+  };
+  const READY: ImportableResponse = { ...REPLACED, status: 'ready', candidates: REPLACED.candidates.slice(0, 10), groups: [{ ...DATA.groups![0], id: 'grp_other' }] };
+
+  const checkedRows = () =>
+    screen.queryAllByRole('checkbox').filter((el) => (el as HTMLInputElement).checked).map((el) => el.getAttribute('data-testid'));
+
+  it('unchecking the first rows, then a replacement list and the scan finishing, checks nothing', () => {
+    const { rerender } = render(<ImportProjectsStep scan={scanOf({ settled: false, importable: FIRST })} onImported={vi.fn()} />);
+    for (const n of ['a', 'b', 'c']) fireEvent.click(check(`import-check-/Users/x/${n}`));
+    expect(submit().textContent).toBe('Import 0 projects');
+
+    rerender(<ImportProjectsStep scan={scanOf({ settled: false, importable: REPLACED })} onImported={vi.fn()} />);
+    expect(checkedRows()).toEqual([]);
+    expect(submit().textContent).toBe('Import 0 projects');
+
+    // The scan flips from running to done (settled, status ready).
+    rerender(<ImportProjectsStep scan={scanOf({ settled: true, importable: READY })} onImported={vi.fn()} />);
+    expect(checkedRows()).toEqual([]);
+    expect(submit().textContent).toBe('Import 0 projects');
+    expect(submit().disabled).toBe(true);
+  });
+
+  it('a row the user left checked stays checked through the replacement', () => {
+    const { rerender } = render(<ImportProjectsStep scan={scanOf({ settled: false, importable: FIRST })} onImported={vi.fn()} />);
+    fireEvent.click(check('import-check-/Users/x/a'));
+    rerender(<ImportProjectsStep scan={scanOf({ settled: true, importable: READY })} onImported={vi.fn()} />);
+    expect(checkedRows()).toEqual(['import-check-/Users/x/c']);
+    expect(submit().textContent).toBe('Import 1 project');
+  });
+
+  it('the wizard-held choices survive the step remounting (Back and forward) mid-scan', () => {
+    function Harness({ data, shown }: { data: ImportableResponse; shown: boolean }) {
+      const choices = useState<ImportChoices>(NO_CHOICES);
+      return shown ? <ImportProjectsStep scan={scanOf({ settled: false, importable: data })} onImported={vi.fn()} choices={choices} /> : null;
+    }
+    const { rerender } = render(<Harness data={FIRST} shown />);
+    for (const n of ['a', 'b', 'c']) fireEvent.click(check(`import-check-/Users/x/${n}`));
+    rerender(<Harness data={FIRST} shown={false} />);
+    rerender(<Harness data={REPLACED} shown />);
+    expect(checkedRows()).toEqual([]);
+    expect(submit().textContent).toBe('Import 0 projects');
   });
 });
