@@ -90,7 +90,8 @@ function GuestCmd([string]$cmd) {
 }
 function GuestPs([string]$script) {
   $ErrorActionPreference = 'Continue'  # 5.1: native stderr must not throw
-  $b64 = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($script))
+  # No progress records: over SSH they arrive as CLIXML on stderr and garble the output.
+  $b64 = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes("`$ProgressPreference='SilentlyContinue'`n" + $script))
   & $SshExe @SshOpts -p $FreshSshPort "$FreshVmUser@127.0.0.1" "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $b64"
 }
 function GuestPsFile([string]$file, [string]$argline = '') {
