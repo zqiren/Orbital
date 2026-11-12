@@ -17,6 +17,9 @@ try {
   $env:ORBITAL_TEST_OPENCODE_KEY = [IO.File]::ReadAllText($keyFile).Trim()
   Remove-Item -Force $keyFile
   if (Test-Path $keyFile) { throw 'could not delete the key file' }
+  $kb = [Text.Encoding]::UTF8.GetBytes($env:ORBITAL_TEST_OPENCODE_KEY)
+  $kh = -join ([Security.Cryptography.SHA256]::Create().ComputeHash($kb)[0..3] | ForEach-Object { $_.ToString('x2') })
+  Note "key fingerprint in the guest: len=$($kb.Length) sha256=$kh..."
   $env:AGENT_OS_TELEMETRY_DISABLED = '1'
   # A task gets the env from the registry; make sure npm's prefix is on PATH.
   $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')

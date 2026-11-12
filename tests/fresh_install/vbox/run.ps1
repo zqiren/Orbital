@@ -127,6 +127,11 @@ try {
   CopyTo $argFile 'C:/fi/run-args.txt'
 
   # ---- start the scenario in tester's desktop session (key on stdin)
+  # Fingerprint only (length + 8 hex of sha256), never the key: compare with
+  # guest-run's line in console.log to prove the key arrived unchanged.
+  $kb = [Text.Encoding]::UTF8.GetBytes($env:ORBITAL_TEST_OPENCODE_KEY)
+  $kh = -join ([Security.Cryptography.SHA256]::Create().ComputeHash($kb)[0..3] | ForEach-Object { $_.ToString('x2') })
+  Log "key fingerprint on the runner: len=$($kb.Length) sha256=$kh..."
   Log 'starting the scenario in the guest desktop session (this takes a while)'
   $env:ORBITAL_TEST_OPENCODE_KEY | & $SshExe @SshOpts -p $FreshSshPort "$FreshVmUser@127.0.0.1" "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File C:\fi\guest-start.ps1"
   $startRc = $LASTEXITCODE
@@ -139,7 +144,7 @@ try {
   while ((Get-Date) -lt $deadline) {
     Start-Sleep -Seconds 20
     $chunk = GuestPs @"
-`$f='C:\fi\state\console.log'; `$n=0; if (Test-Path `$f) { `$b=[IO.File]::ReadAllBytes(`$f); `$n=`$b.Length; if (`$n -gt $offset) { [Console]::Out.Write([Text.Encoding]::UTF8.GetString(`$b, $offset, `$n - $offset)) } }
+`$f='C:\fi\state\console.log'; `$n=0; if (Test-Path `$f) { `$s=New-Object IO.FileStream `$f,'Open','Read','ReadWrite'; `$ms=New-Object IO.MemoryStream; `$s.CopyTo(`$ms); `$s.Close(); `$b=`$ms.ToArray(); `$n=`$b.Length; if (`$n -gt $offset) { [Console]::Out.Write([Text.Encoding]::UTF8.GetString(`$b, $offset, `$n - $offset)) } }
 [Console]::Out.Write("``n@@META `$n " + (Test-Path 'C:\fi\state\done'))
 "@
     if ($LASTEXITCODE -ne 0 -or -not $chunk) { continue }   # a dropped SSH poll is not fatal
