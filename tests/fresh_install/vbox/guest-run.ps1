@@ -1,5 +1,5 @@
-# Runs INSIDE the guest as the scheduled task guest-start.ps1 registers: in
-# tester's desktop session, elevated. Reads the key file into the env and
+# Runs INSIDE the guest, started by tester's desktop explorer (guest-start.ps1
+# explains why): desktop session, the shell's own token, not elevated. Reads the key file into the env and
 # deletes it before node starts, runs `npm ci` + scenario.mjs with the args
 # run.ps1 wrote to C:\fi\run-args.txt, and leaves console.log, exitcode and
 # a `done` marker in C:\fi\state for the host to poll.
@@ -25,7 +25,9 @@ try {
   $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
   $env:NPM_CONFIG_PREFIX = [Environment]::GetEnvironmentVariable('NPM_CONFIG_PREFIX', 'User')
   $session = (Get-Process -Id $PID).SessionId
-  Note "session $session, user $env:USERNAME, node $(& node --version)"
+  $parent = (Get-CimInstance Win32_Process -Filter "ProcessId=$((Get-CimInstance Win32_Process -Filter "ProcessId=$PID").ParentProcessId)" -ErrorAction SilentlyContinue).Name
+  $elev = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+  Note "session $session, user $env:USERNAME, elevated $elev, parent $parent, node $(& node --version)"
 
   Set-Location (Join-Path $fi 'fresh_install')
   & cmd.exe /c "npm ci --no-audit --no-fund > `"$state\npm-ci.log`" 2>&1"

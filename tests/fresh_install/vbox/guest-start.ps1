@@ -31,19 +31,35 @@ $state = Join-Path $fi 'state'
 Remove-Item -Recurse -Force $state -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $state | Out-Null
 
+# The scenario must run with the token of tester's desktop shell, the one a
+# user's double-click gives. A process started by Task Scheduler gets a
+# logon session of its own, and in it Python keyring's CredWrite fails with
+# 1312 (ERROR_NO_SUCH_LOGON_SESSION): Orbital launched that way could not
+# save a provider card, and the installer's --setup-sandbox could not store
+# the sandbox password. Orbital launched through explorer stores both fine
+# (probed on this VM). So the task only asks the desktop's explorer to open
+# guest-run.cmd; explorer starts it with the shell's own token (not elevated).
+#
+# The installer then elevates itself as it does for a user. Its UAC "Yes"
+# is given by setting admin consent to "elevate without prompting" here, in
+# the throwaway guest only (the snapshot is restored after every run).
+$uac = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
+Set-ItemProperty $uac -Name ConsentPromptBehaviorAdmin -Value 0 -Type DWord
+Set-ItemProperty $uac -Name PromptOnSecureDesktop -Value 0 -Type DWord
+
+$cmd = Join-Path $fi 'guest-run.cmd'
+[IO.File]::WriteAllText($cmd, "@start `"`" powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File $fi\guest-run.ps1`r`n")
 $name = 'orbital-fresh-run'
-$action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File $fi\guest-run.ps1" -WorkingDirectory $fi
-$principal = New-ScheduledTaskPrincipal -UserId "$env:COMPUTERNAME\$env:USERNAME" -LogonType Interactive -RunLevel Highest
-$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 3) -MultipleInstances IgnoreNew
-Register-ScheduledTask -TaskName $name -Action $action -Principal $principal -Settings $settings -Force | Out-Null
+$action = New-ScheduledTaskAction -Execute 'explorer.exe' -Argument $cmd -WorkingDirectory $fi
+$principal = New-ScheduledTaskPrincipal -UserId "$env:COMPUTERNAME\$env:USERNAME" -LogonType Interactive -RunLevel Limited
+Register-ScheduledTask -TaskName $name -Action $action -Principal $principal -Force | Out-Null
 Start-ScheduledTask -TaskName $name
-Start-Sleep -Seconds 3
-$t = Get-ScheduledTask -TaskName $name
-Write-Host "scheduled task ${name}: $($t.State)"
-if ($t.State -ne 'Running' -and -not (Test-Path (Join-Path $state 'done'))) {
-  $i = Get-ScheduledTaskInfo -TaskName $name
-  Write-Host "task did not start: last result $($i.LastTaskResult)"
-  Remove-Item -Force (Join-Path $secret 'key') -ErrorAction SilentlyContinue
-  exit 3
+$console = Join-Path $state 'console.log'
+for ($i = 0; $i -lt 30; $i++) {
+  Start-Sleep -Seconds 2
+  if (Test-Path $console) { Write-Host 'guest-run started through the desktop shell'; exit 0 }
 }
-exit 0
+$ti = Get-ScheduledTaskInfo -TaskName $name
+Write-Host "guest-run did not start within 60 s (launcher task last result $($ti.LastTaskResult))"
+Remove-Item -Force (Join-Path $secret 'key') -ErrorAction SilentlyContinue
+exit 3
