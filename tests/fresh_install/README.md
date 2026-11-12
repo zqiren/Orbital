@@ -124,14 +124,23 @@ tests\fresh_install\vbox\bootstrap.cmd D:\orbital-winvm-cache
 .\tests\fresh_install\vbox\run.ps1 -RunId <CI run id> -Out <dir>      # or -Tag vX.Y.Z; downloads with gh
 ```
 
-**Why a scheduled task.** Anything started over SSH on Windows runs outside
-the logged-in desktop, so the Orbital window would never appear and the
-scenario's desktop screenshot / window check (`desktopScreenshot`,
-`nativeWindowFacts`) would come back empty. So `run.ps1` pipes the key over
-SSH stdin into `guest-start.ps1`, which writes it to a file only `tester`
-(and SYSTEM) can read and starts `guest-run.ps1` as a scheduled task in
-tester's interactive session at the highest run level (the Inno installer
-needs admin). `guest-run.ps1` reads the key into its env, deletes the file,
+**Why the desktop shell starts the scenario.** Anything started over SSH on
+Windows runs outside the logged-in desktop, so the Orbital window would never
+appear and the scenario's desktop screenshot / window check
+(`desktopScreenshot`, `nativeWindowFacts`) would come back empty. A process
+that Task Scheduler starts is in the desktop but has a logon session of its
+own, where Credential Manager writes fail (CredWrite 1312): Orbital started
+that way can't save a provider card, and the installer's `--setup-sandbox`
+can't store the sandbox password. So `run.ps1` pipes the key over SSH stdin
+(no BOM; the guest decodes raw bytes as UTF-8, since `[Console]::In` would
+read them as GBK) into `guest-start.ps1`. It writes the key to a file only
+`tester` (and SYSTEM) can read, and registers a one-shot task that only
+asks tester's desktop explorer to open `guest-run.cmd`. Explorer starts it
+with the shell's own unelevated token, as a double-click would. The Inno
+installer elevates itself as it does for a user; the guest's admin consent
+is set to "elevate without prompting", standing in for the UAC "Yes". Both
+sides log a key fingerprint (length + 8 hex of sha256, never the key).
+`guest-run.ps1` reads the key into its env, deletes the file,
 runs `npm ci` and `node scenario.mjs --require-key` with
 `AGENT_OS_TELEMETRY_DISABLED=1`, and writes `console.log`, `exitcode` and
 `done` into `C:\fi\state`; the host polls and streams `console.log`. The
