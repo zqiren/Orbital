@@ -98,14 +98,16 @@ function GuestPsFile([string]$file, [string]$argline = '') {
   & $SshExe @SshOpts -p $FreshSshPort "$FreshVmUser@127.0.0.1" "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $file $argline"
 }
 # Copy to/from the guest. Guest paths are like C:/fi/in/ (forward slashes).
+# -O (legacy scp protocol): the guest's Win32-OpenSSH 10.4 sftp subsystem
+# exits 1 right away ("Connection closed"), which breaks scp's default SFTP mode.
 function CopyTo([string]$src, [string]$dst) {
   $ErrorActionPreference = 'Continue'  # 5.1: native stderr must not throw
-  & $ScpExe -q @SshOpts -P $FreshSshPort $src "$($FreshVmUser)@127.0.0.1:$dst"
+  & $ScpExe -O -q @SshOpts -P $FreshSshPort $src "$($FreshVmUser)@127.0.0.1:$dst"
   if ($LASTEXITCODE -ne 0) { throw "scp $src -> guest $dst failed ($LASTEXITCODE)" }
 }
 function CopyFrom([string]$src, [string]$dst) {
   $ErrorActionPreference = 'Continue'  # 5.1: native stderr must not throw
-  & $ScpExe -q @SshOpts -P $FreshSshPort "$($FreshVmUser)@127.0.0.1:$src" $dst
+  & $ScpExe -O -q @SshOpts -P $FreshSshPort "$($FreshVmUser)@127.0.0.1:$src" $dst
   return ($LASTEXITCODE -eq 0)
 }
 
