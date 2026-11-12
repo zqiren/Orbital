@@ -9,8 +9,17 @@
 # ASCII only (Windows PowerShell 5.1).
 $ErrorActionPreference = 'Stop'
 $fi = 'C:\fi'
-$key = [Console]::In.ReadLine()
-if (-not $key -or -not $key.Trim()) { Write-Host 'no key on stdin'; exit 2 }
+# Read stdin as raw bytes and decode as UTF-8 ourselves: [Console]::In
+# decodes with the guest's ANSI code page (GBK), which turns a UTF-8 BOM
+# from the runner's PowerShell pipe into CJK characters fused with the
+# key's first byte. Strip any BOM and whitespace.
+$in = [Console]::OpenStandardInput()
+$ms = New-Object IO.MemoryStream
+$buf = New-Object byte[] 4096
+while (($n = $in.Read($buf, 0, $buf.Length)) -gt 0) { $ms.Write($buf, 0, $n) }
+$key = [Text.Encoding]::UTF8.GetString($ms.ToArray()).Split("`n")[0].Trim().TrimStart([char]0xFEFF).Trim()
+$ms = $null; $buf = $null
+if (-not $key) { Write-Host 'no key on stdin'; exit 2 }
 
 $secret = Join-Path $fi 'secret'
 New-Item -ItemType Directory -Force -Path $secret | Out-Null

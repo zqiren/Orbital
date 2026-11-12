@@ -133,6 +133,8 @@ try {
   $kh = -join ([Security.Cryptography.SHA256]::Create().ComputeHash($kb)[0..3] | ForEach-Object { $_.ToString('x2') })
   Log "key fingerprint on the runner: len=$($kb.Length) sha256=$kh..."
   Log 'starting the scenario in the guest desktop session (this takes a while)'
+  # No BOM on the pipe (the runner's PowerShell otherwise prefixes EF BB BF).
+  $OutputEncoding = New-Object Text.UTF8Encoding $false
   $env:ORBITAL_TEST_OPENCODE_KEY | & $SshExe @SshOpts -p $FreshSshPort "$FreshVmUser@127.0.0.1" "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File C:\fi\guest-start.ps1"
   $startRc = $LASTEXITCODE
   if ($startRc -ne 0) { throw "guest-start.ps1 exited $startRc" }
