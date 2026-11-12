@@ -113,9 +113,14 @@ function Wait-Ssh([int]$timeoutSec = 600) {
   $ErrorActionPreference = 'Continue'  # 5.1: native stderr must not throw
   $t0 = Get-Date
   while (((Get-Date) - $t0).TotalSeconds -lt $timeoutSec) {
-    $null = GuestCmd 'exit 0' 2>$null
+    # -E NUL: ssh's own "banner exchange" errors while the guest boots go
+    # nowhere instead of filling the transcript.
+    $null = & $SshExe @SshOpts -E NUL -p $FreshSshPort "$FreshVmUser@127.0.0.1" 'exit 0' 2>$null
     if ($LASTEXITCODE -eq 0) { return }
-    Start-Sleep -Seconds 5
+    if ((Get-VmState) -in @('paused', 'stuck', 'aborted', 'poweroff')) {
+      throw "VM $FreshVm is $(Get-VmState) while waiting for SSH (see its Logs\VBox.log: disk full? out of memory?)"
+    }
+    Start-Sleep -Seconds 10
   }
   throw "ssh to $FreshVmUser@127.0.0.1:$FreshSshPort never came up within $timeoutSec s"
 }

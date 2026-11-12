@@ -9,7 +9,7 @@
 #   powershell -ExecutionPolicy Bypass -File tests\fresh_install\vbox\prepare-vm.ps1 `
 #     -Iso <Win11 zh-cn .iso> -AdditionsIso <VBoxGuestAdditions .iso> -NodeMsi <node-v24 x64 .msi> -OpenSshMsi <OpenSSH-Win64 .msi>
 #
-# Options: -MemoryMB (8192) -Cpus (4) -DiskGB (64) -ImageIndex (auto: Home
+# Options: -BaseFolder (D:\orbital-vms) -MemoryMB (6144) -Cpus (4) -DiskGB (64) -ImageIndex (auto: Home
 # China, else Home) -Force (delete an existing VM of that name first)
 # -SkipInstall (VM exists and is installed: just re-provision + re-snapshot).
 # Windows PowerShell 5.1; ASCII only. Runs as the Windows user that will own
@@ -19,7 +19,11 @@ param(
   [string]$AdditionsIso,
   [string]$NodeMsi,
   [string]$OpenSshMsi,
-  [int]$MemoryMB = 8192,
+  # 6 GB: on the owner's 14 GB PC an 8 GB guest left the host 0.7 GB free.
+  [int]$MemoryMB = 6144,
+  # Where the VM and its disk live. NOT VirtualBox's default (~\VirtualBox VMs
+  # on C:): the first build filled C: and VirtualBox paused the guest (DISKFULL).
+  [string]$BaseFolder = 'D:\orbital-vms',
   [int]$Cpus = 4,
   [int]$DiskGB = 64,
   [int]$ImageIndex = 0,
@@ -71,7 +75,14 @@ if (-not $SkipInstall) {
 
   # ---- the VM
   Log "creating ${FreshVm}: $MemoryMB MB, $Cpus vCPU, $DiskGB GB dynamic disk, EFI + TPM 2.0"
-  $null = VBox createvm --name $FreshVm --ostype Windows11_64 --register
+  # The dynamic disk grows to about 35-45 GB during setup + provisioning, and
+  # each run's differencing image on top of snapshot clean grows further.
+  New-Item -ItemType Directory -Force -Path $BaseFolder | Out-Null
+  $drive = (Get-Item $BaseFolder).PSDrive
+  $freeGB = [math]::Floor($drive.Free / 1GB)
+  if ($freeGB -lt ($DiskGB + 10)) { throw "only $freeGB GB free on $($drive.Name): (need $($DiskGB + 10)); pass -BaseFolder on a bigger drive" }
+  Log "VM folder $BaseFolder ($freeGB GB free)"
+  $null = VBox createvm --name $FreshVm --ostype Windows11_64 --basefolder $BaseFolder --register
   $null = VBox modifyvm $FreshVm --memory $MemoryMB --cpus $Cpus --firmware efi --tpm-type 2.0 `
     --graphicscontroller vboxsvga --vram 128 --ioapic on --rtc-use-utc on `
     --audio-enabled off --clipboard-mode disabled --drag-and-drop disabled `
