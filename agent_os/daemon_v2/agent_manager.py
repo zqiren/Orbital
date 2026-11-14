@@ -6717,7 +6717,13 @@ class AgentManager:
     # (``_evict_idle_handleless``). The next message cold-starts from the JSONL on disk —
     # measured at ~140ms (TASK/REPORT-restart-costs.md), invisible behind the
     # LLM round-trip. Hardcoded policy, not a user preference.
-    EVICTION_IDLE_TIMEOUT = 180   # seconds (3 minutes)
+    # Ten minutes, not three (owner, 2026-11-15): a stopped Claude Code worker
+    # answers its next message about 3 s later than a warm one (5.7 s vs 2.7 s
+    # median, measured for spec 175), and a pause of a few minutes between
+    # messages is the normal rhythm of a chat. Ten minutes still ends the
+    # complaint (workers alive for days) and lets most follow-ups stay warm.
+    # One constant for managed and pinned sessions.
+    EVICTION_IDLE_TIMEOUT = 600   # seconds (10 minutes)
     EVICTION_SWEEP_INTERVAL = 60  # seconds between sweeps
 
     async def _evict_idle_once(self) -> list:
