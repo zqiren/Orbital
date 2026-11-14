@@ -38,6 +38,12 @@
  *    card moves to 进行中 at once and comes back to 等你 as finished and
  *    unchecked when the agent's turn ends.
  *
+ * Spec 180: a card's project name opens the composer's project picker. While
+ * 自动 picks, a project there sends to it and ✕ takes the text back; on a
+ * card with a session, another project moves the session (the card keeps its
+ * place; the reading pane stays on it). Opening a card Orbital routed — its
+ * title or its body — clears the ✦ before the name.
+ *
  * Removed with spec 154 (their routes stay for cached phone SPAs): the page
  * header and project filter, the Today strip, Recently closed, the migrate
  * button and the per-project lens.
@@ -52,13 +58,17 @@ import { useT } from '../i18n/useT';
 import { useAgent } from '../hooks/useAgent';
 import { markChecked, useCheckedMarks } from '../hooks/useSeenReplies';
 import {
-  activityText, hideClosedAsk, holdCard, refreshFeed, settleReply, useWorkbenchFeed,
+  activityText, clearRoutedMark, hideClosedAsk, holdCard, moveSession, refreshFeed,
+  settleReply, useWorkbenchFeed,
 } from '../hooks/useWorkbenchFeed';
 import { projectDisplayName } from '../utils/projectDisplayName';
 import { formatAskAnswer } from '../utils/askAnswer';
 import { buildFeedGroups, type FeedItem } from './workbench/feedModel';
 import { classifySessionName } from '../lib/sessionLabel';
-import { recoverDraft, sendWorkbenchTask, type SendChoice, type SendDeps } from './workbench/sendTask';
+import {
+  choosePending, holdPending, recoverDraft, sendWorkbenchTask, unsendPending,
+  type SendChoice, type SendDeps,
+} from './workbench/sendTask';
 import TaskCard from './workbench/TaskCard';
 import WorkbenchComposer, { rememberLastProject } from './workbench/WorkbenchComposer';
 import WorkbenchPane from './workbench/WorkbenchPane';
@@ -110,17 +120,43 @@ export default function WorkbenchPage({
 
   const groups = useMemo(() => buildFeedGroups(feed, marks), [feed, marks]);
   const items = groups.items;
+  // Spec 180: a card is keyed by its session (ids are unique across
+  // projects and survive a move), so a moved card stays mounted and swaps its
+  // name in place. A session drawn twice (an interrupted move) falls back to
+  // the (project, session) key.
+  const cardKeys = useMemo(() => {
+    const out = new Map<string, string>();
+    const used = new Set<string>();
+    for (const item of items) {
+      const sid = item.row?.session_id;
+      const k = sid && !used.has(`s:${sid}`) ? `s:${sid}` : item.key;
+      used.add(k);
+      out.set(item.key, k);
+    }
+    return out;
+  }, [items]);
 
-  // The reading pane: the selected card, by key. A card that leaves the list
-  // (✓, checked elsewhere) closes it.
+  // The reading pane: the selected card, by its card key (its session, so a
+  // move keeps the pane on it). A card that leaves the list (✓, checked
+  // elsewhere) closes it.
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
-  const selected = selectedKey ? items.find((i) => i.key === selectedKey) ?? null : null;
+  const cardKeyOf = useCallback((item: FeedItem) => cardKeys.get(item.key) ?? item.key, [cardKeys]);
+  const selected = selectedKey ? items.find((i) => cardKeyOf(i) === selectedKey) ?? null : null;
   useEffect(() => {
     if (selectedKey && feed.loaded && !selected) setSelectedKey(null);
   }, [selectedKey, selected, feed.loaded]);
-  const handleSelect = useCallback((item: FeedItem) => {
-    setSelectedKey((cur) => (cur === item.key ? null : item.key));
+  // Spec 180: opening a card (its title or its body) folds its ✦ away.
+  const clearMark = useCallback((item: FeedItem) => {
+    if (!item.marked) return;
+    const pid = item.row?.project_id ?? item.pending?.project_id;
+    const sid = item.row?.session_id ?? item.pending?.session_id;
+    if (pid && sid) clearRoutedMark(pid, sid);
   }, []);
+  const handleSelect = useCallback((item: FeedItem) => {
+    const k = cardKeyOf(item);
+    if (k !== selectedKey) clearMark(item);
+    setSelectedKey((cur) => (cur === k ? null : k));
+  }, [clearMark, selectedKey, cardKeyOf]);
 
   // Sidebar order, minus projects excluded from the Workbench.
   const pickable = useMemo(
@@ -152,6 +188,8 @@ export default function WorkbenchPage({
       // No project found: the composer shows its own line and the picker.
       if (!outcome.ok) {
         if (outcome.unrouted) return 'unrouted' as const;
+        // ✕ while picking: the text is back, nothing to report.
+        if (outcome.unsent) return false;
         setOpenError(t('workbench.error.open'));
         return false;
       }
@@ -179,6 +217,7 @@ export default function WorkbenchPage({
   }
 
   function handleOpen(item: FeedItem) {
+    clearMark(item);
     if (item.pending) {
       const { project_id: pid, session_id: sid } = item.pending;
       if (pid) setRoute({ name: 'project', projectId: pid, sessionId: sid ?? undefined });
@@ -205,6 +244,24 @@ export default function WorkbenchPage({
     }
     const key = row.session_uuid ?? row.session_id;
     if (key && row.last_reply_at) void markChecked(row.project_id, key, row.last_reply_at);
+  }
+
+  // Spec 180 §5.2 / §5.5: a project picked on a card. While 自动 picks it is
+  // the send's project; on a card with a session it moves the session.
+  async function handlePickProject(item: FeedItem, projectId: string) {
+    if (item.pending) {
+      if (item.pending.routing) choosePending(item.pending.nonce, projectId);
+      return;
+    }
+    const row = item.row;
+    if (!row?.session_id || row.project_id === projectId) return;
+    setOpenError(null);
+    try {
+      // The card (and the reading pane, keyed the same way) stays on it.
+      await moveSession(row.project_id, row.session_id, projectId);
+    } catch {
+      setOpenError(t('workbench.error.open'));
+    }
   }
 
   async function handleReply(item: FeedItem, words: string): Promise<boolean> {
@@ -299,7 +356,7 @@ export default function WorkbenchPage({
               <div className="wb-cards" data-testid="workbench-cards">
                 {items.map((item) => (
                   <TaskCard
-                    key={item.key}
+                    key={cardKeyOf(item)}
                     item={item}
                     phone={phone}
                     fresh={!!item.pending}
@@ -309,8 +366,12 @@ export default function WorkbenchPage({
                     onOpen={handleOpen}
                     onConfirm={handleConfirm}
                     onReply={handleReply}
-                    selected={item.key === selectedKey}
+                    selected={cardKeyOf(item) === selectedKey}
                     onSelect={item.row?.session_id ? handleSelect : undefined}
+                    projects={pickable}
+                    onPickProject={(it, pid) => void handlePickProject(it, pid)}
+                    onUnsend={(it) => { if (it.pending) unsendPending(it.pending.nonce); }}
+                    onPickerOpen={(it, open) => { if (it.pending) holdPending(it.pending.nonce, open); }}
                   />
                 ))}
               </div>

@@ -516,6 +516,8 @@ export interface SessionListEntry {
   session_id: string;
   status: AgentRunStatus;
   session_uuid: string | null;
+  /** Spec 180: Orbital chose the project (Workbench 自动); see WorkbenchFeedRow. */
+  routed_by?: 'model' | 'fallback' | null;
   /**
    * The `last_reply_at` the user has checked in this session, from the
    * daemon's checked store (spec 154 §5.1: shared by every device). null =
@@ -1637,4 +1639,7 @@ export interface WorkbenchFeedRow {
   /** First line of the last reply (finished rows only). */
   result_line: string | null;
   stop: WorkbenchFeedStop | null;
+  /** Spec 180: Orbital chose this project when the task was sent (the card's
+   *  ✦); cleared when the user opens the card or moves the session. */
+  routed_by?: 'model' | 'fallback' | null;
 }

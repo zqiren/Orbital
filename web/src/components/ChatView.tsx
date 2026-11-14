@@ -768,6 +768,7 @@ import { useSubAgentStatus } from '../hooks/useSubAgentStatus';
 import FanoutCard, { isTerminal, type FanoutTaskState } from './FanoutCard';
 import SubAgentDrillIn from './SubAgentDrillIn';
 import InlineMarkdown from './InlineMarkdown';
+import { projectDisplayName } from '../utils/projectDisplayName';
 
 interface ChatViewProps {
   projectId: string;
@@ -3403,6 +3404,9 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     if (item.type === 'daemon_row') {
       return `daemon_row:${item.event}:${item.timestamp}:${item.handle}`;
     }
+    if (item.type === 'session_moved') {
+      return `session_moved:${item.timestamp}:${item.toProjectId ?? item.to}`;
+    }
     // user_message, agent_message, sub_agent_message — use timestamp +
     // first 32 chars of content as a stable-enough fingerprint.
     const contentPrefix = item.content.slice(0, 32);
@@ -4465,6 +4469,31 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                     {text}
                   </span>
                   <div className="flex-1 border-t border-border" />
+                </div>
+              );
+            } else if (item.type === 'session_moved') {
+              // Spec 180: one quiet divider, 「从 A 移到 B」, names in medium
+              // weight and ellipsised. This project's own name is the live one.
+              const toName = item.toProjectId === project.project_id
+                ? projectDisplayName(project, t)
+                : item.toScratch ? t('project.scratchName') : item.to;
+              const fromName = item.fromScratch ? t('project.scratchName') : item.from;
+              const parts = t('chat.sessionMoved', { a: '\u0001', b: '\u0002' }).split(/(\u0001|\u0002)/);
+              rendered = (
+                <div key={`moved-${index}`} className="flex items-center gap-3 px-2" data-testid="chat-session-moved">
+                  <div className="flex-1 min-w-4 border-t border-border" />
+                  <span className="inline-flex items-center min-w-0 max-w-[82%] whitespace-nowrap text-xs text-secondary">
+                    {parts.map((part, i) => {
+                      if (part !== '\u0001' && part !== '\u0002') return part ? <span key={i} className="whitespace-pre">{part}</span> : null;
+                      const name = part === '\u0001' ? fromName : toName;
+                      return (
+                        <b key={i} title={name} className="font-medium inline-block truncate align-bottom max-w-[14em] max-md:max-w-[7.5em]">
+                          {name}
+                        </b>
+                      );
+                    })}
+                  </span>
+                  <div className="flex-1 min-w-4 border-t border-border" />
                 </div>
               );
             } else if (item.type === 'session_separator') {

@@ -390,7 +390,8 @@ _MIGRATION_MESSAGE = (
 
 
 async def _spawn_seeded(project_id: str, content: str, *, agent: str | None = "orbital",
-                        attachments: list | None = None) -> dict:
+                        attachments: list | None = None,
+                        routed_by: str | None = None) -> dict:
     """Mint a fresh session and send ``content`` into it through the same two
     route handlers the chat and the Workbench composer call
     (``POST /agents/{pid}/new-session`` then ``POST /agents/{pid}/inject``),
@@ -416,7 +417,8 @@ async def _spawn_seeded(project_id: str, content: str, *, agent: str | None = "o
         agent = (minted.get("pinned_target") if isinstance(minted, dict) else None) or "orbital"
     target = None if agent == "orbital" else agent
     req = agents_v2.InjectRequest(content=content, target=target, pinned=target is not None,
-                                  attachments=attachments, session_id=session_id)
+                                  attachments=attachments, session_id=session_id,
+                                  routed_by=routed_by)
     body = await agents_v2.inject_message(project_id, req)
     return {"session_id": session_id, "agent": agent, "inject": body}
 
@@ -579,6 +581,8 @@ def feed_rows(project: dict, sessions: list[dict], now: datetime) -> list[dict]:
             "status": row.get("status"),
             "worker_running": bool(row.get("worker_running")),
             "trigger_type": row.get("trigger_type"),
+            # Spec 180: "Orbital chose this project" (model | fallback).
+            "routed_by": row.get("routed_by") or None,
             "last_user_at": row.get("last_user_at"),
             "last_reply_at": row.get("last_reply_at"),
             "last_activity_at": row.get("last_activity_at"),
@@ -594,8 +598,8 @@ def feed_rows(project: dict, sessions: list[dict], now: datetime) -> list[dict]:
         out.append({
             "project_id": project_id, "session_id": None, "session_uuid": None,
             "name": None, "agent": None, "status": "idle", "worker_running": False,
-            "trigger_type": None, "last_user_at": None, "last_reply_at": None,
-            "last_activity_at": None, "checked_reply_at": None,
+            "trigger_type": None, "routed_by": None, "last_user_at": None,
+            "last_reply_at": None, "last_activity_at": None, "checked_reply_at": None,
             "ask": _feed_ask(project_id, a, tz, now), "result_line": None, "stop": None,
         })
     return out
@@ -1044,7 +1048,10 @@ async def create_task(req: TaskRequest):
         except ValueError as e:
             raise HTTPException(status_code=400, detail=f"Invalid attachment: {e}")
     logger.info("workbench task: %s (by %s), agent %s", pid, by, req.agent or "pin")
-    spawned = await _spawn_seeded(pid, text, agent=req.agent, attachments=req.attachments)
+    spawned = await _spawn_seeded(
+        pid, text, agent=req.agent, attachments=req.attachments,
+        # Spec 180: a routed task carries the mark, as the composer's does.
+        routed_by=by if by in ("model", "fallback") else None)
     body = {"project_id": pid, "session_id": spawned["session_id"],
             "agent": spawned["agent"], "by": by, "inject": spawned["inject"]}
     body.update(extra)

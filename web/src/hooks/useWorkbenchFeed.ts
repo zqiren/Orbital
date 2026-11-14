@@ -45,11 +45,31 @@ export interface PendingTask {
   /** The picked agent ('orbital' for Orbital), or null for 自动. */
   agent: string | null;
   created_at: number;
+  /** Spec 180: 自动 is still picking (the card shows a shimmering 自动). */
+  routing?: boolean;
+  /** Spec 180: the route answered with a project it chose (the card's ✦). */
+  routed_by?: 'model' | 'fallback' | null;
+}
+
+/**
+ * Spec 180: a session being moved from a card. `moving` while the daemon
+ * stops and moves it (the card's dot rests, its project does not open);
+ * `moved` once it answered, until the feed carries the session in `to`.
+ */
+export interface MoveOverride {
+  from: string;
+  to: string;
+  phase: 'moving' | 'moved';
+  /** The daemon restarted the work in `to`. */
+  woke: boolean;
 }
 
 interface Held {
   sawRunning: boolean;
   at: number;
+  /** Spec 180: held because a move restarted the work (正在开始… until the
+   *  run is seen). */
+  starting?: boolean;
   /** The last row seen, drawn while a refetch momentarily lacks it. */
   row: WorkbenchFeedRow;
 }
@@ -64,6 +84,11 @@ export interface FeedState {
   held: ReadonlyMap<string, Held>;
   closedAsks: ReadonlySet<string>;
   composerRestore: string | null;
+  /** Spec 180: sessions whose ✦ the user cleared here (by session key),
+   *  hidden until the feed agrees. */
+  unmarked: ReadonlySet<string>;
+  /** Spec 180: card moves in flight or just done, by session id. */
+  moves: ReadonlyMap<string, MoveOverride>;
 }
 
 /** A held card that never saw its turn start is let go after this long. */
@@ -105,6 +130,8 @@ const EMPTY: FeedState = {
   held: new Map(),
   closedAsks: new Set(),
   composerRestore: null,
+  unmarked: new Set(),
+  moves: new Map(),
 };
 
 let state: FeedState = EMPTY;
@@ -171,7 +198,18 @@ function applyRows(rows: WorkbenchFeedRow[]): void {
       return !!row && isRunning(row);
     }),
   );
-  set({ rows, loaded: true, error: false, pending, held, closedAsks, activity });
+  // A cleared ✦ stays hidden until the feed drops `routed_by` too.
+  const marked = new Set(
+    rows.filter((r) => r.routed_by).map((r) => sessionKeyOf(r.project_id, r.session_id)),
+  );
+  const unmarked = new Set([...state.unmarked].filter((k) => marked.has(k)));
+  // A finished move is the feed's once the session is no longer listed in
+  // the project it left.
+  const moves = new Map(state.moves);
+  for (const [sid, m] of moves) {
+    if (m.phase === 'moved' && !byKey.has(sessionKeyOf(m.from, sid))) moves.delete(sid);
+  }
+  set({ rows, loaded: true, error: false, pending, held, closedAsks, activity, unmarked, moves });
 }
 
 /** Refetch the feed: one request in flight, one trailing request after it. */
@@ -242,6 +280,88 @@ export function settleReply(
     && (result as { status?: unknown }).status === 'recorded';
   if (result === null || recorded) releaseCard(projectId, sessionId);
   void refreshFeed();
+}
+
+/**
+ * Spec 180 §5.1: the user opened a card Orbital routed — its ✦ goes at once
+ * (optimistic, like a checked reply) and the session PATCH clears
+ * `routed_by` for every device. A session with no file yet answers 404:
+ * the mark stays hidden here, nothing else to do.
+ */
+export function clearRoutedMark(projectId: string, sessionId: string): void {
+  const key = sessionKeyOf(projectId, sessionId);
+  if (!state.unmarked.has(key)) set({ unmarked: new Set([...state.unmarked, key]) });
+  api(`/api/v2/agents/${encodeURIComponent(projectId)}/sessions/${encodeURIComponent(sessionId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ routed_by: null }),
+  }).catch(() => { /* hidden here; the next feed decides */ });
+}
+
+function renameKey<V>(map: ReadonlyMap<string, V>, from: string, to: string): Map<string, V> {
+  const next = new Map(map);
+  const v = next.get(from);
+  if (v !== undefined) {
+    next.delete(from);
+    next.set(to, v);
+  }
+  return next;
+}
+
+/**
+ * Spec 180 §5.5: move a session to another project from its card. The card
+ * stays in place (the move changes neither of its times); while the daemon
+ * stops and moves it the dot rests, then the name changes. A held card
+ * follows the session to its new project; the stopped run's live line is
+ * dropped. Resolves with the daemon's answer; rejects (and puts
+ * everything back) when the move failed.
+ */
+export async function moveSession(
+  from: string, sessionId: string, to: string,
+): Promise<{ project_id: string; session_id: string; woke: boolean }> {
+  const moves = new Map(state.moves);
+  moves.set(sessionId, { from, to, phase: 'moving', woke: false });
+  set({ moves });
+  try {
+    const res = await api<{ project_id?: string; session_id?: string; woke?: boolean }>(
+      `/api/v2/agents/${encodeURIComponent(from)}/sessions/${encodeURIComponent(sessionId)}/move`,
+      { method: 'POST', body: JSON.stringify({ to_project_id: to }) },
+    );
+    const dest = res?.project_id || to;
+    const sid = res?.session_id || sessionId;
+    const oldKey = sessionKeyOf(from, sessionId);
+    const newKey = sessionKeyOf(dest, sid);
+    const timer = holdTimers.get(oldKey);
+    if (timer !== undefined) {
+      holdTimers.delete(oldKey);
+      holdTimers.set(newKey, timer);
+    }
+    // The run it had was stopped: its live line goes with it (the run in
+    // the new project reports its own).
+    const activity = { ...state.activity };
+    delete activity[oldKey];
+    const done = new Map(state.moves);
+    done.set(sid, { from, to: dest, phase: 'moved', woke: !!res?.woke });
+    const held = renameKey(state.held, oldKey, newKey);
+    // The daemon restarted the work in the new project: the card is drawn
+    // running from now, as after a reply, until that run ends.
+    const snapshot = state.rows.find((r) => r.session_id === sessionId && r.project_id === from)
+      ?? state.held.get(oldKey)?.row;
+    if (res?.woke && snapshot) {
+      const at = Date.now();
+      held.set(newKey, { sawRunning: false, at, starting: true, row: { ...snapshot, project_id: dest, routed_by: null } });
+      clearHoldTimer(newKey);
+      holdTimers.set(newKey, setTimeout(() => expireHold(newKey, at), HOLD_SAFETY_MS));
+    }
+    set({ moves: done, held, activity });
+    void refreshFeed();
+    return { project_id: dest, session_id: sid, woke: !!res?.woke };
+  } catch (e) {
+    const back = new Map(state.moves);
+    back.delete(sessionId);
+    set({ moves: back });
+    void refreshFeed();
+    throw e;
+  }
 }
 
 export function hideClosedAsk(projectId: string, askId: string): void {

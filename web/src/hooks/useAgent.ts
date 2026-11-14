@@ -124,6 +124,10 @@ export function useAgent() {
       skill?: { key: string; path: string },
       // Spec 146: this message answers the ask in the composer's tray.
       answering?: { id: string; words: string },
+      // Spec 180: the Workbench route chose this project ('model' |
+      // 'fallback'); the daemon stamps it only when this send creates the
+      // session, and an older daemon ignores it.
+      routedBy?: 'model' | 'fallback',
     ) => {
       return api<InjectResult>(
         `/api/v2/agents/${encodeURIComponent(projectId)}/inject`,
@@ -138,6 +142,7 @@ export function useAgent() {
             ...(pinned && { pinned: true }),
             ...(skill && { skill }),
             ...(answering && { ask_id: answering.id, ask_answer: answering.words }),
+            ...(routedBy && { routed_by: routedBy }),
           }),
         },
       );

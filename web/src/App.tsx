@@ -895,6 +895,7 @@ export default function App() {
               onTriggerDelete={deleteTrigger}
               globalDefaultModel={defaultModel}
               agentsAvailable={agentsAvailable ?? []}
+              projects={projects}
               pageContent={{
                 tasks: (
                   <QueueTab

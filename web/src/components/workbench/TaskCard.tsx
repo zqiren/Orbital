@@ -25,11 +25,22 @@
  *
  * The agent is its LOGO, never its name (the name is the tooltip). The card
  * always renders from the feed row it is given.
+ *
+ * Spec 180 — the project name is a button (its chevron always shows, small
+ * and muted) that opens the composer's own project picker:
+ *   - while 自动 picks, the name's place reads a shimmering 自动 after the
+ *     Sparkles glyph; the picker has 自动 ticked on top, and a project there
+ *     ends the picking and sends to it. ✕ (撤回) returns the text;
+ *   - after routing, ✦ (the composer's Sparkles) sits before the name when
+ *     Orbital chose it; opening the card or moving it folds ✦ away;
+ *   - on a card with a session, another project moves the session at once
+ *     (a running one too): the dot rests, the name changes in place (old
+ *     blurs up, new rises), and the work continues there.
  */
 
-import { useEffect, useState, type KeyboardEvent, type MouseEvent, useRef } from 'react';
-import { Check, Send } from 'lucide-react';
-import type { WorkbenchFeedRow } from '../../types';
+import { useEffect, useLayoutEffect, useState, type KeyboardEvent, type MouseEvent, useRef } from 'react';
+import { Check, ChevronDown, Send, Sparkles, X } from 'lucide-react';
+import type { Project, WorkbenchFeedRow } from '../../types';
 import { useT } from '../../i18n/useT';
 import { changeOptionPrefill, isChangeOption } from '../../utils/changeOptionPrefill';
 import type { StringKey } from '../../i18n/strings';
@@ -40,6 +51,71 @@ import { classifySessionName } from '../../lib/sessionLabel';
 import MarkdownContent from '../MarkdownContent';
 import InlineMarkdown from '../InlineMarkdown';
 import type { FeedItem } from './feedModel';
+import { AnchoredProjectPicker } from './ProjectPicker';
+
+/** How long the name swap runs (the CSS animations end inside it). */
+const SWAP_MS = 620;
+
+/**
+ * The project name on the card, which changes in place: the old name blurs
+ * up and out while the new one rises in, and the slot's width eases from
+ * one to the other (prototype `setNm`, l.819-836). The first render, and the
+ * shimmering 自动 while picking, appear without a swap.
+ */
+function SlotName({ text, shim, phone }: { text: string; shim: boolean; phone: boolean }) {
+  const k = shim ? '\u0000auto' : `n:${text}`;
+  const wrapRef = useRef<HTMLSpanElement>(null);
+  const [shown, setShown] = useState({ k, text, shim });
+  const [out, setOut] = useState<{ k: string; text: string; shim: boolean } | null>(null);
+  const fromRef = useRef<number | null>(null);
+
+  // A new name: remember the width the old one had, keep it on show as the
+  // leaving copy, and render the new one (before paint).
+  useLayoutEffect(() => {
+    if (k === shown.k) return;
+    fromRef.current = wrapRef.current?.offsetWidth ?? null;
+    setOut(shown);
+    setShown({ k, text, shim });
+  }, [k, text, shim, shown]);
+
+  // Then ease the width from the old name to the new one.
+  useLayoutEffect(() => {
+    const w = wrapRef.current;
+    const from = fromRef.current;
+    if (!w || !out || from === null) return;
+    fromRef.current = null;
+    const nu = w.querySelector<HTMLElement>('.wb-nm-in');
+    const slot = w.closest<HTMLElement>('.wb-slot');
+    const meta = slot?.parentElement;
+    if (!nu || !slot || !meta) return;
+    nu.classList.add('is-measure');
+    const natural = nu.offsetWidth;
+    nu.classList.remove('is-measure');
+    const cap = Math.max(40, meta.clientWidth * (phone ? 0.7 : 0.64) - (slot.offsetWidth - from) - 2);
+    const to = Math.min(natural, cap);
+    w.classList.remove('is-anim');
+    w.style.width = `${from}px`;
+    void w.offsetWidth;
+    w.classList.add('is-anim');
+    w.style.width = `${to}px`;
+    const id = window.setTimeout(() => {
+      w.classList.remove('is-anim');
+      w.style.width = '';
+      setOut(null);
+    }, SWAP_MS);
+    return () => window.clearTimeout(id);
+  }, [out, phone]);
+
+  const body = (v: { text: string; shim: boolean }) => (v.shim ? <span className="wb-shim">{v.text}</span> : v.text);
+  return (
+    <span ref={wrapRef} className="wb-nmw">
+      {out && <span key={`o${out.k}`} className="wb-nm is-out" aria-hidden="true">{body(out)}</span>}
+      <span key={`n${shown.k}`} className={`wb-nm${out ? ' wb-nm-in is-in' : ''}`} data-testid="wb-card-project-name">
+        {body(shown)}
+      </span>
+    </span>
+  );
+}
 
 const CAUSE_KEY: Record<string, StringKey> = {
   usage_limit: 'leftOff.cause.usageLimit',
@@ -73,11 +149,21 @@ export interface TaskCardProps {
   selected?: boolean;
   /** A click on the card body. Absent: the card cannot be selected. */
   onSelect?: (item: FeedItem) => void;
+  /** Spec 180: the projects the card's picker offers (the Workbench's). */
+  projects?: readonly Project[];
+  /** Spec 180: a project picked on the card — ends the picking (pending), or
+   *  moves the session. Absent: the name is not a button. */
+  onPickProject?: (item: FeedItem, projectId: string) => void;
+  /** Spec 180: ✕ on a picking card (after its leave animation). */
+  onUnsend?: (item: FeedItem) => void;
+  /** Spec 180: the picker opened / closed on a picking card (a route answer
+   *  waits for it). */
+  onPickerOpen?: (item: FeedItem, open: boolean) => void;
 }
 
 export default function TaskCard({
   item, projectName, agentName, activity, phone, fresh, onOpen, onConfirm, onReply,
-  selected = false, onSelect,
+  selected = false, onSelect, projects = [], onPickProject, onUnsend, onPickerOpen,
 }: TaskCardProps) {
   const t = useT();
   const [reply, setReply] = useState('');
@@ -96,6 +182,27 @@ export default function TaskCard({
   const agentLabel = slug === MAIN_AGENT_HANDLE ? 'Orbital' : agentName(slug);
   const pid = pending ? pending.project_id : row?.project_id ?? null;
   const project = projectName(pid);
+  // Spec 180: 自动 is still picking this send's project.
+  const picking = !!pending?.routing;
+  const slotRef = useRef<HTMLButtonElement>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  // The name opens the picker while picking, and on a card with a session
+  // (a move); in between (routed, not minted yet) and mid-move it only shows.
+  const slotLive = !!onPickProject && (picking || (!pending && !!row?.session_id && !item.moving));
+  function openPicker(open: boolean) {
+    setPickerOpen(open);
+    if (picking) onPickerOpen?.(item, open);
+  }
+  function pickProject(projectId: string) {
+    const current = picking ? null : pid;
+    setPickerOpen(false);
+    if (projectId !== current) onPickProject?.(item, projectId);
+    if (picking) onPickerOpen?.(item, false);
+  }
+  // A move or a route answer that ends the picking closes the picker.
+  useEffect(() => {
+    if (pickerOpen && !slotLive) setPickerOpen(false);
+  }, [pickerOpen, slotLive]);
 
   // An automation run is named by its automation, not by the trigger header
   // its first message carries.
@@ -117,6 +224,13 @@ export default function TaskCard({
   // The muted line's tail: one of activity / result / stop / approval / due.
   let detail: { text: string; warn: boolean } | null = null;
   if (pending) {
+    // While 自动 picks there is no detail: the name's place says it.
+    detail = picking ? null : { text: t('workbench.card.starting'), warn: false };
+  } else if (item.moving) {
+    // Stopped for the move: the dot rests, nothing to say yet.
+    detail = null;
+  } else if (row && item.woke) {
+    // Moved and restarting in the new project, until its run is seen.
     detail = { text: t('workbench.card.starting'), warn: false };
   } else if (row) {
     if (ask) {
@@ -194,8 +308,28 @@ export default function TaskCard({
     }
   }
 
-  // ✓ is the only icon, and only a card that can be confirmed has it.
-  const acts = canConfirm ? (
+  function unsend() {
+    setPickerOpen(false);
+    setLeaving(true);
+    window.setTimeout(() => onUnsend?.(item), 220);
+  }
+
+  // ✓ is the only icon, and only a card that can be confirmed has it; a card
+  // still picking its project has ✕ (撤回) in that place instead.
+  const acts = picking && onUnsend ? (
+    <div className="wb-acts">
+      <button
+        type="button"
+        className="wb-ab"
+        data-testid="wb-card-unsend"
+        aria-label={t('workbench.card.unsend')}
+        title={t('workbench.card.unsend')}
+        onClick={unsend}
+      >
+        <X size={14} strokeWidth={1.75} aria-hidden="true" />
+      </button>
+    </div>
+  ) : canConfirm ? (
     <div className="wb-acts">
       <button
         type="button"
@@ -282,7 +416,40 @@ export default function TaskCard({
     item.waiting ? 'is-waiting' : '',
     fresh ? 'is-fresh' : '',
     leaving ? 'is-leaving' : '',
+    picking ? 'is-picking' : '',
   ].filter(Boolean).join(' ');
+
+  // The project's place on the meta line: 自动 while picking, else the name.
+  const slotText = picking ? t('workbench.composer.auto') : project;
+  const marked = item.marked;
+  const slotInner = slotText !== null ? (
+    <>
+      <span className={`wb-mk${marked ? '' : ' is-off'}`} title={marked && !picking ? t('workbench.card.autoPicked') : undefined} data-testid="wb-card-mark" data-on={marked ? 'true' : 'false'}>
+        <span className="wb-mk-in"><span className="wb-mk-gl"><Sparkles size={11} strokeWidth={2} aria-hidden="true" /></span></span>
+      </span>
+      <SlotName text={slotText} shim={picking} phone={phone} />
+      {onPickProject && <span className="wb-cv"><ChevronDown size={11} strokeWidth={2.2} aria-hidden="true" /></span>}
+    </>
+  ) : null;
+  const slot = slotInner === null ? null : onPickProject ? (
+    <button
+      ref={slotRef}
+      type="button"
+      className="wb-slot"
+      data-testid="wb-card-project"
+      aria-haspopup="listbox"
+      aria-expanded={pickerOpen}
+      aria-disabled={slotLive ? undefined : 'true'}
+      aria-label={t('workbench.card.projectAria', { name: slotText ?? '' })}
+      title={picking ? undefined : slotText ?? undefined}
+      onClick={() => { if (slotLive) openPicker(!pickerOpen); }}
+    >
+      {slotInner}
+    </button>
+  ) : (
+    <span className="wb-slot is-static" data-testid="wb-card-project">{slotInner}</span>
+  );
+  const dotClass = item.moving ? 'is-idle' : `is-${item.dot}`;
 
   return (
     <div
@@ -294,7 +461,7 @@ export default function TaskCard({
       onClick={onCardClick}
     >
       <div className="wb-head">
-        <span className={`wb-dot is-${item.dot}`} aria-hidden="true" />
+        <span className={`wb-dot ${dotClass}`} aria-hidden="true" />
         <span className="wb-tx">
           <button
             type="button"
@@ -316,18 +483,22 @@ export default function TaskCard({
             <span className={`wb-lg${slug === MAIN_AGENT_HANDLE ? ' is-orb' : ''}`} title={agentLabel}>
               {icon.src ? <img src={icon.src} alt={agentLabel} /> : null}
             </span>
-            {project}
-            {detail && (
-              <>
-                {project ? ' · ' : ''}
-                {detail.warn ? <span className="wb-warn">{detail.text}</span> : detail.text}
-              </>
-            )}
-            {overdueDue && (
-              <>
-                {' · '}
-                <span className="wb-warn">{overdueDue}</span>
-              </>
+            {slot}
+            {(detail || overdueDue) && (
+              <span className={`wb-dt${detail?.warn ? ' is-warn' : ''}`}>
+                {detail && (
+                  <>
+                    {slot ? <span className="wb-dsep"> · </span> : null}
+                    {detail.warn ? <span className="wb-warn">{detail.text}</span> : detail.text}
+                  </>
+                )}
+                {overdueDue && (
+                  <>
+                    {slot || detail ? <span className="wb-dsep"> · </span> : null}
+                    <span className="wb-warn">{overdueDue}</span>
+                  </>
+                )}
+              </span>
             )}
           </span>
           {!phone && replyRow}
@@ -335,9 +506,21 @@ export default function TaskCard({
         <span className="wb-rz">
           <span className="wb-time">{timeText}</span>
         </span>
-        {!phone && acts}
+        {(!phone || picking) && acts}
       </div>
       {phone && replyRow}
+      {pickerOpen && slotLive && (
+        <AnchoredProjectPicker
+          anchor={slotRef.current}
+          projects={projects}
+          selectedId={picking ? null : pid}
+          auto={picking ? 'ticked' : 'none'}
+          onAuto={() => openPicker(false)}
+          onPick={pickProject}
+          onClose={() => openPicker(false)}
+          testId="wb-pop-card-project"
+        />
+      )}
     </div>
   );
 }

@@ -527,7 +527,24 @@ class AgentManager:
         except Exception:
             logger.debug("attachment grant hydrate failed for %s/%s",
                          project_id, session_id, exc_info=True)
+            session = None
         extra = sorted(attachment_grants.granted(project_id))
+        # Spec 180 (owner decision 11): a session moved here may read the
+        # folders it came from — read only, this session only, derived from
+        # its own ``session_moved`` rows.
+        if session is not None and hasattr(session, "get_messages"):
+            try:
+                for row in session.get_messages():
+                    meta = row.get("_meta") if isinstance(row, dict) else None
+                    if (row.get("role") == "system" and isinstance(meta, dict)
+                            and meta.get("event") == "session_moved"):
+                        ws = (meta.get("from") or {}).get("workspace")
+                        if (isinstance(ws, str) and ws and os.path.isdir(ws)
+                                and ws not in roots and ws not in extra):
+                            extra.append(ws)
+            except Exception:
+                logger.debug("moved-from read roots failed for %s/%s",
+                             project_id, session_id, exc_info=True)
         if not extra:
             return roots
         return [*roots, *extra]
@@ -2563,6 +2580,12 @@ class AgentManager:
         dispatches; an unflagged event wakes exactly as before.
         """
         session_id = self._resolve_session_id(session_id)
+        # Spec 180: a row for a session that is being (or was) moved lands
+        # where the session is now, never in a stranded copy in A.
+        moved_to = await self.move_redirect(project_id, session_id, during_stop=False)
+        if isinstance(moved_to, str) and moved_to != project_id:
+            return await self.inject_system_message(
+                moved_to, content, session_id=session_id, meta=meta)
         suppress_wake = bool(meta and meta.get("suppress_wake"))
         # Spec 112 A6: rows of a pinned worker's memory reminder turn (its
         # dispatch marker, its terminal) are tagged like the manager's own
@@ -3181,7 +3204,8 @@ class AgentManager:
                            parent, child, project_id, session_id, exc_info=True)
 
     async def persist_mention_message(self, project_id: str, session_id: str | None,
-                                      user_msg: dict) -> str:
+                                      user_msg: dict, *,
+                                      routed_by: str | None = None) -> str:
         """Append an authored @mention user record to the project's canonical
         chat session and return that session's concrete id — WITHOUT waking the
         management loop.
@@ -3204,6 +3228,13 @@ class AgentManager:
         pinned direct-send path. The append, which takes the session file
         lock, stays on the loop.
         """
+        # Spec 180: a row for a session that is being (or was) moved lands in
+        # the project it is in now (the inject route redirects user sends
+        # before this, and answers with the new project).
+        moved_to = await self.move_redirect(project_id, session_id, during_stop=False)
+        if isinstance(moved_to, str) and moved_to != project_id:
+            return await self.persist_mention_message(
+                moved_to, session_id, user_msg, routed_by=routed_by)
         resolved = self._sid_inject(project_id, session_id)
         key = make_session_key(project_id, resolved)
         handle = self._handles.get(key)
@@ -3227,6 +3258,10 @@ class AgentManager:
                 # no longer the only thing that records it.
                 if user_msg.get("target"):
                     session.set_pinned_target(user_msg["target"])
+                # Spec 180: the Workbench routed the send that creates this
+                # session (stamped only here, at creation).
+                if routed_by:
+                    session.set_routed_by(routed_by)
         await retry_session_lock(lambda: session.append(user_msg))
         return resolved
 
@@ -3272,6 +3307,7 @@ class AgentManager:
         nonce: str | None, *, session_id: str,
         queue_state: str = "chat",
         session: "Session | None" = None,
+        routed_by: str | None = None,
     ) -> str:
         """Write-ahead the user's row, THEN run the start window (bug #59).
 
@@ -3309,6 +3345,10 @@ class AgentManager:
             session = self._new_session_object(
                 config, session_id, queue_state=queue_state,
             )
+            # Spec 180: only a send that creates the session carries the
+            # "Orbital chose this project" mark.
+            if routed_by:
+                session.set_routed_by(routed_by)
         # Wire observers BEFORE the write: the user row must fire the canonical
         # chat.user_message echo (nonce + timestamp + session_id) that the
         # frontend dedups its optimistic bubble against. start_agent re-wires
@@ -3419,7 +3459,8 @@ class AgentManager:
     async def inject_message(self, project_id: str, content: str, *,
                              nonce: str | None = None,
                              session_id: str | None = None,
-                             queue_state: str = "chat") -> "str | dict":
+                             queue_state: str = "chat",
+                             routed_by: str | None = None) -> "str | dict":
         """Inject a message. Four cases:
         1. Loop running -> queue (returns "queued_same_session")
         1b. Loop paused for approval -> auto-deny pending, deliver, resume
@@ -3498,6 +3539,7 @@ class AgentManager:
             return await self._start_with_persisted_message(
                 project_id, config, content, nonce,
                 session_id=session_id, queue_state=queue_state,
+                routed_by=routed_by,
             )
 
         # User interaction — defer idle eviction. (Cold-start paths above
@@ -5280,6 +5322,14 @@ class AgentManager:
             await handle.loop.terminate()
             try:
                 await asyncio.wait_for(asyncio.shield(handle.task), timeout=10.0)
+            except asyncio.CancelledError:
+                # The loop task ending *cancelled* surfaces here too (awaiting
+                # a cancelled task raises): that is the stop succeeding, not
+                # this caller being cancelled — only re-raise the latter.
+                # (Spec 180: moving a running task answered 500 from this.)
+                current = asyncio.current_task()
+                if current is not None and current.cancelling():
+                    raise
             except (asyncio.TimeoutError, Exception):
                 pass
         else:
@@ -5534,6 +5584,227 @@ class AgentManager:
         return {"session_id": new_uuid, "session_uuid": new_uuid,
                 "target": target, "name": name}
 
+    # ------------------------------------------------------------------
+    # Spec 180: move a session to another project
+    # ------------------------------------------------------------------
+
+    def _move_gates(self) -> dict:
+        """``(project_id, session id) -> gate`` for moves in flight. Lazily
+        built so an AgentManager constructed without ``__init__`` (tests)
+        still has one."""
+        gates = getattr(self, "_moving", None)
+        if gates is None:
+            gates = self._moving = {}
+        return gates
+
+    async def move_redirect(self, project_id: str, session_id: str | None, *,
+                            during_stop: bool = True) -> str | None:
+        """The project a write addressed to ``(project_id, session_id)`` must
+        go to instead, or None to write where it was addressed.
+
+        While a move of that session is in flight the write waits for it and
+        then goes wherever the session ended up (``during_stop=False``, the
+        stop path's own rows, only waits once the copy has started). After a
+        move, A has no log for the id but ``.moved/{stem}.to-{B}.*.jsonl``
+        names B: the write goes to B."""
+        if not session_id:
+            return None
+        gate = self._move_gates().get((project_id, session_id))
+        if gate is not None and (during_stop or gate["gated"]):
+            await gate["event"].wait()
+            dest = gate.get("dest")
+            return dest if dest and dest != project_id else None
+        from agent_os.daemon_v2.session_move import moved_destination, safe_session_id
+        if not safe_session_id(session_id) or self._project_store is None:
+            return None
+        project = self._project_store.get_project(project_id) or {}
+        workspace = project.get("workspace") if isinstance(project, dict) else None
+        if not isinstance(workspace, str) or not workspace:
+            return None
+        sessions_dir = ProjectPaths(workspace).sessions_dir
+        live = os.path.join(sessions_dir, f"{session_id}.jsonl")
+        try:
+            if os.path.getsize(live) > 0:
+                return None
+        except OSError:
+            pass
+        dest = moved_destination(sessions_dir, session_id)
+        if dest and dest != project_id and self._project_store.get_project(dest):
+            return dest
+        return None
+
+    async def move_session(self, project_id: str, session_id: str, *,
+                           to_project_id: str) -> dict:
+        """Spec 180 §5.4: move ``session_id`` from ``project_id`` (A) to
+        ``to_project_id`` (B). The session keeps its id. A running task is
+        stopped and moved at once; the work restarts in B.
+
+        Raises ``FileNotFoundError`` (→ 404) and ``MoveError`` with ``code``
+        ``same_project`` / ``destination_missing`` / ``not_movable`` (400),
+        ``moving`` / ``destination_exists`` (409); ``FileLockError`` (→ 503).
+        """
+        from agent_os.agent.session import read_session_start
+        from agent_os.daemon_v2.session_move import MoveError, transfer_session_files
+
+        a_id, b_id = project_id, to_project_id
+        if a_id == b_id:
+            raise MoveError("same_project")
+        store = self._project_store
+        a_project = store.get_project(a_id) if store else None
+        b_project = store.get_project(b_id) if store else None
+        if a_project is None:
+            raise FileNotFoundError(f"No project '{a_id}'")
+        b_workspace = (b_project or {}).get("workspace") or ""
+        if b_project is None or not b_workspace or not os.path.isdir(b_workspace):
+            raise MoveError("destination_missing")
+        a_workspace = a_project.get("workspace") or ""
+        resolved = self._resolve_session_uuid_on_disk(a_id, session_id)
+        if resolved is None:
+            raise FileNotFoundError(f"No session '{session_id}' for project '{a_id}'")
+        stem, a_path = resolved
+        start = await asyncio.to_thread(read_session_start, a_path) or {}
+        if start.get("origin") == "memory":
+            raise MoveError("not_movable")
+        ids = {session_id, stem}
+        if isinstance(start.get("session_id"), str) and start["session_id"]:
+            ids.add(start["session_id"])
+        gates = self._move_gates()
+        if any((a_id, k) in gates for k in ids):
+            raise MoveError("moving", 409)
+        # Step 0: close the door on A (stopping; the stop's own rows still
+        # land in A, user sends wait).
+        gate = {"event": asyncio.Event(), "gated": False, "dest": a_id, "to": b_id}
+        for k in ids:
+            gates[(a_id, k)] = gate
+        try:
+            was_live, pinned_target, queued = await self._stop_for_move(
+                a_id, ids, start)
+            gate["gated"] = True  # no await between the stop and this line
+            from_info = {"project_id": a_id, "name": a_project.get("name") or a_id,
+                         "workspace": a_workspace,
+                         "is_scratch": bool(a_project.get("is_scratch"))}
+            to_info = {"project_id": b_id, "name": b_project.get("name") or b_id,
+                       "workspace": b_workspace,
+                       "is_scratch": bool(b_project.get("is_scratch"))}
+            await asyncio.to_thread(
+                transfer_session_files, a_workspace=a_workspace,
+                b_workspace=b_workspace, a_path=a_path, stem=stem, ids=ids,
+                from_info=from_info, to_info=to_info)
+            gate["dest"] = b_id
+        finally:
+            for k in ids:
+                gates.pop((a_id, k), None)
+            gate["event"].set()
+        for (pid, sid) in list(self._last_terminal_events.keys()):
+            if pid == a_id and sid in ids:
+                self._last_terminal_events.pop((pid, sid), None)
+        logger.info("move_session: %s %s -> %s (live=%s, queued=%d)",
+                    stem, a_id, b_id, was_live, len(queued))
+        woke = await self._wake_after_move(
+            b_id, stem, was_live=was_live, pinned_target=pinned_target,
+            queued=queued, workspace=b_workspace)
+        return {"project_id": b_id, "session_id": stem, "woke": woke}
+
+    async def _stop_for_move(self, project_id: str, ids: set[str],
+                             start: dict) -> tuple[str | None, str | None, list]:
+        """Step 2-3: note what was live, then stop it with the existing stops.
+        Returns ``(was_live, pinned_target, queued)``: ``was_live`` is
+        ``"manager"``, ``"worker"`` or None."""
+        sam = self._sub_agent_manager
+        handle = None
+        for k in ids:
+            handle = self._handles.get(make_session_key(project_id, k))
+            if handle is not None:
+                break
+        pinned_target = (getattr(handle.session, "pinned_target", None)
+                         if handle is not None else start.get("pinned_target")) or None
+        manager_live = any(self._session_live_status(project_id, k) is not None
+                           for k in ids)
+        busy_workers: list[tuple[str, str]] = []
+        if sam is not None:
+            for k in ids:
+                try:
+                    for a in sam.list_active(project_id, session_id=k):
+                        if a.get("status") not in (None, "idle"):
+                            busy_workers.append((k, a["handle"]))
+                except Exception:
+                    logger.warning("move: could not list workers of %s/%s",
+                                   project_id, k, exc_info=True)
+        queued: list = []
+        if handle is not None:
+            try:
+                queued = list(handle.session.pop_queued_messages())
+            except Exception:
+                queued = []
+        for k, h in busy_workers:
+            try:
+                await sam.stop_for_user(project_id, h, session_id=k)
+            except Exception:
+                logger.warning("move: stopping %s in %s/%s failed", h, project_id, k,
+                               exc_info=True)
+        for k in ids:
+            try:
+                await self.cancel_message(project_id, session_id=k)
+            except Exception:
+                logger.warning("move: cancel of %s/%s failed", project_id, k,
+                               exc_info=True)
+            registry = getattr(self, "_job_registry", None)
+            if registry is not None:
+                try:
+                    registry.cancel_scope(project_id, k)
+                except Exception:
+                    logger.warning("move: job cancel for %s/%s failed",
+                                   project_id, k, exc_info=True)
+            if self._handles.get(make_session_key(project_id, k)) is not None:
+                try:
+                    await self.stop_agent(project_id, session_id=k)
+                except KeyError:
+                    pass
+            elif sam is not None:
+                # No manager handle (a pinned chat): idle workers still hold
+                # threads in A's folder. Tear them down silently.
+                try:
+                    await asyncio.wait_for(sam.stop_all(project_id, session_id=k),
+                                           timeout=self.SUB_AGENT_TEARDOWN_BUDGET)
+                except asyncio.TimeoutError:
+                    pass
+                except Exception:
+                    logger.warning("move: worker teardown of %s/%s failed",
+                                   project_id, k, exc_info=True)
+        was_live = "manager" if manager_live else ("worker" if busy_workers else None)
+        return was_live, pinned_target, queued
+
+    async def _wake_after_move(self, project_id: str, stem: str, *,
+                               was_live: str | None, pinned_target: str | None,
+                               queued: list, workspace: str) -> bool:
+        """Step 8: restart in B what the move stopped. Never raises — the
+        move is done and durable; a failed wake leaves an idle card in B."""
+        try:
+            if queued:
+                for item in queued:
+                    content, nonce = (item if isinstance(item, tuple) else (item, None))
+                    await self.inject_message(project_id, content, nonce=nonce,
+                                              session_id=stem)
+                return True
+            if was_live == "worker" and pinned_target and self._sub_agent_manager:
+                await self._sub_agent_manager.send(
+                    project_id, pinned_target,
+                    f"Continue the task in {workspace}.",
+                    session_id=stem, initiator="user_pinned")
+                return True
+            if was_live is not None:
+                loaded = await self._hydrate_session(project_id, stem)
+                if loaded is None:
+                    return False
+                config = await self._abuild_agent_config_from_project(project_id)
+                await self.start_agent(project_id, config, initial_message=None,
+                                       session_id=loaded.session_uuid, session=loaded)
+                return True
+        except Exception:
+            logger.warning("move: wake in %s/%s failed; the session is moved and "
+                           "idle", project_id, stem, exc_info=True)
+        return False
+
     def rename_session(self, project_id: str, session_id: str, name: str) -> dict:
         """Rename a session: update its display name in memory + on disk.
 
@@ -5561,7 +5832,8 @@ class AgentManager:
     def patch_session(self, project_id: str, session_id: str, *,
                       name: str | None = None,
                       pinned: bool | None = None,
-                      pinned_target=_UNSET) -> dict:
+                      pinned_target=_UNSET,
+                      clear_routed_by: bool = False) -> dict:
         """Update a session's display state in memory + on disk.
 
         Resolves the session (F1 or F2/uuid). If a live handle exists, mutate
@@ -5597,6 +5869,9 @@ class AgentManager:
                 result["previous_pinned_target"] = getattr(
                     session, "pinned_target", None)
                 session.set_pinned_target(pinned_target)
+            if clear_routed_by:
+                # Spec 180: the user opened the card; the mark goes.
+                session.set_routed_by(None)
 
         # Live handle path: mutate in memory (also rewrites the meta line).
         for (pid, sid), handle in self._handles.items():
@@ -5742,6 +6017,8 @@ class AgentManager:
                 # Pinned sub-agent target (spec 074) — slug or None. Same meta
                 # record; absent on pre-074 logs, which read as unpinned.
                 "pinned_target": getattr(handle.session, "pinned_target", None),
+                # Spec 180: "Orbital chose this project" (model | fallback).
+                "routed_by": getattr(handle.session, "routed_by", None),
                 "last_terminal_event": self._last_terminal_events.get(
                     (pid, sid),
                 ),

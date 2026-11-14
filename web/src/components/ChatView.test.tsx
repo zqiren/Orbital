@@ -4914,6 +4914,34 @@ describe('Keyless: the import scan on the pinned worker', () => {
   });
 });
 
+describe('Spec 180: a moved session', () => {
+  it('shows one quiet divider 「从 A 移到 B」 from the stored names, Quick Tasks by its own name, never the model note', async () => {
+    chatInitialResponse = {
+      data: [
+        { role: 'user', source: 'user', content: 'Draft the budget', timestamp: '2026-11-14T08:00:00Z' },
+        {
+          role: 'system', source: 'daemon', timestamp: '2026-11-14T08:05:00Z',
+          content: 'The user moved this conversation from the project "Quick Tasks" (folder: /a) to the project "Finance" (folder: /b).',
+          _meta: {
+            event: 'session_moved',
+            from: { project_id: 'qt', name: 'Quick Tasks', workspace: '/a', is_scratch: true },
+            to: { project_id: project.project_id, name: 'old name' },
+          },
+        },
+      ],
+      total: 2,
+    };
+    await renderChat({ sessionId: 's_moved' });
+    await flushEffects();
+    const row = container.querySelector('[data-testid="chat-session-moved"]');
+    expect(row).not.toBeNull();
+    // This project's live name, not the stored one.
+    expect(row?.textContent).toBe(`Moved from Quick Tasks to ${project.name}`);
+    expect(row?.querySelectorAll('b')).toHaveLength(2);
+    expect(container.textContent).not.toContain('The user moved this conversation');
+  });
+});
+
 describe('Session import: opening an imported row', () => {
   it('shows a short importing line while the first /chat materializes it', async () => {
     let release!: () => void;

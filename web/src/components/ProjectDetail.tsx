@@ -75,6 +75,8 @@ interface ProjectDetailProps {
    * do with it (`PROJECT_PAGES[page].render`).
    */
   pageContent?: Partial<Record<ProjectPage, ReactNode>>;
+  /** Spec 180: every project, sidebar order — where a session can be moved. */
+  projects?: Project[];
 }
 
 // Workbench and Calendar are GLOBAL workspace surfaces — they aggregate
@@ -106,6 +108,7 @@ export default function ProjectDetail({
   agentsAvailable = [],
   children,
   pageContent = {},
+  projects,
 }: ProjectDetailProps) {
   const t = useT();
   // Names the credential the header chip shows; the same flat list the
@@ -258,6 +261,13 @@ export default function ProjectDetail({
 
   function handleSessionDeleted(deletedId: string, remaining: SessionListEntry[]) {
     sessionNav.sessionDeleted(deletedId, remaining, route.sessionId);
+  }
+
+  // Spec 180: the open session was moved — the view follows it.
+  function handleSessionMoved(sessionId: string, toProjectId: string) {
+    if (route.sessionId === sessionId) {
+      setRoute({ name: 'project', projectId: toProjectId, sessionId });
+    }
   }
 
   // Automations "try this in chat" and "New automation" (spec 137 decision
@@ -525,6 +535,8 @@ export default function ProjectDetail({
           onSessionSelect={handleSelectSession}
           onNewSession={handleNewSession}
           onSessionDeleted={handleSessionDeleted}
+          projects={projects}
+          onSessionMoved={handleSessionMoved}
         />
       </aside>
       {/* The right area: the chat, or the page opened from the column. One

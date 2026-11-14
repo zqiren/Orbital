@@ -41,7 +41,8 @@ INDEX_FILENAME = ".session-index.sqlite"
 #   "3": ``imported_from`` / ``imported`` on imported sessions (session
 #        import, 2026-10-21).
 #   "4": ``last_user_at`` skips bookkeeping rows; ``ask_ids`` (spec 154 §5.3).
-INDEX_VERSION = "4"
+#   "5": ``routed_by`` — "Orbital chose this project" (spec 180).
+INDEX_VERSION = "5"
 
 # ``_kind`` tags of daemon bookkeeping rows (spec 112 A6, 124, 146). Some are
 # ``role: "user"`` (the record turn's [MEMORY] ask), but none is the user's
@@ -202,6 +203,7 @@ def derive_disk_entry(path: str, uuid: str) -> dict | None:
     stored_pinned = False  # `pinned` on the same meta (spec 067)
     stored_pinned_target = None  # `pinned_target` (spec 074)
     stored_trigger_type = None  # `trigger_type` (spec 066 4b)
+    stored_routed_by = None  # `routed_by` (spec 180); null once cleared
     imported_from = None  # session import (2026-10-21): {agent, native_id}
     origin = "chat"  # session_start meta origin; legacy logs → chat
     first_user_content = None  # for name backfill
@@ -236,6 +238,8 @@ def derive_disk_entry(path: str, uuid: str) -> dict | None:
                         stored_pinned_target = rec["pinned_target"]
                     if rec.get("trigger_type"):
                         stored_trigger_type = rec["trigger_type"]
+                    if rec.get("routed_by") in ("model", "fallback"):
+                        stored_routed_by = rec["routed_by"]
                     if isinstance(rec.get("imported_from"), dict):
                         imported_from = rec["imported_from"]
                 elif rec.get("event") == "session_kind" and rec.get("kind") == "worker":
@@ -285,6 +289,7 @@ def derive_disk_entry(path: str, uuid: str) -> dict | None:
         "name": name,
         "pinned": stored_pinned,
         "pinned_target": stored_pinned_target,
+        "routed_by": stored_routed_by,
         "last_terminal_event": None,
         "last_activity_at": last_activity_at,
         # Spec 108: who spoke last. The client badges a row whose reply is

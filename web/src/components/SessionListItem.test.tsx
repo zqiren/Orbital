@@ -812,3 +812,98 @@ describe('SessionListItem — imported sessions', () => {
     expect(screen.getByRole('button', { name: 'Session Imported Fix the login bug' })).toBeTruthy();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Spec 180: 移动到项目… — the Workbench's project picker from the row's menu
+// ---------------------------------------------------------------------------
+
+describe('SessionListItem — move to project (spec 180)', () => {
+  const PROJECTS = [
+    { project_id: 'qt', name: 'Quick Tasks', workspace: '/w/qt', is_scratch: true },
+    { project_id: 'fin', name: '季度经营分析与 2027 年度预算编制（财务部 · 含各事业部滚动预测）', workspace: '/w/fin' },
+    // Excluded from the Workbench, still a valid destination here.
+    { project_id: 'priv', name: 'Private', workspace: '/w/priv', workbench_exclude_global: true },
+  ] as unknown as import('../types').Project[];
+
+  function renderRow(onMove = vi.fn(async (_sid: string, _to: string) => {}), onSelect = vi.fn()) {
+    render(
+      <SessionListItem
+        session={makeSession({ session_id: 'sess-mv', name: 'Budget draft' })}
+        selected={false}
+        onSelect={onSelect}
+        onRename={vi.fn()}
+        onPin={vi.fn()}
+        onDelete={vi.fn()}
+        onMove={onMove}
+        moveProjects={PROJECTS}
+        projectId="qt"
+      />,
+    );
+    return { onMove, onSelect };
+  }
+
+  it('the menu reads 置顶 · 重命名 · 移动到项目… · 删除', async () => {
+    renderRow();
+    await userEvent.click(screen.getByTestId('session-three-dot-trigger'));
+    const items = screen.getAllByRole('menuitem').map((b) => b.getAttribute('data-testid'));
+    expect(items).toEqual(['session-action-pin', 'session-action-rename', 'session-action-move', 'session-action-delete']);
+    expect(screen.getByTestId('session-action-move')).toHaveTextContent('Move to project…');
+  });
+
+  it('no onMove (or nowhere to go): no menu item', async () => {
+    render(<SessionListItem session={makeSession()} selected={false} onSelect={vi.fn()} onDelete={vi.fn()} />);
+    await userEvent.click(screen.getByTestId('session-three-dot-trigger'));
+    expect(screen.queryByTestId('session-action-move')).toBeNull();
+  });
+
+  it('opens the picker: every project, this one ticked, no 自动 row', async () => {
+    renderRow();
+    await userEvent.click(screen.getByTestId('session-three-dot-trigger'));
+    await userEvent.click(screen.getByTestId('session-action-move'));
+    const pop = screen.getByTestId('session-move-picker');
+    expect(screen.queryByTestId('session-three-dot-dropdown')).toBeNull();
+    expect(pop.querySelector('[data-testid="wb-opt-auto"]')).toBeNull();
+    expect(screen.getByTestId('wb-opt-project-qt')).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByTestId('wb-opt-project-qt')).toHaveTextContent('Quick Tasks');
+    expect(screen.getByTestId('wb-opt-project-priv')).toBeInTheDocument();
+    expect(screen.getByTestId('wb-opt-project-fin')).toHaveAttribute('aria-selected', 'false');
+  });
+
+  it('a pick moves it at once (no confirmation) and the row folds out; the pick does not select the row', async () => {
+    const { onMove, onSelect } = renderRow();
+    await userEvent.click(screen.getByTestId('session-three-dot-trigger'));
+    await userEvent.click(screen.getByTestId('session-action-move'));
+    await userEvent.click(screen.getByTestId('wb-opt-project-fin'));
+    expect(onMove).toHaveBeenCalledWith('sess-mv', 'fin');
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.queryByTestId('session-move-picker')).toBeNull();
+    expect(screen.getByTestId('session-list-item-sess-mv').className).toContain('is-gone');
+  });
+
+  it('the current project only closes the picker', async () => {
+    const { onMove } = renderRow();
+    await userEvent.click(screen.getByTestId('session-three-dot-trigger'));
+    await userEvent.click(screen.getByTestId('session-action-move'));
+    await userEvent.click(screen.getByTestId('wb-opt-project-qt'));
+    expect(onMove).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('session-move-picker')).toBeNull();
+  });
+
+  it('a move that fails puts the row back', async () => {
+    renderRow(vi.fn(async () => { throw new Error('409'); }));
+    await userEvent.click(screen.getByTestId('session-three-dot-trigger'));
+    await userEvent.click(screen.getByTestId('session-action-move'));
+    await userEvent.click(screen.getByTestId('wb-opt-project-fin'));
+    await vi.waitFor(() => expect(screen.getByTestId('session-list-item-sess-mv').className).not.toContain('is-gone'));
+  });
+
+  it('Esc closes the picker without moving', async () => {
+    const { onMove } = renderRow();
+    await userEvent.click(screen.getByTestId('session-three-dot-trigger'));
+    await userEvent.click(screen.getByTestId('session-action-move'));
+    await userEvent.keyboard('{Escape}');
+    expect(screen.queryByTestId('session-move-picker')).toBeNull();
+    expect(onMove).not.toHaveBeenCalled();
+  });
+});

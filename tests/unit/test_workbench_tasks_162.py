@@ -100,13 +100,17 @@ class FakeManager:
         return {"status": "ok", "session_id": sid, "session_uuid": sid,
                 "pinned_target": self.pinned.get(project_id)}
 
-    async def inject_message(self, project_id, content, *, session_id=None, nonce=None):
+    async def inject_message(self, project_id, content, *, session_id=None, nonce=None,
+                             routed_by=None):
         self.log.append(("inject", project_id))
         self.injected.append((project_id, content, session_id))
+        self.routed_by = routed_by
         return self.inject_result
 
-    async def persist_mention_message(self, project_id, session_id, user_msg):
+    async def persist_mention_message(self, project_id, session_id, user_msg, *,
+                                      routed_by=None):
         self.log.append(("persist", project_id))
+        self.routed_by = routed_by
         self.persisted.append((project_id, session_id, user_msg))
         return session_id
 
@@ -196,6 +200,7 @@ async def test_given_project_skips_routing_and_sends_to_the_manager(rig):
     assert prov.calls == []                                   # no routing call
     assert mgr.log == [("mint", "proj_app"), ("inject", "proj_app")]
     assert mgr.injected == [("proj_app", "Fix #123: login 500s", "s_1")]
+    assert mgr.routed_by is None                              # a given project: no mark
     assert subs.sent == []
     assert store.updates == []                                # the pin never moves
 
@@ -341,6 +346,8 @@ async def test_omitted_project_routes_then_mints_then_injects(rig):
     assert body["project_id"] == "proj_site" and body["by"] == "model"
     assert [e[0] for e in mgr.log] == ["route", "mint", "inject"]
     assert mgr.log[1:] == [("mint", "proj_site"), ("inject", "proj_site")]
+    # Spec 180: a routed task carries the "Orbital chose this" mark.
+    assert mgr.routed_by == "model"
     # The same routing call the composer's /route makes.
     (messages,) = prov.calls
     assert messages == wb.build_route_messages(

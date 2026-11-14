@@ -282,7 +282,30 @@ export function useSessions(projectId: string | null) {
     [projectId],
   );
 
-  return { sessions, loading, error, refresh, renameSession, pinSession, pinAgent, deleteSession };
+  // Spec 180: move a session to another project (its id does not change).
+  // The row leaves this list on success; rejects (list untouched) on failure.
+  // `minMs`: resolve no sooner, so the row's fold-out plays to its end.
+  const moveSession = useCallback(
+    async (sessionId: string, toProjectId: string, minMs = 0): Promise<{ project_id: string; session_id: string }> => {
+      if (!projectId) throw new Error('No project selected');
+      const [res] = await Promise.all([
+        api<{ project_id?: string; session_id?: string }>(
+          `/api/v2/agents/${encodeURIComponent(projectId)}/sessions/${encodeURIComponent(sessionId)}/move`,
+          { method: 'POST', body: JSON.stringify({ to_project_id: toProjectId }) },
+        ),
+        new Promise((r) => setTimeout(r, minMs)),
+      ]);
+      setSessions((prev) => {
+        const next = prev.filter((s) => s.session_id !== sessionId);
+        sessionsCache.set(projectId, next);
+        return next;
+      });
+      return { project_id: res?.project_id || toProjectId, session_id: res?.session_id || sessionId };
+    },
+    [projectId],
+  );
+
+  return { sessions, loading, error, refresh, renameSession, pinSession, pinAgent, deleteSession, moveSession };
 }
 
 // Alias for consumers that prefer the more explicit name.

@@ -377,6 +377,14 @@ class Session:
         # timestamp>}``) on its session_start meta. Display and the spec 128
         # path labels only; None for every other session.
         self.forked_from: dict | None = None
+        # Spec 180: "Orbital chose this project" — ``"model"`` / ``"fallback"``
+        # when the Workbench routed the send that created this session, None
+        # otherwise or once the user opened the card (stored null). Display
+        # only.
+        self.routed_by: str | None = None
+        # Spec 180: the last move into this project (``{"project_id", "at"}``)
+        # on the session_start meta, else None. Display / bookkeeping only.
+        self.moved_from: dict | None = None
         # Spec 156 §5.4: handle -> ``{"from_session_id", "at_uuid"}`` from
         # ``event: sub_agent_fork`` meta rows (last row wins): the parent's
         # Claude Code session this fork's first spawn forks natively. Never a
@@ -505,6 +513,12 @@ class Session:
                                 session.trigger_type = msg["trigger_type"]
                             if isinstance(msg.get("forked_from"), dict):
                                 session.forked_from = dict(msg["forked_from"])
+                            if msg.get("routed_by") in ("model", "fallback"):
+                                session.routed_by = msg["routed_by"]
+                            elif "routed_by" in msg:
+                                session.routed_by = None
+                            if isinstance(msg.get("moved_from"), dict):
+                                session.moved_from = dict(msg["moved_from"])
                         elif msg.get("event") == "sub_agent_thread":
                             # Resume identity rows: append-only, last row per
                             # handle wins (TASK-resume-persistence).
@@ -885,6 +899,13 @@ class Session:
         """
         self.pinned_target = target if target else None
         self._apply_meta_fields(pinned_target=self.pinned_target)
+
+    def set_routed_by(self, routed_by: str | None) -> None:
+        """Spec 180: stamp (``"model"`` / ``"fallback"``) or clear (None) the
+        "Orbital chose this project" mark on the session_start meta. A clear
+        persists as an explicit null, like a cleared pin."""
+        self.routed_by = routed_by if routed_by in ("model", "fallback") else None
+        self._apply_meta_fields(routed_by=self.routed_by)
 
     def set_sub_agent_params(self, slug: str, params: dict[str, str]) -> None:
         """Spec 149: replace ``slug``'s conversation overrides (empty clears)
@@ -1527,3 +1548,172 @@ def persist_user_row(session: Session, content: str,
         message["nonce"] = nonce
     session.append(message)
     return message
+
+
+# ---------------------------------------------------------------------------
+# Spec 180: move a session to another project
+# ---------------------------------------------------------------------------
+
+SESSION_MOVED_EVENT = "session_moved"
+
+# Resume records are never carried across a move (fork's rule): every worker
+# in the destination starts a fresh thread with cwd = the new folder.
+_MOVE_DROPPED_META_EVENTS = frozenset({"sub_agent_thread", "sub_agent_fork"})
+
+
+def _rewrite_transcript_paths(meta, rewrite) -> tuple[dict, bool]:
+    """``_meta`` with every ``transcript_path`` (top level, or inside a list
+    of dicts such as a fanout join's tasks) mapped through ``rewrite``."""
+    changed = False
+    out = dict(meta)
+    path = out.get("transcript_path")
+    if isinstance(path, str):
+        new = rewrite(path)
+        if new and new != path:
+            out["transcript_path"] = new
+            changed = True
+    for key, value in list(out.items()):
+        if isinstance(value, list) and any(isinstance(v, dict) and "transcript_path" in v
+                                           for v in value):
+            items = []
+            for v in value:
+                if isinstance(v, dict) and isinstance(v.get("transcript_path"), str):
+                    new = rewrite(v["transcript_path"])
+                    if new and new != v["transcript_path"]:
+                        v = {**v, "transcript_path": new}
+                        changed = True
+                items.append(v)
+            out[key] = items
+    return out, changed
+
+
+def transcript_paths_in(text: str) -> list[str]:
+    """Every ``transcript_path`` the rows of a session log name, first-seen
+    order (the sub-agent transcripts a move copies)."""
+    seen: list[str] = []
+
+    def note(path: str) -> str:
+        if path not in seen:
+            seen.append(path)
+        return path
+
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or '"transcript_path"' not in line:
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        meta = row.get("_meta") if isinstance(row, dict) else None
+        if isinstance(meta, dict):
+            _rewrite_transcript_paths(meta, note)
+    return seen
+
+
+def image_blob_refs_in(text: str) -> list[tuple[str, str]]:
+    """``(sha256, ext)`` of every image blob the rows of a session log name."""
+    from agent_os.agent.blob_store import META_KEY
+    refs: list[tuple[str, str]] = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or META_KEY not in line:
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        meta = row.get("_meta") if isinstance(row, dict) else None
+        if not isinstance(meta, dict):
+            continue
+        for ref in meta.get(META_KEY) or ():
+            if (isinstance(ref, dict) and isinstance(ref.get("sha256"), str)
+                    and isinstance(ref.get("ext"), str)):
+                pair = (ref["sha256"], ref["ext"])
+                if pair not in refs:
+                    refs.append(pair)
+    return refs
+
+
+def move_session_lines(text: str, *, moved_from: dict, move_row: dict | None,
+                       rewrite_transcript=None, session_uuid: str = "") -> list[str]:
+    """The destination log of a move (spec 180 §5.4 step 4).
+
+    * ``session_start`` copied whole (every key survives), minus
+      ``routed_by``, plus ``moved_from``; a legacy log without one gets a
+      minimal one;
+    * every conversation row and every other meta row VERBATIM (the stored
+      line itself), except that a row naming a sub-agent transcript has its
+      ``transcript_path`` mapped through ``rewrite_transcript``;
+    * no ``sub_agent_thread`` / ``sub_agent_fork`` rows;
+    * ``move_row`` (if given) last.
+
+    A line that is not valid JSON is kept as it is (``Session.load`` skips it
+    the same way in either project)."""
+    lines: list[str] = []
+    saw_start = False
+    for raw in text.splitlines():
+        stripped = raw.strip()
+        if not stripped:
+            continue
+        try:
+            row = json.loads(stripped)
+        except json.JSONDecodeError:
+            lines.append(stripped + "\n")
+            continue
+        if not isinstance(row, dict):
+            lines.append(stripped + "\n")
+            continue
+        if row.get("role") == "meta":
+            event = row.get("event")
+            if event == "session_start" and not saw_start:
+                saw_start = True
+                start = {k: v for k, v in row.items() if k != "routed_by"}
+                start["moved_from"] = dict(moved_from)
+                lines.append(json.dumps(start, ensure_ascii=False) + "\n")
+                continue
+            if event in _MOVE_DROPPED_META_EVENTS:
+                continue
+            lines.append(stripped + "\n")
+            continue
+        meta = row.get("_meta")
+        if rewrite_transcript is not None and isinstance(meta, dict):
+            new_meta, changed = _rewrite_transcript_paths(meta, rewrite_transcript)
+            if changed:
+                lines.append(json.dumps({**row, "_meta": new_meta},
+                                        ensure_ascii=False) + "\n")
+                continue
+        lines.append(stripped + "\n")
+    if not saw_start:
+        lines.insert(0, json.dumps({
+            "role": "meta", "event": "session_start",
+            "session_id": session_uuid, "session_uuid": session_uuid,
+            "origin": "chat", "timestamp": _now(),
+            "moved_from": dict(moved_from),
+        }, ensure_ascii=False) + "\n")
+    if move_row is not None:
+        lines.append(json.dumps(move_row, ensure_ascii=False) + "\n")
+    return lines
+
+
+def read_session_start(path: str) -> dict | None:
+    """The ``session_start`` meta of a log, read from its head, else None."""
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            for _ in range(20):
+                raw = fh.readline()
+                if not raw:
+                    break
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    rec = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(rec, dict) and rec.get("role") == "meta" \
+                        and rec.get("event") == "session_start":
+                    return rec
+    except OSError:
+        return None
+    return None

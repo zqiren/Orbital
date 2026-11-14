@@ -55,6 +55,7 @@ import { projectAgents } from '../../hooks/useAgentAvailability';
 import { overUploadCap, useAttachments } from '../../hooks/useAttachments';
 import AttachmentChip from '../AttachmentChip';
 import type { SendChoice, SendDeps } from './sendTask';
+import ProjectPicker from './ProjectPicker';
 
 const LAST_PROJECT_KEY = 'orbital.wbLastProject';
 
@@ -134,6 +135,14 @@ export default function WorkbenchComposer({
     if (feed.composerRestore === null) return;
     setText(feed.composerRestore);
     restoreComposer(null);
+    // The text rises back in (spec 180: ✕ on a picking card, a send that
+    // could not start); restarted each time.
+    const el = inputRef.current;
+    if (el) {
+      el.classList.remove('is-back');
+      void el.offsetWidth;
+      el.classList.add('is-back');
+    }
   }, [feed.composerRestore]);
 
   // Close a picker on Esc and on a press outside it.
@@ -375,51 +384,20 @@ export default function WorkbenchComposer({
       </div>
 
       {pop === 'project' && (
-        <div className="wb-pop" role="listbox" aria-label={t('workbench.composer.project')} style={{ left: 8 }} data-testid="wb-pop-project">
-          {keyless ? (
-            // Routing needs a key: 自动 stays visible, not selectable; the
-            // click goes where the key is added.
-            <button
-              type="button"
-              role="option"
-              aria-selected={false}
-              aria-disabled="true"
-              className="wb-opt is-off"
-              data-testid="wb-opt-auto"
-              onClick={() => {
-                setPop('none');
-                window.dispatchEvent(new CustomEvent('open-global-settings', { detail: { section: 'llm' } }));
-              }}
-            >
-              <span className="wb-gl"><Sparkles size={13} strokeWidth={1.9} aria-hidden="true" /></span>
-              <span className="wb-tx"><span className="wb-n1">{t('workbench.composer.auto')}</span></span>
-              <span className="wb-note">{t('workbench.composer.needsKey')}</span>
-              {ck(false)}
-            </button>
-          ) : (
-            <button type="button" role="option" aria-selected={!projectId} className="wb-opt" data-testid="wb-opt-auto" onClick={() => { setProjectId(null); setPop('none'); }}>
-              <span className="wb-gl"><Sparkles size={13} strokeWidth={1.9} aria-hidden="true" /></span>
-              <span className="wb-tx"><span className="wb-n1">{t('workbench.composer.auto')}</span></span>
-              {ck(!projectId)}
-            </button>
-          )}
-          <div className="wb-sep" />
-          {projects.map((p) => (
-            <button
-              key={p.project_id}
-              type="button"
-              role="option"
-              aria-selected={effectiveProjectId === p.project_id}
-              className="wb-opt"
-              title={projectDisplayName(p, t)}
-              onClick={() => { setProjectId(p.project_id); setRouteError(false); setPop('none'); }}
-            >
-              <span className="wb-gl"><Folder size={13} strokeWidth={1.9} aria-hidden="true" /></span>
-              <span className="wb-tx"><span className="wb-n1">{projectDisplayName(p, t)}</span></span>
-              {ck(effectiveProjectId === p.project_id)}
-            </button>
-          ))}
-        </div>
+        <ProjectPicker
+          projects={projects}
+          selectedId={effectiveProjectId}
+          auto={keyless ? 'keyless' : 'choose'}
+          autoSelected={!projectId}
+          onAuto={() => {
+            setPop('none');
+            if (keyless) window.dispatchEvent(new CustomEvent('open-global-settings', { detail: { section: 'llm' } }));
+            else setProjectId(null);
+          }}
+          onPick={(id) => { setProjectId(id); setRouteError(false); setPop('none'); }}
+          style={{ left: 8 }}
+          testId="wb-pop-project"
+        />
       )}
 
       {pop === 'agent' && (

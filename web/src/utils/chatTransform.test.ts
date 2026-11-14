@@ -2627,6 +2627,39 @@ describe('transformChatHistory — import and worker-onboarding rows', () => {
     }]);
   });
 
+  it('spec 180: the session_moved row becomes one divider with both names, never its model-facing content', () => {
+    const items = transformChatHistory([
+      daemon('The user moved this conversation from the project "Quick Tasks" (folder: /a) to the project "财务" (folder: /b). Work in /b from now on.', {
+        event: 'session_moved',
+        from: { project_id: 'qt', name: 'Quick Tasks', workspace: '/a', is_scratch: true },
+        to: { project_id: 'fin', name: '财务' },
+      }),
+    ]);
+    expect(items).toEqual([{
+      type: 'session_moved', from: 'Quick Tasks', to: '财务', fromProjectId: 'qt', toProjectId: 'fin',
+      fromScratch: true, timestamp: TS,
+    }]);
+  });
+
+  it('spec 180: a session moved twice keeps both dividers in place', () => {
+    const items = transformChatHistory([
+      daemon('moved', { event: 'session_moved', from: { project_id: 'a', name: 'A' }, to: { project_id: 'b', name: 'B' } }, TS),
+      user('continue', TS2),
+      daemon('moved', { event: 'session_moved', from: { project_id: 'b', name: 'B' }, to: { project_id: 'a', name: 'A' } }, TS3),
+    ]);
+    expect(items.map((it) => it.type)).toEqual(['session_moved', 'user_message', 'session_moved']);
+    expect(items[2]).toMatchObject({ from: 'B', to: 'A' });
+    expect(items[0]).not.toHaveProperty('fromScratch');
+  });
+
+  it('spec 180: a move into Quick Tasks marks that side as scratch', () => {
+    const items = transformChatHistory([
+      daemon('moved', { event: 'session_moved', from: { project_id: 'a', name: 'A' }, to: { project_id: 'qt', name: 'Quick Tasks', is_scratch: true } }),
+    ]);
+    expect(items[0]).toMatchObject({ type: 'session_moved', toScratch: true });
+    expect(items[0]).not.toHaveProperty('fromScratch');
+  });
+
   it('an imported transcript renders user bubbles and worker bubbles, in order', () => {
     const longReply = 'A'.repeat(250) + '\n\n(tools: Read ×3, Edit ×1)';
     const items = transformChatHistory([

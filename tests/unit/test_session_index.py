@@ -438,7 +438,8 @@ def test_index_version_is_bumped_for_the_reply_fields():
     # the version mismatch empties it and the background build re-derives.
     # "3" (session import, 2026-10-21) added imported_from / imported.
     # "4" (spec 154 §5.3): bookkeeping rows never set last_user_at; ask_ids.
-    assert si.INDEX_VERSION == "4"
+    # "5" (spec 180): routed_by.
+    assert si.INDEX_VERSION == "5"
 
 
 # ── Spec 154 §5.3: bookkeeping rows and ask_ids ──────────────────────────

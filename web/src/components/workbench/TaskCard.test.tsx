@@ -24,7 +24,7 @@ function row(over: Partial<WorkbenchFeedRow> = {}): WorkbenchFeedRow {
 }
 
 function renderCard(r: WorkbenchFeedRow = row()) {
-  const item: FeedItem = { key: 'k', row: r, pending: null, dot: 'new', waiting: true, time: r.last_reply_at };
+  const item: FeedItem = { key: 'k', row: r, pending: null, dot: 'new', waiting: true, time: r.last_reply_at, marked: false };
   const onReply = vi.fn((_item: FeedItem, _words: string) => Promise.resolve(true));
   render(
     <TaskCard
@@ -141,7 +141,7 @@ describe('TaskCard — the goals card\'s change option asks for the correction (
 });
 
 function renderCardWithReply(r: WorkbenchFeedRow) {
-  const item: FeedItem = { key: 'k', row: r, pending: null, dot: 'new', waiting: true, time: r.last_reply_at };
+  const item: FeedItem = { key: 'k', row: r, pending: null, dot: 'new', waiting: true, time: r.last_reply_at, marked: false };
   const onReply = vi.fn((_item: FeedItem, _words: string) => Promise.resolve(true));
   render(
     <TaskCard
