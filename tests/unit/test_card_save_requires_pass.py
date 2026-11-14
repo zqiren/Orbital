@@ -58,8 +58,6 @@ def env(monkeypatch):
     monkeypatch.setattr(agents_v2, "_provider_registry", ProviderRegistry())
     monkeypatch.setattr(agents_v2, "_RECENT_TESTS", {})
     monkeypatch.setattr(settings, "_refresh_agents_in_background", lambda *a: None)
-    kicks = []
-    monkeypatch.setattr(settings, "_import_scan_kick", kicks.append)
 
     calls = []
 
@@ -73,7 +71,7 @@ def env(monkeypatch):
                 "message": f"Connected to {provider} using {model}"}
 
     monkeypatch.setattr(agents_v2, "run_connection_test", fake_run)
-    return store, calls, emitted, kicks
+    return store, calls, emitted
 
 
 def _create(key=GOOD, model=MODEL):
@@ -94,16 +92,16 @@ def _refusal(exc_info, expected):
 
 @pytest.mark.parametrize("key", sorted(FAILURES))
 async def test_every_failure_kind_refuses_an_add_and_creates_nothing(env, key):
-    store, _, emitted, kicks = env
+    store, _, emitted = env
     with pytest.raises(settings.HTTPException) as exc:
         await _create(key=key)
     _refusal(exc, FAILURES[key])
     assert store.cards == [] and store.keys == {} and store.health == []
-    assert "key_set" not in emitted and kicks == []
+    assert "key_set" not in emitted
 
 
 async def test_an_unavailable_model_refuses_an_add(env):
-    store, _, _, _ = env
+    store, _, _ = env
     with pytest.raises(settings.HTTPException) as exc:
         await _create(model=BAD_MODEL)
     _refusal(exc, BAD_MODEL_RESULT)
@@ -111,7 +109,7 @@ async def test_an_unavailable_model_refuses_an_add(env):
 
 
 async def test_a_passing_add_stores_the_card_verified(env):
-    store, calls, emitted, _ = env
+    store, calls, emitted = env
     res = await _create()
     assert res["test"]["ok"] is True
     assert [c.id for c in store.cards] == [res["card"]["id"]]
@@ -125,7 +123,7 @@ async def test_a_passing_add_stores_the_card_verified(env):
 
 @pytest.mark.parametrize("key", sorted(FAILURES))
 async def test_a_failing_rekey_leaves_the_stored_card_exactly_as_it_was(env, key):
-    store, _, _, _ = env
+    store, _, _ = env
     card = store.add(card_id="c1", provider="opencode-go", model=MODEL, key=GOOD)
     before = card.model_dump()
     with pytest.raises(settings.HTTPException) as exc:
@@ -138,7 +136,7 @@ async def test_a_failing_rekey_leaves_the_stored_card_exactly_as_it_was(env, key
 
 
 async def test_a_failing_model_change_is_tested_with_the_stored_key_and_refused(env):
-    store, calls, _, _ = env
+    store, calls, _ = env
     store.add(card_id="c1", provider="opencode-go", model=MODEL, key=GOOD)
     with pytest.raises(settings.HTTPException) as exc:
         await settings.update_card("c1", settings.UpdateCardRequest(model=BAD_MODEL))
@@ -148,18 +146,17 @@ async def test_a_failing_model_change_is_tested_with_the_stored_key_and_refused(
 
 
 async def test_a_passing_rekey_stores_and_verifies(env):
-    store, _, _, kicks = env
+    store, _, _ = env
     store.add(card_id="c1", provider="opencode-go", model=MODEL, key="sk-401",
               make_default=True)
     res = await settings.update_card("c1", settings.UpdateCardRequest(api_key=GOOD))
     assert res["test"]["ok"] is True
     assert store.keys["c1"] == GOOD
     assert store.health == [("c1", True, None)]
-    assert kicks == ["card_updated"]
 
 
 async def test_a_rename_saves_without_a_test(env):
-    store, calls, _, _ = env
+    store, calls, _ = env
     store.add(card_id="c1", provider="opencode-go", model=MODEL, key=GOOD)
     res = await settings.update_card("c1", settings.UpdateCardRequest(name="Work"))
     assert res["test"] is None and calls == []
@@ -171,7 +168,7 @@ async def test_a_rename_with_the_forms_full_body_is_not_a_credential_change(env)
     presence used to count as a credential change, so a rename spent a real
     test — and under the pass rule would be refused on a card whose key has
     since stopped working (live smoke 2026-11-12)."""
-    store, calls, _, _ = env
+    store, calls, _ = env
     store.add(card_id="c1", provider="opencode-go", model=MODEL, key="sk-401")
     sdk = settings._test_target(store.resolve_card("c1"))[3]
     res = await settings.update_card("c1", settings.UpdateCardRequest(
@@ -181,7 +178,7 @@ async def test_a_rename_with_the_forms_full_body_is_not_a_credential_change(env)
 
 
 async def test_changing_the_region_is_a_credential_change(env):
-    store, calls, _, _ = env
+    store, calls, _ = env
     store.add(card_id="c1", provider="moonshot", model="kimi-k2", key=GOOD)
     await settings.update_card("c1", settings.UpdateCardRequest(region="china"))
     assert len(calls) == 1
@@ -191,7 +188,7 @@ async def test_changing_the_region_is_a_credential_change(env):
 
 
 async def test_a_card_stored_with_a_failing_verdict_still_lists_retests_and_renames(env):
-    store, calls, _, _ = env
+    store, calls, _ = env
     error = {"status": 401, "code": "invalid_api_key", "message": "Invalid API key",
              "at": "2026-11-01T00:00:00+00:00"}
     store.add(card_id="old", provider="opencode-go", model=MODEL, key="sk-401",
@@ -215,7 +212,7 @@ async def test_a_card_stored_with_a_failing_verdict_still_lists_retests_and_rena
 
 
 async def test_legacy_put_settings_key_is_refused_when_its_test_fails(env):
-    store, _, _, _ = env
+    store, _, _ = env
     store.add(card_id="c1", provider="opencode-go", model=MODEL, key=GOOD,
               make_default=True)
     with pytest.raises(settings.HTTPException) as exc:
@@ -228,7 +225,7 @@ async def test_legacy_put_settings_key_is_refused_when_its_test_fails(env):
 async def test_legacy_put_settings_tests_the_merged_card(env):
     """Provider, model and key change together in one legacy PUT: the test
     runs on that combination, not on the stored card."""
-    store, calls, _, _ = env
+    store, calls, _ = env
     store.add(card_id="c1", provider="opencode-go", model=MODEL, key=GOOD,
               make_default=True)
     await settings._legacy_key_gate(settings.UpdateSettingsRequest(
@@ -239,7 +236,7 @@ async def test_legacy_put_settings_tests_the_merged_card(env):
 async def test_legacy_key_routes_skip_the_test_when_the_env_key_rules(env, monkeypatch):
     """AGENT_OS_API_KEY set: the legacy routes persist nothing, so there is
     nothing to gate (the dev-daemon and test boot path)."""
-    _, calls, _, _ = env
+    _, calls, _ = env
     monkeypatch.setenv("AGENT_OS_API_KEY", "sk-env")
     await settings._legacy_key_gate(settings.UpdateSettingsRequest(llm_api_key="sk-401"))
     creds = MagicMock()
@@ -250,7 +247,7 @@ async def test_legacy_key_routes_skip_the_test_when_the_env_key_rules(env, monke
 
 
 async def test_legacy_put_api_key_is_refused_when_its_test_fails(env, monkeypatch):
-    store, _, _, kicks = env
+    store, _, _ = env
     store.add(card_id="c1", provider="opencode-go", model=MODEL, key=GOOD,
               make_default=True)
     creds = MagicMock()
@@ -259,11 +256,10 @@ async def test_legacy_put_api_key_is_refused_when_its_test_fails(env, monkeypatc
         await settings.set_api_key(settings.SetApiKeyRequest(api_key="sk-402"))
     _refusal(exc, FAILURES["sk-402"])
     creds.set_api_key.assert_not_called()
-    assert kicks == []
 
 
 async def test_legacy_put_api_key_stores_a_passing_key(env, monkeypatch):
-    store, _, _, kicks = env
+    store, _, _ = env
     store.add(card_id="c1", provider="opencode-go", model=MODEL, key="",
               make_default=True)
     creds = MagicMock()
@@ -273,4 +269,3 @@ async def test_legacy_put_api_key_stores_a_passing_key(env, monkeypatch):
     creds.set_api_key.assert_called_once_with(GOOD)
     assert res["card_id"] == "c1"
     assert store.health == [("c1", True, None)]
-    assert kicks == ["legacy_key_saved"]

@@ -49,8 +49,6 @@ def seen(monkeypatch):
                         AsyncMock(return_value={"ok": False}))
     monkeypatch.setattr(settings_routes, "_refresh_agents_in_background",
                         lambda *_a, **_k: None)
-    monkeypatch.setattr(settings_routes, "_import_scan_switch",
-                        lambda *_a, **_k: None)
     return out
 
 
@@ -61,9 +59,6 @@ def _off_loop(seen: list[int]) -> None:
 
 @pytest.mark.asyncio
 async def test_get_settings_reads_keys_off_the_loop(seen, monkeypatch):
-    from agent_os.onboarding import import_scan
-    monkeypatch.setattr(import_scan, "unscanned_count", lambda _ps: 0)
-    monkeypatch.setattr(import_scan, "scan_agent", lambda _am, _ps: None)
     out = await settings_routes.get_settings()
     assert out["credential_cards"] == []
     _off_loop(seen)

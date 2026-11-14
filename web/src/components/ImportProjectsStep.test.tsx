@@ -158,46 +158,104 @@ describe('ImportProjectsStep — the Import count', () => {
   });
 });
 
-describe('ImportProjectsStep — cost sign (spec 160 round 2)', () => {
-  it('counts the checked rows beside Import, with the key or the agent sentence', () => {
-    const { unmount } = render(<ImportProjectsStep scan={scanOf()} onImported={vi.fn()}
-      scanRunner={{ key: true, agent: null }} />);
-    const sign = screen.getByTestId('token-cost-sign');
-    expect(sign.getAttribute('data-kind')).toBe('importKey');
-    expect(sign.textContent).toBe(submit().textContent?.match(/\d+/)?.[0]);
-    expect(sign.nextElementSibling).toBe(submit());
-    unmount();
-    render(<ImportProjectsStep scan={scanOf()} onImported={vi.fn()}
-      scanRunner={{ key: false, agent: 'Claude Code' }} />);
-    expect(screen.getByTestId('token-cost-sign').getAttribute('data-kind')).toBe('importAgent');
-  });
-
-  it('round 2: switched off, the import request carries import_scan:false', async () => {
+describe('ImportProjectsStep — no read (batch 1114)', () => {
+  it('shows no cost sign and sends only the list', async () => {
     importResponse = async () => ({ created: [], skipped: [] });
-    render(<ImportProjectsStep scan={scanOf()} onImported={vi.fn()}
-      scanRunner={{ key: true, agent: null }} />);
-    fireEvent.click(screen.getByTestId('token-cost-sign'));
-    fireEvent.click(screen.getByTestId('token-cost-switch'));
-    await act(async () => { fireEvent.click(submit()); });
-    const post = apiMock.mock.calls.find(([p]) => p === '/api/v2/onboarding/import');
-    expect(JSON.parse(post?.[1]?.body).import_scan).toBe(false);
-  });
-
-  it('round 3: the wizard defers the read to its key step (defer_scan); the dialog does not', async () => {
-    for (const defer of [true, false]) {
-      apiMock.mockClear();
-      importResponse = async () => ({ created: [], skipped: [] });
-      const { unmount } = render(<ImportProjectsStep scan={scanOf()} onImported={vi.fn()} deferScan={defer} />);
-      await act(async () => { fireEvent.click(submit()); });
-      const post = apiMock.mock.calls.find(([p]) => p === '/api/v2/onboarding/import');
-      expect(JSON.parse(post?.[1]?.body).defer_scan).toBe(defer ? true : undefined);
-      unmount();
-    }
-  });
-
-  it('no runner (the wizard) shows no sign', () => {
     render(<ImportProjectsStep scan={scanOf()} onImported={vi.fn()} />);
     expect(screen.queryByTestId('token-cost-sign')).toBeNull();
+    await act(async () => { fireEvent.click(submit()); });
+    const post = apiMock.mock.calls.find(([p]) => p === '/api/v2/onboarding/import');
+    expect(Object.keys(JSON.parse(post?.[1]?.body)).sort()).toEqual(['folders', 'groups']);
+  });
+
+  it('a git repo found on disk is a ticked row with no conversation count', () => {
+    const repo = { source: 'git', name: 'side-project', path: '/Users/x/Desktop/side-project', session_count: 0,
+      last_activity: iso(DAY), already_imported: false, kind: 'folder', minor: false, is_git: true, by_agent: {} };
+    render(<ImportProjectsStep scan={scanOf({ importable: { ...DATA, candidates: [...DATA.candidates, repo] } })} onImported={vi.fn()} />);
+    expect(check('import-check-/Users/x/Desktop/side-project').checked).toBe(true);
+    const row = screen.getByTestId('import-candidate-/Users/x/Desktop/side-project');
+    expect(row.textContent).not.toMatch(/\d+$/);
+    expect(row.textContent).not.toContain('git');
+  });
+});
+
+describe('ImportProjectsStep — section checkboxes (spec 178 §5.1)', () => {
+  const folders = () => screen.getByTestId('import-folders-toggle') as HTMLInputElement;
+  const groupsToggle = () => screen.getByTestId('import-groups-toggle') as HTMLInputElement;
+
+  it('starts ticked (default ticks unchanged), labelled by aria-label only', () => {
+    render(<ImportProjectsStep scan={scanOf()} onImported={vi.fn()} />);
+    expect(folders().checked).toBe(true);
+    expect(folders().indeterminate).toBe(false);
+    expect(folders().getAttribute('aria-label')).toBe('Select or clear all folders');
+    expect(groupsToggle().getAttribute('aria-label')).toBe('Select or clear all these conversations');
+    // No visible text beside it other than the heading itself.
+    expect(folders().parentElement?.textContent).toBe("Folders you've worked in");
+  });
+
+  it('clearing both sections disables Import; ticking folders again restores the non-minor rows only', () => {
+    render(<ImportProjectsStep scan={scanOf()} onImported={vi.fn()} />);
+    fireEvent.click(folders());
+    expect(check('import-check-/Users/x/orbital-test').checked).toBe(false);
+    expect(folders().checked).toBe(false);
+    fireEvent.click(groupsToggle());
+    expect(check('import-group-check-grp_decks').checked).toBe(false);
+    expect(check('import-group-check-grp_loose').checked).toBe(false);
+    expect(submit().disabled).toBe(true);
+    expect(submit().textContent).toBe('Import 0 projects');
+    fireEvent.click(folders());
+    expect(check('import-check-/Users/x/orbital-test').checked).toBe(true);
+    fireEvent.click(screen.getByTestId('import-minor-toggle'));
+    expect(check('import-check-/Users/x/scratch-a').checked).toBe(false);
+    expect(check('import-check-/Users/x/scratch-b').checked).toBe(false);
+  });
+
+  it('one manual untick shows the indeterminate state; with the minor rows open, a tick takes them too', () => {
+    render(<ImportProjectsStep scan={scanOf()} onImported={vi.fn()} />);
+    fireEvent.click(screen.getByTestId('import-minor-toggle'));
+    // orbital-test ticked, the two minor rows not: some.
+    expect(folders().indeterminate).toBe(true);
+    expect(folders().checked).toBe(false);
+    fireEvent.click(folders()); // something ticked: clears the section
+    expect(check('import-check-/Users/x/orbital-test').checked).toBe(false);
+    fireEvent.click(folders()); // nothing ticked: ticks every row on screen
+    for (const p of ['orbital-test', 'scratch-a', 'scratch-b']) {
+      expect(check(`import-check-/Users/x/${p}`).checked).toBe(true);
+    }
+    expect(folders().checked).toBe(true);
+    expect(folders().indeterminate).toBe(false);
+  });
+
+  it('a minor row ticked and then collapsed is still cleared by the heading', () => {
+    render(<ImportProjectsStep scan={scanOf()} onImported={vi.fn()} />);
+    fireEvent.click(screen.getByTestId('import-minor-toggle'));
+    fireEvent.click(check('import-check-/Users/x/scratch-a'));
+    fireEvent.click(screen.getByTestId('import-minor-toggle')); // collapse
+    expect(folders().checked).toBe(true);
+    fireEvent.click(folders());
+    fireEvent.click(screen.getByTestId('import-minor-toggle'));
+    expect(check('import-check-/Users/x/scratch-a').checked).toBe(false);
+    expect(check('import-check-/Users/x/orbital-test').checked).toBe(false);
+  });
+
+  it('a groups-only list has its checkbox; a folders section of imported rows only has none', () => {
+    render(<ImportProjectsStep scan={scanOf({ importable: { ...DATA, candidates: [DATA.candidates[1]] } })} onImported={vi.fn()} />);
+    expect(screen.queryByTestId('import-folders-toggle')).toBeNull();
+    expect(groupsToggle().checked).toBe(true);
+    fireEvent.click(groupsToggle());
+    expect(submit().disabled).toBe(true);
+  });
+
+  it('a row that arrives after a bulk click is unticked', () => {
+    const { rerender } = render(<ImportProjectsStep scan={scanOf()} onImported={vi.fn()} />);
+    fireEvent.click(groupsToggle());
+    fireEvent.click(groupsToggle()); // ticks both again
+    const late = { source: 'git', name: 'late', path: '/Users/x/late', session_count: 0, last_activity: iso(DAY),
+      already_imported: false, kind: 'folder', minor: false, is_git: true, by_agent: {} };
+    rerender(<ImportProjectsStep scan={scanOf({ importable: { ...DATA, candidates: [...DATA.candidates, late] } })} onImported={vi.fn()} />);
+    expect(check('import-check-/Users/x/late').checked).toBe(false);
+    expect(check('import-check-/Users/x/orbital-test').checked).toBe(true);
+    expect(folders().indeterminate).toBe(true);
   });
 });
 
@@ -226,8 +284,6 @@ describe('ImportProjectsStep — Import', () => {
         { id: 'grp_decks', workspace: '/Users/x/Desktop/decks' },
         { id: 'grp_loose', workspace: '/Users/x/new-decks' },
       ],
-      // Spec 160: the UI language the background read replies in.
-      lang: 'en',
     });
     expect(telemetry).toContainEqual({ event: 'projects_unchecked', fields: { n: 1 } });
     // grp_decks (2 days ago) is more recent than grp_loose (4 days ago).

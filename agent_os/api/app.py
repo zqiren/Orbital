@@ -775,12 +775,9 @@ def _assemble_app(app: FastAPI, data_dir: str | None) -> FastAPI:
     app.include_router(onboarding_routes.projects_router)
     app.include_router(onboarding_routes.telemetry_router)
 
-    # 7c5b. Spec 160: the background guess-first read of imported projects.
-    # Kicked by the import and by key events; resumed below at startup for
-    # projects a previous run left pending (never a sweep of old projects).
-    from agent_os.onboarding import import_scan
-    import_scan.configure(import_scan.ImportScanQueue(
-        project_store, import_scan.ScanRunner(agent_manager)))
+    # (7c5b, the spec 160 background read of imported projects, is gone:
+    # batch 1114. Nothing resumes a read an older build left pending or
+    # running; those projects are normal projects.)
 
     # 7c-pricing. Pricing-table routes (resolved rates + per-field origin GET,
     # validated override PUT). Stateless — reads providers.json defaults and
@@ -873,24 +870,6 @@ def _assemble_app(app: FastAPI, data_dir: str | None) -> FastAPI:
             logging.getLogger(__name__).exception(
                 "Failed to start the session index build on startup"
             )
-
-    # Spec 160: carry on with imported projects whose one read had not
-    # finished (stamped pending, or running when the daemon stopped).
-    @app.on_event("startup")
-    async def _resume_import_scans():
-        try:
-            queue = import_scan.get_queue()
-            if queue is not None:
-                queue.resume()
-        except Exception:
-            import logging
-            logging.getLogger(__name__).exception(
-                "Failed to resume the import scan queue on startup"
-            )
-
-    @app.on_event("shutdown")
-    async def _stop_import_scans():
-        import_scan.configure(None)
 
     # 7f. Pairing routes
     pairing_routes.configure(getattr(app.state, "relay_client", None))

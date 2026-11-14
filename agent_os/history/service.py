@@ -220,6 +220,13 @@ class FileHistory:
             self._projects.pop(pid, None)
         if not workspace:
             return
+        if (project or {}).get("deferred_seed") and not os.path.isdir(
+                os.path.join(workspace, "orbital")):
+            # Batch 1114: an imported folder nobody has worked in yet. The
+            # import writes nothing into it, so its watch and baseline wait
+            # for first use (``agents_v2._ensure_seeded`` adds it then). An
+            # older import that already wrote ``orbital/`` is watched as before.
+            return
         proj = _Project(pid, workspace)
         self._projects[pid] = proj
         self._recompute_nesting()

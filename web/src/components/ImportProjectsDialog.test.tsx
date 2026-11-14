@@ -7,7 +7,7 @@
  * Cancel and Import sat at the end of the scrolling list, so a long list hid
  * both. Now a × in the header and a footer that stays in view.
  */
-import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, cleanup, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import type { OnboardingScan } from '../hooks/useOnboardingScan';
 
@@ -57,25 +57,13 @@ describe('ImportProjectsDialog', () => {
 });
 
 
-describe('ImportProjectsDialog — cost sign (spec 160 round 2)', () => {
-  it('with a key: the token sentence beside Import, counting the checked rows', async () => {
-    apiMock.mockResolvedValue({ llm: { api_key_set: true }, setup: {}, import_scan_agent: null });
+describe('ImportProjectsDialog — no read (batch 1114)', () => {
+  it('asks the daemon nothing before import and shows no cost sign; the intro names no count', () => {
     render(<ImportProjectsDialog onClose={vi.fn()} onImported={vi.fn()} />);
-    const sign = await screen.findByTestId('token-cost-sign');
-    expect(sign.getAttribute('data-kind')).toBe('importKey');
-    expect(sign.textContent).toBe('30');
-  });
-
-  it('keyless with a ready agent: the agent sentence (round 3: no Skip needed); no agent: no sign', async () => {
-    apiMock.mockResolvedValue({ llm: { api_key_set: false }, setup: { api_key_skipped: false },
-      import_scan_agent: { slug: 'claude-code', name: 'Claude Code' } });
-    const { unmount } = render(<ImportProjectsDialog onClose={vi.fn()} onImported={vi.fn()} />);
-    expect((await screen.findByTestId('token-cost-sign')).getAttribute('data-kind')).toBe('importAgent');
-    unmount();
-    apiMock.mockResolvedValue({ llm: { api_key_set: false }, setup: {}, import_scan_agent: null });
-    render(<ImportProjectsDialog onClose={vi.fn()} onImported={vi.fn()} />);
-    await waitFor(() => expect(apiMock).toHaveBeenCalled());
+    expect(apiMock).not.toHaveBeenCalled();
     expect(screen.queryByTestId('token-cost-sign')).toBeNull();
+    expect(screen.getByText('Import projects')).toBeTruthy();
+    expect(screen.getByText('After import, every agent in a project shares the same project memory.')).toBeTruthy();
   });
 });
 

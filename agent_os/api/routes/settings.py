@@ -154,9 +154,6 @@ class UpdateSettingsRequest(BaseModel):
     setup_api_key_skipped: bool | None = None
     # Spec 138: global hidden sub-agents (replace). Omitted = untouched.
     sub_agents_hidden: list[str] | None = None
-    # Spec 160 round 2: the sign's switch beside Skip. False = don't read the
-    # imported projects still waiting. Omitted = untouched.
-    import_scan: bool | None = None
 
 
 class SetApiKeyRequest(BaseModel):
@@ -172,9 +169,6 @@ class CreateCardRequest(BaseModel):
     sdk: str | None = None
     api_key: str | None = None
     model: str
-    # Spec 160 round 2: the sign's switch beside Save. False = don't read
-    # the imported projects still waiting. Not a card field.
-    import_scan: bool | None = None
 
 
 class UpdateCardRequest(BaseModel):
@@ -190,8 +184,6 @@ class UpdateCardRequest(BaseModel):
     sdk: str | None = None
     api_key: str | None = None
     model: str | None = None
-    # Spec 160 round 2: as on CreateCardRequest. Not a card field.
-    import_scan: bool | None = None
 
 
 def _card_error(code: str, message: str, status: int = 400) -> HTTPException:
@@ -355,9 +347,6 @@ async def create_card(req: CreateCardRequest):
     _settings_store.record_card_health(card.id, verified=True)
     # Pi borrows a card key for its configured model's provider.
     _refresh_agents_in_background(_model_provider_slugs())
-    _import_scan_switch(req.import_scan)
-    if _default_card_passed(card.id, test):
-        _import_scan_kick("card_created")
     return {"card": await _masked(card.id), "test": test}
 
 
@@ -375,7 +364,7 @@ async def update_card(card_id: str, req: UpdateCardRequest):
     _reject_read_only(card_id)
     card = _card_or_404(card_id)
     fields = {k: v for k, v in req.model_dump().items()
-              if k in req.model_fields_set and k != "import_scan"}
+              if k in req.model_fields_set}
     if "name" in fields and not (fields["name"] or "").strip():
         fields.pop("name")
     provider = fields.get("provider", card.provider)
@@ -406,9 +395,6 @@ async def update_card(card_id: str, req: UpdateCardRequest):
     if retest:
         _settings_store.record_card_health(card_id, verified=True)
         _refresh_agents_in_background(_model_provider_slugs())
-    _import_scan_switch(req.import_scan)
-    if _default_card_passed(card_id, test):
-        _import_scan_kick("card_updated")
     return {"card": await _masked(card_id), "test": test}
 
 
@@ -482,8 +468,6 @@ async def set_default_card(card_id: str):
     if card_id != ENV_CARD_ID:
         _settings_store.set_default_card(card_id)
     effective = _settings_store.effective_default_card_id()
-    if _card_verified(effective):
-        _import_scan_kick("default_card_changed")
     return {"default_card_id": effective, "applied": effective == card_id}
 
 
@@ -492,63 +476,14 @@ async def test_card(card_id: str):
     """Re-test a saved card and write its health. 200 even when it fails."""
     _card_or_404(card_id)
     test = await _test_and_record(card_id)
-    if _default_card_passed(card_id, test):
-        _import_scan_kick("card_tested")
     return {"card": await _masked(card_id), "test": test}
-
-
-def _default_card_passed(card_id: str | None, test: dict | None) -> bool:
-    """1111 D1: the imported projects' one read starts only on a key that
-    works. A credential save now needs a passing test, but a rename (no
-    test) or a failing re-test must not burn every waiting read into a final
-    failure; the default card's next passing test starts them. Only the
-    default counts: the waiting imports read with it."""
-    return (bool(test and test.get("ok"))
-            and card_id == _settings_store.effective_default_card_id())
-
-
-def _card_verified(card_id: str | None) -> bool:
-    """The card's last connection test passed (its recorded health)."""
-    card = _settings_store.resolve_card(card_id) if card_id else None
-    return (card is not None and bool(getattr(card, "verified_at", None))
-            and getattr(card, "last_error", None) is None)
-
-
-def _import_scan_switch(on: bool | None) -> None:
-    """The sign's switch rode on this request: off turns every imported
-    project still waiting to ``off`` before the action's trigger fires."""
-    if on is False:
-        from agent_os.onboarding.import_scan import turn_off_waiting
-        turn_off_waiting(_project_store)
-
-
-def _import_scan_kick(reason: str) -> None:
-    """Spec 160 §5.2 trigger 2: a key became available, so imported projects
-    still waiting for their one read can start (the queue checks each
-    project's key itself; a no-op when nothing waits)."""
-    from agent_os.onboarding import import_scan
-    import_scan.kick(reason)
 
 
 @router.get("/settings")
 async def get_settings():
-    from agent_os.onboarding.import_scan import unscanned_count
-
     # Off the loop: one Keychain read per card. hang.log caught this read
     # holding the loop (spec 171 A1).
-    out = await asyncio.to_thread(_settings_store.get_masked)
-    # Spec 160 §5.3: how many imported projects a key saved now would read
-    # once (the token sign beside the key form's Save).
-    if isinstance(out, dict):
-        out = {**out, "unscanned_imports": await asyncio.to_thread(
-            unscanned_count, _project_store)}
-        # Round 2: the agent a keyless scan would spend ({slug, name}), for
-        # the sign beside Skip and the import dialog. None: no worker ready.
-        from agent_os.api.routes import agents_v2
-        from agent_os.onboarding.import_scan import scan_agent
-        out["import_scan_agent"] = await asyncio.to_thread(
-            scan_agent, agents_v2._agent_manager, _project_store)
-    return out
+    return await asyncio.to_thread(_settings_store.get_masked)
 
 
 def _apply_legacy_llm_fields(req: UpdateSettingsRequest) -> None:
@@ -702,22 +637,9 @@ async def update_settings(req: UpdateSettingsRequest):
         telemetry.emit("key_set",
                        {"provider": card.provider if card else "custom"})
         telemetry.latch("key_set")
-        _import_scan_kick("legacy_key_saved")
     if req.setup_api_key_skipped:
         # Spec 138: the wizard's "Skip for now" on the Orbital-agent key step.
         telemetry.latch("key_skipped")
-        # Spec 167: Skip skips Orbital's key, not the read. The sign beside
-        # Skip sends its switch: on, the wizard's deferred imports are read by
-        # the user's own agent; off — or no value, from a client that showed
-        # no sign — they are not, and an explicit off also switches off
-        # everything still waiting, as before.
-        from agent_os.onboarding.import_scan import stamp_deferred_pending, turn_off_deferred
-        if req.import_scan is True:
-            if stamp_deferred_pending(_project_store):
-                _import_scan_kick("key_skipped")
-        else:
-            turn_off_deferred(_project_store)
-            _import_scan_switch(req.import_scan)
 
     return await asyncio.to_thread(_settings_store.get_masked)
 
@@ -777,7 +699,6 @@ async def set_api_key(req: SetApiKeyRequest):
     telemetry.emit("key_set",
                    {"provider": card.provider if card else "custom"})
     telemetry.latch("key_set")
-    _import_scan_kick("legacy_key_saved")
     return {**result, "card_id": result.get("card_id",
                                             card.id if card else None)}
 

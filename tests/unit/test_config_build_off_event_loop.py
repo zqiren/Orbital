@@ -236,23 +236,6 @@ async def test_start_route_builds_off_the_loop_and_refuses_a_second_start(monkey
     assert len(refused) == 1 and refused[0].status_code == 400
 
 
-@pytest.mark.asyncio
-async def test_manager_scan_builds_off_the_loop(monkeypatch):
-    from agent_os.api.routes import agents_v2
-
-    mgr = _manager()
-    seen: list[int] = []
-    mgr._build_agent_config_from_project = _recording_build(seen)
-    mgr.validate_provider_config = MagicMock()
-    mgr.new_session = AsyncMock(return_value={"session_id": "sess_scan"})
-    mgr.start_agent = AsyncMock()
-    monkeypatch.setattr(agents_v2, "_agent_manager", mgr)
-
-    out = await agents_v2._start_manager_scan("proj_1", "skeleton", flavour="guess")
-    assert out["session_id"] == "sess_scan"
-    _assert_off_loop(seen)
-
-
 # --------------------------------------------------------------------------
 # Triggers
 # --------------------------------------------------------------------------

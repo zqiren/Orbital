@@ -124,17 +124,6 @@ def test_without_signals_the_text_is_unchanged(tmp_path):
     assert "## LANGUAGE" not in _section(tmp_path, cold_start="guess:en")
 
 
-@pytest.mark.parametrize("guess", ["zh", "en"])
-def test_worker_import_scan_carries_it(tmp_path, guess):
-    from agent_os.daemon_v2.worker_onboarding import build_instruction
-    project = {"workspace": str(tmp_path), "name": "p"}
-    text = build_instruction("claude-code", project, "README.md\t5",
-                             guess_lang=guess, language_signals=SIG)
-    assert "## LANGUAGE" in text
-    assert "## LANGUAGE" not in build_instruction("claude-code", project,
-                                                  "README.md\t5", guess_lang=guess)
-
-
 # ---------------------------------------------------------------------------
 # The app reports it
 # ---------------------------------------------------------------------------

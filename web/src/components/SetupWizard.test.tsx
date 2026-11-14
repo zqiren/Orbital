@@ -43,20 +43,13 @@ const MockApiError = vi.hoisted(() => {
   };
 });
 vi.mock('../config', () => ({ api: apiMock, ApiError: MockApiError }));
-const stubUnscanned = vi.hoisted(() => ({ n: 0, agent: null as string | null, silent: false }));
 const stubSave = vi.hoisted(() => ({ fn: null as (() => Promise<boolean>) | null }));
 vi.mock('./LLMProviderSettings', async () => {
   const { useEffect } = await import('react');
   return {
-    // Spec 160: the real form reports the unscanned-imports count it read.
-    default: ({ onUnscannedImports, saveRef }: {
-      onUnscannedImports?: (n: number, agent: string | null) => void;
+    default: ({ saveRef }: {
       saveRef?: { current: (() => Promise<boolean>) | null };
     }) => {
-      useEffect(() => {
-        if (stubUnscanned.silent) return;
-        onUnscannedImports?.(stubUnscanned.n, stubUnscanned.agent);
-      }, [onUnscannedImports]);
       // The real form's save: true only when its key passed and was stored.
       useEffect(() => {
         if (saveRef) saveRef.current = stubSave.fn;
@@ -257,7 +250,8 @@ describe('SetupWizard — spec 138 step flow', () => {
     render(<SetupWizard onComplete={vi.fn()} />);
     await continueFromAgents();
     await waitFor(() => expect(screen.getByText('Your projects')).toBeTruthy());
-    expect(screen.getByText(/^Found in 296 conversations with your agents\./)).toBeTruthy();
+    // Spec 174 §4.3: the intro names no count (git rows have none).
+    expect(screen.getByText('After import, every agent in a project shares the same project memory.')).toBeTruthy();
 
     fireEvent.click(screen.getByTestId('import-back'));
     expect(screen.getByText('Welcome to Orbital')).toBeTruthy();
@@ -528,7 +522,7 @@ describe('SetupWizard — Finish', () => {
     expect(localStorage.getItem(TOUR_STORAGE_KEY)).toBe('pending');
   });
 
-  it('spec 160 round 3: with no key the import defers the read to the key step; with a key it does not', async () => {
+  it('batch 1114: the import request is the list only, with or without a key (no read to defer)', async () => {
     for (const apiKeySet of [false, true]) {
       apiMock.mockClear();
       mockApi({ apiKeySet, importable: SOME_PROJECTS });
@@ -537,7 +531,7 @@ describe('SetupWizard — Finish', () => {
       await waitFor(() => expect(screen.getByText('Your projects')).toBeTruthy());
       await act(async () => { fireEvent.click(screen.getByTestId('import-submit')); });
       const post = apiMock.mock.calls.find(([p]) => p === '/api/v2/onboarding/import');
-      expect(JSON.parse(String((post?.[1] as RequestInit).body)).defer_scan).toBe(apiKeySet ? undefined : true);
+      expect(Object.keys(JSON.parse(String((post?.[1] as RequestInit).body))).sort()).toEqual(['folders', 'groups']);
       unmount();
     }
   });
@@ -777,99 +771,28 @@ describe('SetupWizard — skip the key step', () => {
     expect(screen.getByText('Next →')).toBeTruthy();
   });
 
-  it('shows the token sign beside Next only when imported projects wait (spec 160)', async () => {
-    mockApi({ apiKeySet: false });
-    stubUnscanned.n = 0;
+  it('batch 1114: no read sign beside Next or Skip, even when an older daemon reports waiting imports', async () => {
+    mockApi({
+      apiKeySet: false,
+      settingsExtra: { unscanned_imports: 3, import_scan_agent: { slug: 'claude-code', name: 'Claude Code' } },
+    });
     await renderAtKey();
     expect(screen.queryByTestId('token-cost-sign')).toBeNull();
-    cleanup();
-    stubUnscanned.n = 3;
-    mockApi({ apiKeySet: false });
-    await renderAtKey();
-    const sign = await screen.findByTestId('token-cost-sign');
-    expect(sign.textContent).toBe('3');
-    expect(sign.nextElementSibling?.textContent).toBe('Next →');
-    expect(screen.getAllByTestId('token-cost-sign')).toHaveLength(1);
-    // No worker ready: nothing beside Skip (it would read nothing).
     expect(screen.getByTestId('wizard-skip-key').previousElementSibling).toBeNull();
-    cleanup();
-    // Spec 167: with a worker ready, the worker sign sits beside Skip too.
-    stubUnscanned.agent = 'Claude Code';
-    mockApi({ apiKeySet: false });
-    await renderAtKey();
-    await screen.findAllByTestId('token-cost-sign');
-    const signs = screen.getAllByTestId('token-cost-sign');
-    expect(signs).toHaveLength(2);
-    const beside = screen.getByTestId('wizard-skip-key').previousElementSibling as HTMLElement;
-    expect(beside?.getAttribute('data-testid')).toBe('token-cost-sign');
-    expect(beside.getAttribute('data-kind')).toBe('importAgent');
-    expect(beside.textContent).toBe('3');
-    stubUnscanned.n = 0;
-    stubUnscanned.agent = null;
   });
 
-  it('Skip persists setup_api_key_skipped and advances to the accounts step', async () => {
-    mockApi({ apiKeySet: false });
-    await renderAtKey();
-
-    fireEvent.click(screen.getByTestId('wizard-skip-key'));
-    await waitFor(() => expect(screen.getByText('Connect Your Accounts')).toBeTruthy());
-
-    // [0] is the Agents step's hidden list. Nothing to read: no read.
-    expect(settingsPuts().slice(1)).toEqual([{ setup_api_key_skipped: true, import_scan: false }]);
-  });
-
-  it('Skip with imports waiting and a worker ready reads them with the switch on (spec 167)', async () => {
-    stubUnscanned.n = 2;
-    stubUnscanned.agent = 'Claude Code';
-    mockApi({ apiKeySet: false });
-    await renderAtKey();
-    fireEvent.click(screen.getByTestId('wizard-skip-key'));
-    await waitFor(() => expect(screen.getByText('Connect Your Accounts')).toBeTruthy());
-    expect(settingsPuts().slice(1)).toEqual([{ setup_api_key_skipped: true, import_scan: true }]);
-    stubUnscanned.n = 0;
-    stubUnscanned.agent = null;
-  });
-
-  it('the switch in the sign beside Skip turns the read off', async () => {
-    stubUnscanned.n = 2;
-    stubUnscanned.agent = 'Claude Code';
-    mockApi({ apiKeySet: false });
-    await renderAtKey();
-    const beside = screen.getByTestId('wizard-skip-key').previousElementSibling as HTMLElement;
-    fireEvent.click(beside);
-    fireEvent.click(await screen.findByTestId('token-cost-switch'));
-    fireEvent.click(screen.getByTestId('wizard-skip-key'));
-    await waitFor(() => expect(screen.getByText('Connect Your Accounts')).toBeTruthy());
-    expect(settingsPuts().slice(1)).toEqual([{ setup_api_key_skipped: true, import_scan: false }]);
-    stubUnscanned.n = 0;
-    stubUnscanned.agent = null;
-  });
-
-  it('Skip before the key form has reported still reads with the switch on (the sign inputs come from the settings read)', async () => {
-    // The race: the form's own GET /settings has not landed when Skip is
-    // clicked, so the wizard knows no count and no worker yet. It must not
-    // send import_scan:false (which turns every waiting import off for good).
-    stubUnscanned.silent = true;
+  it('Skip persists setup_api_key_skipped only (no read) and advances to the accounts step', async () => {
     mockApi({
       apiKeySet: false,
       settingsExtra: { unscanned_imports: 2, import_scan_agent: { slug: 'claude-code', name: 'Claude Code' } },
     });
     await renderAtKey();
-    fireEvent.click(screen.getByTestId('wizard-skip-key'));
-    await waitFor(() => expect(screen.getByText('Connect Your Accounts')).toBeTruthy());
-    expect(settingsPuts().slice(1)).toEqual([{ setup_api_key_skipped: true, import_scan: true }]);
-    stubUnscanned.silent = false;
-  });
 
-  it('Skip before the key form has reported, with nothing to read, sends import_scan:false', async () => {
-    stubUnscanned.silent = true;
-    mockApi({ apiKeySet: false, settingsExtra: { unscanned_imports: 0, import_scan_agent: null } });
-    await renderAtKey();
     fireEvent.click(screen.getByTestId('wizard-skip-key'));
     await waitFor(() => expect(screen.getByText('Connect Your Accounts')).toBeTruthy());
-    expect(settingsPuts().slice(1)).toEqual([{ setup_api_key_skipped: true, import_scan: false }]);
-    stubUnscanned.silent = false;
+
+    // [0] is the Agents step's hidden list.
+    expect(settingsPuts().slice(1)).toEqual([{ setup_api_key_skipped: true }]);
   });
 
   it('a failed Skip shows an error line and stays on the key step', async () => {

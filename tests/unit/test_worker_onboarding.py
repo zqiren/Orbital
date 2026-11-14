@@ -5,11 +5,10 @@
 """Spec 167: no interview, no card-driven scan, no agent-speaks-first start.
 
 A project's goals come from its first run's record turn
-(``test_work_first_goals_167.py``). What is left of first-run onboarding is
-spec 160's import scan: the manager's guess-first section for that scan's
-run, and the same text behind a worker preamble on a keyless project, run
-through ``start_import_scan``. This file pins that the removed paths stay
-removed and the scan path keeps working.
+(``test_work_first_goals_167.py``). Spec 160's import scan, the last path
+that ran the guess-first prompt, was removed in batch 1114
+(``test_import_no_read_1114.py``); the prompt text it used is still pinned
+here. This file pins that the removed paths stay removed.
 """
 
 from __future__ import annotations
@@ -22,9 +21,7 @@ import pytest
 
 from agent_os.agent import onboarding_prompts as op
 from agent_os.agent.prompt_builder import Autonomy, PromptBuilder, PromptContext
-from tests.unit.keyless_harness import (
-    agent_status, build_client, create_project,
-)
+from tests.unit.keyless_harness import build_client, create_project
 
 
 @pytest.fixture(autouse=True)
@@ -189,96 +186,3 @@ class TestRemovedRoutes:
         assert r.status_code in (404, 405), r.text
         assert deps["sub_agent_manager"].send.await_count == 0
         assert tc.get(f"/api/v2/projects/{pid}/sessions").json()["sessions"] == []
-
-
-# ---------------------------------------------------------------------------
-# Spec 160 round 2 — the import scan on a keyless project's worker
-# ---------------------------------------------------------------------------
-
-
-class TestKeylessImportScan:
-    def test_worker_gets_the_guess_text_and_the_session_its_title(self, tmp_path, monkeypatch):
-        import asyncio as _asyncio
-
-        from agent_os.api.routes import agents_v2
-        from agent_os.onboarding import import_scan
-
-        tc, deps, row = _keyless(tmp_path, files={"README.md": "# lib\n"})
-        pid, ws = row["project_id"], row["workspace"]
-        deps["project_store"].update_project(pid, {import_scan.LANG_FIELD: "zh"})
-        sid = _asyncio.run(agents_v2.start_import_scan(pid, "worker"))
-        sub = deps["sub_agent_manager"]
-        args, kwargs = sub.send.await_args
-        assert args[1] == "claude-code" and kwargs["session_id"] == sid
-        text = args[2]
-        assert text.startswith("You are claude-code working directly")
-        assert "STAGE 3 — WRITE YOUR GUESS → ASK" in text
-        assert "这样理解对吗" not in text            # round 4: the daemon asks
-        # Round 5: the worker records 1-3 next steps for the card, starts none.
-        flat = " ".join(text.split())
-        assert "`## Next steps` heading (exactly that heading" in flat
-        assert "do not start any step" in flat
-        assert "README.md" in text and "orbital/" not in text.split("[WORKSPACE SKELETON]")[-1]
-        meta = _rows(ws, sid)[0]
-        assert meta["name"] == "项目梳理" and "name_provisional" not in meta
-        assert meta["origin"] == "cold_start"
-
-    def test_a_refused_dispatch_is_reported_and_keeps_its_session(self, tmp_path):
-        import asyncio as _asyncio
-
-        from fastapi import HTTPException
-
-        from agent_os.api.routes import agents_v2
-
-        tc, deps, row = _keyless(tmp_path, files={"README.md": "# lib\n"})
-        pid, ws = row["project_id"], row["workspace"]
-        deps["sub_agent_manager"].send.side_effect = None
-        deps["sub_agent_manager"].send.return_value = (
-            "Error: 'claude-code' is installed but not signed in")
-        with pytest.raises(HTTPException) as exc:
-            _asyncio.run(agents_v2.start_import_scan(pid, "worker"))
-        assert exc.value.status_code == 502
-        detail = exc.value.detail
-        assert detail["code"] == "worker_dispatch_failed"
-        events = [r.get("_meta", {}).get("event") for r in _rows(ws, detail["session_id"])
-                  if r.get("role") == "system"]
-        assert events == ["worker_onboarding", "sub_agent_dispatch_failed"]
-
-    def test_no_worker_is_the_typed_400_and_mints_nothing(self, tmp_path):
-        import asyncio as _asyncio
-
-        from fastapi import HTTPException
-
-        from agent_os.api.routes import agents_v2
-
-        tc, deps, row = _keyless(
-            tmp_path, statuses=[agent_status("built-in"), agent_status("codex", creds=False)],
-            files={"README.md": "x"})
-        pid = row["project_id"]
-        with pytest.raises(HTTPException) as exc:
-            _asyncio.run(agents_v2.start_import_scan(pid, "worker"))
-        assert exc.value.status_code == 400
-        assert exc.value.detail["code"] == "missing_api_key"
-        assert deps["sub_agent_manager"].send.await_count == 0
-        assert tc.get(f"/api/v2/projects/{pid}/sessions").json()["sessions"] == []
-
-
-class TestKeyedImportScan:
-    def test_the_manager_runs_the_guess_flavour(self, tmp_path, monkeypatch):
-        import asyncio as _asyncio
-        from unittest.mock import AsyncMock
-
-        from agent_os.api.routes import agents_v2
-        from agent_os.onboarding import import_scan
-
-        tc, deps = build_client(tmp_path, keyed=True)
-        ws = tmp_path / "ws"; ws.mkdir()
-        (ws / "README.md").write_text("x", encoding="utf-8")
-        pid = create_project(tc, ws)["project_id"]
-        deps["project_store"].update_project(pid, {import_scan.LANG_FIELD: "zh"})
-        start = AsyncMock()
-        monkeypatch.setattr(deps["agent_manager"], "start_agent", start)
-        sid = _asyncio.run(agents_v2.start_import_scan(pid, "orbital"))
-        assert start.await_args.kwargs["session_id"] == sid
-        assert start.await_args.kwargs["cold_start"] == "guess:zh"
-        assert deps["sub_agent_manager"].send.await_count == 0

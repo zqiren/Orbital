@@ -682,6 +682,9 @@ ROUTE_RETRY_DELAY_S = 5.0  # an overloaded provider (429) needs a moment; 1 s fa
 GOALS_CAP = 1200
 STATE_LINES = 20
 STATE_CAP = 1200
+# Batch 1114: a project with no goals and no state (an import, before its
+# first run) is routed on the head of its CLAUDE.md / AGENTS.md / README.
+DOC_HEAD_CAP = 1200
 RECENT_SESSIONS = 3
 
 ROUTE_INSTRUCTION = (
@@ -728,6 +731,15 @@ def route_candidates(projects: list[dict]) -> list[dict]:
             and not p.get("workbench_exclude_global")]
 
 
+def _doc_head_part(project: dict) -> list[str]:
+    """Batch 1114 C: a project with no goals and no state yet is routed on
+    the head of its CLAUDE.md / user AGENTS.md / README* (``[]`` when it has
+    none)."""
+    from agent_os.onboarding.workspace_pointers import doc_head
+    head = doc_head(project.get("workspace", ""), DOC_HEAD_CAP)
+    return [f"{head[0]} (head):\n{head[1]}"] if head is not None else []
+
+
 def project_block(project: dict, session_names: list[str]) -> str:
     """One project's capped routing context (decided inputs, §5.4)."""
     pp = ProjectPaths(project.get("workspace", ""))
@@ -739,6 +751,8 @@ def project_block(project: dict, session_names: list[str]) -> str:
         parts.append(f"Goals:\n{goals}")
     if state:
         parts.append(f"State (head):\n{state}")
+    if not goals and not state:
+        parts.extend(_doc_head_part(project))
     names = [n for n in session_names if n][:RECENT_SESSIONS]
     if names:
         parts.append("Latest sessions: " + " | ".join(names))
