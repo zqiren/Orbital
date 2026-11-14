@@ -903,13 +903,14 @@ class TestDeclaredCredentials:
         """The trap: ``check_credentials`` skips optional credentials, so they
         never appear in ``missing_credentials`` whether set or not. Deriving
         ``configured`` from that list marks every unset optional key as
-        satisfied."""
-        entries = client.get("/api/v2/settings/sub-agents").json()
-        aider = next(e for e in entries if e["slug"] == "aider")
-        optional = [c for c in aider["credentials"] if not c["required"]]
-        assert optional  # aider declares only optional keys
+        satisfied. (This used aider, the shipped agent with only optional
+        keys; spec 171 B2 unlisted it, so the fixture's optional key carries
+        the same check.)"""
+        entry = fixture_entry(client)
+        optional = [c for c in entry["credentials"] if not c["required"]]
+        assert [c["key"] for c in optional] == ["NPM_COMPOSED_BASE_URL"]
         assert all(c["configured"] is False for c in optional)
-        assert aider["missing_credentials"] == []
+        assert "NPM_COMPOSED_BASE_URL" not in (entry["missing_credentials"] or [])
 
     def test_configured_follows_the_store_then_the_environment(
             self, client, monkeypatch):

@@ -802,7 +802,7 @@ async def get_update_status():
         from agent_os.version import get_version
 
         return {"current": get_version(), "update_available": False,
-                "latest": None, "url": None}
+                "latest": None, "url": None, "installer": None}
     await checker.run_check()
     return checker.status
 

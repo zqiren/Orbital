@@ -274,3 +274,31 @@ class TestRelayOptIn:
         assert app.state.relay_client is not None
         assert app.state.relay_client.relay_url == "https://relay.example.com"
         assert app.state.relay_client.device_id == "dev_test"
+
+    def test_relay_proxies_to_the_port_this_daemon_serves_on(self, monkeypatch):
+        """Batch 1114: the relay client was built without the daemon's base
+        URL and defaulted to :8000, so a daemon on any other port (a
+        relaunch that lost 8000) sent the paired phone to a dead port.
+        ``AGENT_OS_PORT`` is exported by the packaged app (start_daemon,
+        before create_app) and the scripts."""
+        monkeypatch.setenv("AGENT_OS_RELAY_URL", "https://relay.example.com")
+        monkeypatch.setenv("AGENT_OS_PORT", "8793")
+        monkeypatch.setattr(
+            "agent_os.relay.device.get_or_create_device_identity",
+            lambda: {"device_id": "dev_test", "device_secret": "secret"},
+        )
+
+        from agent_os.api.app import create_app
+        app = create_app(data_dir="orbital-test-data")
+
+        assert app.state.relay_client.daemon_base_url == "http://127.0.0.1:8793"
+
+    @pytest.mark.parametrize("value", [None, "", "not-a-port"])
+    def test_relay_base_url_keeps_the_old_default_without_a_port(self, monkeypatch, value):
+        from agent_os.relay.client import local_daemon_base_url
+
+        if value is None:
+            monkeypatch.delenv("AGENT_OS_PORT", raising=False)
+        else:
+            monkeypatch.setenv("AGENT_OS_PORT", value)
+        assert local_daemon_base_url() == "http://localhost:8000"

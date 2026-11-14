@@ -13,6 +13,7 @@ import asyncio
 import base64
 import json
 import logging
+import os
 import time
 from urllib.parse import urlencode
 
@@ -25,6 +26,16 @@ logger = logging.getLogger(__name__)
 _BACKOFF_BASE = 1.0
 _BACKOFF_MAX = 30.0
 _HEARTBEAT_INTERVAL = 30  # seconds
+
+
+def local_daemon_base_url() -> str:
+    """Where this daemon serves: ``AGENT_OS_PORT``, which the packaged app
+    (before create_app) and the scripts export. Without it, the old default.
+    """
+    port = (os.environ.get("AGENT_OS_PORT") or "").strip()
+    if port.isdigit():
+        return f"http://127.0.0.1:{port}"
+    return "http://localhost:8000"
 
 
 class RelayClient:

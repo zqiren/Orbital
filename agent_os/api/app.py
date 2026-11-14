@@ -799,11 +799,12 @@ def _assemble_app(app: FastAPI, data_dir: str | None) -> FastAPI:
     relay_url = os.environ.get("AGENT_OS_RELAY_URL")
     if relay_url:
         from agent_os.relay.device import get_or_create_device_identity, register_device
-        from agent_os.relay.client import RelayClient
+        from agent_os.relay.client import RelayClient, local_daemon_base_url
 
         identity = get_or_create_device_identity()
         relay_client = RelayClient(
             relay_url, identity["device_id"], identity["device_secret"],
+            daemon_base_url=local_daemon_base_url(),
             project_store=project_store,
         )
         app.state.relay_client = relay_client

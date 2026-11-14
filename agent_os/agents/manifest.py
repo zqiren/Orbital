@@ -170,6 +170,9 @@ class AgentManifest:
     setup: ManifestSetup = field(default_factory=ManifestSetup)
     capabilities: ManifestCapabilities = field(default_factory=ManifestCapabilities)
     permissions: ManifestPermissions = field(default_factory=ManifestPermissions)
+    # False keeps the agent off every list (spec 171 B2: the PTY agents).
+    # It stays registered, so a pin or automation that names it still runs.
+    listed: bool = True
 
 
 # ---------------------------------------------------------------------------
@@ -355,4 +358,5 @@ class ManifestLoader:
             setup=setup,
             capabilities=capabilities,
             permissions=permissions,
+            listed=data.get("listed", True) is not False,
         )

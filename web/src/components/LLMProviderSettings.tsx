@@ -16,7 +16,7 @@ import { api } from '../config';
 import { codedErrorOf } from '../utils/providerError';
 import { useT } from '../i18n/useT';
 import { useLocale } from '../i18n/LocaleContext';
-import type { Locale } from '../i18n/locales';
+import { regionForLocale, type Locale } from '../i18n/locales';
 import watchaLogo from '../assets/watcha-logo.png';
 import Select from './Select';
 import ProviderCombobox from './ProviderCombobox';
@@ -120,7 +120,7 @@ export function regionDefaultForProvider(
   info: Pick<ProviderInfo, 'china_base_url'> | undefined,
   locale: Locale = 'en',
 ): 'global' | 'china' {
-  return info?.china_base_url && locale === 'zh' ? 'china' : 'global';
+  return info?.china_base_url ? regionForLocale(locale) : 'global';
 }
 
 /** Collapsed-by-default wrapper for the long explanatory hint paragraphs

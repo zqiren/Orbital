@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from agent_os import update_check
-from agent_os.update_check import UpdateChecker, is_newer
+from agent_os.update_check import UpdateChecker, installer_links, is_newer
 
 
 class TestIsNewer:
@@ -32,7 +32,8 @@ def make_checker(fetch_result=None, fetch_exc=None, enabled=True, current="0.8.4
     fetch = AsyncMock(return_value=fetch_result)
     if fetch_exc:
         fetch.side_effect = fetch_exc
-    checker = UpdateChecker(ws, latest_url="http://stub/latest", enabled=enabled, fetch=fetch)
+    checker = UpdateChecker(ws, latest_url="http://stub/latest", enabled=enabled, fetch=fetch,
+                            platform="darwin")
     checker.status["current"] = current
     return checker, ws, fetch
 
@@ -46,7 +47,8 @@ class TestUpdateChecker:
         assert checker.status["update_available"] is True
         assert checker.status["latest"] == "0.9.0"
         ws.broadcast_global.assert_called_once_with(
-            {"type": "update.available", "version": "0.9.0", "url": "https://gh/rel"}
+            {"type": "update.available", "version": "0.9.0", "url": "https://gh/rel",
+             "installer": installer_links("darwin")}
         )
         # 6h re-check of the SAME version must not re-announce (the user may
         # have dismissed the pill).
@@ -89,3 +91,47 @@ class TestUpdateChecker:
     def test_default_disabled_when_not_frozen(self, monkeypatch):
         monkeypatch.delenv("AGENT_OS_UPDATE_CHECK", raising=False)
         assert update_check._default_enabled() is False  # test runs unfrozen
+
+
+class TestInstallerLinks:
+    """Clicking the pill downloads the platform's installer directly (#170).
+
+    The stable release-asset names are the ones README's download buttons and
+    scripts/sync-release-to-oss.sh publish. The UI language picks global vs
+    china on the frontend; the daemon only knows its own platform."""
+
+    def test_macos(self):
+        assert installer_links("darwin") == {
+            "global": "https://github.com/zqiren/Orbital/releases/latest/download/Orbital-macOS.dmg",
+            "china": "https://orbital-release.oss-cn-hongkong.aliyuncs.com/releases/Orbital-macOS.dmg",
+        }
+
+    def test_windows(self):
+        assert installer_links("win32") == {
+            "global": "https://github.com/zqiren/Orbital/releases/latest/download/Orbital-Setup.exe",
+            "china": "https://orbital-release.oss-cn-hongkong.aliyuncs.com/releases/Orbital-Setup.exe",
+        }
+
+    def test_linux_has_no_installer(self):
+        assert installer_links("linux") is None
+
+    async def test_status_carries_installer_and_keeps_website_url(self):
+        checker, ws, _ = make_checker({"version": "0.9.0", "url": "https://site/download"})
+        await checker.run_check()
+        assert checker.status["url"] == "https://site/download"
+        assert checker.status["installer"] == installer_links("darwin")
+
+    async def test_linux_status_keeps_only_the_website(self):
+        ws = MagicMock()
+        fetch = AsyncMock(return_value={"version": "0.9.0", "url": "https://site/download"})
+        checker = UpdateChecker(ws, latest_url="http://stub/latest", enabled=True,
+                                fetch=fetch, platform="linux")
+        checker.status["current"] = "0.8.4"
+        await checker.run_check()
+        assert checker.status["installer"] is None
+        assert checker.status["url"] == "https://site/download"
+        assert ws.broadcast_global.call_args.args[0]["installer"] is None
+
+    def test_no_update_has_no_installer(self):
+        checker, _, _ = make_checker()
+        assert checker.status["installer"] is None

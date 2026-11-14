@@ -70,6 +70,50 @@ if sys.platform == "win32":
     ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("orbital.desktop.app")
 
 
+def _only_time_wait_holds(port: int) -> bool:
+    """POSIX: the plain probe failed on *port*; is that only the TIME_WAIT
+    the previous instance's connections left (~30 s on macOS after a quit or
+    an upgrade relaunch)? uvicorn binds with SO_REUSEADDR, which TIME_WAIT
+    does not block, so the port is usable and the app keeps it.
+
+    SO_REUSEADDR alone would hide a foreign socket: on macOS a wildcard bind
+    with it succeeds over another program's 127.0.0.1 or LAN-address socket.
+    A foreign socket on an exact address does still refuse it, so the retry
+    binds every IPv4 address this machine has, one by one, and also requires
+    that nothing accepts on 127.0.0.1. Anything it cannot check (the address
+    list, a bind, a connect that neither connects nor is refused) counts as
+    taken. Windows never gets here: SO_REUSEADDR there binds over a live
+    socket, so it would detect nothing."""
+    try:
+        import psutil
+
+        addrs = {"0.0.0.0", "127.0.0.1"}
+        for entries in psutil.net_if_addrs().values():
+            addrs.update(e.address for e in entries if e.family == socket.AF_INET)
+    except Exception:
+        return False
+    for addr in sorted(addrs):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind((addr, port))
+        except OSError:
+            return False
+        finally:
+            sock.close()
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    probe.settimeout(1.0)
+    try:
+        probe.connect(("127.0.0.1", port))
+        return False  # something is serving it
+    except ConnectionRefusedError:
+        return True
+    except OSError:
+        return False
+    finally:
+        probe.close()
+
+
 def find_free_port(preferred: int = 8000) -> int:
     # Probe BOTH addresses the app depends on: uvicorn binds the wildcard, and
     # the health probe + SPA connect via 127.0.0.1. Bind semantics differ per
@@ -84,7 +128,9 @@ def find_free_port(preferred: int = 8000) -> int:
     # occupants too. A port counts as free only when both legs bind cleanly.
     # Bind only, never listen() (listening triggers the macOS app-firewall
     # prompt on unsigned dev builds), and no SO_REUSEADDR (it would mask the
-    # very conflicts this probe exists to detect).
+    # very conflicts this probe exists to detect). When the preferred port
+    # fails only because of the last instance's TIME_WAIT, POSIX keeps it
+    # (``_only_time_wait_holds``).
     def _binds_cleanly(candidate: int):
         port = candidate
         for addr in ("0.0.0.0", "127.0.0.1"):
@@ -101,6 +147,8 @@ def find_free_port(preferred: int = 8000) -> int:
     port = _binds_cleanly(preferred)
     if port is not None:
         return port
+    if preferred and sys.platform != "win32" and _only_time_wait_holds(preferred):
+        return preferred
     for _ in range(5):
         port = _binds_cleanly(0)
         if port is not None:

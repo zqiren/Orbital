@@ -23,6 +23,9 @@ slug: "aider"
 description: "AI pair programming in your terminal — edit code with LLMs"
 author: "aider-ai"
 version: "1.0.0"
+# Spec 171 B2: off every list (no turn-end signal, no resume; issue #74).
+# Still registered, so an existing pin or automation keeps running it.
+listed: false
 
 runtime:
   adapter: cli

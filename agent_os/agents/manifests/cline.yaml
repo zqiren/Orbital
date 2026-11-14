@@ -29,6 +29,9 @@ slug: "cline"
 description: "Autonomous coding agent with CLI and VS Code support"
 author: "cline"
 version: "1.0.0"
+# Spec 171 B2: off every list (no turn-end signal, no resume; issue #74).
+# Still registered, so an existing pin or automation keeps running it.
+listed: false
 
 runtime:
   adapter: cli

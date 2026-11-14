@@ -985,12 +985,20 @@ export interface DeviceStatusEvent {
   status: 'online' | 'offline';
 }
 
+// Direct installer links for the daemon's platform (null where Orbital ships
+// no installer, or from an older daemon). The UI language picks one.
+export interface UpdateInstallerLinks {
+  global: string;
+  china: string;
+}
+
 // Daemon-global update announce (agent_os/update_check.py) — once per newer
 // released version; the UpdatePill renders it.
 export interface UpdateAvailableEvent {
   type: 'update.available';
   version: string;
   url: string;
+  installer?: UpdateInstallerLinks | null;
 }
 
 // Daemon-global sub-agent install job events (agent_os/agents/installer.py),
