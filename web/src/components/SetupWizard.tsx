@@ -42,12 +42,11 @@ import { api, ApiError } from '../config';
 import { useCredentialCards } from '../hooks/useCredentialCards';
 import type { Connector, ConnectorListResponse, Project } from '../types';
 import LLMProviderSettings from './LLMProviderSettings';
-import TokenCostSign from './TokenCostSign';
 import ImportProjectsStep from './ImportProjectsStep';
 import WizardAgentsStep from './WizardAgentsStep';
 import { useSubAgentList } from '../hooks/useSubAgentList';
 import { useOnboardingScan } from '../hooks/useOnboardingScan';
-import { hasImportables, importIntro, NO_CHOICES, type ImportChoices } from '../utils/onboarding';
+import { hasImportables, NO_CHOICES, type ImportChoices } from '../utils/onboarding';
 import { sendTelemetry } from '../utils/telemetry';
 import { isFirstRun } from '../utils/firstRun';
 import { readTourState, writeTourState } from '../tour/tourLogic';
@@ -178,20 +177,6 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
   const defaultCard = cards.find((c) => c.id === defaultCardId) ?? undefined;
   const [checkingKey, setCheckingKey] = useState(false);
   const saveRef = useRef<(() => Promise<boolean>) | null>(null);
-  // Spec 160 §5.3: imported projects this key would read once (from the
-  // key form's own settings read, made after the import).
-  const [unscannedImports, setUnscannedImports] = useState(0);
-  // Spec 167: the worker a keyless read would spend (product name), for the
-  // sign beside Skip. null: no worker ready, so Skip reads nothing.
-  const [scanAgent, setScanAgent] = useState<string | null>(null);
-  // Whether the key form's settings read has reported yet. Until it has,
-  // Skip cannot tell from state whether anything waits, so it reads the
-  // settings itself (a Skip clicked at once must not turn the read off).
-  const [scanKnown, setScanKnown] = useState(false);
-  // Round 2 opt-out (per batch, never lasting), shared by the signs beside
-  // Next and Skip: one batch, one switch.
-  const [scanOn, setScanOn] = useState(true);
-  const skipReads = unscannedImports >= 1 && scanAgent !== null;
 
   // Accounts step — API connector cards. null = fetch not resolved yet;
   // fetch failure resolves to [] so the browser group renders alone.
@@ -358,28 +343,17 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
 
   // Skip the key: persist the choice so the first-run gate stops showing the
   // wizard, then continue to the accounts step exactly as Next does. Nothing
-  // is saved from the form — a half-filled provider stays unsaved. Spec 167:
-  // Skip skips Orbital's key, not the read — with the sign shown and its
-  // switch on, the user's own agent reads the imported projects once.
+  // is saved from the form — a half-filled provider stays unsaved. Nothing
+  // is read either: the imported projects get their goals from their first
+  // run (batch 1114).
   const handleSkipKey = useCallback(async () => {
     setSkippingKey(true);
     setSkipError(null);
     setNextError(null);
     try {
-      let reads = skipReads;
-      if (!scanKnown) {
-        // The form's own read has not landed: ask the daemon directly rather
-        // than guess "nothing waits" (import_scan:false is final for the
-        // wizard's imports).
-        const data = await api<{
-          unscanned_imports?: number;
-          import_scan_agent?: { slug: string; name: string } | null;
-        }>('/api/v2/settings');
-        reads = (data.unscanned_imports ?? 0) >= 1 && !!data.import_scan_agent;
-      }
       await api('/api/v2/settings', {
         method: 'PUT',
-        body: JSON.stringify({ setup_api_key_skipped: true, import_scan: reads && scanOn }),
+        body: JSON.stringify({ setup_api_key_skipped: true }),
       });
       setStep('accounts');
     } catch {
@@ -387,7 +361,7 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
     } finally {
       setSkippingKey(false);
     }
-  }, [t, skipReads, scanKnown, scanOn]);
+  }, [t]);
 
   // Connector connect — the backend runs a BLOCKING loopback OAuth flow (up
   // to ~300 s while the user completes browser consent), so the card shows a
@@ -508,14 +482,10 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
           <WizardCard
             step="projects"
             title={t('importProjects.title')}
-            intro={importIntro(t, scan.history?.sessions_total, scan.importable)}
+            intro={t('importProjects.intro')}
           >
             <ImportProjectsStep
               scan={scan}
-              // Spec 160: with no key yet, the read waits for the key step's
-              // Save or Skip (each with its sign); with one, the key step is skipped and the import
-              // itself starts it.
-              deferScan={!keySet}
               choices={importChoices}
               onBack={() => setStep('agents')}
               onSkip={afterProjects}
@@ -539,8 +509,6 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
               card={defaultCard}
               hideSaveButton
               saveRef={saveRef}
-              onUnscannedImports={(n, agent) => { setUnscannedImports(n); setScanAgent(agent); setScanKnown(true); }}
-              importScan={scanOn}
               providerPicker="cards"
               // One-click sign-in creates (or re-keys) a card on the daemon;
               // re-read so "Adjust settings" edits THAT card, not the one
@@ -572,9 +540,6 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
                 >
                   {t('global.back')}
                 </button>
-                {/* Spec 160 §5.3: saving the key reads the imported projects
-                    once; the count says so, the sentence waits for a hover. */}
-                <TokenCostSign n={unscannedImports} scan={scanOn} onScanChange={setScanOn} />
                 <button
                   onClick={handleNext}
                   disabled={checkingKey || skippingKey}
@@ -619,10 +584,6 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
             ) : (
               <div className="mt-5 pt-4 border-t border-border flex flex-col items-end text-right">
                 <div className="flex items-center gap-2.5">
-                  {/* Spec 167: Skip reads with the user's own agent; the sign
-                      says which, and how many, and holds the switch. */}
-                  <TokenCostSign n={unscannedImports} kind="importAgent" agent={scanAgent}
-                    scan={scanOn} onScanChange={setScanOn} />
                   <button
                     type="button"
                     onClick={handleSkipKey}

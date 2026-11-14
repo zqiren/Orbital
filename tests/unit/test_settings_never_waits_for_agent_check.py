@@ -112,22 +112,20 @@ def _timed_get(client):
 
 
 def test_settings_answers_before_the_first_agent_check(tmp_path, monkeypatch):
+    """Batch 1114 removed the read's fields (``import_scan_agent``,
+    ``unscanned_imports``) and with them the one thing here that touched the
+    agent check; the route still must not wait for it."""
     engine, _calls = _slow_engine(tmp_path)
     client, _deps = _settings_client(tmp_path, monkeypatch, engine)
 
     resp, elapsed = _timed_get(client)
     assert resp.status_code == 200
     assert elapsed < 1.0, f"/settings waited {elapsed:.1f}s for the agent check"
-    assert resp.json()["import_scan_agent"] is None  # not known yet
-
-    # The check it started finishes in the background; the next read has it.
-    assert _wait_for(lambda: engine.check_all_cached() is not None)
-    resp, elapsed = _timed_get(client)
-    assert elapsed < 1.0
-    assert resp.json()["import_scan_agent"] == {"slug": "claude-code", "name": "Claude Code"}
+    assert "import_scan_agent" not in resp.json()
+    assert "unscanned_imports" not in resp.json()
 
 
-def test_settings_with_an_imported_project_waiting_does_not_wait_either(tmp_path, monkeypatch):
+def test_settings_with_a_project_an_older_import_stamped_does_not_wait_either(tmp_path, monkeypatch):
     from agent_os.onboarding.import_scan import PENDING, STATE_FIELD
 
     engine, _calls = _slow_engine(tmp_path)
@@ -140,8 +138,4 @@ def test_settings_with_an_imported_project_waiting_does_not_wait_either(tmp_path
     resp, elapsed = _timed_get(client)
     assert resp.status_code == 200
     assert elapsed < 1.0, f"/settings waited {elapsed:.1f}s for the agent check"
-    assert resp.json()["unscanned_imports"] == 1
-
-    assert _wait_for(lambda: engine.check_all_cached() is not None)
-    assert client.get("/api/v2/settings").json()["import_scan_agent"] == {
-        "slug": "claude-code", "name": "Claude Code"}
+    assert "unscanned_imports" not in resp.json()

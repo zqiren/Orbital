@@ -9,8 +9,6 @@
  * dialog and the left-off cards share, kept here so they test without a DOM.
  */
 
-import type { useT } from '../i18n/useT';
-
 // ── Wire shapes ─────────────────────────────────────────────────────────────
 
 /** GET /api/v2/onboarding/history — also starts the scan on first call. */
@@ -46,7 +44,8 @@ export interface ImportedNotes {
 
 /** One folder from GET /api/v2/onboarding/importable-projects. */
 export interface ImportCandidate {
-  source: 'claude-code' | 'codex' | 'obsidian' | string;
+  /** `git`: a repo found on disk that no agent's history names (batch 1114). */
+  source: 'claude-code' | 'codex' | 'obsidian' | 'git' | string;
   name: string;
   path: string;
   session_count: number;
@@ -236,6 +235,47 @@ export function withTickChange(
 }
 
 /**
+ * Spec 178 §5.1: one click on a section heading's checkbox — every key in
+ * `keys` takes `checked`. Pins the list exactly as a single click does
+ * (withTickChange): a bulk click is a choice, so rows that arrive later stay
+ * unchecked.
+ */
+export function withTicksChange(
+  prev: ImportChoices,
+  data: ImportableResponse | null,
+  keys: readonly string[],
+  checked: boolean,
+): ImportChoices {
+  if (keys.length === 0) return prev;
+  const next = withTickChange(prev, data, keys[0], checked);
+  const ticks = { ...next.ticks };
+  for (const key of keys) ticks[key] = checked;
+  return { ...next, ticks };
+}
+
+export type SectionTick = 'all' | 'some' | 'none';
+
+/**
+ * A section heading's checkbox (spec 178 §5.1). It governs the rows on
+ * screen (`visible`) and any row of the section that is ticked while hidden
+ * (`hidden`: the collapsed minor folders). Its state: every governed row
+ * ticked, some, or none. Its click: untick every row of the section when
+ * anything is ticked (the hidden ones too), else tick the rows on screen —
+ * a row the user cannot see is never imported by a bulk click.
+ */
+export function sectionToggle(
+  visible: readonly string[],
+  hidden: readonly string[],
+  isTicked: (key: string) => boolean,
+): { state: SectionTick; keys: string[]; checked: boolean } {
+  const governed = [...visible, ...hidden.filter(isTicked)];
+  const ticked = governed.filter(isTicked).length;
+  const state: SectionTick = ticked === 0 ? 'none' : ticked === governed.length ? 'all' : 'some';
+  if (ticked > 0) return { state, keys: [...visible, ...hidden], checked: false };
+  return { state, keys: [...visible], checked: true };
+}
+
+/**
  * The list keeps filling in after it first shows (groups and the rebuilt
  * folder rows arrive with the history scan, and may replace the first rows
  * under new paths or ids). Everything is offered checked, but once the user
@@ -290,20 +330,6 @@ export function landingProjectId(
   let best = result.created[0];
   for (const c of result.created) if (activity(c) > activity(best)) best = c;
   return best.project_id;
-}
-
-/** "Found in {n} conversations with your agents. …" — n from the history
- *  scan, else the candidates' own counts while it is still running. */
-export function importIntro(
-  t: ReturnType<typeof useT>,
-  total: number | undefined,
-  data: { candidates: Array<{ session_count: number }> } | null,
-): string {
-  // While the history scan is still counting, its total lags the rows that
-  // are already on screen; never say "0 conversations" above a list of them.
-  const fromRows = (data?.candidates ?? []).reduce((sum, c) => sum + (c.session_count || 0), 0);
-  const n = Math.max(total ?? 0, fromRows);
-  return t(n === 1 ? 'importProjects.intro.one' : 'importProjects.intro.other', { n });
 }
 
 // ── Left-off cards ──────────────────────────────────────────────────────────

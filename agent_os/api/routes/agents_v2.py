@@ -947,8 +947,9 @@ def _seed_new_project(pid: str) -> None:
 
 async def _ensure_seeded(project_id: str) -> None:
     """First use of a deferred-seed project (spec 138): write its AGENTS.md
-    and ``orbital/`` now, then start the queue dispatcher that creation
-    skipped. A no-op for every other project; never raises.
+    and ``orbital/`` now, then start the file-history watch and the queue
+    dispatcher that creation skipped. A no-op for every other project;
+    never raises.
 
     Spec 153: the seed also folds the agent's private notes (up to a few
     hundred file copies), so it runs in a worker thread; it takes its own
@@ -959,6 +960,8 @@ async def _ensure_seeded(project_id: str) -> None:
                                      scanner=onboarding_routes._scanner)
     if not seeded:
         return
+    # Batch 1114: the file history's watch waited for this first use.
+    await _file_history_add(project_id)
     project = _project_store.get_project(project_id) or {}
     try:
         await _agent_manager._ensure_dispatcher(project_id, project.get("workspace", ""))
@@ -1596,48 +1599,6 @@ async def start_agent(req: StartAgentRequest):
     return {"status": "started"}
 
 
-async def _start_manager_scan(project_id: str, skeleton: str, *,
-                              flavour: str, title: str | None = None) -> dict:
-    """The manager half of the import scan: validate, mint, start a
-    content-less loop. ``flavour`` is ``"guess"`` / ``"guess:<lang>"``, spec
-    160's read → write the guess → ask (``PromptContext.cold_start``)."""
-    # Off the loop (spec 171 A2). The session is minted after this await, so
-    # no other request can have started it meanwhile.
-    config = await _agent_manager._abuild_agent_config_from_project(project_id)
-    # Validate the provider BEFORE minting: a credential failure must surface
-    # as a structured 400 the frontend can translate, and must not leave an
-    # orphan session per click (the silent-error bug minted one per attempt).
-    try:
-        _agent_manager.validate_provider_config(config)
-    except ProviderConfigError as e:
-        raise HTTPException(status_code=400,
-                            detail={"code": e.code, "message": str(e)})
-    minted = await _agent_manager.new_session(project_id)
-    session_id = minted["session_id"]
-    try:
-        await _agent_manager.start_agent(
-            project_id, config,
-            initial_message=None,
-            session_id=session_id,
-            cold_start=flavour,
-            cold_start_skeleton=skeleton,
-        )
-    except ProviderConfigError as e:
-        # Belt-and-braces: settings changed between validate and start.
-        raise HTTPException(status_code=400,
-                            detail={"code": e.code, "message": str(e)})
-    if title:
-        # Spec 160 round 3: the scan session keeps "项目梳理" (a final name,
-        # like a rename: the user's first reply does not retitle it).
-        from agent_os.daemon_v2.models import make_session_key
-        handle = _agent_manager._handles.get(make_session_key(project_id, session_id))
-        if handle is not None:
-            handle.session.set_name(title)
-    return {"status": "started", "session_id": session_id,
-            "session_uuid": minted.get("session_uuid", session_id),
-            "runner": "orbital"}
-
-
 def _card_lang(project: dict) -> str:
     """The confirm card's language: the import's UI language (spec 160);
     for a project with none (spec 167: one created by hand), the interface
@@ -1669,11 +1630,11 @@ async def post_goals_confirm(project_id: str, session_id: str) -> str | None:
     steps``), the card lists them as its detail and offers step 1
     (对，做第 1 步 | 对，先不做 | 需要改).
 
-    Spec 167: one card, whoever created the goals file — the import scan
-    (``_run_one``), or the record turn of a project's first real run (the
-    manager loop's ``on_goals_created``, a pinned worker's memory turn). The
-    creator posts; a second post while the project's card is still open
-    returns None.
+    Spec 167: one card, posted by whoever created the goals file — the
+    record turn of a project's first real run (the manager loop's
+    ``on_goals_created``, a pinned worker's memory turn); the import's
+    background read that also posted it is gone (batch 1114). A second post
+    while the project's card is still open returns None.
 
     Spec 169: never in Quick Tasks (the scratch project records no memory,
     so it has no goals to confirm) — this is the card's one exclusion,
@@ -1757,71 +1718,6 @@ async def _record_scan_yes(project_id: str, req: "InjectRequest") -> dict:
             "nonce": user_msg.get("nonce", ""), "timestamp": user_msg["timestamp"],
         })
     return {"status": "recorded", "session_id": session_id}
-
-
-async def start_import_scan(project_id: str, runner: str = "orbital") -> str:
-    """Spec 160 §5.2: the background read of an imported project — the
-    cold-start mint path, in its guess-first flavour, titled 项目梳理 /
-    Project overview. ``runner`` is ``"orbital"`` (the manager, with a key)
-    or ``"worker"`` (a keyless project's effective pinned worker, through the
-    existing keyless path ``_worker_onboarding``). Returns the session id;
-    raises on any refusal (the queue counts that as a failed attempt)."""
-    from agent_os.agent.workspace_scan import scan_workspace
-    from agent_os.onboarding.import_scan import guess_flavour, guess_lang, scan_title
-    project = _project_store.get_project(project_id)
-    if not project:
-        raise HTTPException(status_code=404, detail="project not found")
-    workspace = project.get("workspace", "")
-    if not workspace or not os.path.isdir(workspace):
-        raise HTTPException(status_code=400, detail="workspace missing")
-    lang = guess_lang(project)
-    skeleton = await asyncio.to_thread(scan_workspace, workspace)
-    if runner == "orbital":
-        if not _agent_manager.manager_ready(project_id):
-            raise HTTPException(status_code=400, detail="manager has no key")
-        started = await _start_manager_scan(project_id, skeleton,
-                                            flavour=guess_flavour(project),
-                                            title=scan_title(lang))
-        return started["session_id"]
-    workers = await asyncio.to_thread(_agent_manager.available_worker_slugs, project_id)
-    started = await _worker_onboarding(
-        project_id, skeleton, guess_lang=lang,
-        # §5.4 keyless: "more than one agent" = two workers to switch between.
-        multi_agent=len(workers) >= 2, title=scan_title(lang))
-    return started["session_id"]
-
-
-async def _worker_onboarding(project_id: str, skeleton: str | None = None,
-                             **scan_kwargs) -> dict:
-    """The keyless branch of the import scan (contract §5).
-
-    Orbital's own agent has no key here, so the project's effective pinned
-    worker runs the scan. No worker available → the typed
-    ``missing_api_key`` 400, and no session is minted.
-    """
-    from agent_os.daemon_v2.worker_onboarding import (
-        WorkerDispatchError, start_worker_onboarding,
-    )
-    runner = await asyncio.to_thread(
-        _agent_manager.effective_pinned_target, project_id, ready=False)
-    if runner is None:
-        err = ProviderConfigError(
-            "missing_api_key",
-            "No LLM API key configured for this project or globally",
-        )
-        raise HTTPException(status_code=400,
-                            detail={"code": err.code, "message": str(err)})
-    try:
-        return await start_worker_onboarding(
-            _agent_manager, _sub_agent_manager, project_id, runner,
-            skeleton_text=skeleton, ws_manager=_ws_manager,
-            **scan_kwargs,
-        )
-    except WorkerDispatchError as e:
-        raise HTTPException(status_code=502, detail={
-            "code": "worker_dispatch_failed", "message": str(e),
-            "runner": runner, "session_id": e.session_id,
-        })
 
 
 # The session JSONL's advisory lock is held in short bursts by concurrent
@@ -3896,9 +3792,6 @@ async def tokendance_signin(req: TokenDanceSigninRequest | None = None):
     telemetry.latch("key_set")
 
     test = await _test_and_record(card.id)
-    # Spec 160 §5.2: a key became available (the wizard's one-click path).
-    from agent_os.onboarding import import_scan
-    import_scan.kick("card_created")
     return {
         "card": _settings_store.masked_card(_settings_store.get_card(card.id)),
         "test": test,

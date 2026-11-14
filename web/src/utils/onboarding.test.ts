@@ -17,9 +17,11 @@ import {
   parseImportedNotes,
   showNotesCard,
   parseLeftOff,
+  sectionToggle,
   uncheckedCount,
   withLateRowsUnchecked,
   withTickChange,
+  withTicksChange,
   isFolderChecked,
   isGroupChecked,
   NO_CHOICES,
@@ -155,6 +157,33 @@ describe('withTickChange + withLateRowsUnchecked — after the first change only
     const b = withTickChange(a, ready, folderKey('/Users/x/late'), true);
     expect(b.offered).toEqual(a.offered);
     expect(shown(ready, b).folders).toEqual({ '/Users/x/alpha': false, '/Users/x/late': true });
+  });
+});
+
+describe('withTicksChange + sectionToggle — a section heading checkbox (spec 178 §5.1)', () => {
+  it('a bulk click writes every key and pins the list like a single click', () => {
+    const data: ImportableResponse = { status: 'scanning', candidates: [cand(), cand({ name: 'beta', path: '/Users/x/beta' })], groups: [group({ id: 'grp_1' })] };
+    const keys = [folderKey('/Users/x/alpha'), folderKey('/Users/x/beta')];
+    const next = withTicksChange(NO_CHOICES, data, keys, false);
+    expect(next.ticks).toMatchObject({ [keys[0]]: false, [keys[1]]: false, [groupKey('grp_1')]: true });
+    expect(next.offered).toEqual([...keys, groupKey('grp_1')]);
+    // A row that arrives later stays unchecked.
+    const late: ImportableResponse = { ...data, candidates: [...data.candidates, cand({ name: 'late', path: '/Users/x/late' })] };
+    expect(withLateRowsUnchecked(late, next.ticks, next.offered)[folderKey('/Users/x/late')]).toBe(false);
+  });
+
+  it('no keys is no change', () => {
+    expect(withTicksChange(NO_CHOICES, DATA, [], true)).toBe(NO_CHOICES);
+  });
+
+  it('state over the rows on screen plus hidden ticked ones; click clears all or ticks the visible', () => {
+    const t = (on: string[]) => (k: string) => on.includes(k);
+    expect(sectionToggle(['a', 'b'], ['m'], t(['a', 'b']))).toEqual({ state: 'all', keys: ['a', 'b', 'm'], checked: false });
+    expect(sectionToggle(['a', 'b'], ['m'], t(['a']))).toEqual({ state: 'some', keys: ['a', 'b', 'm'], checked: false });
+    expect(sectionToggle(['a', 'b'], ['m'], t([]))).toEqual({ state: 'none', keys: ['a', 'b'], checked: true });
+    // A hidden row that is ticked counts, and is cleared.
+    expect(sectionToggle(['a'], ['m'], t(['m']))).toEqual({ state: 'some', keys: ['a', 'm'], checked: false });
+    expect(sectionToggle([], ['m'], t(['m']))).toEqual({ state: 'all', keys: ['m'], checked: false });
   });
 });
 

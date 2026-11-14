@@ -1221,6 +1221,10 @@ class AgentLoop:
                 self._session._paused_for_approval = False  # reset here, not in resume()
             else:
                 self._session.resolve_pending_tool_calls()
+                # Batch 1114: a goal-less project's first run is pointed at
+                # the notes its folder already holds (one row, at the tail;
+                # never between an approved call and its result).
+                await self._maybe_point_at_workspace_notes()
 
             # NOTE (bug #59): no initial-message append here. The injector
             # already persisted the user row via persist_user_row() before it
@@ -2631,6 +2635,46 @@ class AgentLoop:
         await self._run_memory_record_turn(
             provider, iteration, trigger=trigger, rows_at_run_start=rows_at_run_start)
         await self._maybe_confirm_goals()
+
+    async def _maybe_point_at_workspace_notes(self) -> None:
+        """Batch 1114: the first run of a session in a project with no goals
+        yet gets ONE daemon row naming what the folder already says about
+        itself (``CLAUDE.md``, a user-written ``AGENTS.md``, ``README*``,
+        Claude Code's memory folder for it) as paths, so the agent can read
+        them; the run's record turn then drafts the goals (spec 167). It
+        lands after the user's message (the tail, never the system prompt)
+        and rides the wire as a ``[runtime]`` turn; the chat does not draw it.
+        Written once per session; nothing when the folder has none of them.
+        Same exclusions as the record turn. Never raises."""
+        if not self._goals_missing_at_run_start:
+            return
+        if (getattr(self._session, "origin", None) == "memory"
+                or getattr(self._session, "source", None) == "memory"):
+            return
+        base = getattr(self._context_manager, "_base_ctx", None)
+        if base is None or getattr(base, "is_scratch", False):
+            return
+        workspace = self._workspace()
+        if not workspace:
+            return
+        try:
+            from agent_os.onboarding import workspace_pointers as wp
+            for row in self._session.get_messages():
+                meta = row.get("_meta") if isinstance(row, dict) else None
+                if isinstance(meta, dict) and meta.get("event") == wp.POINTER_EVENT:
+                    return
+            text = wp.pointer_row(await asyncio.to_thread(wp.pointers, workspace))
+            if text is None:
+                return
+            self._session.append({
+                "role": "system",
+                "source": "management",
+                "content": text,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "_meta": {"event": wp.POINTER_EVENT},
+            })
+        except Exception:  # noqa: BLE001 — a pointer must never fail the run
+            logger.warning("workspace pointers: could not add the row", exc_info=True)
 
     async def _maybe_confirm_goals(self) -> None:
         hook = self.on_goals_created

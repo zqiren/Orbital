@@ -11,10 +11,10 @@ spec 138).
   metadata-only :mod:`agent_os.onboarding.import_scanner` (available at
   once) plus, when the scan is done, the groups of scattered conversations.
 * ``POST /onboarding/import`` — creates the checked folders and groups as
-  projects through the one project-creation path. Spec 160: ``orbital/`` is
-  written at once (keyless too), the root AGENTS.md still waits for first
-  use, and each project is stamped ``import_scan: pending`` for the
-  background guess-first scan (:mod:`agent_os.onboarding.import_scan`).
+  projects through the one project-creation path. A list write (batch 1114):
+  no process, no model call, nothing written into the folder until the user
+  first works there (:mod:`agent_os.onboarding.deferred_seed`); the project
+  gets its goals at the end of its first run (spec 167).
 * ``GET /projects/{id}/left-off`` — the "Last time" / "Didn't finish" cards.
 * ``POST /telemetry/event`` — the allowlisted onboarding events the web UI
   reports (counters and enums only).
@@ -25,6 +25,8 @@ Everything is local; nothing read here leaves the machine.
 import asyncio
 import logging
 import os
+import threading
+import time
 
 from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel
@@ -45,6 +47,13 @@ _scanner = None
 
 # How long an import waits for the scan before groups are reported missing.
 _IMPORT_SCAN_WAIT_SECONDS = 30.0
+
+# Batch 1114: the git repos found on disk, reused for a short while so the
+# list's polling and a quick reopen do not walk the disk again; one walk at a
+# time (a second caller waits for the first and takes its answer).
+_REPO_TTL_SECONDS = 30.0
+_repo_lock = threading.Lock()
+_repo_cache: tuple[str, float, list] | None = None
 
 
 def configure(project_store=None, *, data_dir: str | None = None, setup_engine=None,
@@ -100,6 +109,21 @@ def _existing_projects() -> list[dict]:
     except Exception:
         logger.exception("importable-projects: could not list existing projects")
         return []
+
+
+def _git_repos() -> list:
+    """:func:`scan_git_repos` behind the short cache. Blocking."""
+    global _repo_cache
+    from agent_os.onboarding.history_paths import history_home
+    from agent_os.onboarding.import_scanner import scan_git_repos
+    home = history_home()
+    with _repo_lock:
+        if (_repo_cache is not None and _repo_cache[0] == home
+                and time.monotonic() - _repo_cache[1] < _REPO_TTL_SECONDS):
+            return list(_repo_cache[2])
+        repos = scan_git_repos(home, exclude=[_data_dir] if _data_dir else ())
+        _repo_cache = (home, time.monotonic(), repos)
+        return list(repos)
 
 
 def _existing_workspaces() -> set[str]:
@@ -166,10 +190,17 @@ async def importable_projects():
     # is only the instant first answer while the history is read.
     analysis = scanner.analysis() if scanner.status()["status"] == "ready" else None
     if analysis is not None:
+        # Batch 1114: plus the git repos on this computer no agent opened
+        # (bounded walk, off the loop; an unreadable folder is skipped).
+        try:
+            repos = await asyncio.to_thread(_git_repos)
+        except Exception:
+            logger.exception("importable-projects: repo walk failed")
+            repos = []
         try:
             candidates = candidates_from_analysis(
                 analysis, vaults=candidates, existing_workspaces=_existing_workspaces(),
-                notes=scanner.notes())
+                notes=scanner.notes(), repos=repos)
         except Exception:
             logger.exception("importable-projects: rows from the history scan failed")
     try:
@@ -193,18 +224,10 @@ class ImportGroupBody(BaseModel):
 
 
 class ImportBody(BaseModel):
+    # An older web build also sends ``lang``, ``import_scan`` and
+    # ``defer_scan`` (the retired background read); they are ignored.
     folders: list[str] = []
     groups: list[ImportGroupBody] = []
-    # Spec 160: the UI language, so the background read replies in it (the
-    # daemon only knows the system locale). Anything else is ignored.
-    lang: str | None = None
-    # Round 2: the sign's switch beside Import. False = don't read these
-    # projects: they are created unstamped, exactly like pre-160 imports.
-    import_scan: bool = True
-    # Round 3: the wizard's import comes before its key step, so it stamps
-    # the projects but fires no trigger; the key step's Save does, and so
-    # does its Skip with the sign's switch on (spec 167; off turns them off).
-    defer_scan: bool = False
 
 
 def _members_json(sessions) -> list[dict]:
@@ -226,37 +249,14 @@ def _folder_members(analysis, folder: str) -> list[dict]:
     return []
 
 
-def _last_activity(sessions) -> str | None:
-    ended = [s.ended_at for s in sessions if getattr(s, "ended_at", None)]
-    return max(ended) if ended else None
-
-
-def _folder_activity(analysis, folder: str) -> str | None:
-    """The folder's last session end in the history scan (the wizard's own
-    newest-first order), for the scan queue's ordering."""
-    if analysis is None:
-        return None
-    from agent_os.onboarding.import_scanner import path_key
-    want = path_key(folder)
-    for root, project in analysis.projects.items():
-        if path_key(root) == want:
-            return _last_activity(project.sessions)
-    return None
-
-
-async def _create_imported(folder: str, members: list[dict], *,
-                           activity: str | None = None, lang: str | None = None,
-                           scan: bool = True, deferred: bool = False) -> dict:
+async def _create_imported(folder: str, members: list[dict]) -> dict:
     from agent_os.api.routes import agents_v2
     req = agents_v2.CreateProjectRequest(
         name=os.path.basename(os.path.normpath(folder)) or folder,
         workspace=folder, auto_unique_name=True)
     from agent_os.onboarding.deferred_seed import IMPORTED_FIELD
-    from agent_os.onboarding.import_scan import pending_fields
 
     extra = {IMPORTED_FIELD: True}
-    if scan:
-        extra.update(pending_fields(activity, lang=lang, deferred=deferred))
     if members:
         extra["imported_sessions"] = members
     return await agents_v2.create_project_from_request(
@@ -280,8 +280,7 @@ async def import_projects(body: ImportBody):
     created: list[dict] = []
     skipped: list[dict] = []
 
-    async def create(path: str, origin: str, members: list[dict],
-                     activity: str | None = None) -> None:
+    async def create(path: str, origin: str, members: list[dict]) -> None:
         if not path or not os.path.isabs(path):
             skipped.append({"path": path, "reason": "invalid"})
             return
@@ -292,9 +291,7 @@ async def import_projects(body: ImportBody):
             skipped.append({"path": path, "reason": "already_imported"})
             return
         try:
-            project = await _create_imported(path, members, activity=activity,
-                                             lang=body.lang, scan=body.import_scan,
-                                             deferred=body.defer_scan)
+            project = await _create_imported(path, members)
         except HTTPException as e:
             logger.warning("onboarding import: %s refused (%s)", path, e.detail)
             skipped.append({"path": path, "reason": "invalid"})
@@ -308,53 +305,20 @@ async def import_projects(body: ImportBody):
                         "workspace": project.get("workspace"), "from": origin})
 
     for folder in body.folders:
-        await create(folder, "folder", _folder_members(analysis, folder) if folder else [],
-                     _folder_activity(analysis, folder) if folder else None)
+        await create(folder, "folder", _folder_members(analysis, folder) if folder else [])
     for g in body.groups:
         group = analysis.group(g.id) if analysis is not None else None
         if group is None:
             skipped.append({"path": g.workspace or g.id, "reason": "invalid"})
             continue
-        await create(g.workspace or "", "group", _members_json(group.members),
-                     _last_activity(group.members))
-
-    # Spec 160 §5.1: write orbital/ now (skills + private-notes fold, no
-    # model, keyless too); the root AGENTS.md waits for first use.
-    from agent_os.onboarding.deferred_seed import seed_orbital_folder
-    for c in created:
-        await asyncio.to_thread(seed_orbital_folder, _project_store, c["project_id"],
-                                scanner=scanner)
-    # Spec 160 §4 (a): the checked store seeds a project once, on its first
-    # list, counting every reply then present as checked (so history doesn't
-    # flood). A new import has no Orbital reply yet: seed it now, empty, so
-    # the background scan's reply — whenever the user first looks — is
-    # unread through that same path.
-    _seed_checked([c["project_id"] for c in created])
+        await create(g.workspace or "", "group", _members_json(group.members))
 
     n_folder = sum(1 for c in created if c["from"] == "folder")
     n_group = len(created) - n_folder
     if created:
         telemetry.emit("projects_imported", {"folder": n_folder, "group": n_group})
         telemetry.latch("first_import")
-        # Spec 160 §5.2 trigger 1: with a key the scans start now; keyless,
-        # the projects stay pending until a key event.
-        if body.import_scan and not body.defer_scan:
-            from agent_os.onboarding import import_scan
-            import_scan.kick("import")
     return {"created": created, "skipped": skipped}
-
-
-def _seed_checked(project_ids: list[str]) -> None:
-    from agent_os.api.routes import workbench
-    store = getattr(workbench, "_checked_store", None)
-    if store is None:
-        return
-    for pid in project_ids:
-        try:
-            store.seed_if_absent(pid, [])
-        except Exception:
-            logger.warning("onboarding import: could not seed checked map for %s", pid,
-                           exc_info=True)
 
 
 # --------------------------------------------------------------------------
@@ -420,8 +384,8 @@ async def project_imported_notes(project_id: str, seed: bool = False):
         logger.exception("imported-notes failed for %s", project_id)
         notes = []
     index = os.path.join(workspace, *IMPORTED_INDEX_PATH.split("/")) if workspace else ""
-    # Spec 160: the fold now runs at import (``orbital_seeded``) while the
-    # seed field waits for the root AGENTS.md.
+    # A v0.20-v0.22 import ran the fold at import (``orbital_seeded``) while
+    # the seed field waited for the root AGENTS.md.
     seeded = not is_deferred(project) or bool(project.get(ORBITAL_SEEDED_FIELD))
     folded = seeded and bool(index) and os.path.isfile(index)
     return {"agent": AGENT, "count": sum(1 for n in notes if n.agent == AGENT),

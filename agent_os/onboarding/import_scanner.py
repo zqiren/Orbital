@@ -56,6 +56,9 @@ logger = logging.getLogger(__name__)
 SOURCE_CLAUDE_CODE = "claude-code"
 SOURCE_CODEX = "codex"
 SOURCE_OBSIDIAN = "obsidian"
+# Batch 1114 (spec 174, widened): a git repo found on disk, never opened by
+# an agent Orbital reads the history of.
+SOURCE_GIT = "git"
 
 # Ranking tier: agent projects sort above Obsidian vaults.
 _AGENT_SOURCES = frozenset({SOURCE_CLAUDE_CODE, SOURCE_CODEX})
@@ -606,13 +609,16 @@ def _rank(candidates: list[ImportCandidate]) -> list[ImportCandidate]:
 
 def candidates_from_analysis(analysis, *, vaults: Iterable[ImportCandidate] = (),
                              existing_workspaces: Iterable[str] = (),
-                             notes: Iterable = ()) -> list[ImportCandidate]:
+                             notes: Iterable = (),
+                             repos: Iterable[ImportCandidate] = ()) -> list[ImportCandidate]:
     """Spec 138 step 2 rows once the history scan is done: one per pass-1
     folder of ``analysis``, plus the Obsidian ``vaults`` (which have no
     history). Unlike the folder scan above, the analysis has dropped the
     sessions Orbital itself ran as a worker, automation runs and probes, and
     counts the sessions it attached to a folder by the files they touched, so
-    the rows agree with the groups."""
+    the rows agree with the groups. ``repos`` (:func:`scan_git_repos`) adds
+    the git repos found on disk that no history row covers: ticked, like
+    every git row."""
     out: list[ImportCandidate] = []
     for root, project in analysis.projects.items():
         by_agent = Counter(s.agent for s in project.sessions)
@@ -636,6 +642,14 @@ def candidates_from_analysis(analysis, *, vaults: Iterable[ImportCandidate] = ()
     seen = {_path_key(c.path) for c in out}
     out.extend(v for v in vaults
                if v.source == SOURCE_OBSIDIAN and _path_key(v.path) not in seen)
+    # Batch 1114: git repos found on disk; a folder the history already has
+    # stays the history row (it carries the conversations).
+    seen = {_path_key(c.path) for c in out}
+    for repo in repos:
+        key = _path_key(repo.path)
+        if key not in seen:
+            seen.add(key)
+            out.append(repo)
     imported_keys = {_path_key(w) for w in existing_workspaces if w}
     for cand in out:
         cand.already_imported = _path_key(cand.path) in imported_keys
@@ -650,6 +664,233 @@ def candidates_from_analysis(analysis, *, vaults: Iterable[ImportCandidate] = ()
         if counts:
             cand.notes = dict(counts)
     return _rank(out)
+
+
+# --------------------------------------------------------------------------
+# Git repos on disk (batch 1114, spec 174 widened)
+# --------------------------------------------------------------------------
+
+# Folders never walked into, by name, at any depth: app data, caches,
+# dependency trees, media libraries (TCC-protected on macOS) and Windows'
+# system folders. Dot folders are skipped by their dot.
+_WALK_SKIP_NAMES = frozenset(n.casefold() for n in (
+    "Library", "AppData", "Applications", "Pictures", "Movies", "Music", "Photos",
+    "node_modules", "bower_components", "site-packages", "__pycache__", "Pods",
+    "DerivedData", "venv",
+    # Windows system folders (at a drive root, mostly)
+    "Windows", "Program Files", "Program Files (x86)", "ProgramData",
+    "$Recycle.Bin", "System Volume Information", "Recovery", "PerfLogs",
+    "$WinREAgent", "OneDriveTemp", "MSOCache",
+))
+_WINDOWS = sys.platform.startswith("win")
+# Depth below each start (a repo at ``~/a/b/c/d/e`` is depth 5).
+WALK_HOME_DEPTH = 5
+WALK_DRIVE_DEPTH = 4
+# Bounds: directories listed, and the whole walk's wall clock. A directory
+# read that hangs (a network share, a TCC prompt nobody answers) cannot be
+# interrupted, so the walk runs in its own thread and the caller stops
+# waiting at the deadline with what was found by then.
+WALK_MAX_DIRS = 20000
+WALK_DEADLINE_S = 6.0
+
+
+def _windows_fixed_drives() -> list[str]:
+    """``C:\\``-style roots of the fixed (local, non-removable) drives."""
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        mask = kernel32.GetLogicalDrives()
+    except Exception:
+        return []
+    out = []
+    for i in range(26):
+        if mask & (1 << i):
+            root = f"{chr(65 + i)}:\\"
+            try:
+                if kernel32.GetDriveTypeW(root) == 3:  # DRIVE_FIXED
+                    out.append(root)
+            except Exception:
+                continue
+    return out
+
+
+def walk_starts(home: str, *, platform: str | None = None,
+                drives: Iterable[str] | None = None) -> list[tuple[str, int]]:
+    """``(folder, depth)`` starts of the walk: the home folder, Desktop,
+    Documents and Downloads included (macOS may ask once per folder; a denied
+    one is skipped). On Windows also every fixed drive's root (removable and
+    network drives are never walked); the home folder is walked from itself,
+    so the drives' ``Users`` folder is not walked again."""
+    platform = platform or sys.platform
+    starts = [(home, WALK_HOME_DEPTH)]
+    if platform.startswith("win"):
+        for root in (drives if drives is not None else _windows_fixed_drives()):
+            starts.append((root, WALK_DRIVE_DEPTH))
+    return starts
+
+
+class _Walk:
+    """One bounded walk; ``found`` fills as it goes (read it under ``lock``)."""
+
+    def __init__(self, env: HistoryEnv, *, max_dirs: int, skip: frozenset[str]):
+        import threading
+        self.env = env
+        self.max_dirs = max_dirs
+        self.skip = skip
+        self.lock = threading.Lock()
+        self.found: dict[str, tuple[str, bool]] = {}  # key -> (path, is_worktree_file)
+        self.dirs = 0
+        self.capped = False
+        self.stop = False
+        self.done = False
+
+    def run(self, starts: list[tuple[str, int]], drive_roots: set[str]) -> None:
+        try:
+            for start, depth in starts:
+                if self.stop or self.capped:
+                    break
+                try:
+                    dev = os.stat(start).st_dev
+                except OSError:
+                    continue
+                self._walk(start, depth, dev, top=_path_key(start) in drive_roots)
+        except Exception:  # pragma: no cover - discovery never raises
+            logger.exception("repo walk failed")
+        finally:
+            self.done = True
+
+    def _walk(self, start: str, max_depth: int, dev: int, *, top: bool) -> None:
+        stack = [(start, 0)]
+        while stack:
+            if self.stop:
+                return
+            if self.dirs >= self.max_dirs:
+                self.capped = True
+                return
+            folder, depth = stack.pop()
+            self.dirs += 1
+            try:
+                with os.scandir(folder) as it:
+                    entries = list(it)
+            except OSError:
+                continue  # denied, vanished, not a folder: skipped silently
+            # A start (the home folder, a drive root) and the folders the
+            # history never offers are walked through even when they are a
+            # repo (a dotfiles repo in ~).
+            container = depth == 0 or self.env.is_container(folder)
+            git = next((e for e in entries if e.name == ".git"), None)
+            if git is not None and not container:
+                try:
+                    is_file = git.is_file(follow_symlinks=False)
+                except OSError:
+                    is_file = False
+                with self.lock:
+                    self.found.setdefault(_path_key(folder), (folder, is_file))
+                continue  # a repo: never walked into (submodules stay out)
+            if depth >= max_depth:
+                continue
+            children = []
+            for e in entries:
+                name = e.name
+                if name.startswith(".") or name.startswith("$") or name.casefold() in self.skip:
+                    continue
+                if top and depth == 0 and name.casefold() == "users":
+                    continue
+                try:
+                    if not e.is_dir(follow_symlinks=False):
+                        continue
+                    if _WINDOWS:
+                        # A junction (the profile's legacy "My Documents"
+                        # loops) is never followed. Windows' DirEntry.stat
+                        # carries no st_dev, so the volume check is POSIX
+                        # only; other drives are their own starts.
+                        if getattr(e, "is_junction", lambda: False)():
+                            continue
+                    elif e.stat(follow_symlinks=False).st_dev != dev:
+                        continue  # another volume mounted here
+                except OSError:
+                    continue
+                children.append(e.path)
+            for child in sorted(children, reverse=True):
+                stack.append((child, depth + 1))
+
+
+def _repo_activity(root: str) -> str | None:
+    """Last activity of a repo: the newest of ``.git/index``, ``.git/HEAD``
+    and ``.git/logs/HEAD`` (stat only)."""
+    git = os.path.join(root, ".git")
+    times = [t for t in (_safe_mtime(os.path.join(git, "index")),
+                         _safe_mtime(os.path.join(git, "HEAD")),
+                         _safe_mtime(os.path.join(git, "logs", "HEAD"))) if t]
+    return _iso(max(times)) if times else None
+
+
+def scan_git_repos(home: str | None = None, *, env: HistoryEnv | None = None,
+                   platform: str | None = None, drives: Iterable[str] | None = None,
+                   max_dirs: int = WALK_MAX_DIRS, deadline_s: float = WALK_DEADLINE_S,
+                   exclude: Iterable[str] = ()) -> list[ImportCandidate]:
+    """Git repos on this computer, one candidate each (batch 1114).
+
+    Walks :func:`walk_starts` breadth-limited, never following symlinks or
+    crossing onto another volume, skipping dot folders and
+    :data:`_WALK_SKIP_NAMES`, and stops at a repo (``.git`` folder or file).
+    A worktree folds onto its main repo through :func:`git_main_root`
+    (only for a ``.git`` file: a ``.git`` folder is a main checkout); one
+    git cannot resolve is dropped.
+    Container and temp folders are dropped by the history rules; a folder in
+    ``exclude`` (Orbital's own data dir) is never offered.
+
+    Bounded by ``max_dirs`` listed folders and ``deadline_s`` of wall clock:
+    the walk runs in a daemon thread and whatever it found by the deadline
+    is returned (the thread is told to stop and is left to finish one stuck
+    read on its own). Never raises; blocking — call it off the event loop.
+    Logs ``repo walk: N dirs, M repos, X s, capped=…``."""
+    import threading
+    import time as _time
+    from agent_os.onboarding.history import git_main_root
+
+    home = str(home) if home else history_home()
+    env = env or HistoryEnv.for_home(home)
+    starts = walk_starts(home, platform=platform, drives=drives)
+    drive_roots = {_path_key(s) for s, _d in starts[1:]}
+    walk = _Walk(env, max_dirs=max_dirs, skip=_WALK_SKIP_NAMES)
+    t0 = _time.monotonic()
+    thread = threading.Thread(target=walk.run, args=(starts, drive_roots),
+                              name="orbital-repo-walk", daemon=True)
+    thread.start()
+    thread.join(deadline_s)
+    timed_out = thread.is_alive()
+    walk.stop = True
+    with walk.lock:
+        found = list(walk.found.values())
+    skip_keys = {_path_key(p) for p in exclude if p}
+    out: dict[str, ImportCandidate] = {}
+    # Main repos first (no git call), then worktrees, folded through git; the
+    # folding stops at the deadline too (each call is a subprocess), and a
+    # worktree left unfolded then is dropped, not offered on its own.
+    found.sort(key=lambda hit: hit[1])
+    for path, is_file in found:
+        root = path
+        if is_file:
+            if _time.monotonic() - t0 > deadline_s:
+                continue
+            main = git_main_root(os.path.normpath(path))
+            if not main or not _path_is_live(main):
+                continue
+            root = main
+        if env.is_container(root) or env.is_temp(root):
+            continue
+        key = _path_key(root)
+        if key in out or any(key == k or key.startswith(k.rstrip(os.sep) + os.sep)
+                             for k in skip_keys):
+            continue
+        out[key] = ImportCandidate(
+            source=SOURCE_GIT, name=os.path.basename(root.rstrip("/\\")) or root,
+            path=root, last_activity=_repo_activity(root), sources=[SOURCE_GIT],
+            is_git=True, minor=False)
+    logger.info("repo walk: %d dirs, %d repos, %.2f s, capped=%s, timed_out=%s",
+                walk.dirs, len(out), _time.monotonic() - t0, walk.capped, timed_out)
+    return list(out.values())
 
 
 # --------------------------------------------------------------------------

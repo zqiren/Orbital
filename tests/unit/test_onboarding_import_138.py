@@ -143,13 +143,12 @@ def test_import_creates_deferred_projects_with_members_and_hidden_agents(app_env
         p = app_env.store.get_project(c["project_id"])
         assert p["deferred_seed"] is True
         assert p["disabled_sub_agents"] == ["gemini-cli"]
-        # Spec 160 §5.1: orbital/ is written at import; the root AGENTS.md
-        # (the only write outside orbital/) still waits for first use.
+        # Batch 1114: an import writes nothing into the folder (no orbital/,
+        # no AGENTS.md) and stamps no background read; first use seeds it.
         assert not os.path.exists(os.path.join(c["workspace"], "AGENTS.md"))
-        # 1109 Task B: the skills step runs at import but bundles nothing.
-        assert p["default_skills_reconciled"] is True
-        assert p["orbital_seeded"] is True
-        assert p["import_scan"] == "pending"
+        assert not os.path.exists(os.path.join(c["workspace"], "orbital"))
+        assert "orbital_seeded" not in p
+        assert not any(k.startswith("import_scan") for k in p)
     group_project = app_env.store.get_project(out["created"][1]["project_id"])
     assert sorted(m["native_id"] for m in group_project["imported_sessions"]) == ["d1", "d2"]
     assert all(m["agent"] == "claude-code" for m in group_project["imported_sessions"])

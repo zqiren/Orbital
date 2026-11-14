@@ -2,111 +2,56 @@
 # Copyright (C) 2026 Orbital Contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Imported projects: Orbital guesses first, the user confirms (spec 160 §5.2).
+"""The goals confirm card, and the fields the retired import read left behind.
 
-``POST /onboarding/import`` stamps every project it creates
-``import_scan: "pending"``. With a key, a daemon-side queue reads each such
-project once through the cold-start mint path, in its guess-first flavour:
-the manager writes its best guess at goals, ``PROJECT_STATE.md`` and
-``INDEX.md`` and leaves one unread reply ending with "is this right?".
+Spec 160 read every imported project once in the background (a model run per
+project; keyless, one Claude Code process per project that nothing stopped:
+spec 178). Batch 1114 removed that read: an import is a list write that
+starts no process, spends no tokens and writes nothing into the folder until
+the user works there, and the project gets its goals at the end of its first
+real run (spec 167's record turn), like a new project.
 
-* **Only stamped projects.** A project with no ``import_scan`` field (every
-  project imported before spec 160, every project created by hand) is never
-  scanned, whatever event arrives (open decision 1: only new imports).
-* **Decidable triggers only** (:func:`kick`): the import finishing, a card
-  created or re-keyed, the default card changed, the legacy key saved. Never
-  a startup sweep: :meth:`ImportScanQueue.resume` on startup picks up only
-  projects already ``pending`` (or ``running`` when the daemon died mid-scan).
-* **2 at a time, newest activity first** (``import_scan_activity``, the
-  folder's last session from the history scan; unknown sorts last, then
-  creation order).
-* **Skip** when ``project_goals.md`` exists by the time a project's turn
-  comes (the user got there first): ``skipped``.
-* **Opt-out** (round 2): the sign's switch, per batch. Off on the sidebar
-  import → those projects are never stamped (pre-160 behaviour). Off on a
-  key Save → everything still waiting turns ``off``.
-* **Skip skips Orbital's key, not the read** (spec 167, replacing the
-  2026-11-07 "Skip means skip"): the wizard's key step shows the same sign
-  and switch beside Skip. Switch on, Skip stamps its ``deferred`` imports
-  ``pending`` and kicks the queue (the pinned worker reads them); switch
-  off, they turn ``off``. Either way a project with no goals gets them from
-  its first real run's record turn.
-* **Failure is final** (the run ends without goals, or the start fails):
-  ``failed``, never re-queued by any trigger or restart. The failed run's
-  session stays, an ordinary unfinished session showing its cause; the
-  project gets its goals the first time someone works in it. A ``running``
-  scan found at startup was interrupted, not failed, and is resumed once.
-* **Runner, chosen per run** (round 3): the manager when it has a key; else
-  the project's effective pinned worker when one is ready, through the
-  existing keyless path; else nobody, and the project stays ``pending``
-  until a key or a worker arrives. The wizard imports before its key step,
-  so its import is marked ``defer_scan`` and stamps without triggering: the
-  key step's Save is the trigger there (its Skip too, with the switch on).
-  One queue, the same 2 slots, for both runners.
-* The scan session is titled 项目梳理 / Project overview (the import's UI
-  language), set at mint like a rename: the user's first reply does not
-  retitle it; a manual rename still does.
+What stays here is the card that asks whether the drafted goals are right
+(这样理解对吗？ · 对 | 需要改, spec 160 round 4/5, posted by
+``agents_v2.post_goals_confirm`` when a first run's record turn creates the
+goals file) and the helpers that answer it.
 
-The fields are additive: an older daemon ignores them.
+**Fields an older build wrote** (``import_scan``, ``import_scan_at``,
+``import_scan_activity``, ``import_scan_lang``, ``import_scan_session``,
+``import_scan_attempts``) are left on the project records as they are:
+nothing reads the state any more, so a project stamped ``pending``,
+``deferred``, ``running`` or ``failed`` is simply a normal project, and a
+downgrade to v0.22.0 finds them unchanged. ``import_scan_lang`` still picks
+the confirm card's language, and ``import_scan_ask`` (``ASK_FIELD``) keys the
+open card.
 """
 
 from __future__ import annotations
 
-import asyncio
-import logging
-import os
 import re
-from datetime import datetime, timezone
-
-logger = logging.getLogger(__name__)
 
 STATE_FIELD = "import_scan"
 AT_FIELD = "import_scan_at"
 ACTIVITY_FIELD = "import_scan_activity"
-# The UI language at import (``zh`` | ``en``), for the guess reply.
+# The UI language at import (``zh`` | ``en``), written by v0.20-v0.22: the
+# confirm card's language when the goals file does not decide it.
 LANG_FIELD = "import_scan_lang"
-# The session the current run started in. A restart finds a ``running`` scan
-# by it and hands it to ``discard`` before minting the next one, so a crash
-# never leaves a second, empty "Project overview" (1109 keyless smoke, F4.1).
+# The session a v0.20-v0.22 read ran in.
 SESSION_FIELD = "import_scan_session"
 LANGS = ("zh", "en")
 
+# The states those builds wrote. Read by nothing; kept so tests and a
+# reader of an old record can name them.
 PENDING = "pending"
 RUNNING = "running"
 DONE = "done"
 FAILED = "failed"
 SKIPPED = "skipped"
-# Round 2 opt-out: the user switched the sign off for the batch behind a
-# button. Terminal, like done: the queue never picks it, nothing re-arms it.
 OFF = "off"
-# Round 4: a wizard import (``defer_scan``) waits for the key step's Save or
-# Skip (spec 167: Skip with the switch on stamps it ``pending``, off turns it
-# ``off``) — a daemon restart in between must not start it. Picked by a real
-# trigger, never by the startup resume; the trigger that queues it stamps it
-# ``pending``, so a restart after that resumes it.
 DEFERRED = "deferred"
 
-CONCURRENCY = 2
 
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def pending_fields(activity: str | None = None, *, lang: str | None = None,
-                   deferred: bool = False) -> dict:
-    """The stamp ``POST /onboarding/import`` writes on a project it creates
-    (``deferred``: the wizard's, waiting for its key step)."""
-    out = {STATE_FIELD: DEFERRED if deferred else PENDING, AT_FIELD: _now(),
-           ACTIVITY_FIELD: activity}
-    if lang in LANGS:
-        out[LANG_FIELD] = lang
-    return out
-
-
-SCAN_TITLES = {"zh": "项目梳理", "en": "Project overview"}
-
-# Round 4: the scan's confirmation is a daemon-posted ask card, never the
+# Round 4: the goals confirmation is a daemon-posted ask card, never the
 # model's own question, so "对" can never be read as a go-ahead.
 # ``(question, yes, needs-changes)``; the yes option is answered by the daemon
 # alone (no run), anything else runs one guarded turn.
@@ -264,7 +209,7 @@ def turn_note_block(lang: str) -> str:
 
 
 def scan_ask_of(project: dict | None, ask_id: str | None) -> dict | None:
-    """The project's open scan-confirm record when ``ask_id`` is it."""
+    """The project's open goals-confirm record when ``ask_id`` is it."""
     rec = (project or {}).get(ASK_FIELD)
     if isinstance(rec, dict) and ask_id and rec.get("id") == (ask_id or "").lower():
         return rec
@@ -272,24 +217,13 @@ def scan_ask_of(project: dict | None, ask_id: str | None) -> dict | None:
 
 
 def guess_lang(project: dict | None) -> str:
-    """The reply language of a project's scan: the import's UI language,
-    else the system's."""
+    """The confirm card's fallback language: the UI language an older build
+    stamped at import, else the system's."""
     lang = (project or {}).get(LANG_FIELD)
     if lang in LANGS:
         return lang
     from agent_os.onboarding.deferred_seed import default_lang
     return default_lang()
-
-
-def scan_title(lang: str) -> str:
-    return SCAN_TITLES.get(lang, SCAN_TITLES["en"])
-
-
-def guess_flavour(project: dict | None) -> str:
-    """The ``cold_start`` value of a project's guess run: ``"guess"``, with
-    the import's UI language when it was known (``"guess:zh"``)."""
-    lang = (project or {}).get(LANG_FIELD)
-    return f"guess:{lang}" if lang in LANGS else "guess"
 
 
 # Spec 169 D (R8): a draft is Chinese when CJK is a real share of its letters,
@@ -319,529 +253,3 @@ def goals_lang(workspace: str) -> str | None:
             return text_lang(fh.read())
     except OSError:
         return None
-
-
-def has_goals(workspace: str) -> bool:
-    """The test the prompt uses: an empty goals file is still onboarding."""
-    if not workspace:
-        return False
-    from agent_os.agent.project_paths import ProjectPaths
-    try:
-        with open(ProjectPaths(workspace).project_goals, encoding="utf-8",
-                  errors="replace") as fh:
-            return bool(fh.read().strip())
-    except OSError:
-        return False
-
-
-def wants_scan(project: dict | None, *, include_deferred: bool = True) -> bool:
-    """Whether ``project``'s stamp still asks for a scan (goals aside).
-    ``include_deferred=False`` is the startup resume: a deferred wizard
-    import waits for its key step. ``failed`` is final (spec 167)."""
-    if not isinstance(project, dict) or project.get("is_scratch"):
-        return False
-    state = project.get(STATE_FIELD)
-    if state in (PENDING, RUNNING):
-        return True
-    if state == DEFERRED:
-        return include_deferred
-    return False
-
-
-def turn_off_waiting(project_store) -> list[str]:
-    """The sign's switch was off when the user pressed its button: every
-    project still waiting for its read (``pending`` or ``deferred``) becomes ``off`` in that same action, so the trigger the
-    action fires finds nothing. A scan already ``running`` is left alone (the
-    session's own stop handles it); queued-but-not-started ones are
-    ``pending`` and so are covered. Returns the ids turned off."""
-    if project_store is None:
-        return []
-    out = []
-    try:
-        projects = list(project_store.list_projects())
-    except Exception:
-        logger.warning("import scan: could not list projects", exc_info=True)
-        return []
-    for p in projects:
-        if p.get(STATE_FIELD) == RUNNING or not wants_scan(p):
-            continue
-        pid = p.get("project_id")
-        try:
-            project_store.update_project(pid, {STATE_FIELD: OFF, AT_FIELD: _now()})
-            out.append(pid)
-        except Exception:
-            logger.warning("import scan: could not turn off %s", pid, exc_info=True)
-    if out:
-        logger.info("import scan: switched off for %d project(s): %s", len(out), ", ".join(out))
-    return out
-
-
-def turn_off_deferred(project_store) -> list[str]:
-    """The wizard's key-step Skip with the sign's switch off: every wizard
-    import still ``deferred`` becomes ``off``; it gets its goals from its
-    first real run. Other waiting projects (a sidebar import) keep their
-    stamp. Returns the ids turned off."""
-    return _restamp_deferred(project_store, OFF, "key step skipped, %d project(s) not read")
-
-
-def stamp_deferred_pending(project_store) -> list[str]:
-    """The wizard's key-step Skip with the sign's switch on (spec 167): every
-    wizard import still ``deferred`` becomes ``pending``, for the pinned
-    worker to read (the caller kicks the queue; a restart resumes them).
-    Returns the ids stamped."""
-    return _restamp_deferred(project_store, PENDING,
-                             "key step skipped, %d project(s) to read with the user's agent")
-
-
-def _restamp_deferred(project_store, state: str, note: str) -> list[str]:
-    if project_store is None:
-        return []
-    out = []
-    try:
-        projects = list(project_store.list_projects())
-    except Exception:
-        logger.warning("import scan: could not list projects", exc_info=True)
-        return []
-    for p in projects:
-        if not isinstance(p, dict) or p.get(STATE_FIELD) != DEFERRED:
-            continue
-        pid = p.get("project_id")
-        try:
-            project_store.update_project(pid, {STATE_FIELD: state, AT_FIELD: _now()})
-            out.append(pid)
-        except Exception:
-            logger.warning("import scan: could not restamp %s", pid, exc_info=True)
-    if out:
-        logger.info("import scan: " + note + ": %s", len(out), ", ".join(out))
-    return out
-
-
-def unscanned_count(project_store) -> int:
-    """Spec 160 §5.3: imported projects a key saved now would read, for the
-    token sign on the key form. ``running`` ones are being read already and
-    cost nothing more on save, so they are not counted."""
-    if project_store is None:
-        return 0
-    n = 0
-    try:
-        projects = list(project_store.list_projects())
-    except Exception:
-        logger.warning("unscanned_imports: could not list projects", exc_info=True)
-        return 0
-    for p in projects:
-        if p.get(STATE_FIELD) == RUNNING or not wants_scan(p):
-            continue
-        workspace = p.get("workspace") or ""
-        if not workspace or not os.path.isdir(workspace) or has_goals(workspace):
-            continue
-        n += 1
-    return n
-
-
-def _activity_key(project: dict) -> float:
-    value = project.get(ACTIVITY_FIELD)
-    if not isinstance(value, str) or not value:
-        return float("-inf")
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return float("-inf")
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.timestamp()
-
-
-class ImportScanQueue:
-    """The one daemon-side queue. ``runner`` does the model side:
-
-    * ``pick(pid) -> "orbital" | "worker" | None`` — who can read this
-      project now (blocking: it may read the agent setup cache);
-    * ``async start(pid, who) -> session_id`` — mint and start the scan;
-    * ``async wait(pid, session_id, who)`` — return when that run has ended;
-    * ``async discard(pid, session_id)`` — drop the noise-only session of a
-      run a restart abandoned (a failed run's session stays);
-    * ``async confirm(pid, session_id)`` — post the confirm card (round 4).
-    """
-
-    def __init__(self, project_store, runner, *, concurrency: int = CONCURRENCY):
-        self._store = project_store
-        self._runner = runner
-        self._concurrency = concurrency
-        self._slots: asyncio.Semaphore | None = None
-        self._waiting: list[str] = []
-        self._inflight: set[str] = set()
-        self._tasks: set[asyncio.Task] = set()
-        self._pump: asyncio.Task | None = None
-
-    # -- triggers ------------------------------------------------------------
-
-    def kick(self, reason: str, *, include_deferred: bool = True) -> None:
-        """Queue every stamped project that still wants a scan and make sure
-        the pump runs. Sync; needs a running event loop (a route handler)."""
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            logger.debug("import scan: kick(%s) outside an event loop ignored", reason)
-            return
-        added = self._collect(include_deferred=include_deferred)
-        if added:
-            logger.info("import scan: %s queued %d project(s): %s", reason,
-                        len(added), ", ".join(added))
-        if self._waiting and (self._pump is None or self._pump.done()):
-            self._pump = loop.create_task(self._run_pump())
-
-    def resume(self) -> None:
-        """Daemon start: carry on with projects already ``pending`` (or left
-        ``running`` by a crash: interrupted, not failed). A ``deferred``
-        wizard import waits for its key step; ``failed`` is final."""
-        self.kick("resume", include_deferred=False)
-
-    async def idle(self) -> None:
-        """Return once nothing is queued or running (tests, shutdown)."""
-        while True:
-            pending = [t for t in (self._pump, *self._tasks) if t is not None and not t.done()]
-            if not pending:
-                return
-            await asyncio.wait(pending)
-
-    # -- internals -----------------------------------------------------------
-
-    def _collect(self, *, include_deferred: bool) -> list[str]:
-        try:
-            projects = list(self._store.list_projects())
-        except Exception:
-            logger.warning("import scan: could not list projects", exc_info=True)
-            return []
-        order = {p.get("project_id"): (i, p) for i, p in enumerate(projects)}
-        added = []
-        for pid, (_i, p) in order.items():
-            if not pid or pid in self._inflight or pid in self._waiting:
-                continue
-            if not wants_scan(p, include_deferred=include_deferred):
-                continue
-            if p.get(STATE_FIELD) == DEFERRED:
-                # Its trigger has fired: it now waits on the queue, and a
-                # restart before its turn must resume it (1111 keyed D25: a
-                # third wizard import stayed ``deferred`` past a restart).
-                self._mark(pid, PENDING)
-            self._waiting.append(pid)
-            added.append(pid)
-        # Newest activity first; unknown last; creation order breaks ties.
-        self._waiting.sort(key=lambda pid: (
-            -_activity_key(order[pid][1]) if pid in order else float("inf"),
-            order[pid][0] if pid in order else 0,
-        ))
-        return added
-
-    async def _run_pump(self) -> None:
-        if self._slots is None:
-            self._slots = asyncio.Semaphore(self._concurrency)
-        while self._waiting:
-            await self._slots.acquire()
-            if not self._waiting:
-                self._slots.release()
-                break
-            pid = self._waiting.pop(0)
-            self._inflight.add(pid)
-            task = asyncio.get_running_loop().create_task(self._run_one(pid))
-            self._tasks.add(task)
-            task.add_done_callback(self._tasks.discard)
-
-    def _mark(self, pid: str, state: str, **extra) -> None:
-        try:
-            self._store.update_project(pid, {STATE_FIELD: state, AT_FIELD: _now(), **extra})
-        except Exception:
-            logger.warning("import scan: could not record %s for %s", state, pid,
-                           exc_info=True)
-
-    def _fail(self, pid: str) -> None:
-        """Final (spec 167): nothing re-queues it; the project gets its goals
-        from its first real run."""
-        self._mark(pid, FAILED)
-        logger.info("import scan: %s failed; its first real run drafts the goals", pid)
-
-    async def _run_one(self, pid: str) -> None:
-        try:
-            project = self._store.get_project(pid)
-            if not wants_scan(project):
-                return
-            # A run a restart cut off: its session, if this run recorded one.
-            abandoned = (project.get(SESSION_FIELD)
-                         if project.get(STATE_FIELD) == RUNNING else None)
-            workspace = project.get("workspace") or ""
-            if not workspace or not os.path.isdir(workspace):
-                return
-            if await asyncio.to_thread(has_goals, workspace):
-                self._mark(pid, SKIPPED)
-                return
-            who = await asyncio.to_thread(self._runner.pick, pid)
-            if who is None:
-                return  # nobody can read it yet: stays as it is
-            if isinstance(abandoned, str) and abandoned:
-                try:
-                    await self._runner.discard(pid, abandoned)
-                except Exception:
-                    logger.warning("import scan: could not discard %s/%s", pid, abandoned,
-                                   exc_info=True)
-            self._mark(pid, RUNNING, **{SESSION_FIELD: None})
-            try:
-                session_id = await self._runner.start(pid, who)
-            except Exception as exc:
-                if _runner_busy(exc):
-                    # The runner is mid-turn (a keyless worker): not a
-                    # failure, try again on the next trigger.
-                    self._mark(pid, PENDING)
-                    return
-                logger.warning("import scan: could not start %s: %s", pid, exc)
-                self._fail(pid)
-                return
-            self._mark(pid, RUNNING, **{SESSION_FIELD: session_id})
-            logger.info("import scan: reading %s with %s (session %s)", pid, who, session_id)
-            try:
-                await self._runner.wait(pid, session_id, who)
-            except Exception:
-                logger.warning("import scan: waiting on %s failed", pid, exc_info=True)
-            if await asyncio.to_thread(has_goals, workspace):
-                self._mark(pid, DONE)
-                logger.info("import scan: %s done", pid)
-                try:
-                    await self._runner.confirm(pid, session_id)
-                except Exception:
-                    logger.warning("import scan: could not post the confirm card for %s",
-                                   pid, exc_info=True)
-                return
-            # Spec 167: the failed run's session stays — an ordinary
-            # unfinished session, showing why it stopped.
-            self._fail(pid)
-        except Exception:
-            logger.exception("import scan: %s crashed", pid)
-        finally:
-            self._inflight.discard(pid)
-            if self._slots is not None:
-                self._slots.release()
-
-
-def _runner_busy(exc: BaseException) -> bool:
-    """A start refused only because its runner is already mid-turn.
-
-    Spec 155 lifted the project slot: the scan mints its own session and
-    runs beside the user's sessions, so the manager path never refuses for
-    another session. What is left is a keyless worker still busy with a turn
-    ("already running"), which the next trigger retries. Anything else is a
-    failed attempt."""
-    detail = getattr(exc, "detail", None)
-    text = detail if isinstance(detail, str) else str(exc)
-    return "already running" in text
-
-
-# ---------------------------------------------------------------------------
-# The production runner: the manager, through the cold-start mint path
-# ---------------------------------------------------------------------------
-
-
-_WAIT_POLL_SECONDS = 1.0
-_LIVE_STATUSES = ("running", "pending_approval", "waiting")
-
-
-class ScanRunner:
-    """The model side of the queue, on the daemon's agent manager."""
-
-    def __init__(self, agent_manager, *, poll_seconds: float = _WAIT_POLL_SECONDS):
-        self._mgr = agent_manager
-        self._poll = poll_seconds
-
-    def pick(self, pid: str) -> str | None:
-        try:
-            if self._mgr.manager_ready(pid):
-                return "orbital"
-            if self._mgr.effective_pinned_target(pid, ready=False):
-                return "worker"
-        except Exception:
-            logger.warning("import scan: could not pick a runner for %s", pid,
-                           exc_info=True)
-        return None
-
-    async def start(self, pid: str, who: str) -> str:
-        from agent_os.api.routes import agents_v2
-        return await agents_v2.start_import_scan(pid, who)
-
-    async def wait(self, pid: str, session_id: str, who: str) -> None:
-        if who == "orbital":
-            # The loop task exists once start_agent returned; poll the same
-            # run status the session list reports until it rests.
-            while self._mgr.get_run_status(pid, session_id=session_id) in _LIVE_STATUSES:
-                await asyncio.sleep(self._poll)
-            _end_guess_flavour(self._mgr, pid, session_id)
-            return
-        # A worker's turn ends with its terminal row on disk (completed or
-        # error); then nothing of it is still running.
-        while True:
-            rows = await asyncio.to_thread(_session_rows, self._mgr, pid, session_id)
-            if any(_is_terminal(r) for r in rows) and not _worker_running(
-                    self._mgr, pid, session_id):
-                return
-            await asyncio.sleep(self._poll)
-
-    async def confirm(self, pid: str, session_id: str) -> None:
-        from agent_os.api.routes import agents_v2
-        await agents_v2.post_goals_confirm(pid, session_id)
-
-    async def discard(self, pid: str, session_id: str) -> None:
-        rows = await asyncio.to_thread(_session_rows, self._mgr, pid, session_id)
-        if rows is None or not _only_noise(rows):
-            return
-        try:
-            await self._mgr.delete_session(pid, session_id)
-        except FileNotFoundError:
-            pass
-
-
-# Round 1's name, kept for callers that construct it directly.
-ManagerScanRunner = ScanRunner
-
-
-def _end_guess_flavour(mgr, pid: str, session_id: str) -> None:
-    """The scan run ended: a later turn in the same live handle (a hot resume)
-    gets the plain prompt every other session gets, not the scan section."""
-    from agent_os.daemon_v2.models import make_session_key
-    handle = getattr(mgr, "_handles", {}).get(make_session_key(pid, session_id))
-    loop = getattr(handle, "loop", None)
-    ctx = getattr(getattr(loop, "_context_manager", None), "_base_ctx", None)
-    if ctx is not None and isinstance(getattr(ctx, "cold_start", None), str):
-        ctx.cold_start = False
-
-
-def _is_terminal(row: dict) -> bool:
-    meta = row.get("_meta") if isinstance(row, dict) else None
-    return isinstance(meta, dict) and meta.get("event") == "sub_agent_terminal"
-
-
-def _worker_running(mgr, pid: str, session_id: str) -> bool:
-    sam = getattr(mgr, "_sub_agent_manager", None)
-    if sam is None:
-        return False
-    try:
-        return any(a.get("status") == "running"
-                   for a in sam.list_active(pid, session_id=session_id))
-    except Exception:
-        return False
-
-
-def _session_rows(mgr, pid: str, session_id: str) -> list[dict] | None:
-    """The session's rows: the live handle's, else read from its JSONL."""
-    import json
-    from agent_os.daemon_v2.models import make_session_key
-    handle = getattr(mgr, "_handles", {}).get(make_session_key(pid, session_id))
-    session = getattr(handle, "session", None)
-    if session is not None:
-        return list(session.get_messages())
-    try:
-        resolved = mgr._resolve_session_uuid_on_disk(pid, session_id)
-    except Exception:
-        resolved = None
-    if not resolved:
-        return []
-    rows = []
-    try:
-        with open(resolved[1], encoding="utf-8", errors="replace") as fh:
-            for line in fh:
-                try:
-                    rec = json.loads(line)
-                except ValueError:
-                    continue
-                if isinstance(rec, dict) and rec.get("role") != "meta":
-                    rows.append(rec)
-    except OSError:
-        return None
-    return rows
-
-
-def _only_noise(rows: list[dict]) -> bool:
-    """True when nothing in the session is the user's or a real reply (the
-    agent's final text, or a worker's answer), so removing it loses nothing
-    anyone wrote."""
-    for row in rows:
-        role = row.get("role")
-        if role == "user" and row.get("source") != "daemon":
-            return False
-        if role == "assistant" and not row.get("tool_calls"):
-            content = row.get("content")
-            if content.strip() if isinstance(content, str) else content:
-                return False
-        meta = row.get("_meta")
-        if (role == "system" and isinstance(meta, dict)
-                and meta.get("event") == "sub_agent_terminal"):
-            reply = meta.get("reply")
-            if isinstance(reply, str) and reply.strip():
-                return False  # a pinned worker's answer lives here
-    return True
-
-
-def scan_agent(agent_manager, project_store) -> dict | None:
-    """Spec 160 round 2: the worker a keyless scan would run on, for the
-    cost sign ({"slug", "name"} with the product name, never a raw id) —
-    the first unscanned project's effective pinned worker, else the worker a
-    new project would get. None when no worker is ready, or before the
-    first agent check has finished: it never waits for one, because
-    ``GET /settings`` serves this and is also the desktop shell's boot health
-    check (v0.21.0 showed "Failed to start daemon" on a slow machine)."""
-    if agent_manager is None:
-        return None
-    slug = None
-    try:
-        for p in (project_store.list_projects() if project_store is not None else []):
-            if wants_scan(p) and p.get(STATE_FIELD) != RUNNING:
-                slug = agent_manager.effective_pinned_target(
-                    p.get("project_id"), ready=False, wait=False)
-                if slug:
-                    break
-        if slug is None:
-            hidden = []
-            store = getattr(agent_manager, "_settings_store", None)
-            if store is not None:
-                hidden = list(getattr(store.get(), "sub_agents_hidden", None) or [])
-            workers = agent_manager.available_worker_slugs(
-                "", project={"disabled_sub_agents": hidden}, wait=False)
-            slug = workers[0] if workers else None
-    except Exception:
-        logger.warning("import scan: could not resolve the keyless runner", exc_info=True)
-        return None
-    if not slug:
-        return None
-    name = slug
-    registry = getattr(agent_manager, "_registry", None)
-    try:
-        manifest = registry.get(slug) if registry is not None else None
-        if manifest is not None and getattr(manifest, "name", None):
-            name = manifest.name
-    except Exception:
-        pass
-    return {"slug": slug, "name": name}
-
-
-# ---------------------------------------------------------------------------
-# Module singleton (configured by the app factory)
-# ---------------------------------------------------------------------------
-
-
-_queue: ImportScanQueue | None = None
-
-
-def configure(queue) -> None:
-    global _queue
-    _queue = queue
-
-
-def get_queue():
-    return _queue
-
-
-def kick(reason: str, *, include_deferred: bool = True) -> None:
-    """Fire a decidable trigger. A no-op until the app wires a queue (unit
-    tests of the routes) and never raises into a route."""
-    if _queue is None:
-        return
-    try:
-        _queue.kick(reason, include_deferred=include_deferred)
-    except Exception:
-        logger.warning("import scan: kick(%s) failed", reason, exc_info=True)

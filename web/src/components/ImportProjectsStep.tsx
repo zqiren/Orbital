@@ -13,7 +13,9 @@
  * groups of scattered conversations that belong together. A group needs a
  * folder before it can be imported; without one it stays on the list but is
  * neither sent nor counted. One POST /onboarding/import creates them all
- * (link-only: Orbital writes nothing into a folder until it is first used).
+ * (link-only: Orbital writes nothing into a folder until it is first used,
+ * and starts nothing: batch 1114 removed the background read). Each section
+ * heading carries one checkbox that clears or ticks its rows (spec 178).
  *
  * Candidates render at once; groups arrive when the scan is ready (the
  * `scan` prop polls). Data comes from `useOnboardingScan` so the wizard can
@@ -24,8 +26,6 @@ import { useState, type Dispatch, type SetStateAction } from 'react';
 import { Check, ChevronDown, ChevronRight, FolderOpen, Loader2 } from 'lucide-react';
 import { api } from '../config';
 import { useT } from '../i18n/useT';
-import { useLocale } from '../i18n/LocaleContext';
-import TokenCostSign from './TokenCostSign';
 import type { StringKey } from '../i18n/strings';
 import { formatRelativeTime } from '../utils/relativeTime';
 import {
@@ -37,9 +37,11 @@ import {
   isFolderChecked,
   isGroupChecked,
   landingProjectId,
+  sectionToggle,
   uncheckedCount,
   withLateRowsUnchecked,
   withTickChange,
+  withTicksChange,
   NO_CHOICES,
   type GroupReason,
   type ImportChoices,
@@ -63,14 +65,6 @@ interface ImportProjectsStepProps {
   /** The dialog's layout: the list scrolls and the actions sit in a footer
    *  below it, always in view (a long list used to hide Cancel and Import). */
   scrollable?: boolean;
-  /** Spec 160 round 2 (the dialog only): who reads the imported projects
-   *  once — Orbital with the key, else the user's own agent (product name).
-   *  Null/absent: nobody, no sign. The wizard imports before its key step,
-   *  so it passes nothing. */
-  scanRunner?: { key: boolean; agent: string | null } | null;
-  /** The wizard: its import comes before the key step, so the read waits
-   *  for that step's Save or Skip (``defer_scan`` on the request). */
-  deferScan?: boolean;
   /** Controlled choices (the wizard's), so they outlive this step's mount. */
   choices?: [ImportChoices, Dispatch<SetStateAction<ImportChoices>>];
 }
@@ -100,6 +94,26 @@ function reasonText(t: ReturnType<typeof useT>, r: GroupReason): string | null {
 
 const checkboxClass = 'mt-0.5 h-4 w-4 shrink-0 accent-accent cursor-pointer';
 
+/** A section heading's checkbox: ticked, indeterminate or empty; no text. */
+function SectionCheckbox({ state, label, onToggle, testId }: {
+  state: 'all' | 'some' | 'none';
+  label: string;
+  onToggle: () => void;
+  testId: string;
+}) {
+  return (
+    <input
+      type="checkbox"
+      checked={state === 'all'}
+      ref={(el) => { if (el) el.indeterminate = state === 'some'; }}
+      onChange={onToggle}
+      aria-label={label}
+      data-testid={testId}
+      className="h-4 w-4 shrink-0 accent-accent cursor-pointer"
+    />
+  );
+}
+
 export default function ImportProjectsStep({
   scan,
   onImported,
@@ -107,12 +121,9 @@ export default function ImportProjectsStep({
   onSkip,
   skipLabel,
   scrollable = false,
-  scanRunner,
-  deferScan = false,
   choices,
 }: ImportProjectsStepProps) {
   const t = useT();
-  const { locale } = useLocale();
   // The user's choices. The wizard holds them itself so they survive Back to
   // Agents and forward again (this step remounts); the dialog keeps its own.
   const ownChoices = useState<ImportChoices>(NO_CHOICES);
@@ -122,8 +133,6 @@ export default function ImportProjectsStep({
   const [showMinor, setShowMinor] = useState(false);
   const [browsingGroup, setBrowsingGroup] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
-  // Round 2 opt-out (the dialog's sign): off = import without the read.
-  const [scanOn, setScanOn] = useState(true);
   const [importError, setImportError] = useState(false);
 
   const data = scan.importable;
@@ -143,6 +152,22 @@ export default function ImportProjectsStep({
     setChoices((prev) => withTickChange(prev, data, key, checked));
   };
 
+  // Spec 178 §5.1: one checkbox per section heading. The folders one governs
+  // the rows on screen and any collapsed minor folder that is ticked.
+  const open = (rows: ImportCandidate[]) => rows.filter((c) => !c.already_imported);
+  const folderTicked = new Map(candidates.map((c) => [folderKey(c.path), isFolderChecked(c, ticks)]));
+  const folderSection = sectionToggle(
+    [...open(major), ...(showMinor ? open(minor) : [])].map((c) => folderKey(c.path)),
+    showMinor ? [] : open(minor).map((c) => folderKey(c.path)),
+    (key) => folderTicked.get(key) ?? false,
+  );
+  const groupTicked = new Map(groups.map((g) => [groupKey(g.id), isGroupChecked(g, ticks)]));
+  const groupSection = sectionToggle(
+    groups.map((g) => groupKey(g.id)), [], (key) => groupTicked.get(key) ?? false);
+  const toggleSection = (section: { keys: string[]; checked: boolean }) => {
+    setChoices((prev) => withTicksChange(prev, data, section.keys, section.checked));
+  };
+
   async function handleImport() {
     if (!data || count === 0 || importing) return;
     setImporting(true);
@@ -151,13 +176,7 @@ export default function ImportProjectsStep({
     try {
       const result = await api<ImportResult>('/api/v2/onboarding/import', {
         method: 'POST',
-        // Spec 160: the language the background read replies in.
-        body: JSON.stringify({
-          ...request,
-          lang: locale,
-          ...(scanRunner && !scanOn ? { import_scan: false } : {}),
-          ...(deferScan ? { defer_scan: true } : {}),
-        }),
+        body: JSON.stringify(request),
       });
       const safe: ImportResult = {
         created: Array.isArray(result?.created) ? result.created : [],
@@ -321,9 +340,19 @@ export default function ImportProjectsStep({
 
       {(major.length > 0 || minor.length > 0) && (
         <section className="mb-5" aria-labelledby="import-folders-heading">
-          <h2 id="import-folders-heading" className="mb-2 text-sm font-medium text-primary">
-            {t('importProjects.folders.heading')}
-          </h2>
+          <div className="mb-2 flex items-center gap-3 px-3">
+            {folderSection.keys.length > 0 && (
+              <SectionCheckbox
+                state={folderSection.state}
+                label={t('importProjects.folders.toggleAll')}
+                onToggle={() => toggleSection(folderSection)}
+                testId="import-folders-toggle"
+              />
+            )}
+            <h2 id="import-folders-heading" className="min-w-0 text-sm font-medium text-primary">
+              {t('importProjects.folders.heading')}
+            </h2>
+          </div>
           {major.length > 0 && <ul className="space-y-2" data-testid="import-list">{major.map(renderFolder)}</ul>}
           {minor.length > 0 && (
             <>
@@ -345,10 +374,20 @@ export default function ImportProjectsStep({
 
       {(groups.length > 0 || scanning) && (
         <section className="mb-5" aria-labelledby="import-groups-heading">
-          <h2 id="import-groups-heading" className="text-sm font-medium text-primary">
-            {t('importProjects.groups.heading')}
-          </h2>
-          <p className="mb-2 text-xs text-secondary">{t('importProjects.groups.sub')}</p>
+          <div className="flex items-center gap-3 px-3">
+            {groups.length > 0 && (
+              <SectionCheckbox
+                state={groupSection.state}
+                label={t('importProjects.groups.toggleAll')}
+                onToggle={() => toggleSection(groupSection)}
+                testId="import-groups-toggle"
+              />
+            )}
+            <h2 id="import-groups-heading" className="min-w-0 text-sm font-medium text-primary">
+              {t('importProjects.groups.heading')}
+            </h2>
+          </div>
+          <p className={`mb-2 text-xs text-secondary px-3${groups.length > 0 ? ' pl-10' : ''}`}>{t('importProjects.groups.sub')}</p>
           {groups.length > 0 && <ul className="space-y-2" data-testid="import-groups">{groups.map(renderGroup)}</ul>}
           {scanning && (
             <div className="mt-1 inline-flex items-center gap-2 text-xs text-secondary" data-testid="import-groups-scanning">
@@ -390,15 +429,6 @@ export default function ImportProjectsStep({
           >
             {skipLabel ?? t('wizard.skip')}
           </button>
-        )}
-        {scanRunner && (
-          <TokenCostSign
-            n={count}
-            kind={scanRunner.key ? 'importKey' : 'importAgent'}
-            agent={scanRunner.agent}
-            scan={scanOn}
-            onScanChange={setScanOn}
-          />
         )}
         <button
           type="button"
