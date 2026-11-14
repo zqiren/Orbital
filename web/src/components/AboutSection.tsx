@@ -4,6 +4,9 @@
 
 import { useEffect, useState } from 'react';
 import { useT } from '../i18n/useT';
+import { useLocale } from '../i18n/LocaleContext';
+import { regionForLocale } from '../i18n/locales';
+import type { UpdateInstallerLinks } from '../types';
 
 /**
  * About row in Global Settings: the running version (the app finally knows
@@ -18,6 +21,7 @@ interface UpdateStatus {
   update_available: boolean;
   latest: string | null;
   url: string | null;
+  installer?: UpdateInstallerLinks | null;
 }
 
 interface AboutSectionProps {
@@ -31,6 +35,7 @@ interface AboutSectionProps {
 
 export default function AboutSection({ onTakeTour, canTakeTour = false }: AboutSectionProps = {}) {
   const t = useT();
+  const { locale } = useLocale();
   const [status, setStatus] = useState<UpdateStatus | null>(null);
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState(false);
@@ -82,7 +87,7 @@ export default function AboutSection({ onTakeTour, canTakeTour = false }: AboutS
           : status?.update_available && status.latest
             ? (
                 <a
-                  href={status.url ?? '#'}
+                  href={status.installer?.[regionForLocale(locale)] || status.url || '#'}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-accent hover:underline"

@@ -16,3 +16,9 @@ export const LOCALES: LocaleOption[] = [
 
 export const DEFAULT_LOCALE: Locale = 'en';
 export const LOCALE_STORAGE_KEY = 'orbital.locale';
+
+/** The region a UI language implies: zh → China, en → Global. The one rule
+ * for a new card's provider region and the update pill's installer mirror. */
+export function regionForLocale(locale: Locale): 'global' | 'china' {
+  return locale === 'zh' ? 'china' : 'global';
+}

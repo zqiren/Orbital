@@ -8,8 +8,11 @@ telemetry service's ``GET /latest`` (a cached GitHub-releases proxy that is
 reachable where api.github.com is not) and compare against the running
 version. When a newer release exists, expose it via ``GET
 /api/v2/update-status`` and announce it once per version over a global WS
-event — the frontend renders a dismissible pill; download/install stays
-manual (the pill links to the release page).
+event — the frontend renders a dismissible pill. Clicking it downloads this
+platform's installer directly in the system browser (``installer``: the
+GitHub release asset and its China mirror; the UI language picks one on the
+frontend); Linux, which has no installer, keeps the website link (``url``).
+Opening the installer stays manual.
 
 Deliberately NOT auto-update: silently replacing unsigned binaries would hit
 SmartScreen/Gatekeeper on every update, and a running app can't replace
@@ -38,6 +41,13 @@ logger = logging.getLogger(__name__)
 DEFAULT_LATEST_URL = "https://orbital-telemetry-production.up.railway.app/latest"
 CHECK_INTERVAL_SECONDS = 6 * 60 * 60
 
+# Stable installer names, the same ones README's download buttons
+# (scripts/release-aliases.sh) and the China mirror
+# (scripts/sync-release-to-oss.sh) publish for every release.
+GITHUB_DOWNLOAD_BASE = "https://github.com/zqiren/Orbital/releases/latest/download"
+CHINA_DOWNLOAD_BASE = "https://orbital-release.oss-cn-hongkong.aliyuncs.com/releases"
+_INSTALLER_NAMES = {"darwin": "Orbital-macOS.dmg", "win32": "Orbital-Setup.exe"}
+
 FetchFn = Callable[[str], Awaitable[dict]]
 
 
@@ -64,6 +74,18 @@ def is_newer(latest: str, current: str) -> bool:
     return latest_t > current_t
 
 
+def installer_links(platform: str | None = None) -> dict | None:
+    """Direct installer links for ``platform`` (default: this host), or None
+    where Orbital ships no installer. ``global`` is GitHub, ``china`` the OSS
+    mirror; the frontend picks one by the UI language, the same rule as the
+    provider region default (``regionForLocale``)."""
+    name = _INSTALLER_NAMES.get(platform or sys.platform)
+    if name is None:
+        return None
+    return {"global": f"{GITHUB_DOWNLOAD_BASE}/{name}",
+            "china": f"{CHINA_DOWNLOAD_BASE}/{name}"}
+
+
 def _default_enabled() -> bool:
     env = os.environ.get("AGENT_OS_UPDATE_CHECK")
     if env is not None:
@@ -87,6 +109,7 @@ class UpdateChecker:
         latest_url: str | None = None,
         enabled: bool | None = None,
         fetch: FetchFn | None = None,
+        platform: str | None = None,
     ) -> None:
         self._ws = ws_manager
         self._url = latest_url or os.environ.get("AGENT_OS_UPDATE_URL", DEFAULT_LATEST_URL)
@@ -94,11 +117,13 @@ class UpdateChecker:
         self._fetch = fetch or _httpx_fetch
         self._task: asyncio.Task | None = None
         self._announced: str | None = None
+        self._installer = installer_links(platform)
         self.status: dict = {
             "current": get_version(),
             "update_available": False,
             "latest": None,
             "url": None,
+            "installer": None,
         }
 
     async def run_check(self) -> None:
@@ -111,13 +136,15 @@ class UpdateChecker:
             if not is_newer(latest, self.status["current"]):
                 return
             url = data.get("url") or ""
-            self.status.update(update_available=True, latest=latest, url=url)
+            self.status.update(update_available=True, latest=latest, url=url,
+                               installer=self._installer)
             # Announce each new version once — the 6h re-check must not
             # re-surface a pill the user dismissed.
             if latest != self._announced:
                 self._announced = latest
                 self._ws.broadcast_global(
-                    {"type": "update.available", "version": latest, "url": url}
+                    {"type": "update.available", "version": latest, "url": url,
+                     "installer": self._installer}
                 )
         except Exception:
             logger.debug("update check failed", exc_info=True)

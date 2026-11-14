@@ -20,15 +20,21 @@ vi.mock('../hooks/useWebSocket', () => ({
 }));
 
 import UpdatePill from './UpdatePill';
+import { LocaleProvider } from '../i18n/LocaleContext';
 
 let statusResponse: unknown = { current: '0.8.4', update_available: false, latest: null, url: null };
 
-function emitUpdate(version = '0.9.0', url = 'https://gh/rel') {
+function emitUpdate(version = '0.9.0', url = 'https://gh/rel', installer: unknown = null) {
   const handler = onMock.mock.calls.find((c) => c[0] === 'update.available')?.[1] as
     | ((e: unknown) => void)
     | undefined;
-  act(() => handler?.({ type: 'update.available', version, url }));
+  act(() => handler?.({ type: 'update.available', version, url, installer }));
 }
+
+const INSTALLER = {
+  global: 'https://github.com/zqiren/Orbital/releases/latest/download/Orbital-macOS.dmg',
+  china: 'https://orbital-release.oss-cn-hongkong.aliyuncs.com/releases/Orbital-macOS.dmg',
+};
 
 beforeEach(() => {
   onMock.mockClear();
@@ -67,6 +73,35 @@ describe('UpdatePill', () => {
     render(<UpdatePill />);
     const pill = await screen.findByTestId('update-pill');
     expect(pill.querySelector('a')!.textContent).toContain('0.9.1');
+  });
+
+  it('links straight to the installer for an English UI (GitHub)', async () => {
+    render(<UpdatePill />);
+    emitUpdate('0.9.0', 'https://site', INSTALLER);
+    const pill = await screen.findByTestId('update-pill');
+    expect(pill.querySelector('a')!).toHaveAttribute('href', INSTALLER.global);
+  });
+
+  it('a Chinese UI gets the China mirror, the same rule as the provider region default', async () => {
+    localStorage.setItem('orbital.locale', 'zh');
+    render(<LocaleProvider><UpdatePill /></LocaleProvider>);
+    emitUpdate('0.9.0', 'https://site', INSTALLER);
+    const pill = await screen.findByTestId('update-pill');
+    expect(pill.querySelector('a')!).toHaveAttribute('href', INSTALLER.china);
+  });
+
+  it('the mount fetch carries the installer too', async () => {
+    statusResponse = { current: '0.8.4', update_available: true, latest: '0.9.1', url: 'https://site', installer: INSTALLER };
+    render(<UpdatePill />);
+    const pill = await screen.findByTestId('update-pill');
+    expect(pill.querySelector('a')!).toHaveAttribute('href', INSTALLER.global);
+  });
+
+  it('no installer (Linux, or an older daemon) keeps the website link', async () => {
+    render(<UpdatePill />);
+    emitUpdate('0.9.0', 'https://site', null);
+    const pill = await screen.findByTestId('update-pill');
+    expect(pill.querySelector('a')!).toHaveAttribute('href', 'https://site');
   });
 
   it('dismiss hides the pill and persists per version', async () => {

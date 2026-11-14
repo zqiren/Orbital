@@ -824,7 +824,10 @@ class SetupEngine:
                 self._start_handshakes()
             finally:
                 self._sweep_local.in_sweep = False
-            slugs = [m.slug for m in self._registry.list_all()]
+            # Unlisted agents (spec 171 B2) are never swept, so no list built
+            # from this result shows them; check_agent(slug) still answers.
+            slugs = [m.slug for m in self._registry.list_all()
+                     if getattr(m, "listed", True) is not False]
             memo = _SweepMemo()
             timings: dict[str, float] = {}
 

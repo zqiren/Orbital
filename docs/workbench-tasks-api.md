@@ -24,6 +24,8 @@ curl -s -X POST http://127.0.0.1:8000/api/v2/workbench/tasks \
 
 它在本机运行，和其它本地 API 一样，没有额外的鉴权或令牌。
 
+端口通常是 8000。如果启动时 8000 被别的程序占着，Orbital 会换一个端口，当前端口记在 `~/orbital/daemon.pid.meta` 的 `port` 字段里（Windows 上是 `%USERPROFILE%\orbital\daemon.pid.meta`），脚本可以这样读：`PORT=$(jq -r .port ~/orbital/daemon.pid.meta)`。
+
 示例：把带 `orbital` 标签的 GitHub issue 各发成一个任务：
 
 ```bash
@@ -59,6 +61,8 @@ Errors: `422` for empty text. `404` if the project doesn't exist or isn't on the
 To follow a task, poll `GET /api/v2/workbench/feed` (each row has `status`, `result_line` and `ask`) or read the session's chat. A retry after a timeout can create two sessions, so dedupe on the `session_id` you got back.
 
 The endpoint runs on this machine and is reachable the same way as the rest of the local API, with no extra auth or token.
+
+The port is usually 8000. If another program holds 8000 when Orbital starts, Orbital picks another port and records it in the `port` field of `~/orbital/daemon.pid.meta` (`%USERPROFILE%\orbital\daemon.pid.meta` on Windows). A script can read it with `PORT=$(jq -r .port ~/orbital/daemon.pid.meta)`.
 
 Example: send one task per GitHub issue labelled `orbital`:
 

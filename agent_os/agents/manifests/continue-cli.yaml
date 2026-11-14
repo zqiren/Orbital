@@ -27,6 +27,9 @@ slug: "continue-cli"
 description: "Open-source modular coding agent for the command line"
 author: "continuedev"
 version: "1.0.0"
+# Spec 171 B2: off every list (no turn-end signal, no resume; issue #74).
+# Still registered, so an existing pin or automation keeps running it.
+listed: false
 
 runtime:
   adapter: cli

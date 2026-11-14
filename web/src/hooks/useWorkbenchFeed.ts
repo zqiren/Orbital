@@ -381,6 +381,19 @@ export function setActivity(
   set({ activity: { ...state.activity, [key]: { ...cur, [kind]: text } } });
 }
 
+// Orbital's own memory under a project's orbital/ folder: the Layer-1 files
+// and their archives, ASKS.md, instructions/ and the workers' sub_agents/.
+// Named files only, so a user's README.md in a folder called orbital stays.
+const MEMORY_PATH = /(?:^|[\\/])orbital[\\/](?:(?:PROJECT_STATE|DECISIONS|LESSONS|INDEX)(?:_ARCHIVE)?\.md|ASKS\.md|(?:instructions|sub_agents)[\\/].+)$/;
+const READ_TOOLS = new Set(['read', 'read_file']);
+
+/** A read of Orbital's own memory files: bookkeeping, not the user's work. */
+function isBookkeepingRead(e: Partial<ActivityEvent>): boolean {
+  if (!READ_TOOLS.has((e.tool_name ?? '').toLowerCase())) return false;
+  const path = e.arguments?.path ?? e.arguments?.file_path;
+  return typeof path === 'string' && MEMORY_PATH.test(path);
+}
+
 /**
  * A running card's line for one `agent.activity` event, worded as the chat
  * words the same event. A tool result is not a new step (the chat only marks
@@ -388,6 +401,7 @@ export function setActivity(
  */
 export function activityLine(e: Partial<ActivityEvent>, tr: ActivityTranslate): string | null {
   if (e.category === 'tool_result' || e.worker_event === 'tool_result') return null;
+  if (isBookkeepingRead(e)) return null;
   if (e.worker_event === 'tool_call') {
     return describeWorkerTool(e.tool_name || 'tool', e.arguments, undefined, tr);
   }

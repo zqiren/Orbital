@@ -26,6 +26,9 @@ slug: "gemini-cli"
 description: "Google's AI coding agent for the command line"
 author: "google"
 version: "1.0.0"
+# Spec 171 B2: off every list (no turn-end signal, no resume; issue #74).
+# Still registered, so an existing pin or automation keeps running it.
+listed: false
 
 runtime:
   adapter: cli
