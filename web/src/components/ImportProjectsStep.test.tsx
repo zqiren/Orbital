@@ -259,6 +259,56 @@ describe('ImportProjectsStep — section checkboxes (spec 178 §5.1)', () => {
   });
 });
 
+describe('ImportProjectsStep — git repos keep arriving while the list is open (batch 1115)', () => {
+  const folders = () => screen.getByTestId('import-folders-toggle') as HTMLInputElement;
+  const repo = (name: string) => ({ source: 'git', name, path: `/Users/x/${name}`, session_count: 0, last_activity: iso(DAY),
+    already_imported: false, kind: 'folder', minor: false, is_git: true, by_agent: {} });
+  const base = DATA.candidates[0];
+  const answer = (names: string[], status: 'scanning' | 'ready' = 'scanning'): ImportableResponse =>
+    ({ status, candidates: [base, ...names.map(repo)], groups: [] });
+  const rows = () => screen.getAllByTestId(/^import-candidate-/).map((el) => el.getAttribute('data-testid')!.replace('import-candidate-/Users/x/', ''));
+
+  it('untouched, every repo arrives ticked and the heading stays all', () => {
+    const { rerender } = render(<ImportProjectsStep scan={scanOf({ settled: false, importable: answer(['r1']) })} onImported={vi.fn()} />);
+    expect(folders().checked).toBe(true);
+    rerender(<ImportProjectsStep scan={scanOf({ settled: false, importable: answer(['r1', 'r2']) })} onImported={vi.fn()} />);
+    expect(check('import-check-/Users/x/r2').checked).toBe(true);
+    expect(folders().checked).toBe(true);
+    expect(folders().indeterminate).toBe(false);
+    expect(submit().textContent).toBe('Import 3 projects');
+  });
+
+  it('after one untick, later repos arrive unticked, the ticks given stay, and the heading reads some', () => {
+    const { rerender } = render(<ImportProjectsStep scan={scanOf({ settled: false, importable: answer(['r1', 'r2']) })} onImported={vi.fn()} />);
+    fireEvent.click(check('import-check-/Users/x/r1'));
+    for (const more of [['r1', 'r2', 'r3'], ['r1', 'r2', 'r3', 'r4']]) {
+      rerender(<ImportProjectsStep scan={scanOf({ settled: false, importable: answer(more) })} onImported={vi.fn()} />);
+    }
+    rerender(<ImportProjectsStep scan={scanOf({ settled: true, importable: answer(['r1', 'r2', 'r3', 'r4', 'r5'], 'ready') })} onImported={vi.fn()} />);
+    expect(check('import-check-/Users/x/orbital-test').checked).toBe(true);
+    expect(check('import-check-/Users/x/r1').checked).toBe(false);
+    expect(check('import-check-/Users/x/r2').checked).toBe(true);
+    for (const late of ['r3', 'r4', 'r5']) expect(check(`import-check-/Users/x/${late}`).checked).toBe(false);
+    expect(folders().indeterminate).toBe(true);
+    expect(rows()).toEqual(['orbital-test', 'r1', 'r2', 'r3', 'r4', 'r5']);
+    expect(submit().textContent).toBe('Import 2 projects');
+  });
+
+  it('after clearing the section, repos keep arriving unticked and the heading stays clear', () => {
+    const { rerender } = render(<ImportProjectsStep scan={scanOf({ settled: false, importable: answer(['r1']) })} onImported={vi.fn()} />);
+    fireEvent.click(folders());
+    rerender(<ImportProjectsStep scan={scanOf({ settled: false, importable: answer(['r1', 'r2', 'r3']) })} onImported={vi.fn()} />);
+    expect(folders().checked).toBe(false);
+    expect(folders().indeterminate).toBe(false);
+    expect(submit().disabled).toBe(true);
+    fireEvent.click(folders()); // ticks every row on screen, the late ones too
+    expect(check('import-check-/Users/x/r3').checked).toBe(true);
+    rerender(<ImportProjectsStep scan={scanOf({ settled: true, importable: answer(['r1', 'r2', 'r3', 'r4'], 'ready') })} onImported={vi.fn()} />);
+    expect(check('import-check-/Users/x/r4').checked).toBe(false);
+    expect(folders().indeterminate).toBe(true);
+  });
+});
+
 describe('ImportProjectsStep — Import', () => {
   it('POSTs one import with the checked folders and groups, reports unchecks, and hands back the landing project', async () => {
     importResponse = async () => ({

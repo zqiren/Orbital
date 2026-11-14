@@ -24,6 +24,7 @@ import {
   withTicksChange,
   isFolderChecked,
   isGroupChecked,
+  keepShownOrder,
   NO_CHOICES,
   type ImportCandidate,
   type ImportGroup,
@@ -306,5 +307,41 @@ describe('spec 153 — private notes helpers', () => {
     expect(showNotesCard(notes, { imported: false, available_workers: ['a', 'b'] })).toBe(false);
     expect(showNotesCard(notes, { imported: true })).toBe(false);
     expect(showNotesCard({ ...notes!, count: 0 }, { imported: true, available_workers: ['a', 'b'] })).toBe(false);
+  });
+});
+
+describe('keepShownOrder — the list fills in without moving (batch 1115)', () => {
+  const paths = (d: ImportableResponse) => d.candidates.map((c) => c.name);
+  const a = cand({ name: 'a', path: '/a' });
+  const b = cand({ name: 'b', path: '/b' });
+  const c = cand({ name: 'c', path: '/c' });
+  const repo = cand({ name: 'repo', path: '/repo', source: 'git', by_agent: {}, session_count: 0 });
+
+  it('the first answer is shown as ranked', () => {
+    const first: ImportableResponse = { status: 'scanning', candidates: [b, a], groups: [] };
+    expect(keepShownOrder(null, first)).toBe(first);
+  });
+
+  it('rows on screen keep their order; a row the daemon ranks first is appended instead', () => {
+    const shown: ImportableResponse = { status: 'scanning', candidates: [a, b], groups: [group({ id: 'g1' })] };
+    const next: ImportableResponse = {
+      status: 'ready', candidates: [repo, b, c, a], groups: [group({ id: 'g2' }), group({ id: 'g1' })],
+    };
+    const out = keepShownOrder(shown, next);
+    expect(paths(out)).toEqual(['a', 'b', 'repo', 'c']);
+    expect(out.groups!.map((g) => g.id)).toEqual(['g1', 'g2']);
+    expect(out.status).toBe('ready');
+  });
+
+  it('a row the daemon no longer sends is dropped; the rest keep their places', () => {
+    const shown: ImportableResponse = { status: 'scanning', candidates: [a, b, c], groups: [] };
+    expect(paths(keepShownOrder(shown, { status: 'ready', candidates: [c, a], groups: [] }))).toEqual(['a', 'c']);
+  });
+
+  it('takes the new copy of a kept row (its fields can change)', () => {
+    const shown: ImportableResponse = { status: 'scanning', candidates: [a], groups: [] };
+    const out = keepShownOrder(shown, { status: 'ready', candidates: [{ ...a, session_count: 99 }] });
+    expect(out.candidates[0].session_count).toBe(99);
+    expect(out.groups).toBeUndefined();
   });
 });

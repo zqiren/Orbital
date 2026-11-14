@@ -4,7 +4,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../config';
-import type { HistoryStatus, ImportableResponse } from '../utils/onboarding';
+import { keepShownOrder, type HistoryStatus, type ImportableResponse } from '../utils/onboarding';
 
 export interface OnboardingScan {
   history: HistoryStatus | null;
@@ -31,7 +31,10 @@ interface Options {
  * while either says `status == "scanning"` (every 1.5 s, at most 90 s). Once the scan is
  * ready the folder rows are rebuilt from it, so giving up early leaves the
  * first, noisier list; reading Codex's compressed rollouts made a cold scan
- * take 10–14 s on a dev Mac, and a heavier history takes longer.
+ * take 10–14 s on a dev Mac, and a heavier history takes longer. The list
+ * also says scanning while the daemon's walk for git repos runs (batch 1115:
+ * bounded at 60 s, inside the 90 s here), each answer carrying the repos
+ * found so far; rows already shown keep their place (keepShownOrder).
  */
 export function useOnboardingScan({ pollMs = 1500, maxMs = 90000 }: Options = {}): OnboardingScan {
   const [history, setHistory] = useState<HistoryStatus | null>(null);
@@ -44,6 +47,8 @@ export function useOnboardingScan({ pollMs = 1500, maxMs = 90000 }: Options = {}
   useEffect(() => {
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    // The list as last shown: rows that arrive later never reorder it.
+    let shown: ImportableResponse | null = null;
     const started = Date.now();
     const { pollMs: every, maxMs: limit } = optsRef.current;
 
@@ -66,11 +71,12 @@ export function useOnboardingScan({ pollMs = 1500, maxMs = 90000 }: Options = {}
         return;
       }
       if (cancelled) return;
-      const body: ImportableResponse = {
+      const body: ImportableResponse = keepShownOrder(shown, {
         status: data?.status,
         candidates: Array.isArray(data?.candidates) ? data.candidates : [],
         groups: Array.isArray(data?.groups) ? data.groups : [],
-      };
+      });
+      shown = body;
       setImportable(body);
       if ((body.status === 'scanning' || historyScanning) && Date.now() - started < limit) {
         timer = setTimeout(() => { void tick(); }, every);

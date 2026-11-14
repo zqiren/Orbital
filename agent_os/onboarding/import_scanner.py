@@ -688,10 +688,15 @@ WALK_HOME_DEPTH = 5
 WALK_DRIVE_DEPTH = 4
 # Bounds: directories listed, and the whole walk's wall clock. A directory
 # read that hangs (a network share, a TCC prompt nobody answers) cannot be
-# interrupted, so the walk runs in its own thread and the caller stops
-# waiting at the deadline with what was found by then.
+# interrupted, so the walk runs in its own thread and counts as finished at
+# the bound with what it found by then (batch 1115: the list fills in while
+# it runs, so the bound is not something the user waits for). Measured on a
+# dev Mac home (6,413 folders, 106 repos): 5.9 s cold, 2.5 s warm, i.e.
+# ~1 ms a folder cold; the folder cap is then reached in ~20 s, and 60 s
+# leaves a disk three times slower room to reach it while staying inside
+# the list's 90 s of polling.
 WALK_MAX_DIRS = 20000
-WALK_DEADLINE_S = 6.0
+WALK_BOUND_S = 60.0
 
 
 def _windows_fixed_drives() -> list[str]:
@@ -730,19 +735,16 @@ def walk_starts(home: str, *, platform: str | None = None,
 
 
 class _Walk:
-    """One bounded walk; ``found`` fills as it goes (read it under ``lock``)."""
+    """The folder walk; ``on_hit(folder, is_worktree_file)`` per repo found."""
 
-    def __init__(self, env: HistoryEnv, *, max_dirs: int, skip: frozenset[str]):
-        import threading
+    def __init__(self, env: HistoryEnv, *, max_dirs: int, skip: frozenset[str], on_hit):
         self.env = env
         self.max_dirs = max_dirs
         self.skip = skip
-        self.lock = threading.Lock()
-        self.found: dict[str, tuple[str, bool]] = {}  # key -> (path, is_worktree_file)
+        self.on_hit = on_hit
         self.dirs = 0
         self.capped = False
         self.stop = False
-        self.done = False
 
     def run(self, starts: list[tuple[str, int]], drive_roots: set[str]) -> None:
         try:
@@ -756,8 +758,6 @@ class _Walk:
                 self._walk(start, depth, dev, top=_path_key(start) in drive_roots)
         except Exception:  # pragma: no cover - discovery never raises
             logger.exception("repo walk failed")
-        finally:
-            self.done = True
 
     def _walk(self, start: str, max_depth: int, dev: int, *, top: bool) -> None:
         stack = [(start, 0)]
@@ -784,8 +784,7 @@ class _Walk:
                     is_file = git.is_file(follow_symlinks=False)
                 except OSError:
                     is_file = False
-                with self.lock:
-                    self.found.setdefault(_path_key(folder), (folder, is_file))
+                self.on_hit(folder, is_file)
                 continue  # a repo: never walked into (submodules stay out)
             if depth >= max_depth:
                 continue
@@ -825,72 +824,150 @@ def _repo_activity(root: str) -> str | None:
     return _iso(max(times)) if times else None
 
 
-def scan_git_repos(home: str | None = None, *, env: HistoryEnv | None = None,
-                   platform: str | None = None, drives: Iterable[str] | None = None,
-                   max_dirs: int = WALK_MAX_DIRS, deadline_s: float = WALK_DEADLINE_S,
-                   exclude: Iterable[str] = ()) -> list[ImportCandidate]:
-    """Git repos on this computer, one candidate each (batch 1114).
+class RepoWalk:
+    """One walk of this computer for git repos, in its own thread; the rows
+    fill in as it goes (batch 1114, made background in batch 1115).
 
-    Walks :func:`walk_starts` breadth-limited, never following symlinks or
+    Walks :func:`walk_starts` depth-limited, never following symlinks or
     crossing onto another volume, skipping dot folders and
     :data:`_WALK_SKIP_NAMES`, and stops at a repo (``.git`` folder or file).
     A worktree folds onto its main repo through :func:`git_main_root`
     (only for a ``.git`` file: a ``.git`` folder is a main checkout); one
-    git cannot resolve is dropped.
-    Container and temp folders are dropped by the history rules; a folder in
-    ``exclude`` (Orbital's own data dir) is never offered.
+    git cannot resolve is dropped. Container and temp folders are dropped by
+    the history rules; a folder in ``exclude`` (Orbital's own data dir) is
+    never offered.
 
-    Bounded by ``max_dirs`` listed folders and ``deadline_s`` of wall clock:
-    the walk runs in a daemon thread and whatever it found by the deadline
-    is returned (the thread is told to stop and is left to finish one stuck
-    read on its own). Never raises; blocking — call it off the event loop.
-    Logs ``repo walk: N dirs, M repos, X s, capped=…``."""
-    import threading
-    import time as _time
-    from agent_os.onboarding.history import git_main_root
+    Bounded by ``max_dirs`` listed folders and ``bound_s`` of wall clock. A
+    stuck folder read cannot be interrupted: at the bound the walk counts as
+    finished with what it found, is told to stop, and its thread is left to
+    end on its own (:meth:`alive`). One line is logged at the end: the
+    summary, or that the bound cut it. Never raises."""
 
-    home = str(home) if home else history_home()
-    env = env or HistoryEnv.for_home(home)
-    starts = walk_starts(home, platform=platform, drives=drives)
-    drive_roots = {_path_key(s) for s, _d in starts[1:]}
-    walk = _Walk(env, max_dirs=max_dirs, skip=_WALK_SKIP_NAMES)
-    t0 = _time.monotonic()
-    thread = threading.Thread(target=walk.run, args=(starts, drive_roots),
-                              name="orbital-repo-walk", daemon=True)
-    thread.start()
-    thread.join(deadline_s)
-    timed_out = thread.is_alive()
-    walk.stop = True
-    with walk.lock:
-        found = list(walk.found.values())
-    skip_keys = {_path_key(p) for p in exclude if p}
-    out: dict[str, ImportCandidate] = {}
-    # Main repos first (no git call), then worktrees, folded through git; the
-    # folding stops at the deadline too (each call is a subprocess), and a
-    # worktree left unfolded then is dropped, not offered on its own.
-    found.sort(key=lambda hit: hit[1])
-    for path, is_file in found:
-        root = path
+    def __init__(self, home: str | None = None, *, env: HistoryEnv | None = None,
+                 platform: str | None = None, drives: Iterable[str] | None = None,
+                 max_dirs: int = WALK_MAX_DIRS, bound_s: float | None = None,
+                 exclude: Iterable[str] = ()):
+        import threading
+        self.home = str(home) if home else history_home()
+        self.env = env or HistoryEnv.for_home(self.home)
+        self.bound_s = WALK_BOUND_S if bound_s is None else bound_s
+        self._starts = walk_starts(self.home, platform=platform, drives=drives)
+        self._drive_roots = {_path_key(s) for s, _d in self._starts[1:]}
+        self._skip_keys = [_path_key(p).rstrip(os.sep) for p in exclude if p]
+        self._walk = _Walk(self.env, max_dirs=max_dirs, skip=_WALK_SKIP_NAMES,
+                           on_hit=self._add)
+        self._lock = threading.Lock()
+        self._rows: dict[str, ImportCandidate] = {}
+        self._thread = threading.Thread(target=self._run, name="orbital-repo-walk",
+                                        daemon=True)
+        self._ended = threading.Event()
+        self.t0: float | None = None
+        self.finished_at: float | None = None
+        self.cut = False
+
+    @property
+    def stop(self) -> bool:
+        return self._walk.stop
+
+    @stop.setter
+    def stop(self, value: bool) -> None:
+        self._walk.stop = value
+
+    def start(self) -> "RepoWalk":
+        import time as _time
+        self.t0 = _time.monotonic()
+        self._thread.start()
+        return self
+
+    def _run(self) -> None:
+        import time as _time
+        try:
+            self._walk.run(self._starts, self._drive_roots)
+        finally:
+            with self._lock:
+                if self.finished_at is None:
+                    self.finished_at = _time.monotonic()
+                cut = self.cut
+            self._ended.set()
+            if not cut:
+                logger.info("repo walk: %d dirs, %d repos, %.2f s, capped=%s",
+                            self._walk.dirs, len(self._rows),
+                            _time.monotonic() - (self.t0 or 0.0), self._walk.capped)
+
+    def _add(self, folder: str, is_file: bool) -> None:
+        from agent_os.onboarding.history import git_main_root
+        root = folder
         if is_file:
-            if _time.monotonic() - t0 > deadline_s:
-                continue
-            main = git_main_root(os.path.normpath(path))
+            main = git_main_root(os.path.normpath(folder))
             if not main or not _path_is_live(main):
-                continue
+                return
             root = main
-        if env.is_container(root) or env.is_temp(root):
-            continue
+        if self.env.is_container(root) or self.env.is_temp(root):
+            return
         key = _path_key(root)
-        if key in out or any(key == k or key.startswith(k.rstrip(os.sep) + os.sep)
-                             for k in skip_keys):
-            continue
-        out[key] = ImportCandidate(
+        if any(key == k or key.startswith(k + os.sep) for k in self._skip_keys):
+            return
+        with self._lock:
+            if key in self._rows:
+                return
+        cand = ImportCandidate(
             source=SOURCE_GIT, name=os.path.basename(root.rstrip("/\\")) or root,
             path=root, last_activity=_repo_activity(root), sources=[SOURCE_GIT],
             is_git=True, minor=False)
-    logger.info("repo walk: %d dirs, %d repos, %.2f s, capped=%s, timed_out=%s",
-                walk.dirs, len(out), _time.monotonic() - t0, walk.capped, timed_out)
-    return list(out.values())
+        with self._lock:
+            if not self.cut:  # a cut walk's rows are final
+                self._rows.setdefault(key, cand)
+
+    def rows(self) -> list[ImportCandidate]:
+        """The repos found so far, as copies (the list marks its rows)."""
+        from dataclasses import replace
+        with self._lock:
+            return [replace(c, sources=list(c.sources)) for c in self._rows.values()]
+
+    def finished(self) -> bool:
+        """The walk is done, or ran into its bound (then it is cut here)."""
+        import time as _time
+        if self._ended.is_set():
+            return True
+        if self.t0 is None or _time.monotonic() - self.t0 < self.bound_s:
+            return False
+        with self._lock:
+            if self.finished_at is not None:
+                return True
+            self.cut = True
+            self.finished_at = _time.monotonic()
+            self._walk.stop = True
+            n = len(self._rows)
+        logger.warning("repo walk cut at the %.0f s bound: %d dirs, %d repos found",
+                       self.bound_s, self._walk.dirs, n)
+        return True
+
+    def wait(self, timeout: float) -> bool:
+        """Block until :meth:`finished` (at most ``timeout`` s)."""
+        import time as _time
+        end = _time.monotonic() + timeout
+        while not self.finished():
+            now = _time.monotonic()
+            if now >= end:
+                return False
+            self._ended.wait(min(0.05, end - now))
+        return True
+
+    def alive(self) -> bool:
+        """Its thread is still running (a cut walk can stay in a stuck read)."""
+        return self._thread.is_alive()
+
+
+def scan_git_repos(home: str | None = None, *, env: HistoryEnv | None = None,
+                   platform: str | None = None, drives: Iterable[str] | None = None,
+                   max_dirs: int = WALK_MAX_DIRS, deadline_s: float | None = None,
+                   exclude: Iterable[str] = ()) -> list[ImportCandidate]:
+    """A :class:`RepoWalk` run to its end (or ``deadline_s``) and its rows.
+    Blocking — call it off the event loop."""
+    walk = RepoWalk(home, env=env, platform=platform, drives=drives, max_dirs=max_dirs,
+                    bound_s=deadline_s, exclude=exclude).start()
+    walk.wait(walk.bound_s + 1.0)
+    return walk.rows()
 
 
 # --------------------------------------------------------------------------

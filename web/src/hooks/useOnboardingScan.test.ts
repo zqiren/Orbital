@@ -71,6 +71,28 @@ describe('useOnboardingScan', () => {
     expect(calls('/api/v2/onboarding/history')).toBe(3);
   });
 
+  it('rows that arrive in later answers are appended; rows on screen never move', async () => {
+    const row = (name: string) => ({ ...CAND, name, path: `/${name}` });
+    const answers = [
+      { status: 'scanning', candidates: [row('a'), row('b')], groups: [] },
+      // The daemon ranks a freshly found repo first: it is appended instead.
+      { status: 'scanning', candidates: [row('repo1'), row('b'), row('a')], groups: [] },
+      { status: 'ready', candidates: [row('b'), row('repo2'), row('repo1'), row('a')], groups: [] },
+    ];
+    let n = 0;
+    apiMock.mockImplementation(async (path: string) =>
+      path === '/api/v2/onboarding/history' ? HISTORY : answers[Math.min(n++, answers.length - 1)]);
+    const seen: string[][] = [];
+    const { result } = renderHook(() => {
+      const scan = useOnboardingScan({ pollMs: 10 });
+      const names = scan.importable?.candidates.map((c) => c.name);
+      if (names && seen[seen.length - 1]?.join() !== names.join()) seen.push(names);
+      return scan;
+    });
+    await waitFor(() => expect(result.current.settled).toBe(true));
+    expect(seen).toEqual([['a', 'b'], ['a', 'b', 'repo1'], ['a', 'b', 'repo1', 'repo2']]);
+  });
+
   it('gives up polling after maxMs and settles with what it has', async () => {
     apiMock.mockImplementation(async (path: string) =>
       path === '/api/v2/onboarding/history' ? HISTORY : { status: 'scanning', candidates: [], groups: [] });

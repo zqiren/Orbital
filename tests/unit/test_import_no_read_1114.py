@@ -488,6 +488,7 @@ def test_the_list_carries_git_rows_once_the_history_is_ready(tmp_path, monkeypat
     scanner = HistoryScanner(str(tmp_path / "data"), home=str(home),
                              sources=[claude_code.SOURCE], env=HistoryEnv.for_home(str(home)))
     onboarding_routes.configure(project_store=store, scanner=scanner, data_dir=str(tmp_path / "data"))
+    onboarding_routes._reset_repo_walk()
     app = FastAPI()
     app.include_router(onboarding_routes.router)
     client = TestClient(app)
@@ -496,7 +497,11 @@ def test_the_list_carries_git_rows_once_the_history_is_ready(tmp_path, monkeypat
         while client.get("/api/v2/onboarding/history").json()["status"] != "ready":
             assert time.time() < deadline
             time.sleep(0.05)
-        body = client.get("/api/v2/onboarding/importable-projects").json()
+        # Batch 1115: the walk runs in the background; the list says
+        # scanning until it is done, then carries the repo.
+        while (body := client.get("/api/v2/onboarding/importable-projects").json())["status"] != "ready":
+            assert time.time() < deadline
+            time.sleep(0.05)
         (row,) = body["candidates"]
         assert row["source"] == "git" and row["path"] == str(home / "Desktop" / "side")
         assert row["minor"] is False and row["is_git"] is True and row["by_agent"] == {}

@@ -294,6 +294,29 @@ export function withLateRowsUnchecked(
   return { ...late, ...ticks };
 }
 
+/**
+ * The list keeps filling in while it is open (the history scan, then the git
+ * repos found on disk, batch 1115), and the daemon ranks every answer afresh.
+ * A row already on screen keeps its place: the rows of `next` that `shown`
+ * had come first in `shown`'s order, then the new ones in the daemon's order
+ * (appended, since putting one in its ranked place would push the rows under
+ * the pointer down). Rows the daemon no longer sends are dropped.
+ */
+export function keepShownOrder(shown: ImportableResponse | null, next: ImportableResponse): ImportableResponse {
+  if (!shown) return next;
+  return {
+    ...next,
+    candidates: inShownOrder(shown.candidates, next.candidates, (c) => c.path),
+    groups: next.groups && inShownOrder(shown.groups ?? [], next.groups, (g) => g.id),
+  };
+}
+
+function inShownOrder<T>(prev: readonly T[], rows: readonly T[], key: (r: T) => string): T[] {
+  const at = new Map(prev.map((r, i) => [key(r), i]));
+  const kept = rows.filter((r) => at.has(key(r))).sort((a, b) => at.get(key(a))! - at.get(key(b))!);
+  return [...kept, ...rows.filter((r) => !at.has(key(r)))];
+}
+
 /** Items that were offered checked and the user unchecked. */
 export function uncheckedCount(data: ImportableResponse, ticks: TickOverrides): number {
   const folders = data.candidates.filter(
