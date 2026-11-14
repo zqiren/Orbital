@@ -117,6 +117,10 @@ class SubAgentManager:
         # active sub-agents. Single-loop callers route through
         # ``DEFAULT_SESSION_ID`` via ``_resolve_session_id``.
         self._adapters: dict[SessionKey, dict[str, object]] = {}
+        # Spec 175: when each session last dispatched to a worker or had a
+        # worker turn end (monotonic). The idle sweep's clock for sessions
+        # no manager handle owns (a pinned chat); see ``idle_handleless_sessions``.
+        self._last_worker_activity: dict[SessionKey, float] = {}
         # Spec 171 A3: one start at a time per (session, worker); see
         # ``_start_from_registry_once``.
         self._inflight_starts: dict[tuple[SessionKey, str], asyncio.Future] = {}
@@ -1978,6 +1982,7 @@ class SubAgentManager:
         session_id: str, handle: str,
     ) -> None:
         """Start one queued prompt while the session lifecycle lock is held."""
+        self._note_worker_activity(project_id, session_id)
         # Spec 074: push this dispatch's initiator into the lifecycle
         # observer's registry BEFORE the dispatch, so the terminal event that
         # eventually closes this turn (fired by process_manager, which has no
@@ -2267,6 +2272,7 @@ class SubAgentManager:
     ) -> None:
         """Advance a handle FIFO after its provider reports a real boundary."""
         session_id = self._resolve_session_id(session_id)
+        self._note_worker_activity(project_id, session_id)
         key = (project_id, session_id, handle)
         self._track_auth_outcome(key, cause)
         sk = make_session_key(project_id, session_id)
@@ -3709,6 +3715,42 @@ class SubAgentManager:
             if t is not None:
                 deltas.append(_time.monotonic() - t)
         return min(deltas) if deltas else None
+
+    # Spec 175: workers the idle sweep may stop in a session no manager
+    # handle owns. Only agents whose stop-then-resume was verified end to end
+    # (the next send respawns and continues the same thread); add others one
+    # at a time once theirs is.
+    IDLE_STOP_WITHOUT_MANAGER = frozenset({"claude-code"})
+
+    def _note_worker_activity(self, project_id: str, session_id: str) -> None:
+        # setdefault: tolerates instances built without __init__ (tests).
+        self.__dict__.setdefault("_last_worker_activity", {})[
+            make_session_key(project_id, session_id)] = time.monotonic()
+
+    def idle_handleless_sessions(self, owned, timeout: float) -> list:
+        """SessionKeys holding adapters that no manager handle owns (``owned``
+        is the manager's handle table), whose workers are all in
+        ``IDLE_STOP_WITHOUT_MANAGER``, and whose last worker dispatch or turn
+        end is at least ``timeout`` seconds old. Status and background-work
+        gates are the caller's (the same ones managed sessions pass).
+
+        A session seen with no recorded activity (its workers predate the
+        clock) starts its clock now rather than being stopped at once.
+        """
+        now = time.monotonic()
+        clock = self.__dict__.setdefault("_last_worker_activity", {})
+        for sk in [k for k in clock if k not in self._adapters]:
+            clock.pop(sk, None)
+        result = []
+        for sk, slate in list(self._adapters.items()):
+            if sk in owned or not slate:
+                continue
+            if not set(slate) <= self.IDLE_STOP_WITHOUT_MANAGER:
+                continue
+            last = clock.setdefault(sk, now)
+            if now - last >= timeout:
+                result.append(sk)
+        return result
 
     def has_live_descendants_degraded(self, project_id: str, *,
                                       session_id: str | None = None) -> bool:

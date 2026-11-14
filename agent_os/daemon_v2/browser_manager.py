@@ -285,6 +285,10 @@ class BrowserManager:
         "--disable-client-side-phishing-detection",
         "--disable-component-extensions-with-background-pages",
         "--force-color-profile=srgb",
+        # Spec 175: cap the profile's caches (Chrome's default grows with
+        # free disk; the owner's reached 1.9 GB). Measured: Chrome trims an
+        # existing larger HTTP cache and Code Cache down to this on its own.
+        "--disk-cache-size=268435456",
         "--start-minimized",
     ]
 
@@ -342,6 +346,10 @@ class BrowserManager:
 
         # Max concurrent pages
         self._max_pages = 10
+
+        # Spec 175: last agent browser action or user input through the live
+        # view (monotonic). A viewer merely connected does not count.
+        self._last_use = time.monotonic()
 
     # ------------------------------------------------------------------
     # Browser launch (lazy + persistent context)
@@ -818,6 +826,7 @@ class BrowserManager:
         if project_id.startswith(WORKER_SCOPE_PREFIX):
             ctx = await self._get_worker_context(project_id)
         else:
+            self.note_use()
             ctx = await self.ensure_browser()
 
         # Return existing page if alive
@@ -856,6 +865,7 @@ class BrowserManager:
         if project_id.startswith(WORKER_SCOPE_PREFIX):
             ctx = await self._get_worker_context(project_id)
         else:
+            self.note_use()
             ctx = await self.ensure_browser()
         total = sum(len(ps) for ps in self._project_pages.values())
         if total >= self._max_pages:
@@ -1032,6 +1042,43 @@ class BrowserManager:
             logger.info("Closing daemon browser context for sign-in handoff")
             await self._cleanup_stale()
             logger.info("Daemon browser context closed — profile lock released")
+
+    # ------------------------------------------------------------------
+    # Idle close (spec 175)
+    # ------------------------------------------------------------------
+
+    # Close the main browser after this long with no agent browser action
+    # and no user input through the live view, live view open or not. The
+    # next browser action relaunches it on the same (persistent) profile.
+    IDLE_CLOSE_AFTER = 900.0  # seconds (15 minutes)
+
+    def note_use(self) -> None:
+        """An agent browser action or user input through the live view."""
+        self._last_use = time.monotonic()
+
+    async def close_if_idle(self) -> bool:
+        """Close the main browser when unused for ``IDLE_CLOSE_AFTER``. True
+        when it closed. Never touches the sign-in browser (its own
+        playwright) and does nothing while one is open; the fan-out worker
+        browser is closed per scope elsewhere."""
+        if self._context is None and self._playwright is None:
+            return False
+        if self._warmup_active:
+            return False
+        if time.monotonic() - self._last_use < self.IDLE_CLOSE_AFTER:
+            return False
+        async with self._main_lock:
+            # Re-check under the lock: an action that queued behind it
+            # stamped its use before waiting.
+            if self._context is None and self._playwright is None:
+                return False
+            if self._warmup_active or (
+                    time.monotonic() - self._last_use < self.IDLE_CLOSE_AFTER):
+                return False
+            logger.info("Closing the agent browser after %.0f idle minutes",
+                        self.IDLE_CLOSE_AFTER / 60)
+            await self._cleanup_stale()
+        return True
 
     # ------------------------------------------------------------------
     # Browser warmup (headed session for cookie warmup)

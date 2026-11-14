@@ -6433,8 +6433,11 @@ class AgentManager:
     # Idle eviction
     # ------------------------------------------------------------------
     # After N seconds with no user interaction, an idle session's runtime
-    # resources (handle, browser pages, sub-agents, sandbox) are torn down
-    # via stop_agent. The next message cold-starts from the JSONL on disk —
+    # resources (handle, sub-agents, sandbox) are torn down via stop_agent;
+    # its browser pages stay for the live view until the browser's own idle
+    # close (spec 175). A session with workers but no handle (a pinned chat)
+    # gets the same timeout and gates and has its workers stopped
+    # (``_evict_idle_handleless``). The next message cold-starts from the JSONL on disk —
     # measured at ~140ms (TASK/REPORT-restart-costs.md), invisible behind the
     # LLM round-trip. Hardcoded policy, not a user preference.
     EVICTION_IDLE_TIMEOUT = 180   # seconds (3 minutes)
@@ -6477,7 +6480,35 @@ class AgentManager:
                 logger.warning(
                     "eviction failed for %s/%s", pid, sid, exc_info=True
                 )
+        to_evict.extend(await self._evict_idle_handleless())
         return to_evict
+
+    async def _evict_idle_handleless(self) -> list:
+        """Spec 175: the same eviction for sessions whose workers no manager
+        handle owns (a pinned chat never creates one). Same timeout, same
+        gates, and the workers' own stop; the browser pages are left alone."""
+        sam = self._sub_agent_manager
+        try:
+            candidates = sam.idle_handleless_sessions(
+                self._handles, self.EVICTION_IDLE_TIMEOUT)
+        except Exception:
+            return []
+        if not isinstance(candidates, list):
+            return []  # a partial manager (tests)
+        evicted = []
+        for pid, sid in candidates:
+            if self._sub_agents_block_eviction(pid, sid):
+                continue
+            logger.info("evicting idle workers of project %s session %s "
+                        "(no manager handle)", pid, sid)
+            try:
+                await sam.stop_all(pid, session_id=sid)
+                evicted.append((pid, sid))
+            except Exception:
+                logger.warning(
+                    "eviction failed for %s/%s", pid, sid, exc_info=True
+                )
+        return evicted
 
     def _sub_agents_block_eviction(self, project_id: str, session_id: str) -> bool:
         """True when a session's sub-agents make it non-evictable (Piece 3).
@@ -6526,6 +6557,14 @@ class AgentManager:
                 raise
             except Exception:
                 logger.warning("eviction sweep iteration error", exc_info=True)
+            # Spec 175: the agent browser closes after its own idle period.
+            try:
+                if self._browser_manager is not None:
+                    await self._browser_manager.close_if_idle()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.warning("browser idle check error", exc_info=True)
 
     def start_eviction(self) -> None:
         """Launch the idle-eviction sweep task. Idempotent. Called at daemon
