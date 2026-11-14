@@ -843,6 +843,9 @@ interface ChatViewProps {
    *  to 进行中 at once), with the inject response: a `recorded` reply
    *  started no turn, so the pane lets its card go (spec 169 B). */
   onUserSend?: (result: InjectResult | undefined) => void;
+  /** Spec 180: the daemon delivered a send into another project (the
+   *  session had moved): the open chat follows it there. */
+  onSessionMoved?: (sessionId: string, toProjectId: string) => void;
 }
 
 interface StreamState {
@@ -931,7 +934,7 @@ interface PendingApproval {
   reason?: string;
 }
 
-export default function ChatView({ projectId, project, agentStatus, statusTick, agents, sessionId, initialAskReply, initialDraft, initialSkill, onDraftConsumed, onRefreshProject, onOpenSession, onUndoTurn, checksOnView = true, onUserSend }: ChatViewProps) {
+export default function ChatView({ projectId, project, agentStatus, statusTick, agents, sessionId, initialAskReply, initialDraft, initialSkill, onDraftConsumed, onRefreshProject, onOpenSession, onUndoTurn, checksOnView = true, onUserSend, onSessionMoved }: ChatViewProps) {
   const t = useT();
   const { locale } = useLocale();
   // Chrome-only translator for the annotation chip's fallback label (the
@@ -3878,6 +3881,11 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         send.answering,
       );
       onUserSend?.(result);
+      // Spec 180: the session had moved (another device, or a moment ago) and
+      // the daemon delivered this into its new project: follow it there.
+      if (sid !== undefined && result?.project_id && result.project_id !== projectId) {
+        onSessionMoved?.(sid, result.project_id);
+      }
       // A pinned send materialized the session on the backend — if the pin
       // PATCH had failed earlier (brand-new session, 404 before the first
       // message), persist it now so it survives reloads. `pinAgent`'s

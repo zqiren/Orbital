@@ -121,3 +121,50 @@ describe('settleReply: one step after a reply from a card (spec 169 B)', () => {
     expect(isHeld()).toBe(true);
   });
 });
+
+describe('settleReply: a reply delivered into the project the session moved to (spec 180)', () => {
+  const MOVED = sessionKeyOf('q', 's');
+
+  it('the hold follows the session to the project the response names, under the normal release rule', async () => {
+    apiMock.mockResolvedValue({ rows: [] });
+    holdCard(ROW);
+    settleReply('p', 's', { status: 'started', project_id: 'q' });
+    expect(isHeld()).toBe(false);
+    expect(getFeedState().held.get(MOVED)?.row.project_id).toBe('q');
+    // settleReply's own refetch lands first.
+    await vi.advanceTimersByTimeAsync(0);
+    // The run in the new project is seen, then ends: the hold goes.
+    apiMock.mockResolvedValue({ rows: [{ ...ROW, project_id: 'q', status: 'running' }] });
+    await refreshFeed();
+    expect(getFeedState().held.get(MOVED)?.sawRunning).toBe(true);
+    apiMock.mockResolvedValue({ rows: [{ ...ROW, project_id: 'q' }] });
+    await refreshFeed();
+    expect(getFeedState().held.size).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('the moved hold keeps its original safety deadline', () => {
+    apiMock.mockResolvedValue({ rows: [] });
+    holdCard(ROW);
+    vi.advanceTimersByTime(60_000);
+    settleReply('p', 's', { status: 'started', project_id: 'q' });
+    vi.advanceTimersByTime(HOLD_SAFETY_MS - 60_001);
+    expect(getFeedState().held.has(MOVED)).toBe(true);
+    vi.advanceTimersByTime(1);
+    expect(getFeedState().held.has(MOVED)).toBe(false);
+  });
+
+  it('a response naming the same project changes nothing', () => {
+    apiMock.mockResolvedValue({ rows: [] });
+    holdCard(ROW);
+    settleReply('p', 's', { status: 'started', project_id: 'p' });
+    expect(isHeld()).toBe(true);
+  });
+
+  it('a recorded reply delivered elsewhere lets the hold go', () => {
+    apiMock.mockResolvedValue({ rows: [] });
+    holdCard(ROW);
+    settleReply('p', 's', { status: 'recorded', project_id: 'q' });
+    expect(getFeedState().held.size).toBe(0);
+  });
+});

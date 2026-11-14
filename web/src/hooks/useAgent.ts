@@ -28,6 +28,9 @@ export interface InjectResult extends ActionResult {
   dismissed_tool_call_id?: string;
   /** The request's nonce, echoed back for queued same-session messages. */
   nonce?: string;
+  /** Spec 180: present only when the session had moved and the daemon
+   *  delivered the message into this other project. */
+  project_id?: string;
 }
 
 /**

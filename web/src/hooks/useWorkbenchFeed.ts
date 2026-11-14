@@ -279,7 +279,35 @@ export function settleReply(
   const recorded = !!result && typeof result === 'object'
     && (result as { status?: unknown }).status === 'recorded';
   if (result === null || recorded) releaseCard(projectId, sessionId);
+  // Spec 180: the session had moved and the daemon delivered the reply into
+  // the project it names: the hold (and its timer) follows the session there,
+  // so the run in that project releases it as usual.
+  const dest = !!result && typeof result === 'object'
+    ? (result as { project_id?: unknown }).project_id : undefined;
+  if (typeof dest === 'string' && dest && dest !== projectId) followHold(projectId, sessionId, dest);
   void refreshFeed();
+}
+
+/** Spec 180: a held card's session now lives in `to`: re-key the hold (its
+ *  snapshot names `to`) and re-arm its expiry under the new key, keeping the
+ *  original deadline (a timer only ever expires the key it was armed for). */
+function followHold(
+  from: string, sessionId: string | null | undefined, to: string, toSessionId = sessionId,
+): void {
+  const oldKey = sessionKeyOf(from, sessionId ?? null);
+  const h = state.held.get(oldKey);
+  if (!h) return;
+  const newKey = sessionKeyOf(to, toSessionId ?? null);
+  clearHoldTimer(oldKey);
+  clearHoldTimer(newKey);
+  if (!h.sawRunning) {
+    const left = Math.max(0, h.at + HOLD_SAFETY_MS - Date.now());
+    holdTimers.set(newKey, setTimeout(() => expireHold(newKey, h.at), left));
+  }
+  const held = new Map(state.held);
+  held.delete(oldKey);
+  held.set(newKey, { ...h, row: { ...h.row, project_id: to } });
+  set({ held });
 }
 
 /**
@@ -295,16 +323,6 @@ export function clearRoutedMark(projectId: string, sessionId: string): void {
     method: 'PATCH',
     body: JSON.stringify({ routed_by: null }),
   }).catch(() => { /* hidden here; the next feed decides */ });
-}
-
-function renameKey<V>(map: ReadonlyMap<string, V>, from: string, to: string): Map<string, V> {
-  const next = new Map(map);
-  const v = next.get(from);
-  if (v !== undefined) {
-    next.delete(from);
-    next.set(to, v);
-  }
-  return next;
 }
 
 /**
@@ -330,22 +348,19 @@ export async function moveSession(
     const sid = res?.session_id || sessionId;
     const oldKey = sessionKeyOf(from, sessionId);
     const newKey = sessionKeyOf(dest, sid);
-    const timer = holdTimers.get(oldKey);
-    if (timer !== undefined) {
-      holdTimers.delete(oldKey);
-      holdTimers.set(newKey, timer);
-    }
+    // A held card follows the session (same id across a move).
+    followHold(from, sessionId, dest, sid);
     // The run it had was stopped: its live line goes with it (the run in
     // the new project reports its own).
     const activity = { ...state.activity };
     delete activity[oldKey];
     const done = new Map(state.moves);
     done.set(sid, { from, to: dest, phase: 'moved', woke: !!res?.woke });
-    const held = renameKey(state.held, oldKey, newKey);
+    const held = new Map(state.held);
     // The daemon restarted the work in the new project: the card is drawn
     // running from now, as after a reply, until that run ends.
     const snapshot = state.rows.find((r) => r.session_id === sessionId && r.project_id === from)
-      ?? state.held.get(oldKey)?.row;
+      ?? state.held.get(newKey)?.row;
     if (res?.woke && snapshot) {
       const at = Date.now();
       held.set(newKey, { sawRunning: false, at, starting: true, row: { ...snapshot, project_id: dest, routed_by: null } });

@@ -263,13 +263,6 @@ export default function ProjectDetail({
     sessionNav.sessionDeleted(deletedId, remaining, route.sessionId);
   }
 
-  // Spec 180: the open session was moved — the view follows it.
-  function handleSessionMoved(sessionId: string, toProjectId: string) {
-    if (route.sessionId === sessionId) {
-      setRoute({ name: 'project', projectId: toProjectId, sessionId });
-    }
-  }
-
   // Automations "try this in chat" and "New automation" (spec 137 decision
   // 2): back to chat with `/automate` picked. Rides the existing one-shot
   // composer prefill (route.draft, the Workbench doorway) — filled, never sent.
@@ -536,7 +529,7 @@ export default function ProjectDetail({
           onNewSession={handleNewSession}
           onSessionDeleted={handleSessionDeleted}
           projects={projects}
-          onSessionMoved={handleSessionMoved}
+          onSessionMoved={sessionNav.sessionMoved}
         />
       </aside>
       {/* The right area: the chat, or the page opened from the column. One
