@@ -37,6 +37,16 @@ class _StubScanner:
         return None
 
 
+@pytest.fixture(autouse=True)
+def _scratch_home(tmp_path, monkeypatch):
+    """The route starts the git-repo walk with its first request (batch 1115):
+    walk an empty scratch home, never the machine's."""
+    monkeypatch.setenv("ORBITAL_HISTORY_HOME", str(tmp_path / "home"))
+    onboarding_routes._reset_repo_walk()
+    yield
+    onboarding_routes._reset_repo_walk()
+
+
 @pytest.fixture
 def client():
     app = FastAPI()

@@ -84,6 +84,7 @@ def app_env(staged, tmp_path):
     scanner = HistoryScanner(str(tmp_path / "data"), home=str(staged),
                              sources=[claude_code.SOURCE], env=HistoryEnv.for_home(str(staged)))
     onboarding_routes.configure(project_store=store, scanner=scanner)
+    onboarding_routes._reset_repo_walk()
     app = FastAPI()
     app.include_router(agents_v2.router)
     app.include_router(onboarding_routes.router)
@@ -111,8 +112,11 @@ def test_history_status_starts_the_scan_and_reports_counts(app_env):
 
 def test_importable_projects_carries_candidates_and_groups(app_env):
     _ready(app_env.client)
-    body = app_env.client.get("/api/v2/onboarding/importable-projects").json()
-    assert body["status"] == "ready"
+    # Batch 1115: the list says scanning while the repo walk still runs.
+    deadline = time.time() + 10
+    while (body := app_env.client.get("/api/v2/onboarding/importable-projects").json())["status"] != "ready":
+        assert time.time() < deadline
+        time.sleep(0.05)
     (cand,) = body["candidates"]  # the Desktop is never a project
     assert cand["name"] == "app" and cand["is_git"] is True and cand["minor"] is False
     assert cand["by_agent"] == {"claude-code": 1} and cand["kind"] == "folder"

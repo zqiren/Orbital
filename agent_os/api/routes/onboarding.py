@@ -23,6 +23,7 @@ Everything is local; nothing read here leaves the machine.
 """
 
 import asyncio
+import dataclasses
 import logging
 import os
 import threading
@@ -48,12 +49,19 @@ _scanner = None
 # How long an import waits for the scan before groups are reported missing.
 _IMPORT_SCAN_WAIT_SECONDS = 30.0
 
-# Batch 1114: the git repos found on disk, reused for a short while so the
-# list's polling and a quick reopen do not walk the disk again; one walk at a
-# time (a second caller waits for the first and takes its answer).
-_REPO_TTL_SECONDS = 30.0
+# The git repos found on disk (batch 1114), walked in the background so the
+# list fills in while the walk runs (batch 1115). One walk at a time: every
+# request while it runs reads its rows so far. A finished walk's rows are
+# reused for _REPO_FRESH_SECONDS after it ends; the first request after that
+# starts a new walk and is offered the old rows until it is done. 120 s: a
+# walk starts at the list's first request and ends within its bound (60 s),
+# so one opening of the list (90 s of polling) never walks twice, closing and
+# reopening it does not walk again, and a repo cloned since shows up on an
+# opening two minutes after the last walk, without restarting the app.
+_REPO_FRESH_SECONDS = 120.0
 _repo_lock = threading.Lock()
-_repo_cache: tuple[str, float, list] | None = None
+_repo_walk = None   # the latest RepoWalk, running or finished
+_repo_last: tuple[str, list] | None = None  # home + rows of the last finished walk
 
 
 def configure(project_store=None, *, data_dir: str | None = None, setup_engine=None,
@@ -111,19 +119,38 @@ def _existing_projects() -> list[dict]:
         return []
 
 
-def _git_repos() -> list:
-    """:func:`scan_git_repos` behind the short cache. Blocking."""
-    global _repo_cache
+def _git_repos() -> tuple[list, bool]:
+    """The git repos found so far and whether a walk is still running. Never
+    blocks: starts the background walk when there is none or its rows are
+    stale (and the last walk's thread has ended: a walk cut in a stuck read
+    is not stacked on)."""
+    global _repo_walk, _repo_last
     from agent_os.onboarding.history_paths import history_home
-    from agent_os.onboarding.import_scanner import scan_git_repos
+    from agent_os.onboarding.import_scanner import RepoWalk, path_key
     home = history_home()
     with _repo_lock:
-        if (_repo_cache is not None and _repo_cache[0] == home
-                and time.monotonic() - _repo_cache[1] < _REPO_TTL_SECONDS):
-            return list(_repo_cache[2])
-        repos = scan_git_repos(home, exclude=[_data_dir] if _data_dir else ())
-        _repo_cache = (home, time.monotonic(), repos)
-        return list(repos)
+        walk = _repo_walk if _repo_walk is not None and _repo_walk.home == home else None
+        last = _repo_last[1] if _repo_last is not None and _repo_last[0] == home else []
+        if walk is not None and walk.finished():
+            last = walk.rows()
+            _repo_last = (home, last)
+            stale = time.monotonic() - walk.finished_at >= _REPO_FRESH_SECONDS
+            if not stale or walk.alive():
+                return [dataclasses.replace(c) for c in last], False
+            walk = None
+        if walk is None:
+            walk = _repo_walk = RepoWalk(home, exclude=[_data_dir] if _data_dir else ()).start()
+        rows = {path_key(c.path): c for c in last}
+        rows.update((path_key(c.path), c) for c in walk.rows())
+        return [dataclasses.replace(c) for c in rows.values()], True
+
+
+def _reset_repo_walk() -> None:
+    """Forget the walk and its rows (tests)."""
+    global _repo_walk, _repo_last
+    with _repo_lock:
+        _repo_walk = None
+        _repo_last = None
 
 
 def _existing_workspaces() -> set[str]:
@@ -188,15 +215,18 @@ async def importable_projects():
     # the folder scan above counts the sessions Orbital itself ran as a
     # worker (rc DMG: 42 rows on a dev Mac, 35 of them smoke workspaces) and
     # is only the instant first answer while the history is read.
-    analysis = scanner.analysis() if scanner.status()["status"] == "ready" else None
+    # Batch 1114/1115: plus the git repos on this computer no agent opened.
+    # The walk starts with the list's first request (alongside the history
+    # scan) and runs in its own thread; the list says scanning until it is
+    # done, carrying the repos found so far once the history is ready.
+    try:
+        repos, walking = await asyncio.to_thread(_git_repos)
+    except Exception:
+        logger.exception("importable-projects: repo walk failed")
+        repos, walking = [], False
+    ready = scanner.status()["status"] == "ready"
+    analysis = scanner.analysis() if ready else None
     if analysis is not None:
-        # Batch 1114: plus the git repos on this computer no agent opened
-        # (bounded walk, off the loop; an unreadable folder is skipped).
-        try:
-            repos = await asyncio.to_thread(_git_repos)
-        except Exception:
-            logger.exception("importable-projects: repo walk failed")
-            repos = []
         try:
             candidates = candidates_from_analysis(
                 analysis, vaults=candidates, existing_workspaces=_existing_workspaces(),
@@ -208,7 +238,7 @@ async def importable_projects():
     except Exception:
         logger.exception("importable-projects: grouping failed")
         groups = []
-    return {"status": scanner.status()["status"],
+    return {"status": "ready" if ready and not walking else "scanning",
             "candidates": [c.to_dict() for c in candidates],
             "groups": groups}
 
