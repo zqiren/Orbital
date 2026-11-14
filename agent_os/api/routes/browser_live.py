@@ -746,6 +746,10 @@ class _LiveStream:
         """Queue one input item, merging into the newest queued item when
         both are moves (newest wins) or both are wheels (deltas add up)."""
         self._count_input(count_key)
+        # Spec 175: user input keeps the agent browser from its idle close.
+        note_use = getattr(self._bm, "note_use", None)
+        if callable(note_use):
+            note_use()
         merge = item.get("merge")
         queue = self._input_queue
         if merge and queue and queue[-1].get("merge") == merge:
