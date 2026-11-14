@@ -23,6 +23,20 @@
  *      `attachments` payload and the daemon writes the `<attached_files>`
  *      prefix, exactly as the chat composer sends them.
  *
+ * Spec 180 §5.2 — while 自动 picks, the pending card shows a shimmering 自动
+ * where the name will land, and the user may decide first. One decision per
+ * send, the first one wins:
+ *   - the route answer (`by: model | fallback` is stamped on the session as
+ *     `routed_by`, so its card carries ✦);
+ *   - a project picked on the card (`choosePending`): the send goes there at
+ *     once, unmarked; a route answer arriving later is ignored;
+ *   - ✕ (`unsendPending`): nothing is minted or uploaded, the card leaves and
+ *     the text returns to the composer, with no error line.
+ * A route answer that arrives while the card's picker is open waits until it
+ * closes (`holdPending`): a pick there wins, a close without one applies it.
+ * The cutoff is the route answer: after it the pending card's project only
+ * shows (the card that carries the session is the one that moves it).
+ *
  * Routing that finds no project (2026-11-07: the call failed after its one
  * retry, `by: "failed"`) is not a send: nothing is minted or uploaded, the
  * text comes back and the outcome says `unrouted`, so the composer shows its
@@ -118,6 +132,9 @@ export interface SendDeps {
   injectMessage: (
     projectId: string, content: string, target?: string, nonce?: string,
     attachments?: UploadedAttachment[], sessionId?: string, pinned?: boolean,
+    skill?: undefined, answering?: undefined,
+    /** Spec 180: the route chose the project; stamped when the send creates the session. */
+    routedBy?: RoutedBy,
   ) => Promise<unknown>;
   /** Upload the staged chips with these ids into the project (throws when
    *  one fails). Required when the choice carries attachments. */
@@ -149,8 +166,74 @@ export interface SendChoice {
 
 export type SendOutcome =
   | { ok: true; projectId: string; sessionId: string }
-  /** `unrouted`: 自动 found no project; the user picks one. */
-  | { ok: false; restored: boolean; unrouted?: boolean };
+  /** `unrouted`: 自动 found no project; the user picks one. `unsent`: ✕ while
+   *  picking — the text is back, nothing went out, nothing to report. */
+  | { ok: false; restored: boolean; unrouted?: boolean; unsent?: boolean };
+
+export type RoutedBy = 'model' | 'fallback';
+
+type Decision =
+  | { kind: 'pick'; projectId: string }
+  | { kind: 'unsend' }
+  | { kind: 'route'; projectId: string | null; by: unknown }
+  | { kind: 'routeError' };
+
+interface Decider {
+  decide: (d: Decision) => void;
+  hold: (open: boolean) => void;
+}
+
+/** The sends still picking, by nonce. */
+const deciders = new Map<string, Decider>();
+
+/** A route answer that waited for the card's picker applies this long after
+ *  the picker closed without a pick (the prototype's beat). */
+export const HOLD_RELEASE_MS = 400;
+
+/** A project picked on a picking card: the send goes there, unmarked. */
+export function choosePending(nonce: string, projectId: string): void {
+  deciders.get(nonce)?.decide({ kind: 'pick', projectId });
+}
+
+/** ✕ on a picking card: the send stops before anything is minted. */
+export function unsendPending(nonce: string): void {
+  deciders.get(nonce)?.decide({ kind: 'unsend' });
+}
+
+/** The card's picker opened (true) or closed (false) while picking. */
+export function holdPending(nonce: string, open: boolean): void {
+  deciders.get(nonce)?.hold(open);
+}
+
+/** The first of: the route answer (held while the card's picker is open),
+ *  a pick on the card, ✕. */
+function decide(nonce: string, route: Promise<Decision>): Promise<Decision> {
+  return new Promise<Decision>((resolve) => {
+    let done = false;
+    let held = false;
+    let due: Decision | null = null;
+    const finish = (d: Decision) => {
+      if (done) return;
+      done = true;
+      deciders.delete(nonce);
+      resolve(d);
+    };
+    deciders.set(nonce, {
+      decide: finish,
+      hold: (open) => {
+        held = open;
+        if (!open && due) {
+          const waiting = due;
+          setTimeout(() => { if (!held) finish(waiting); }, HOLD_RELEASE_MS);
+        }
+      },
+    });
+    void route.then((d) => {
+      if (held) due = d;
+      else finish(d);
+    });
+  });
+}
 
 export async function sendWorkbenchTask(choice: SendChoice, deps: SendDeps): Promise<SendOutcome> {
   const text = choice.text.trim();
@@ -163,25 +246,43 @@ export async function sendWorkbenchTask(choice: SendChoice, deps: SendDeps): Pro
     nonce, text: text || files.map((f) => f.filename).join(', '),
     project_id: choice.projectId, session_id: null,
     agent: choice.agent, created_at: Date.now(),
+    routing: !choice.projectId,
   });
 
   let projectId = choice.projectId;
   let sessionId: string | null = null;
   let unrouted = false;
+  let routedBy: RoutedBy | undefined;
   try {
     if (!projectId) {
-      const routed = await api<{ project_id?: string | null }>('/api/v2/workbench/route', {
+      const route = api<{ project_id?: string | null; by?: unknown }>('/api/v2/workbench/route', {
         method: 'POST',
         body: JSON.stringify({ text: routeText(text, files) }),
-      });
-      projectId = routed?.project_id ?? null;
-      if (!projectId) {
-        unrouted = true;
-        throw new Error('no project to route to');
+      }).then(
+        (r): Decision => ({ kind: 'route', projectId: r?.project_id ?? null, by: r?.by }),
+        (): Decision => ({ kind: 'routeError' }),
+      );
+      const d = await decide(nonce, route);
+      if (d.kind === 'unsend') {
+        clearDraft();
+        removePending(nonce);
+        restoreComposer(text);
+        return { ok: false, restored: true, unsent: true };
+      }
+      if (d.kind === 'routeError') throw new Error('route failed');
+      if (d.kind === 'pick') {
+        projectId = d.projectId;
+      } else {
+        projectId = d.projectId;
+        if (!projectId) {
+          unrouted = true;
+          throw new Error('no project to route to');
+        }
+        if (d.by === 'model' || d.by === 'fallback') routedBy = d.by;
       }
       draft.project_id = projectId;
       saveDraft(draft);
-      updatePending(nonce, { project_id: projectId });
+      updatePending(nonce, { project_id: projectId, routing: false, routed_by: routedBy ?? null });
     }
     let attachments: UploadedAttachment[] | undefined;
     if (files.length > 0) {
@@ -200,7 +301,7 @@ export async function sendWorkbenchTask(choice: SendChoice, deps: SendDeps): Pro
     await deps.injectMessage(
       projectId, text, target, nonce,
       attachments && attachments.length > 0 ? attachments : undefined,
-      sessionId, !!target,
+      sessionId, !!target, undefined, undefined, routedBy,
     );
     clearDraft();
     void refreshFeed();

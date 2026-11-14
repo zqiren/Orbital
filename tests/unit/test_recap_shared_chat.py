@@ -30,7 +30,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from agent_os.daemon_v2.recap import (
-    RECAP_CAP_CHARS,
+    RECAP_CAP_BYTES,
     REPLY_CAP_CHARS,
     build_recap,
 )
@@ -226,9 +226,13 @@ class TestRecapSizeAndOrder:
     def test_total_cap_evicts_oldest_first(self):
         rows = [_user(f"message number {i} " + "x" * 400) for i in range(200)]
         recap = build_recap(rows, "codex", fresh=False)
-        assert len(recap) < RECAP_CAP_CHARS + 500
+        # Spec 181: the whole rendered block, in UTF-8 bytes.
+        assert len(recap.encode("utf-8")) <= RECAP_CAP_BYTES
         assert "message number 199 " in recap
-        assert "message number 0 " not in recap
+        # The first user message is kept; the next oldest are cut.
+        assert "message number 0 " in recap
+        assert "message number 1 " not in recap
+        assert "earlier messages of this conversation are not shown" in recap
 
     def test_chronological_order_and_frame(self):
         rows = [_user("first"), _assistant("second"), _user("third")]

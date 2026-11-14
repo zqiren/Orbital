@@ -56,6 +56,12 @@ class AgentTransport(ABC):
     # files, through the CLI's own permission mechanism.
     _read_grants = None
 
+    # Spec 181: ``(context_window, tokens_in_use)`` for this thread, exactly as
+    # the agent itself last reported them (Codex's ``thread/tokenUsage``,
+    # Claude Code's result ``modelUsage``), else None. Read only to shrink
+    # the hand-off budget; never a table of model ids.
+    reported_context: tuple[int, int] | None = None
+
     def set_read_grants(self, grants) -> None:
         """``grants()`` → the realpaths this worker may read (attached files)."""
         self._read_grants = grants

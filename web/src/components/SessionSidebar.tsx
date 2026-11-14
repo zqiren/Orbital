@@ -73,7 +73,7 @@ import { useSessions } from '../hooks/useSessions';
 import { useSeenReplies } from '../hooks/useSeenReplies';
 import { hasUnseenReply, seenKey } from '../utils/sessionUnread';
 import { isWaiting } from '../utils/waitingOnYou';
-import type { SessionListEntry } from '../types';
+import type { Project, SessionListEntry } from '../types';
 import { SessionListItem } from './SessionListItem';
 import { formatRelativeTime } from '../utils/relativeTime';
 import { getStatusDisplay, rowDisplayStatus } from './sessionStatus';
@@ -147,7 +147,14 @@ export interface SessionSidebarProps {
    * faint "was here" mark instead of the selected fill.
    */
   pageOpen?: boolean;
+  /** Spec 180: every project, sidebar order — the 移动到项目… picker. */
+  projects?: readonly Project[];
+  /** Spec 180: a session moved to another project (same id). */
+  onSessionMoved?: (sessionId: string, toProjectId: string) => void;
 }
+
+/** The row's fold-out (workbench.css `.session-row.is-gone`). */
+const MOVE_FOLD_MS = 340;
 
 export function SessionSidebar({
   projectId,
@@ -156,8 +163,10 @@ export function SessionSidebar({
   onSessionSelect,
   onSessionDeleted,
   pageOpen = false,
+  projects,
+  onSessionMoved,
 }: SessionSidebarProps) {
-  const { sessions, loading, renameSession, pinSession, deleteSession } =
+  const { sessions, loading, renameSession, pinSession, deleteSession, moveSession } =
     useSessions(projectId);
   const t = useT();
 
@@ -306,6 +315,20 @@ export function SessionSidebar({
     [deleteSession, onSessionDeleted, sortedSessions],
   );
 
+  const handleMove = useCallback(
+    async (sessionId: string, toProjectId: string) => {
+      try {
+        const res = await moveSession(sessionId, toProjectId, MOVE_FOLD_MS);
+        onSessionMoved?.(res.session_id, res.project_id);
+      } catch (e) {
+        // The row comes back; the session stays where it was.
+        console.error('Failed to move session', e);
+        throw e;
+      }
+    },
+    [moveSession, onSessionMoved],
+  );
+
   function renderRow(session: SessionListEntry, inGroup = false) {
     const current = selectedSessionId === session.session_id;
     const selected = current && !pageOpen;
@@ -324,6 +347,9 @@ export function SessionSidebar({
         onRename={handleRename}
         onPin={handlePin}
         onDelete={handleDelete}
+        onMove={projects ? handleMove : undefined}
+        moveProjects={projects}
+        projectId={projectId}
       />
     );
   }

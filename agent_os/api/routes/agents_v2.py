@@ -8,6 +8,7 @@ All endpoints use /api/v2/ prefix. No v1 routes. snake_case in request/response.
 """
 
 import asyncio
+import inspect
 import hashlib
 import json
 import logging
@@ -291,6 +292,10 @@ class InjectRequest(BaseModel):
     # a project run in parallel (spec 155): naming one never waits for
     # another.
     session_id: str | None = None
+    # Spec 180: the Workbench routed this send ("Orbital chose this
+    # project"). Stamped on the session only when this send creates it; an
+    # older daemon ignores it.
+    routed_by: Literal["model", "fallback"] | None = None
 
     @field_validator("content")
     @classmethod
@@ -1893,6 +1898,21 @@ async def inject_message(project_id: str, req: InjectRequest):
     project = _project_store.get_project(project_id)
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
+    # Spec 180: a send into a session that is being (or was) moved to
+    # another project goes there; the answer names that project so the
+    # sender's client follows.
+    moved_to = None
+    redirect = getattr(_agent_manager, "move_redirect", None)
+    if req.session_id and callable(redirect):
+        pending = redirect(project_id, req.session_id)
+        moved_to = await pending if inspect.isawaitable(pending) else None
+    if isinstance(moved_to, str) and moved_to != project_id:
+        logger.info("inject: %s moved %s -> %s; delivering there",
+                    req.session_id, project_id, moved_to)
+        body = await inject_message(moved_to, req)
+        body = dict(body) if isinstance(body, dict) else {"status": body}
+        body["project_id"] = moved_to
+        return body
     await _ensure_seeded(project_id)
     await _materialize_if_imported(project_id, req.session_id)
     from agent_os.onboarding.session_import import is_imported_session_id
@@ -2009,6 +2029,7 @@ async def inject_message(project_id: str, req: InjectRequest):
             mention_session_id = await _retry_session_lock(
                 lambda: _agent_manager.persist_mention_message(
                     project_id, inject_session_id, user_msg,
+                    **({"routed_by": req.routed_by} if req.routed_by else {}),
                 ))
         except FileLockError:
             # Still contended after the whole backoff budget: refuse cleanly
@@ -2124,6 +2145,7 @@ async def inject_message(project_id: str, req: InjectRequest):
             result = await _agent_manager.inject_message(
                 project_id, effective_content + turn_note, nonce=req.nonce,
                 session_id=req.session_id,
+                **({"routed_by": req.routed_by} if req.routed_by else {}),
             )
         except ProviderConfigError as e:
             # Auto-start could not construct the LLM provider (missing/invalid
@@ -2437,6 +2459,9 @@ class SessionPatchRequest(BaseModel):
     name: str | None = None
     pinned: bool | None = None
     pinned_target: str | None = None
+    # Spec 180: clear-only. ``{"routed_by": null}`` removes the "Orbital chose
+    # this project" mark (the user opened the card); any value is a 422.
+    routed_by: None = None
 
 
 # Back-compat alias: this body used to be rename-only.
@@ -2461,7 +2486,8 @@ async def patch_session(project_id: str, session_id: str, req: SessionPatchReque
     if _project_store is not None and _project_store.get_project(project_id) is None:
         raise HTTPException(status_code=404, detail="Project not found")
     target_set = "pinned_target" in req.model_fields_set
-    if req.name is None and req.pinned is None and not target_set:
+    clear_routed = "routed_by" in req.model_fields_set
+    if req.name is None and req.pinned is None and not target_set and not clear_routed:
         raise HTTPException(status_code=400, detail="nothing to update")
     name = None
     if req.name is not None:
@@ -2489,6 +2515,8 @@ async def patch_session(project_id: str, session_id: str, req: SessionPatchReque
                 detail=f"Unknown or uninstalled sub-agent {slug!r}",
             )
     patch_kwargs: dict = {"name": name, "pinned": req.pinned}
+    if clear_routed:
+        patch_kwargs["clear_routed_by"] = True
     if target_set:
         patch_kwargs["pinned_target"] = req.pinned_target
         # The project's sticky pin follows the user's last choice (keyless
@@ -2522,6 +2550,10 @@ async def patch_session(project_id: str, session_id: str, req: SessionPatchReque
         raise HTTPException(
             status_code=503, detail="Chat session is busy — please retry")
     result: dict = {"status": "patched", "session_id": session_id}
+    if clear_routed:
+        result["routed_by"] = None
+        # The other device drops the mark too.
+        _broadcast_workbench_changed(project_id)
     if name is not None:
         result["name"] = name
     if req.pinned is not None:
@@ -2699,6 +2731,52 @@ async def fork_session(project_id: str, session_id: str, req: ForkSessionRequest
     except FileLockError:
         raise HTTPException(
             status_code=503, detail="Chat session is busy — please retry")
+
+
+class MoveSessionRequest(BaseModel):
+    """Spec 180: the project the session moves to."""
+    to_project_id: str
+
+
+def _broadcast_workbench_changed(project_id: str) -> None:
+    if _ws_manager is not None:
+        _ws_manager.broadcast(project_id, {"type": "workbench.changed",
+                                           "project_id": project_id})
+
+
+@router.post("/agents/{project_id}/sessions/{session_id}/move")
+async def move_session(project_id: str, session_id: str, req: MoveSessionRequest):
+    """Spec 180: move a session (its transcript, its sub-agent transcripts,
+    its images) to another project. The session keeps its id; a running task
+    is stopped and restarts in the new project; no file the agent made is
+    touched in either project. The old log is kept under
+    ``orbital/sessions/.moved/``.
+
+    - 404 ``Project not found`` / ``Session not found``
+    - 400 ``same_project`` / ``destination_missing`` / ``not_movable``
+    - 409 ``moving`` (a move of this session is in flight) /
+      ``destination_exists``
+    - 503 while the session file stays locked
+    - 200 ``{project_id: <destination>, session_id, woke}``; then
+      ``workbench.changed`` for both projects.
+    """
+    from agent_os.daemon_v2.session_move import MoveError
+    if _project_store is not None and _project_store.get_project(project_id) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    await _materialize_if_imported(project_id, session_id)
+    try:
+        result = await _agent_manager.move_session(
+            project_id, session_id, to_project_id=req.to_project_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Session not found")
+    except MoveError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.code)
+    except FileLockError:
+        raise HTTPException(
+            status_code=503, detail="Chat session is busy — please retry")
+    _broadcast_workbench_changed(project_id)
+    _broadcast_workbench_changed(req.to_project_id)
+    return result
 
 
 @router.delete("/agents/{project_id}/sessions/{session_id}")

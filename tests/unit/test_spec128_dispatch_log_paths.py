@@ -27,7 +27,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from agent_os.daemon_v2.recap import (
-    RECAP_CAP_CHARS,
+    RECAP_CAP_BYTES,
     SOURCE_LOGS_HEADER,
     build_recap,
     format_source_logs,
@@ -350,10 +350,10 @@ class TestDispatchCarriesThePaths:
         await mgr._dispatch_prompt_locked(_adapter(), _prompt("go"),
                                           "proj", SID, "codex")
         sent = mgr._dispatch_async.await_args.args[3]
-        assert "message number 0 " not in sent  # recap cap still bites
+        assert "message number 1 " not in sent  # recap cap still bites
         assert '"/c/cc-1.jsonl"' in sent
         assert f'"{CHAT_LOG}"' in sent
-        assert len(sent) < RECAP_CAP_CHARS + 1000
+        assert len(sent.encode("utf-8")) < RECAP_CAP_BYTES + 1000
 
     @pytest.mark.asyncio
     async def test_fifo_drain_resolves_at_dispatch_time(self):

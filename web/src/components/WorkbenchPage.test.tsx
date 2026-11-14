@@ -151,7 +151,8 @@ describe('Workbench — list', () => {
     fireEvent.change(screen.getByTestId('wb-composer-input'), { target: { value: 'Brand new task' } });
     fireEvent.click(screen.getByTestId('wb-composer-send'));
     expect(cards()[0]).toHaveTextContent('Brand new task');
-    expect(cards()[0]).toHaveTextContent('Starting…');
+    // Still routing (spec 180): the project's place reads 自动.
+    expect(within(cards()[0]).getByTestId('wb-card-project')).toHaveTextContent('Auto');
   });
 
   it('desktop: one greeting line heads the composer, the cards follow straight under it (2026-11-05)', async () => {
@@ -198,7 +199,8 @@ describe('Workbench — list', () => {
       const c = cardWith(name);
       expect(within(c).queryByTestId('wb-card-confirm')).toBeNull();
       expect(within(c).queryByTestId('wb-card-reply')).toBeNull();
-      expect(within(c).queryAllByRole('button').map((b) => b.getAttribute('data-testid'))).toEqual(['wb-card-title']);
+      // The title, and the project name (spec 180: it opens the picker).
+      expect(within(c).queryAllByRole('button').map((b) => b.getAttribute('data-testid'))).toEqual(['wb-card-title', 'wb-card-project']);
     }
     const done = cardWith('Hero copy');
     expect(within(done).getByTestId('wb-card-confirm')).toBeInTheDocument();
@@ -425,10 +427,14 @@ describe('Workbench — send', () => {
     const input = screen.getByTestId('wb-composer-input');
     fireEvent.change(input, { target: { value: 'Write the weekly report' } });
     fireEvent.click(screen.getByTestId('wb-composer-send'));
-    // The pending card shows at once, with 正在开始….
-    expect(cardWith('Write the weekly report')).toHaveTextContent('Starting…');
+    // The pending card shows at once; while Orbital picks, the project's
+    // place reads 自动 (spec 180) and there is no 正在开始… yet.
+    const pending = cardWith('Write the weekly report');
+    expect(within(pending).getByTestId('wb-card-project')).toHaveTextContent('Auto');
+    expect(pending).not.toHaveTextContent('Starting…');
     await waitFor(() => expect(injected).not.toBeNull());
-    expect(injected).toMatchObject({ content: 'Write the weekly report', target: 'codex', session_id: 'new-1', pinned: true });
+    // Orbital chose the project: the session is stamped for the card's ✦.
+    expect(injected).toMatchObject({ content: 'Write the weekly report', target: 'codex', session_id: 'new-1', pinned: true, routed_by: 'model' });
     expect(input).toHaveValue('');
     expect(screen.getByTestId('wb-chip-project')).toHaveTextContent('Auto');
     expect(localStorage.getItem(DRAFT_KEY)).toBeNull();
@@ -607,7 +613,7 @@ describe('Workbench — attachments (stage in the composer, upload at send)', ()
     stage('a.txt', 'b.txt');
     fireEvent.change(screen.getByTestId('wb-composer-input'), { target: { value: 'Summarise these' } });
     fireEvent.click(screen.getByTestId('wb-composer-send'));
-    expect(cardWith('Summarise these')).toHaveTextContent('Starting…');
+    expect(within(cardWith('Summarise these')).getByTestId('wb-card-project')).toHaveTextContent('Auto');
     await waitFor(() => expect(injected).not.toBeNull());
     expect(routed).toEqual({ text: 'Summarise these\n\n<attached_files>\n- a.txt\n- b.txt\n</attached_files>' });
     expect(order).toEqual(['route', 'upload proj-b', 'upload proj-b', 'mint', 'inject']);
@@ -952,5 +958,244 @@ describe('Workbench — keyless (no API key: Quick Tasks is not manager_ready)',
     expect(auto).not.toHaveAttribute('aria-disabled');
     expect(auto).toHaveAttribute('aria-selected', 'true');
     expect(auto).not.toHaveTextContent('Needs an API key');
+  });
+});
+
+describe('Workbench — spec 180: where a task goes, and moving it', () => {
+  function deferred<T>() {
+    let resolve!: (v: T) => void;
+    const promise = new Promise<T>((r) => { resolve = r; });
+    return { promise, resolve };
+  }
+  const calls = (suffix: string) => apiMock.mock.calls.filter((c) => String(c[0]).endsWith(suffix));
+  const project = (card: HTMLElement) => within(card).getByTestId('wb-card-project');
+  const mark = (card: HTMLElement) => within(card).getByTestId('wb-card-mark');
+  const cardPicker = () => screen.queryByTestId('wb-pop-card-project');
+
+  async function sendOnAuto(text: string, extra: typeof routes) {
+    await renderPage([], extra);
+    fireEvent.change(screen.getByTestId('wb-composer-input'), { target: { value: text } });
+    fireEvent.click(screen.getByTestId('wb-composer-send'));
+    return cardWith(text);
+  }
+
+  it('while Orbital picks: a shimmering 自动 with ✦ and a chevron, no detail, ✕ to unsend', async () => {
+    const route = deferred<unknown>();
+    const card = await sendOnAuto('Draft the budget', { 'POST /api/v2/workbench/route': () => route.promise });
+    expect(project(card)).toHaveTextContent('Auto');
+    expect(project(card).querySelector('.wb-shim')).not.toBeNull();
+    expect(project(card).querySelector('.wb-cv')).not.toBeNull();
+    expect(project(card)).toHaveAttribute('aria-label', 'Project: Auto');
+    expect(mark(card)).toHaveAttribute('data-on', 'true');
+    expect(card).not.toHaveTextContent('Starting…');
+    expect(within(card).getByTestId('wb-card-unsend')).toHaveAttribute('aria-label', 'Unsend');
+    expect(within(card).queryByTestId('wb-card-confirm')).toBeNull();
+  });
+
+  it('the picker on a picking card: 自动 ticked on top, then the Workbench projects; a project sends there, unmarked', async () => {
+    const route = deferred<unknown>();
+    let injected: Record<string, unknown> | null = null;
+    const card = await sendOnAuto('Draft the budget', {
+      'POST /api/v2/workbench/route': () => route.promise,
+      'POST /api/v2/agents/proj-a/new-session': () => ({ session_id: 'n-a', pinned_target: null }),
+      'POST /api/v2/agents/proj-a/inject': (init) => { injected = JSON.parse(init!.body!); return { status: 'started' }; },
+    });
+    fireEvent.click(project(card));
+    const pop = cardPicker()!;
+    expect(within(pop).getByTestId('wb-opt-auto')).toHaveAttribute('aria-selected', 'true');
+    expect(within(pop).queryByText('Private')).toBeNull();
+    fireEvent.click(within(pop).getByText('Marketing'));
+    await waitFor(() => expect(injected).not.toBeNull());
+    expect(injected).toMatchObject({ content: 'Draft the budget', session_id: 'n-a' });
+    expect(injected).not.toHaveProperty('routed_by');
+    // The route answering later changes nothing.
+    await act(async () => { route.resolve({ project_id: 'proj-b', by: 'model' }); });
+    expect(calls('/agents/proj-b/new-session')).toHaveLength(0);
+  });
+
+  it('✕ while picking: the card leaves, the text is back in the composer, nothing minted, no error line', async () => {
+    const route = deferred<unknown>();
+    const card = await sendOnAuto('Never mind', { 'POST /api/v2/workbench/route': () => route.promise });
+    fireEvent.click(within(card).getByTestId('wb-card-unsend'));
+    await waitFor(() => expect(screen.getByTestId('wb-composer-input')).toHaveValue('Never mind'));
+    await waitFor(() => expect(cards()).toHaveLength(0));
+    await act(async () => { route.resolve({ project_id: 'proj-b', by: 'model' }); });
+    expect(calls('/new-session')).toHaveLength(0);
+    expect(screen.queryByTestId('wb-route-error')).toBeNull();
+    expect(screen.queryByTestId('workbench-open-error')).toBeNull();
+    expect(localStorage.getItem(DRAFT_KEY)).toBeNull();
+  });
+
+  it('a route answer while the card\'s picker is open waits; closing without a pick applies it', async () => {
+    const route = deferred<unknown>();
+    let injected: Record<string, unknown> | null = null;
+    const card = await sendOnAuto('Weekly numbers', {
+      'POST /api/v2/workbench/route': () => route.promise,
+      'POST /api/v2/agents/proj-b/new-session': () => ({ session_id: 'n-b', pinned_target: null }),
+      'POST /api/v2/agents/proj-b/inject': (init) => { injected = JSON.parse(init!.body!); return { status: 'started' }; },
+    });
+    fireEvent.click(project(card));
+    await act(async () => { route.resolve({ project_id: 'proj-b', by: 'model' }); });
+    // Held: still picking, the picker still open.
+    expect(cardPicker()).not.toBeNull();
+    expect(project(card)).toHaveTextContent('Auto');
+    expect(calls('/new-session')).toHaveLength(0);
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(cardPicker()).toBeNull();
+    await waitFor(() => expect(injected).not.toBeNull());
+    expect(injected).toMatchObject({ session_id: 'n-b', routed_by: 'model' });
+  });
+
+  it('routed: the name lands with ✦; the pending card\'s name does not open a picker until the session exists', async () => {
+    const mint = deferred<unknown>();
+    const card = await sendOnAuto('Plan the offsite', {
+      'POST /api/v2/workbench/route': () => ({ project_id: 'proj-b', by: 'fallback' }),
+      'POST /api/v2/agents/proj-b/new-session': () => mint.promise,
+    });
+    await waitFor(() => expect(project(card)).toHaveTextContent('Ops'));
+    expect(mark(card)).toHaveAttribute('data-on', 'true');
+    expect(mark(card)).toHaveAttribute('title', 'Picked automatically');
+    expect(card).toHaveTextContent('Starting…');
+    expect(within(card).queryByTestId('wb-card-unsend')).toBeNull();
+    fireEvent.click(project(card));
+    expect(cardPicker()).toBeNull();
+  });
+
+  it('could not pick a project: unchanged (text back, one error line, the composer picker open)', async () => {
+    await sendOnAuto('记一个问题', {
+      'POST /api/v2/workbench/route': () => ({ project_id: null, by: 'failed', reason: 'timeout' }),
+    });
+    await waitFor(() => expect(screen.getByTestId('wb-route-error')).toBeInTheDocument());
+    expect(screen.getByTestId('wb-composer-input')).toHaveValue('记一个问题');
+    expect(screen.getByTestId('wb-pop-project')).toBeInTheDocument();
+    expect(cards()).toHaveLength(0);
+  });
+
+  it('✦ shows on a card Orbital routed; opening it (title) clears it here and for every device', async () => {
+    let patched: unknown = null;
+    await renderPage([row({ session_id: 'r1', session_uuid: 'r1', name: 'Routed one', routed_by: 'model' })], {
+      'PATCH /api/v2/agents/proj-a/sessions/r1': (init) => { patched = JSON.parse(init!.body!); return { status: 'patched' }; },
+    });
+    expect(mark(cardWith('Routed one'))).toHaveAttribute('data-on', 'true');
+    fireEvent.click(within(cardWith('Routed one')).getByTestId('wb-card-title'));
+    expect(mark(cardWith('Routed one'))).toHaveAttribute('data-on', 'false');
+    expect(patched).toEqual({ routed_by: null });
+  });
+
+  it('✦ also folds away when the card is opened in the reading pane; a card the user picked has none', async () => {
+    let patched = 0;
+    await renderPage([
+      row({ session_id: 'r1', session_uuid: 'r1', name: 'Routed one', routed_by: 'fallback' }),
+      row({ session_id: 'u1', session_uuid: 'u1', name: 'Picked one', last_reply_at: iso(25) }),
+    ], {
+      'PATCH /api/v2/agents/proj-a/sessions/r1': () => { patched += 1; return { status: 'patched' }; },
+    });
+    expect(mark(cardWith('Picked one'))).toHaveAttribute('data-on', 'false');
+    fireEvent.click(cardWith('Routed one'));
+    expect(mark(cardWith('Routed one'))).toHaveAttribute('data-on', 'false');
+    expect(patched).toBe(1);
+    // A feed that still carries the mark (the PATCH not landed yet) keeps it hidden.
+    await act(async () => { await refreshFeed(); });
+    expect(mark(cardWith('Routed one'))).toHaveAttribute('data-on', 'false');
+  });
+
+  it('after routing the picker has no 自动, the current project ticked; another project moves the session and the card stays put', async () => {
+    let moved: unknown = null;
+    const feed = [
+      row({ session_id: 'm1', session_uuid: 'm1', name: 'Move me', routed_by: 'model', last_reply_at: iso(3) }),
+      row({ session_id: 'other', session_uuid: 'other', name: 'Older', last_reply_at: iso(40) }),
+    ];
+    const { setRoute } = await renderPage(feed, {
+      'POST /api/v2/agents/proj-a/sessions/m1/move': (init) => {
+        moved = JSON.parse(init!.body!);
+        return { project_id: 'proj-b', session_id: 'm1', woke: false };
+      },
+    });
+    const before = cards().map((c) => c.textContent);
+    const card = cardWith('Move me');
+    fireEvent.click(project(card));
+    const pop = cardPicker()!;
+    expect(within(pop).queryByTestId('wb-opt-auto')).toBeNull();
+    expect(within(pop).getByTestId('wb-opt-project-proj-a')).toHaveAttribute('aria-selected', 'true');
+    expect(within(pop).queryByText('Private')).toBeNull();
+    // The pick does not select the card or open the session under it.
+    fireEvent.click(within(pop).getByText('Ops'));
+    expect(setRoute).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('wb-pane')).toBeNull();
+    await waitFor(() => expect(project(cardWith('Move me'))).toHaveTextContent('Ops'));
+    expect(moved).toEqual({ to_project_id: 'proj-b' });
+    // Same card (keyed by its session), same place, ✦ gone.
+    expect(cardWith('Move me')).toBe(card);
+    expect(cards()[0]).toBe(card);
+    expect(cards()).toHaveLength(before.length);
+    expect(mark(card)).toHaveAttribute('data-on', 'false');
+  });
+
+  it('picking the current project only closes the picker', async () => {
+    await renderPage([row({ session_id: 'm1', session_uuid: 'm1', name: 'Stay' })]);
+    fireEvent.click(project(cardWith('Stay')));
+    fireEvent.click(within(cardPicker()!).getByText('Marketing'));
+    expect(cardPicker()).toBeNull();
+    expect(calls('/move')).toHaveLength(0);
+  });
+
+  it('a running card: the dot rests while it moves, then the work continues in the new project', async () => {
+    const move = deferred<unknown>();
+    await renderPage([row({ project_id: 'proj-a', session_id: 'run1', session_uuid: 'run1', name: 'Long job', status: 'running', last_reply_at: null, last_user_at: iso(1) })], {
+      'POST /api/v2/agents/proj-a/sessions/run1/move': () => move.promise,
+    });
+    const card = cardWith('Long job');
+    fireEvent.click(project(card));
+    fireEvent.click(within(cardPicker()!).getByText('Ops'));
+    expect(card.querySelector('.wb-dot')!.className).toContain('is-idle');
+    expect(project(card)).toHaveTextContent('Marketing');
+    expect(project(card)).toHaveAttribute('aria-disabled', 'true');
+    setApi({
+      ...routes,
+      'GET /api/v2/workbench/feed': () => ({ rows: [row({ project_id: 'proj-b', session_id: 'run1', session_uuid: 'run1', name: 'Long job', status: 'idle', last_reply_at: null, last_user_at: iso(1) })] }),
+    });
+    await act(async () => { move.resolve({ project_id: 'proj-b', session_id: 'run1', woke: true }); });
+    await waitFor(() => expect(project(card)).toHaveTextContent('Ops'));
+    expect(card).toHaveTextContent('Starting…');
+  });
+
+  it('a running card moved below a newer one keeps its place (the restart is not an answer)', async () => {
+    await renderPage([
+      row({ project_id: 'proj-b', session_id: 'newer', session_uuid: 'newer', name: 'Newer job', status: 'running', last_reply_at: null, last_user_at: iso(1) }),
+      row({ project_id: 'proj-a', session_id: 'older', session_uuid: 'older', name: 'Older job', status: 'running', last_reply_at: null, last_user_at: iso(10) }),
+    ], {
+      'POST /api/v2/agents/proj-a/sessions/older/move': () => ({ project_id: 'proj-b', session_id: 'older', woke: true }),
+    });
+    expect(cards().map((c) => c.textContent?.includes('Newer job'))).toEqual([true, false]);
+    fireEvent.click(project(cardWith('Older job')));
+    fireEvent.click(within(cardPicker()!).getByText('Ops'));
+    await waitFor(() => expect(project(cardWith('Older job'))).toHaveTextContent('Ops'));
+    expect(cards().map((c) => c.textContent?.includes('Newer job'))).toEqual([true, false]);
+    expect(cardWith('Older job')).toHaveTextContent('Starting…');
+  });
+
+  it('moving the selected card keeps the reading pane on it', async () => {
+    await renderPage([row({ session_id: 'm1', session_uuid: 'm1', name: 'Selected one' })], {
+      'POST /api/v2/agents/proj-a/sessions/m1/move': () => ({ project_id: 'proj-b', session_id: 'm1', woke: false }),
+    });
+    fireEvent.click(cardWith('Selected one'));
+    expect(screen.getByTestId('wb-pane')).toBeInTheDocument();
+    fireEvent.click(project(cardWith('Selected one')));
+    fireEvent.click(within(cardPicker()!).getByText('Ops'));
+    await waitFor(() => expect(project(cardWith('Selected one'))).toHaveTextContent('Ops'));
+    expect(cardWith('Selected one').getAttribute('data-selected')).toBe('true');
+    expect(screen.getByTestId('wb-pane')).toBeInTheDocument();
+    expect(chatView.last).toMatchObject({ projectId: 'proj-b', sessionId: 'm1' });
+  });
+
+  it('a move that fails: the old name stays and the page\'s error line shows', async () => {
+    await renderPage([row({ session_id: 'm1', session_uuid: 'm1', name: 'Stuck' })], {
+      'POST /api/v2/agents/proj-a/sessions/m1/move': () => { throw new Error('409 moving'); },
+    });
+    fireEvent.click(project(cardWith('Stuck')));
+    fireEvent.click(within(cardPicker()!).getByText('Ops'));
+    await waitFor(() => expect(screen.getByTestId('workbench-open-error')).toBeInTheDocument());
+    expect(project(cardWith('Stuck'))).toHaveTextContent('Marketing');
+    expect(cardWith('Stuck').querySelector('.wb-dot')!.className).not.toContain('is-idle');
   });
 });

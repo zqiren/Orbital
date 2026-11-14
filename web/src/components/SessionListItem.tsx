@@ -31,12 +31,19 @@
  * Delete: pick Delete from the menu → confirmation dialog → Delete confirms via
  * onDelete.
  *
+ * Move (spec 180): 移动到项目… opens the Workbench's project picker (no 自动
+ * row, every project, this one ticked) beside the row. A pick moves the
+ * session at once — a running one too, no confirmation — and the row folds
+ * out of this project's list. On a device with no hover (a touch screen) the
+ * ⋯ is always visible, so the menu is reachable without a long-press.
+ *
  * Active row: white bg + subtle shadow + font-weight 500.
  */
 
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { Pin } from 'lucide-react';
-import type { SessionListEntry } from '../types';
+import type { Project, SessionListEntry } from '../types';
+import { AnchoredProjectPicker } from './workbench/ProjectPicker';
 import { SessionStatusGlyph } from './SessionStatusGlyph';
 import { getStatusDisplay, rowDisplayStatus } from './sessionStatus';
 import { classifySessionName, type SessionKind } from '../lib/sessionLabel';
@@ -64,6 +71,16 @@ export interface SessionListItemProps {
   onPin?: (sessionId: string, pinned: boolean) => void | Promise<void>;
   /** Delete this session. Receives the sessionId. */
   onDelete?: (sessionId: string) => void | Promise<void>;
+  /**
+   * Spec 180: move this session to another project. Resolves when it moved
+   * (the row is gone from this list by then); rejects to put the row back.
+   * Absent: no 移动到项目… in the menu.
+   */
+  onMove?: (sessionId: string, toProjectId: string) => Promise<void>;
+  /** Spec 180: the move picker's projects (every project, sidebar order). */
+  moveProjects?: readonly Project[];
+  /** Spec 180: the project this row is in (ticked in the move picker). */
+  projectId?: string | null;
   /**
    * Drop the kind chip. Set for runs listed under their automation's group
    * header, which already states the kind — repeating it on every run only
@@ -93,6 +110,9 @@ function SessionListItemBase({
   onRename,
   onPin,
   onDelete,
+  onMove,
+  moveProjects,
+  projectId = null,
   hideKindChip = false,
   unread = false,
   wasHere = false,
@@ -102,6 +122,9 @@ function SessionListItemBase({
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [moveOpen, setMoveOpen] = useState(false);
+  const [gone, setGone] = useState(false);
+  const rowRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const t = useT();
@@ -180,6 +203,24 @@ function SessionListItemBase({
     setDraft('');
   }
 
+  async function moveTo(toProjectId: string) {
+    setMoveOpen(false);
+    if (!onMove || toProjectId === projectId) return;
+    // Fold the row out from its own height (prototype `.srow.gone`).
+    const el = rowRef.current;
+    if (el) {
+      el.style.height = `${el.offsetHeight}px`;
+      void el.offsetHeight;
+    }
+    setGone(true);
+    try {
+      await onMove(session.session_id, toProjectId);
+    } catch {
+      setGone(false);
+      if (rowRef.current) rowRef.current.style.height = '';
+    }
+  }
+
   function confirmDelete() {
     setConfirmingDelete(false);
     void onDelete?.(session.session_id);
@@ -187,6 +228,7 @@ function SessionListItemBase({
 
   return (
     <div
+      ref={rowRef}
       role="button"
       tabIndex={0}
       aria-selected={selected}
@@ -217,8 +259,9 @@ function SessionListItemBase({
           : undefined
       }
       className={[
-        'relative flex items-center gap-1.5 px-2.5 py-[7px] rounded-md cursor-pointer select-none transition-colors',
+        'session-row relative flex items-center gap-1.5 px-2.5 py-[7px] rounded-md cursor-pointer select-none transition-colors',
         selected ? 'font-medium text-selected-text' : 'hover:bg-card-hover',
+        gone ? 'is-gone' : '',
       ].join(' ')}
     >
       {/* Status glyph — only differentiating states (running/waiting/blocked/
@@ -344,10 +387,10 @@ function SessionListItemBase({
       {!editing && (
         <div
           ref={menuRef}
-          className="relative"
+          className="session-dots relative"
           data-testid="session-three-dot-menu"
-          style={{ visibility: hovered || selected || menuOpen ? 'visible' : 'hidden' }}
-          aria-hidden={!hovered && !selected && !menuOpen}
+          style={{ visibility: hovered || selected || menuOpen || moveOpen ? 'visible' : 'hidden' }}
+          aria-hidden={!hovered && !selected && !menuOpen && !moveOpen}
         >
           <button
             type="button"
@@ -398,6 +441,21 @@ function SessionListItemBase({
               >
                 {t('sessionItem.rename')}
               </button>
+              {onMove && moveProjects && moveProjects.length > 1 && (
+                <button
+                  type="button"
+                  role="menuitem"
+                  data-testid="session-action-move"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setMenuOpen(false);
+                    setMoveOpen(true);
+                  }}
+                  className="w-full text-left px-3 py-1.5 text-sm text-primary hover:bg-card-hover"
+                >
+                  {t('sessionItem.moveTo')}
+                </button>
+              )}
               <button
                 type="button"
                 role="menuitem"
@@ -414,6 +472,18 @@ function SessionListItemBase({
             </div>
           )}
         </div>
+      )}
+
+      {moveOpen && moveProjects && (
+        <AnchoredProjectPicker
+          anchor={rowRef.current}
+          placement="side"
+          projects={moveProjects}
+          selectedId={projectId}
+          onPick={(id) => void moveTo(id)}
+          onClose={() => setMoveOpen(false)}
+          testId="session-move-picker"
+        />
       )}
 
       {/* Delete confirmation dialog */}

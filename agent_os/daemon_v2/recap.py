@@ -27,9 +27,10 @@ end):
 * **Only user-visible messages** — user rows, manager text rows, and other
   workers' replies (from the completion row's stored ``_meta.reply``).
   Tool rows, status/lifecycle rows, and steering guidance never appear.
-* **No per-message truncation.** Only a generous total budget applies,
-  evicting oldest-first; the largest realistic message (a pasted form) must
-  arrive intact.
+* **No per-message truncation.** Only a total budget applies, in UTF-8
+  bytes for the whole rendered block (spec 181), evicting oldest-first; the
+  conversation's first user message is kept, and when anything is left out
+  a note says how many messages and which file holds them all.
 * **Worker-anonymous**: every prior reply is labeled ``assistant``.
 """
 
@@ -39,9 +40,20 @@ import json
 import re
 from typing import Callable
 
-# Total budget for one block. Measured on a full day's session: ~19k chars
-# of visible messages, so this only ever bites on a pathological paste.
-RECAP_CAP_CHARS = 60_000
+# Spec 181: the most the WHOLE rendered block (header, note, lines, joins,
+# footer) may weigh, in UTF-8 bytes. Bytes, not characters: a CJK character
+# costs 3 bytes and an ASCII one 1, which is roughly how tokens behave, so
+# this is ~15-20K tokens of prose in any script (it was 60,000 characters:
+# up to ~60K tokens of Chinese).
+RECAP_CAP_BYTES = 60_000
+
+# The budget's room term (T3 Code's handoffBudget shape): what the receiving
+# thread has left, charged one token per byte, minus a reserve for the
+# agent's own work. The window and usage come only from what the agent itself
+# reported for this thread; unknown → this window and nothing used, which
+# leaves the fixed cap in charge.
+DEFAULT_CONTEXT_WINDOW = 256_000
+_MIN_RESERVE_TOKENS = 16_000
 
 # Cap for the full reply stored on a completion row (``_meta.reply``). The
 # old 500-char summary stays as the timeline text.
@@ -134,6 +146,13 @@ def _visible_line(row: dict, handle: str, *, fresh: bool) -> str | None:
             return f"assistant: {content.strip()}"
         return None
     if role == "system":
+        # Spec 180: the move note is part of the conversation for every
+        # worker (each is a fresh spawn in the new project).
+        meta = row.get("_meta")
+        if isinstance(meta, dict) and meta.get("event") == "session_moved":
+            if isinstance(content, str) and content.strip():
+                return f"system: {content.strip()}"
+            return None
         completed = _completion_of(row)
         if completed is None:
             return None
@@ -145,22 +164,96 @@ def _visible_line(row: dict, handle: str, *, fresh: bool) -> str | None:
     return None
 
 
-def build_recap(messages: list[dict], handle: str, *, fresh: bool) -> str:
-    """Render the block for ``handle``; "" when it missed nothing."""
-    lines: list[str] = []
-    total = 0
-    for row in reversed(recap_scope(messages, handle, fresh=fresh)):
+def handoff_budget_bytes(*, message_bytes: int = 0,
+                         reported: tuple | None = None) -> int:
+    """The byte budget for one block: the fixed cap, shrunk (never grown) by
+    the room the receiving thread has left.
+
+    ``reported`` is ``(window, used)`` in tokens as the agent itself reported
+    them for this thread, or None. The user's own message is charged against
+    the room (it is never truncated)."""
+    window, used = DEFAULT_CONTEXT_WINDOW, 0
+    if (isinstance(reported, tuple) and len(reported) == 2
+            and all(isinstance(v, int) and not isinstance(v, bool) and v >= 0
+                    for v in reported)
+            and reported[0] > 0):
+        window, used = reported
+    reserve = max(_MIN_RESERVE_TOKENS, window // 4)
+    room = window - used - max(0, int(message_bytes)) - reserve
+    return max(0, min(RECAP_CAP_BYTES, room))
+
+
+def _utf8_len(text: str) -> int:
+    return len(text.encode("utf-8"))
+
+
+def _left_out_note(n: int, chat_log_path: str | None) -> str:
+    if n == 1:
+        head = ("(The 1 earlier message of this conversation is not shown "
+                "here.")
+    else:
+        head = (f"(The {n} earlier messages of this conversation are not "
+                f"shown here.")
+    if chat_log_path:
+        path = json.dumps(_portable_path(chat_log_path), ensure_ascii=False)
+        return (f"{head} The whole conversation is in the Orbital chat log: "
+                f"{path})")
+    return head + ")"
+
+
+def build_recap(messages: list[dict], handle: str, *, fresh: bool,
+                chat_log_path: str | None = None,
+                budget_bytes: int | None = None) -> str:
+    """Render the block for ``handle``; "" when it missed nothing.
+
+    The whole rendered block is at most ``budget_bytes`` UTF-8 bytes
+    (default ``RECAP_CAP_BYTES``). When every visible line fits, the block is
+    exactly the old shape. Otherwise: the first user message in scope (unless
+    it alone is over a quarter of the budget), then a note with the number of
+    lines left out and the chat log, then the newest lines that fit. When
+    nothing fits, the block is header + note + footer — never ""."""
+    budget = RECAP_CAP_BYTES if budget_bytes is None else max(0, budget_bytes)
+    lines: list[tuple[str, bool]] = []  # (line, is the user's own)
+    for row in recap_scope(messages, handle, fresh=fresh):
         line = _visible_line(row, handle, fresh=fresh)
-        if line is None:
-            continue
-        if total + len(line) > RECAP_CAP_CHARS:
-            break
-        lines.append(line)
-        total += len(line)
+        if line is not None:
+            lines.append((line, row.get("role") == "user"))
     if not lines:
         return ""
-    lines.reverse()
-    return _HEADER + "\n\n".join(lines) + _FOOTER
+    frame = _utf8_len(_HEADER) + _utf8_len(_FOOTER)
+    sizes = [_utf8_len(line) for line, _ in lines]
+    if frame + sum(sizes) + 2 * (len(lines) - 1) <= budget:
+        return _HEADER + "\n\n".join(line for line, _ in lines) + _FOOTER
+
+    # Eviction. The note is reserved at its largest (every line left out),
+    # whether or not it ends up that long, so the fill stays one pass; each
+    # kept line then costs its bytes plus the "\n\n" before it.
+    left = budget - frame - _utf8_len(_left_out_note(len(lines), chat_log_path))
+    first = next((i for i, (_, own) in enumerate(lines) if own), None)
+    if first is not None and (sizes[first] + 2 > budget / 4
+                              or sizes[first] + 2 > left):
+        first = None
+    if first is not None:
+        left -= sizes[first] + 2
+    kept: list[int] = []
+    for i in range(len(lines) - 1, -1, -1):
+        if i == first:
+            continue
+        if sizes[i] + 2 > left:
+            break
+        kept.append(i)
+        left -= sizes[i] + 2
+    kept.reverse()
+    if first is not None and kept and kept[0] < first:
+        # The fill reached past the first user message (lines before it are
+        # the agent's, e.g. an onboarding greeting): it sits in its own place.
+        kept = sorted(kept + [first])
+        first = None
+    n = len(lines) - len(kept) - (1 if first is not None else 0)
+    parts = ([lines[first][0]] if first is not None else [])
+    parts.append(_left_out_note(n, chat_log_path))
+    parts.extend(lines[i][0] for i in kept)
+    return _HEADER + "\n\n".join(parts) + _FOOTER
 
 
 # ---------------------------------------------------------------------------

@@ -91,7 +91,23 @@
 .wb-pop {
   position: absolute; z-index: 30; top: calc(100% + 6px); width: 260px; max-height: 360px; overflow-y: auto;
   background: var(--wb-layer); border-radius: 12px; box-shadow: var(--wb-pop); padding: 5px;
+  animation: wb-pop-in .16s cubic-bezier(.2,.7,.2,1);
 }
+@keyframes wb-pop-in { from { opacity: 0; transform: translateY(-4px) scale(.985); } }
+/* Spec 180: the same picker opened from a card or a session row lives in a
+ * portal, so it carries the Workbench tokens itself (the project page has
+ * no .wb-page around it). */
+.wb-pophost {
+  --wb-layer: var(--float-layer);
+  --wb-tint: rgb(83 154 248 / .09);
+  --wb-pop: var(--float-shadow-pop);
+  color: var(--color-primary); font-size: 13px; line-height: 1.45;
+}
+:root[data-theme="dark"] .wb-pophost { --wb-tint: rgb(83 154 248 / .14); }
+.wb-pop.is-anchored { position: fixed; z-index: 120; }
+/* The composer's text rises back in when a send returns it (✕, a failure). */
+.wb-input.is-back { animation: wb-back .45s cubic-bezier(.2,.7,.2,1); }
+@keyframes wb-back { from { opacity: 0; transform: translateY(6px); } }
 .wb-opt { display: flex; align-items: center; gap: 10px; width: 100%; padding: 7px 8px; border-radius: 8px; min-height: 36px; text-align: left; }
 .wb-opt:hover, .wb-opt:focus-visible { background: var(--wb-tint); outline: none; }
 .wb-opt .wb-tx { flex: 1; min-width: 0; }
@@ -154,23 +170,71 @@
 .wb-askdetail .markdown-content code { font-size: .9em; padding: .05em .3em; background: color-mix(in srgb, var(--color-muted) 13%, transparent); color: inherit; }
 .wb-askdetail .markdown-content pre { padding: 4px 8px; border: 0; background: color-mix(in srgb, var(--color-muted) 10%, transparent); }
 .wb-askdetail .markdown-content pre code { background: none; font-size: .9em; line-height: inherit; }
-.wb-meta { font-size: 12px; line-height: 1.4; color: var(--color-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* The meta line: logo · project · detail. A flex row so the project can be a
+ * button (spec 180) while the detail still ellipsises. */
+.wb-meta {
+  display: flex; align-items: center; min-width: 0; min-height: 17px;
+  font-size: 12px; line-height: 1.4; color: var(--color-muted); white-space: nowrap;
+}
 .wb-meta .wb-warn { color: var(--color-warning-text); }
-/* The meta line clips (overflow: hidden, for the ellipsis), so the mark stays
- * inside its line box: top-aligned, then pushed down by half the leftover
- * height, so it is centred and never grows or overflows the line. */
 .wb-meta .wb-lg {
-  display: inline-flex; box-sizing: border-box; width: 13px; height: 13px; vertical-align: top;
-  margin: calc((1.4em - 13px) / 2) 4px 0 0; border-radius: 3px; overflow: hidden;
+  flex: none; display: inline-flex; box-sizing: border-box; width: 13px; height: 13px;
+  margin-right: 6px; border-radius: 3px; overflow: hidden;
 }
 .wb-meta .wb-lg img { width: 100%; height: 100%; object-fit: contain; display: block; }
 .wb-meta .wb-lg:not(.is-orb) { padding: 2px; background: var(--color-logo-tile); }
+.wb-dt { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wb-dsep { white-space: pre; }
+
+/* ── the project slot (spec 180, prototype treatment A) ── */
+/* The project name is a button: a quiet tint on hover or open, its chevron
+ * always there (small, muted) so it reads as one at a glance. */
+.wb-slot {
+  position: relative; display: inline-flex; align-items: center; flex: 0 1 auto; min-width: 0; max-width: 64%;
+  height: 21px; margin: -2px 0 -2px -4px; padding: 0 4px; border-radius: 6px;
+  color: var(--color-muted); font-size: 12px; line-height: 17px; white-space: nowrap; text-align: left;
+  transition: background .15s, color .15s;
+}
+button.wb-slot { cursor: pointer; }
+button.wb-slot:not([aria-disabled="true"]):hover, .wb-slot[aria-expanded="true"] { background: var(--wb-tint); color: var(--color-secondary); }
+button.wb-slot[aria-disabled="true"] { cursor: default; }
+.wb-slot.is-static { padding-right: 0; }
+.wb-phone .wb-slot { max-width: 70%; }
+/* No hover on a phone: a taller invisible hit area. */
+.wb-phone .wb-slot::after { content: ""; position: absolute; inset: -9px -4px; }
+/* ✦ — the composer's Sparkles; folds in and out by its grid column. */
+.wb-mk { display: inline-grid; grid-template-columns: 1fr; flex: none; transition: grid-template-columns .5s cubic-bezier(.22,.7,.2,1), opacity .35s ease; }
+.wb-mk.is-off { grid-template-columns: 0fr; opacity: 0; }
+.wb-mk-in { overflow: hidden; min-width: 0; display: inline-flex; align-items: center; white-space: nowrap; }
+.wb-mk-gl { display: inline-flex; margin-right: 4px; color: var(--color-secondary); }
+/* The name, which changes in place: the old one blurs up, the new one rises. */
+.wb-nmw { position: relative; display: inline-flex; align-items: center; min-width: 0; overflow: hidden; height: 17px; }
+.wb-nmw.is-anim { transition: width .5s cubic-bezier(.22,.7,.2,1); }
+.wb-nm { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wb-nm.is-measure { position: absolute; left: 0; top: 0; visibility: hidden; overflow: visible; }
+.wb-nm.is-out { position: absolute; left: 0; top: 0; overflow: visible; animation: wb-nm-out .3s ease forwards; pointer-events: none; }
+.wb-nm.is-in { animation: wb-nm-in .5s cubic-bezier(.2,.7,.2,1) .06s both; }
+@keyframes wb-nm-out { to { opacity: 0; transform: translateY(-6px); filter: blur(1.5px); } }
+@keyframes wb-nm-in { from { opacity: 0; transform: translateY(6px); filter: blur(1.5px); } }
+/* 自动 while Orbital picks: a slow shimmer through the muted text. */
+.wb-shim {
+  background: linear-gradient(90deg, var(--color-muted) 0%, var(--color-muted) 38%, color-mix(in srgb, var(--color-primary) 80%, transparent) 50%, var(--color-muted) 62%, var(--color-muted) 100%);
+  background-size: 300% 100%; -webkit-background-clip: text; background-clip: text; color: transparent;
+  animation: wb-shim 2.4s linear infinite;
+}
+@keyframes wb-shim { from { background-position: 100% 0; } to { background-position: 0 0; } }
+.wb-slot .wb-cv { display: inline-flex; width: 11px; margin-left: 3px; overflow: hidden; color: var(--color-muted); opacity: .55; flex: none; transition: opacity .18s; }
+button.wb-slot:not([aria-disabled="true"]):hover .wb-cv, .wb-slot[aria-expanded="true"] .wb-cv, .wb-slot:focus-visible .wb-cv { opacity: 1; }
+.wb-phone .wb-slot .wb-cv { opacity: .75; }
+
 .wb-rz { flex: none; min-width: 52px; display: flex; justify-content: flex-end; }
 .wb-time { font-size: 11.5px; line-height: 19px; color: var(--color-muted); white-space: nowrap; transition: opacity .15s, transform .15s; }
 
 /* Dot: 8px, 10px gap. Amber = needs you; blue = finished, unchecked; green
  * with a quiet breathing ring = running. */
-.wb-dot { position: relative; flex: none; width: 8px; height: 8px; border-radius: 50%; margin-top: 5.5px; }
+.wb-dot { position: relative; flex: none; width: 8px; height: 8px; border-radius: 50%; margin-top: 5.5px; transition: background .35s; }
+/* Spec 180: a session being moved rests a beat before its work continues. */
+.wb-dot.is-idle { background: var(--color-idle); }
 .wb-dot.is-need { background: var(--color-warning); }
 .wb-dot.is-new { background: var(--color-accent); }
 .wb-dot.is-run { background: var(--color-success); }
@@ -229,6 +293,9 @@
 .wb-phone .wb-ab { color: color-mix(in srgb, var(--color-muted) 80%, transparent); }
 .wb-phone .wb-rz { min-width: 0 !important; flex-direction: column; align-items: flex-end; gap: 2px; }
 .wb-phone .wb-card .wb-time, .wb-phone .wb-card:hover .wb-time, .wb-phone .wb-card:focus-within .wb-time { opacity: 1; transform: none; }
+/* A card still picking its project: ✕ sits on the title line in the time's place. */
+.wb-phone .wb-card.is-picking .wb-rz { display: none; }
+.wb-phone .wb-card.is-picking .wb-acts { margin-top: -5px; }
 
 /* Phone header: Orbital mark (home) left, project list right. */
 .wb-phead { display: flex; align-items: center; gap: 8px; padding: 16px 12px 10px 16px; flex: none; }
@@ -292,6 +359,8 @@
 
 @media (prefers-reduced-motion: reduce) {
   .wb-dot.is-run::after, .wb-card.is-fresh { animation: none !important; }
+  .wb-shim, .wb-nm.is-in, .wb-nm.is-out, .wb-pop, .wb-input.is-back { animation: none !important; }
+  .wb-mk, .wb-nmw.is-anim { transition: none !important; }
   .wb-layer, .wb-rwrap { transition: none; }
   .wb-pane, .wb-sheet, .wb-scrim { animation: none; }
 }
@@ -300,3 +369,12 @@
  * per route; home is near-white, not the grey canvas). */
 :root[data-chrome="mac-inline"] main.wb-band { background-color: #FAFBFC; }
 :root[data-chrome="mac-inline"][data-theme="dark"] main.wb-band { background-color: var(--color-background); }
+
+/* Spec 180: a session row moved to another project folds out of the list
+ * (prototype `.srow.gone`); on a device with no hover its ⋯ is always shown. */
+.session-row.is-gone {
+  transition: background-color .15s, height .32s cubic-bezier(.4,0,.2,1), padding .32s, opacity .25s, margin .32s;
+  height: 0 !important; padding-top: 0; padding-bottom: 0; margin-top: -2px; opacity: 0; overflow: hidden; pointer-events: none; }
+@media (hover: none) {
+  .session-dots { visibility: visible !important; }
+}

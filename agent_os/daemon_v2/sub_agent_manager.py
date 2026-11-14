@@ -2035,7 +2035,7 @@ class SubAgentManager:
         manager handle is usually evicted, so the resolver parses the whole
         JSONL and re-encodes its image blobs from disk.
         """
-        from agent_os.daemon_v2.recap import build_recap
+        from agent_os.daemon_v2.recap import build_recap, handoff_budget_bytes
 
         resolver = self._session_resolver
         if resolver is None:
@@ -2048,7 +2048,19 @@ class SubAgentManager:
         try:
             session = await asyncio.to_thread(resolver, project_id, session_id)
             messages = session.get_messages() if session is not None else []
-            block = build_recap(messages, handle, fresh=bool(fresh))
+            # Spec 181: the block is bounded in bytes, says what it left out
+            # (naming this chat log), and shrinks only by what the agent
+            # itself reported about this thread's window.
+            chat_log_path = getattr(session, "filepath", None)
+            if not isinstance(chat_log_path, str) or not chat_log_path:
+                chat_log_path = None
+            transport = getattr(adapter, "_transport", None)
+            budget = handoff_budget_bytes(
+                message_bytes=len((message or "").encode("utf-8")),
+                reported=getattr(transport, "reported_context", None))
+            block = build_recap(messages, handle, fresh=bool(fresh),
+                                chat_log_path=chat_log_path,
+                                budget_bytes=budget)
         except Exception:
             logger.warning(
                 "recap build failed for %s/%s — dispatching without",

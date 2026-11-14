@@ -19,6 +19,10 @@
  * it was answered; it comes back to 等你 as finished and unchecked when the
  * turn ends (2026-11-04).
  *
+ * Spec 180: a session moved from its card is drawn in its new project as
+ * soon as the daemon answered (same time, so the same place), until the feed
+ * carries it there; while the move runs it is drawn where it was, resting.
+ *
  * Pure: the store, the optimistic checked marks and "now" are inputs, so the
  * strip dot, the project counts and the page agree by construction.
  */
@@ -38,6 +42,13 @@ export interface FeedItem {
   waiting: boolean;
   /** The time the card shows (ISO), and the one it sorts by. */
   time: string | null;
+  /** Spec 180: Orbital chose the project — the ✦ before its name (also while
+   *  it is still picking). */
+  marked: boolean;
+  /** Spec 180: being moved from this card (the dot rests). */
+  moving?: boolean;
+  /** Spec 180: just moved, and the daemon restarted the work (正在开始…). */
+  woke?: boolean;
 }
 
 export interface FeedGroups {
@@ -81,7 +92,12 @@ export function buildFeedGroups(feed: FeedState, marks: Marks, now: number = Dat
   for (const [key, h] of feed.held) {
     if (!rows.some((r) => itemKey(r) === key)) rows.push(h.row);
   }
-  for (const raw of rows) {
+  for (const fromFeed of rows) {
+    const move = fromFeed.session_id ? feed.moves.get(fromFeed.session_id) : undefined;
+    const moved = move?.phase === 'moved' && move.from === fromFeed.project_id;
+    const raw: WorkbenchFeedRow = moved
+      ? { ...fromFeed, project_id: move.to, routed_by: null }
+      : fromFeed;
     const key = itemKey(raw);
     if (seen.has(key)) continue;
     seen.add(key);
@@ -99,8 +115,17 @@ export function buildFeedGroups(feed: FeedState, marks: Marks, now: number = Dat
     const dot: CardDot = wait && needsAction(row) ? 'need' : live ? 'run' : 'new';
     // A card just answered here is as recent as the answer, even before the
     // daemon reports the new turn's last_user_at.
-    const time = hold ? laterOf(cardTime(row, live), new Date(hold.at).toISOString()) : cardTime(row, live);
-    const item: FeedItem = { key, row, pending: null, dot, waiting: wait, time };
+    // A move that restarted the work is not an answer: the card keeps its time.
+    const time = hold && !hold.starting
+      ? laterOf(cardTime(row, live), new Date(hold.at).toISOString())
+      : cardTime(row, live);
+    const moving = move?.phase === 'moving' && move.from === raw.project_id;
+    const item: FeedItem = {
+      key, row, pending: null, dot, waiting: wait, time,
+      marked: !!row.routed_by && !moving && !feed.unmarked.has(key),
+      ...(moving ? { moving: true } : {}),
+      ...(hold?.starting && !hold.sawRunning ? { woke: true } : {}),
+    };
     (wait ? waiting : running).push(item);
   }
   // Pending sends the feed does not carry yet.
@@ -113,6 +138,7 @@ export function buildFeedGroups(feed: FeedState, marks: Marks, now: number = Dat
       dot: 'run' as const,
       waiting: false,
       time: new Date(p.created_at).toISOString(),
+      marked: !!p.routing || !!p.routed_by,
     }));
 
   // 等你 by recency alone (2026-11-05): the newest thing waiting sits right

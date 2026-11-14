@@ -428,6 +428,13 @@ class CodexTransport(AgentTransport):
             last = token_usage.get("last")
             if not (thread_id and turn_id and isinstance(last, dict)):
                 return
+            # Spec 181: the thread's window and what its last request used,
+            # as Codex reported them (sizes the next hand-off, never grows it).
+            window = token_usage.get("modelContextWindow")
+            used = last.get("totalTokens")
+            if (isinstance(window, int) and window > 0
+                    and isinstance(used, int) and used >= 0):
+                self.reported_context = (window, used)
             # Last-write-wins: a later notification for the same turn replaces
             # the prior `last` (the final notification carries the turn-final
             # per-turn figures).

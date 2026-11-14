@@ -140,6 +140,20 @@ export type DisplayItem =
       truncated?: boolean;
     }
   | {
+      /** Spec 180: the user moved this conversation 「从 A 移到 B」 — one
+       *  quiet divider, from the names the row stored (its `content` is the
+       *  model's note and is never shown). */
+      type: 'session_moved';
+      from: string;
+      to: string;
+      fromProjectId?: string;
+      toProjectId?: string;
+      /** That side is Quick Tasks (its stored name is English). */
+      fromScratch?: boolean;
+      toScratch?: boolean;
+      timestamp: string;
+    }
+  | {
       /**
        * The agent hit its context ceiling and summarized everything older
        * than the last ~30% of the conversation. The daemon has always
@@ -822,6 +836,21 @@ function parseDaemonRow(msg: ChatMessage): DisplayItem | null {
       type: 'daemon_row',
       event: 'worker_onboarding',
       handle: typeof meta.handle === 'string' ? meta.handle : '',
+      timestamp: msg.timestamp,
+    };
+  }
+  if (meta.event === 'session_moved') {
+    const side = (v: unknown) => (v && typeof v === 'object' ? v as { name?: unknown; project_id?: unknown; is_scratch?: unknown } : {});
+    const from = side(meta.from);
+    const to = side(meta.to);
+    return {
+      type: 'session_moved',
+      from: typeof from.name === 'string' ? from.name : '',
+      to: typeof to.name === 'string' ? to.name : '',
+      fromProjectId: typeof from.project_id === 'string' ? from.project_id : undefined,
+      toProjectId: typeof to.project_id === 'string' ? to.project_id : undefined,
+      ...(from.is_scratch === true ? { fromScratch: true } : {}),
+      ...(to.is_scratch === true ? { toScratch: true } : {}),
       timestamp: msg.timestamp,
     };
   }

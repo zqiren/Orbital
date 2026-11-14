@@ -999,6 +999,13 @@ class SDKTransport(AgentTransport):
             model = getattr(msg, "model", None)
             if model and model != "<synthetic>":
                 self._last_model = model
+            # Spec 181: one API request's usage = what that request put in
+            # the window (the result's usage sums the turn's requests).
+            msg_usage = getattr(msg, "usage", None)
+            if isinstance(msg_usage, dict):
+                self._last_request_tokens = sum(int(msg_usage.get(k, 0) or 0) for k in (
+                    "input_tokens", "cache_read_input_tokens",
+                    "cache_creation_input_tokens", "output_tokens"))
             for block in msg.content:
                 if isinstance(block, TextBlock):
                     events.append(TransportEvent(
@@ -1094,6 +1101,24 @@ class SDKTransport(AgentTransport):
 
         return events
 
+    def _note_reported_context(self, msg) -> None:
+        """Spec 181: remember ``(window, in use)`` as Claude Code reported them
+        on this result: the window from ``modelUsage[*].contextWindow`` (the
+        smallest, if several models served the turn), the use from the turn's
+        last API request (``AssistantMessage.usage``; the result's own usage
+        is the sum over the turn's requests, not what the window holds).
+        Absent or malformed → left as it was."""
+        model_usage = getattr(msg, "model_usage", None)
+        if not isinstance(model_usage, dict):
+            return
+        windows = [m.get("contextWindow") for m in model_usage.values()
+                   if isinstance(m, dict)]
+        windows = [w for w in windows if isinstance(w, int) and w > 0]
+        used = getattr(self, "_last_request_tokens", None)
+        if not windows or not isinstance(used, int):
+            return
+        self.reported_context = (min(windows), max(0, used))
+
     def _capture_usage(self, msg) -> None:
         """Append one ``subagent:claude-code`` ledger event for a result message.
 
@@ -1116,6 +1141,7 @@ class SDKTransport(AgentTransport):
             usage = getattr(msg, "usage", None)
             if not isinstance(usage, dict):
                 return  # no usage on this result; nothing to capture
+            self._note_reported_context(msg)
             # Lazy import: budget.normalize -> providers.types pulls the agent
             # package __init__; a module-level import here risks a cycle and is
             # paid only once per turn-final result.

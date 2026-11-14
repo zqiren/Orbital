@@ -5,7 +5,7 @@
 // @vitest-environment jsdom
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen, cleanup, within } from '@testing-library/react';
+import { render, screen, cleanup, within, fireEvent, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { SessionListEntry } from '../types';
 
@@ -19,6 +19,7 @@ let mockSessions: SessionListEntry[] = [];
 const renameSessionMock = vi.fn(async () => 'renamed');
 const deleteSessionMock = vi.fn(async () => undefined);
 const pinSessionMock = vi.fn(async () => true);
+const moveSessionMock = vi.fn(async (sid: string, to: string, _minMs?: number) => ({ project_id: to, session_id: sid }));
 
 vi.mock('../hooks/useSessions', () => ({
   useSessions: (_projectId: string | null) => ({
@@ -29,6 +30,7 @@ vi.mock('../hooks/useSessions', () => ({
     renameSession: renameSessionMock,
     pinSession: pinSessionMock,
     deleteSession: deleteSessionMock,
+    moveSession: moveSessionMock,
   }),
 }));
 
@@ -78,6 +80,7 @@ function resetMocks() {
   renameSessionMock.mockClear();
   pinSessionMock.mockClear();
   deleteSessionMock.mockClear();
+  moveSessionMock.mockClear();
 }
 
 // ---------------------------------------------------------------------------
@@ -1189,3 +1192,34 @@ describe('SessionSidebar — in the project column', () => {
   });
 });
 
+
+// ---------------------------------------------------------------------------
+// Spec 180: move to project from the row's menu
+// ---------------------------------------------------------------------------
+
+describe('SessionSidebar — move to project (spec 180)', () => {
+  const PROJECTS = [
+    { project_id: 'proj-1', name: 'Here', workspace: '/w/1' },
+    { project_id: 'proj-2', name: 'There', workspace: '/w/2' },
+  ] as unknown as import('../types').Project[];
+
+  it('moves through useSessions (after the fold) and reports where it went', async () => {
+    resetMocks();
+    mockSessions = [makeSession({ session_id: 'sess-a', session_uuid: 'ua', name: 'Alpha' })];
+    const onSessionMoved = vi.fn();
+    render(<SessionSidebar projectId="proj-1" projects={PROJECTS} onSessionMoved={onSessionMoved} />);
+    fireEvent.click(screen.getByTestId('session-three-dot-trigger'));
+    fireEvent.click(screen.getByTestId('session-action-move'));
+    fireEvent.click(screen.getByTestId('wb-opt-project-proj-2'));
+    await waitFor(() => expect(onSessionMoved).toHaveBeenCalledWith('sess-a', 'proj-2'));
+    expect(moveSessionMock).toHaveBeenCalledWith('sess-a', 'proj-2', 340);
+  });
+
+  it('without the project list there is no 移动到项目…', () => {
+    resetMocks();
+    mockSessions = [makeSession({ session_id: 'sess-a', session_uuid: 'ua' })];
+    render(<SessionSidebar projectId="proj-1" />);
+    fireEvent.click(screen.getByTestId('session-three-dot-trigger'));
+    expect(screen.queryByTestId('session-action-move')).toBeNull();
+  });
+});
