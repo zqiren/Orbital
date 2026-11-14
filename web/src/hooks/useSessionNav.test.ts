@@ -114,4 +114,17 @@ describe('useSessionNav', () => {
     expect(lastUpdate(setRoute, route({ sessionId: 'sess-next' }))).toMatchObject({ sessionId: undefined });
     expect(mockSetActiveSessionId).toHaveBeenLastCalledWith(null);
   });
+
+  it('spec 180: sessionMoved follows the viewed session to its new project, else leaves the route alone', () => {
+    const setRoute = vi.fn();
+    const { result } = renderHook(() => useSessionNav('proj-1', setRoute));
+    act(() => result.current.sessionMoved('sess-old', 'proj-2'));
+    expect(lastUpdate(setRoute, route({ page: 'tasks' }))).toEqual({ name: 'project', projectId: 'proj-2', sessionId: 'sess-old' });
+    // Another session is open: nothing to follow.
+    const other = route({ sessionId: 'sess-b' });
+    expect(lastUpdate(setRoute, other)).toBe(other);
+    // Another project is open: nothing to follow either.
+    const elsewhere = route({ projectId: 'proj-3' });
+    expect(lastUpdate(setRoute, elsewhere)).toBe(elsewhere);
+  });
 });

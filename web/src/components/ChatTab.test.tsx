@@ -1519,4 +1519,20 @@ describe('ChatTab — the sheet opened by an edit', () => {
     expect(screen.queryByText('Restore files changed after this')).toBeNull();
     expect(screen.getByText('Undo this turn')).toBeInTheDocument();
   });
+
+  it('spec 180: a send ChatView reports as delivered into another project follows the session there', async () => {
+    mockSessions = [makeSession({ session_id: 'sess-a' })];
+    const route = makeRoute({ sessionId: 'sess-a' });
+    const setRoute = vi.fn();
+    await act(async () => {
+      render(
+        <ChatTab project={PROJECT} agentStatus="idle" agents={[]} route={route} setRoute={setRoute} />,
+      );
+    });
+    act(() => {
+      (lastChatViewProps.onSessionMoved as (sid: string, pid: string) => void)('sess-a', 'proj-2');
+    });
+    const updater = setRoute.mock.calls[setRoute.mock.calls.length - 1][0] as (prev: Route) => Route;
+    expect(updater(route)).toEqual({ name: 'project', projectId: 'proj-2', sessionId: 'sess-a' });
+  });
 });

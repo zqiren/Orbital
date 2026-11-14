@@ -154,7 +154,7 @@ export default function ChatTab({
   const t = useT();
   const { sessions } = useSessions(projectId);
   const { activeSessionId, setActiveSessionId } = useSession(projectId);
-  const { selectSession } = useSessionNav(projectId, setRoute);
+  const { selectSession, sessionMoved } = useSessionNav(projectId, setRoute);
 
   const routeSessionId = route.sessionId;
 
@@ -612,6 +612,7 @@ export default function ChatTab({
             onDraftConsumed={handleDraftConsumed}
             onRefreshProject={onRefreshProject}
             onOpenSession={selectSession}
+            onSessionMoved={sessionMoved}
             onUndoTurn={setUndoTurn}
           />
         </div>

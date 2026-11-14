@@ -32,6 +32,7 @@ vi.mock('./ChatView', async () => {
       <div data-testid="chatview-stub" data-session={String(props.sessionId)}>
         <button type="button" data-testid="stub-open-doc" onClick={() => open?.('docs/a.md')}>doc</button>
         <button type="button" data-testid="stub-send" onClick={() => (props.onUserSend as (() => void) | undefined)?.()}>send</button>
+        <button type="button" data-testid="stub-send-moved" onClick={() => (props.onUserSend as ((r: unknown) => void) | undefined)?.({ status: 'started', project_id: 'proj-b' })}>send moved</button>
         <button type="button" data-testid="stub-send-recorded" onClick={() => (props.onUserSend as ((r: unknown) => void) | undefined)?.({ status: 'recorded', session_id: String(props.sessionId) })}>send recorded</button>
       </div>
     );
@@ -369,6 +370,32 @@ describe('Workbench — card actions', () => {
     await act(async () => { await refreshFeed(); });
     // Not drawn from a held snapshot in 进行中 either.
     expect(cards().some((c) => (c.textContent ?? '').includes('这样理解对吗'))).toBe(false);
+  });
+
+  it('spec 180: a reply delivered into the project the session just moved to: one card, released when that run ends', async () => {
+    await renderPage(FEED, {
+      'POST /api/v2/agents/proj-a/inject': () => ({ status: 'started', project_id: 'proj-b' }),
+    });
+    // The feed already lists the session in its new project.
+    const movedIdle = row({ project_id: 'proj-b', session_id: 'done', session_uuid: 'done', name: 'Hero copy', agent: 'codex' });
+    routes['GET /api/v2/workbench/feed'] = () => ({ rows: [movedIdle], window_days: 14 });
+    const done = cardWith('Hero copy');
+    fireEvent.change(within(done).getByTestId('wb-card-reply'), { target: { value: 'one more pass' } });
+    fireEvent.keyDown(within(done).getByTestId('wb-card-reply'), { key: 'Enter' });
+    await waitFor(() => expect(apiMock.mock.calls.some((c) => c[0] === '/api/v2/agents/proj-a/inject')).toBe(true));
+    await act(async () => { await refreshFeed(); });
+    // One card, not a ghost in the old project beside the real one.
+    expect(cards().filter((c) => (c.textContent ?? '').includes('Hero copy'))).toHaveLength(1);
+    // The run in the new project, then its end: back to 等你 (no 2-minute wait).
+    const running = { ...movedIdle, status: 'running' as const, last_user_at: iso(0) };
+    routes['GET /api/v2/workbench/feed'] = () => ({ rows: [running], window_days: 14 });
+    await act(async () => { await refreshFeed(); });
+    expect(cardWith('Hero copy').getAttribute('data-dot')).toBe('run');
+    const finished = { ...movedIdle, last_user_at: iso(1), last_reply_at: new Date().toISOString() };
+    routes['GET /api/v2/workbench/feed'] = () => ({ rows: [finished], window_days: 14 });
+    await act(async () => { await refreshFeed(); });
+    expect(cardWith('Hero copy').getAttribute('data-dot')).toBe('new');
+    expect(cards().filter((c) => (c.textContent ?? '').includes('Hero copy'))).toHaveLength(1);
   });
 
   it('spec 169 B: a reply from the field that fails lets the card go at once (not held in 进行中)', async () => {
@@ -810,6 +837,24 @@ describe('Workbench — reading pane (2026-11-04)', () => {
     fireEvent.click(screen.getByTestId('stub-send-recorded'));
     expect(cardWith('Hero copy').getAttribute('data-dot')).not.toBe('run');
     expect(screen.getByTestId('workbench-summary')).not.toHaveTextContent('2 running');
+  });
+
+  it('spec 180: a send from the pane delivered into the project the session moved to releases when that run ends', async () => {
+    await renderPage();
+    fireEvent.click(cardWith('Hero copy'));
+    const movedIdle = row({ project_id: 'proj-b', session_id: 'done', session_uuid: 'done', name: 'Hero copy', agent: 'codex' });
+    routes['GET /api/v2/workbench/feed'] = () => ({ rows: [movedIdle], window_days: 14 });
+    fireEvent.click(screen.getByTestId('stub-send-moved'));
+    await act(async () => { await refreshFeed(); });
+    expect(cards().filter((c) => (c.textContent ?? '').includes('Hero copy'))).toHaveLength(1);
+    routes['GET /api/v2/workbench/feed'] = () => ({ rows: [{ ...movedIdle, status: 'running' }], window_days: 14 });
+    await act(async () => { await refreshFeed(); });
+    routes['GET /api/v2/workbench/feed'] = () => ({ rows: [{ ...movedIdle, last_user_at: iso(1), last_reply_at: new Date().toISOString() }], window_days: 14 });
+    await act(async () => { await refreshFeed(); });
+    expect(cardWith('Hero copy').getAttribute('data-dot')).toBe('new');
+    // The pane stays on the session, now in its new project.
+    expect(screen.getByTestId('chatview-stub')).toHaveAttribute('data-session', 'done');
+    expect(chatView.last?.projectId).toBe('proj-b');
   });
 
   it('a document opens OVER the pane with a back chevron; back returns to the same chat', async () => {

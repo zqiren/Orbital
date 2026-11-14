@@ -5659,6 +5659,42 @@ describe('ChatView: embedded in the Workbench pane', () => {
     await flushEffects();
     expect(onUserSend).toHaveBeenCalledWith({ status: 'recorded', session_id: 's1' });
   });
+
+  it('spec 180: a send the daemon delivered into another project (the session moved) follows it there', async () => {
+    injectMessageMock = async () => ({ status: 'started', project_id: 'p2' });
+    const onSessionMoved = vi.fn();
+    await act(async () => {
+      root.render(
+        <ChatView projectId="p1" project={project} agentStatus={'idle' as never} agents={[]}
+          sessionId="s1" onSessionMoved={onSessionMoved} />,
+      );
+    });
+    await flushEffects();
+    await act(async () => { typeInComposer('go on'); });
+    await flushEffects();
+    await act(async () => { pressKey('Enter'); });
+    await flushEffects();
+    expect(onSessionMoved).toHaveBeenCalledTimes(1);
+    expect(onSessionMoved).toHaveBeenCalledWith('s1', 'p2');
+  });
+
+  it('spec 180: a send answered with its own project does not navigate', async () => {
+    injectMessageMock = async () => ({ status: 'started', project_id: 'p1' });
+    const onSessionMoved = vi.fn();
+    await act(async () => {
+      root.render(
+        <ChatView projectId="p1" project={project} agentStatus={'idle' as never} agents={[]}
+          sessionId="s1" onSessionMoved={onSessionMoved} />,
+      );
+    });
+    await flushEffects();
+    await act(async () => { typeInComposer('go on'); });
+    await flushEffects();
+    await act(async () => { pressKey('Enter'); });
+    await flushEffects();
+    expect(injectCalls).toHaveLength(1);
+    expect(onSessionMoved).not.toHaveBeenCalled();
+  });
 });
 
 // A turn that ends with mark_task_complete and no text: its summary is the

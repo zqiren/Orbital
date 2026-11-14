@@ -4,7 +4,7 @@
 
 /**
  * useSessionNav — the project's session navigation: open a session, mint a
- * new one, step off a deleted one.
+ * new one, step off a deleted one, follow a moved one.
  *
  * Spec 137 (the folder shell) moved the session list out of the chat and into
  * the project column, which stays on screen while a page (Tasks, Settings)
@@ -42,6 +42,12 @@ export interface SessionNav {
    * first), else leave the route alone.
    */
   sessionDeleted: (deletedId: string, remaining: SessionListEntry[], viewedId: string | undefined) => void;
+  /**
+   * Spec 180: `sessionId` now lives in `toProjectId` (moved from the sidebar,
+   * or a send the daemon delivered there). If it is the one open, the view
+   * follows it; else the route is left alone.
+   */
+  sessionMoved: (sessionId: string, toProjectId: string) => void;
 }
 
 export function useSessionNav(
@@ -104,5 +110,16 @@ export function useSessionNav(
     [projectId, setRoute, setActiveSessionId],
   );
 
-  return { selectSession, newSession, sessionDeleted };
+  const sessionMoved = useCallback(
+    (sessionId: string, toProjectId: string) => {
+      setRoute((prev) =>
+        prev.name === 'project' && prev.projectId === projectId && prev.sessionId === sessionId
+          ? { name: 'project', projectId: toProjectId, sessionId }
+          : prev,
+      );
+    },
+    [projectId, setRoute],
+  );
+
+  return { selectSession, newSession, sessionDeleted, sessionMoved };
 }
