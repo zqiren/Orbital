@@ -185,8 +185,12 @@ MEMORY_SHAPE_RULES = (
     "sentence; a lesson is the rule itself; a state line is what is true now.\n"
     "Detail goes on indented lines under the bullet, only when needed. Never write\n"
     "or edit the <!--format--> header or the hidden <!--mem--> id comments; the\n"
-    "system stamps those. To revise orbital/instructions/project_goals.md, replace\n"
-    "its paragraph and add one line under it: supersedes: <its old first line>\n"
+    "system stamps those. When a new decision or lesson replaces an old one, keep\n"
+    "the old entry as it is and add one indented line under the new one:\n"
+    "supersedes: <the old bullet line, word for word>\n"
+    "The old one then moves to the archive. To revise\n"
+    "orbital/instructions/project_goals.md, replace its paragraph and add one line\n"
+    "under it: supersedes: <its old first line>\n"
 )
 
 # Spec 167: goals come from work. While the project has no goals (the file is

@@ -209,6 +209,25 @@ def test_contents_table_rows_match_mem_ids_on_the_real_archives():
         assert seen == sorted(seen, reverse=True)
 
 
+def test_replaced_section_parses_and_its_contents_row_names_the_replacement():
+    """Spec 182 §5.3: a fifth section kind, ``## [replaced DATE by id:<new>]``,
+    rendered like a merge with the arrow to the entry that replaced it."""
+    archive = M.append_archive_section(
+        M.append_archive_section(None, "DECISIONS_ARCHIVE.md", "## [archived 2026-10-01]",
+                                 _bullet("Old thing.", "old-thing")),
+        "DECISIONS_ARCHIVE.md", f"## [replaced {TODAY} by id:fastapi]",
+        _bullet("Ship the API on Flask.", "flask"),
+    )
+    rows = M.archive_rows(archive)
+    assert (rows[0].id, rows[0].kind, rows[0].date, rows[0].into) == ("flask", "replaced", TODAY, "fastapi")
+    assert (rows[1].kind, rows[1].into) == ("archived", "")
+    assert f"- id:flask · replaced {TODAY} → id:fastapi · Ship the API on Flask." in archive
+    assert "- id:old-thing · archived 2026-10-01 · Old thing." in archive
+    assert M.archive_summary(archive) == (2, "2026-10-01", TODAY)
+    assert M.archive_ids(archive) == {"flask", "old-thing"}
+    assert M.with_contents_table(archive) == archive
+
+
 def test_every_archive_write_path_regenerates_the_table(tmp_path):
     ws = _ws(tmp_path)
     # daemon append
