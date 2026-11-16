@@ -270,9 +270,12 @@ export default function LLMProviderSettings({
     return () => { cancelled = true; };
   }, []);
 
-  // Initialize fields once providers + global settings loaded
+  // Initialize fields once providers + global settings loaded. A layout
+  // effect, so the fields hold these values the moment they are on screen:
+  // a passive one could still be pending when the user (or a test) picks a
+  // provider, and then overwrote that pick with the saved one.
   const [initialized, setInitialized] = useState(false);
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (initialized) return;
     if (providersLoading || !globalLoaded) return;
 
