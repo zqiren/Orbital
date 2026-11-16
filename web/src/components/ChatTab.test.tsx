@@ -47,6 +47,18 @@ const mockSetActiveSessionId = vi.fn((id: string | null) => {
 // Mock hooks — must be declared before importing the component
 // ---------------------------------------------------------------------------
 
+// Relay (phone) vs local (desktop): only the upload affordance reads it here.
+const relay = vi.hoisted(() => ({ value: false }));
+vi.mock('../config', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../config')>();
+  return {
+    ...actual,
+    get isRelayMode() {
+      return relay.value;
+    },
+  };
+});
+
 vi.mock('../hooks/useSessions', () => ({
   useSessions: (_projectId: string | null) => ({
     sessions: mockSessions,
@@ -1323,9 +1335,27 @@ describe('ChatTab — upload from the docked Files view (gap 2)', () => {
     setViewportWidth(1440);
     mockSessions = [makeSession({ session_id: 'sess-x' })];
   });
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    relay.value = false;
+  });
 
-  it('Upload picks a file, posts it, and refreshes the tree', async () => {
+  it('the desktop (local) bar offers no upload, docked or maximized', async () => {
+    const view = await act(async () => renderChatTab());
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('panel-handle'));
+    });
+    expect(screen.queryByTestId('panel-upload')).toBeNull();
+    expect(view.container.querySelector('[data-testid="panel-upload-input"]')).toBeNull();
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('panel-maximize'));
+    });
+    expect(screen.queryByTestId('panel-upload')).toBeNull();
+    expect(view.container.querySelector('[data-testid="panel-upload-input"]')).toBeNull();
+  });
+
+  it('through the relay, Upload picks a file, posts it, and refreshes the tree', async () => {
+    relay.value = true;
     const fetchMock = vi.fn(async () => new Response('{}', { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
     const view = await act(async () => renderChatTab());

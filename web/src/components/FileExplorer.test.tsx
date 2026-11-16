@@ -195,3 +195,36 @@ describe('FileExplorer — reveal in the file manager (spec 093)', () => {
     expect(screen.getAllByRole('button', { name: 'Show in File Explorer' })).toHaveLength(2);
   });
 });
+
+describe('FileExplorer — upload is for the phone (relay) only', () => {
+  async function renderEmpty() {
+    let container!: HTMLElement;
+    await act(async () => {
+      ({ container } = render(<FileExplorer projectId="project-1" />));
+    });
+    return container;
+  }
+
+  it('offers no upload on the desktop: no button, no file input', async () => {
+    const container = await renderEmpty();
+    expect(screen.queryByRole('button', { name: 'Upload File' })).toBeNull();
+    expect(container.querySelector('input[type="file"]')).toBeNull();
+    // The footer keeps "Open project folder".
+    expect(screen.getByRole('button', { name: 'Open project folder' })).toBeInTheDocument();
+  });
+
+  it('leaves no empty footer when the desktop has nothing to put there', async () => {
+    Object.defineProperty(window.navigator, 'platform', { value: 'Linux x86_64', configurable: true });
+    const container = await renderEmpty();
+    const treePane = container.firstElementChild?.firstElementChild as HTMLElement;
+    // Only the scrolling tree remains in the pane.
+    expect(treePane.children).toHaveLength(1);
+  });
+
+  it('keeps upload through the relay', async () => {
+    relay.value = true;
+    const container = await renderEmpty();
+    expect(screen.getByRole('button', { name: 'Upload File' })).toBeInTheDocument();
+    expect(container.querySelector('input[type="file"]')).not.toBeNull();
+  });
+});

@@ -52,6 +52,7 @@ import { useAnnotations } from '../hooks/useAnnotations';
 import { usePanelDockable, usePanelMobile, usePanelState } from '../hooks/usePanelState';
 import SessionHeading from './SessionHeading';
 import { useWorkspaceUpload } from '../hooks/useWorkspaceUpload';
+import { isRelayMode } from '../config';
 import {
   eventAsMessage,
   isFailedToolResult,
@@ -435,6 +436,9 @@ export default function ChatTab({
 
   // Spec 137 gap 2: upload from the Files view, the old Files tab's
   // affordance. A landed file bumps `filesRefresh`, which FilesView re-lists on.
+  // Phone (relay) only: on the desktop the folder is one click away and the
+  // composer takes attachments.
+  const canUpload = isRelayMode;
   const { upload, uploading, error: uploadError, clearError: clearUploadError } =
     useWorkspaceUpload(projectId);
   const uploadInputRef = useRef<HTMLInputElement>(null);
@@ -516,7 +520,7 @@ export default function ChatTab({
       onViewChange={setPanelView}
       annotating={annotating}
       onToggleAnnotate={() => setAnnotating(!annotating)}
-      onUpload={maximized ? undefined : handleUploadClick}
+      onUpload={canUpload && !maximized ? handleUploadClick : undefined}
       uploading={uploading}
       onToggleMaximize={canMaximize ? toggleMaximize : undefined}
       maximized={maximized}
@@ -524,18 +528,20 @@ export default function ChatTab({
   );
   const panelBody = (
     <>
-      {uploadError && (
+      {canUpload && uploadError && (
         <p role="status" className="shrink-0 mx-3 mt-2 px-3 py-2 text-xs text-error bg-error/10 border border-error/30 rounded-md">
           {uploadError}
         </p>
       )}
-      <input
-        ref={uploadInputRef}
-        type="file"
-        className="hidden"
-        data-testid="panel-upload-input"
-        onChange={handleUploadPicked}
-      />
+      {canUpload && (
+        <input
+          ref={uploadInputRef}
+          type="file"
+          className="hidden"
+          data-testid="panel-upload-input"
+          onChange={handleUploadPicked}
+        />
+      )}
       <WorkspacePanel
         view={panelView}
         browser={

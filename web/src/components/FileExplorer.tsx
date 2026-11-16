@@ -14,7 +14,7 @@ import {
   FolderOpen,
   SquareArrowOutUpRight,
 } from 'lucide-react';
-import { api } from '../config';
+import { api, isRelayMode } from '../config';
 import type { FileEntry, DirectoryListing, FileContent } from '../types';
 import FilePreview from './FilePreview';
 import { revealPath } from '../hooks/useFiles';
@@ -56,7 +56,10 @@ export default function FileExplorer({ projectId, initialPath, onSelectFile }: F
   const [contentLoading, setContentLoading] = useState(false);
   const [mobileShowPreview, setMobileShowPreview] = useState(false);
 
-  // Upload state (shared with the workspace panel's Files view)
+  // Upload is the phone's way in: through the relay the computer's disk is
+  // out of reach. On the desktop the folder is one click away (footer), so
+  // the explorer offers no upload there.
+  const canUpload = isRelayMode;
   const { upload, uploading, error: uploadError, clearError: clearUploadError } = useWorkspaceUpload(projectId);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -322,8 +325,7 @@ export default function FileExplorer({ projectId, initialPath, onSelectFile }: F
           )}
         </div>
 
-        {/* Upload error message */}
-        {uploadError && (
+        {canUpload && uploadError && (
           <div className="mx-3 mb-3 px-3 py-2 bg-error/10 border border-error/30 rounded-md">
             <p className="text-xs text-error">{uploadError}</p>
           </div>
@@ -334,54 +336,59 @@ export default function FileExplorer({ projectId, initialPath, onSelectFile }: F
           </div>
         )}
 
-        {/* Hidden file input */}
-        <input
-          ref={fileInputRef}
-          type="file"
-          className="hidden"
-          onChange={handleFileSelected}
-        />
+        {canUpload && (
+          <input
+            ref={fileInputRef}
+            type="file"
+            className="hidden"
+            onChange={handleFileSelected}
+          />
+        )}
 
-        {/* Upload button (+ "Open project folder") - fixed footer, always visible at bottom */}
-        <div className="shrink-0 px-3 pb-3 max-md:pb-[max(12px,env(safe-area-inset-bottom,12px))] flex items-center justify-end gap-2">
-          <button
-            onClick={handleUploadClick}
-            disabled={uploading}
-            className="
-              flex items-center justify-center gap-1.5
-              bg-accent text-white rounded-full md:rounded-lg
-              w-10 h-10 md:w-auto md:h-auto md:px-3 md:py-2 md:flex-1
-              text-sm font-medium
-              hover:bg-accent/90 transition-all duration-150
-              disabled:opacity-50 disabled:cursor-not-allowed
-              shadow-lg md:shadow-none
-            "
-          >
-            {uploading ? (
-              <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-            ) : (
-              <Plus size={18} />
+        {/* Fixed footer: Upload (relay only) + "Open project folder" (local only) */}
+        {(canUpload || canReveal) && (
+          <div className="shrink-0 px-3 pb-3 max-md:pb-[max(12px,env(safe-area-inset-bottom,12px))] flex items-center justify-end gap-2">
+            {canUpload && (
+              <button
+                onClick={handleUploadClick}
+                disabled={uploading}
+                className="
+                  flex items-center justify-center gap-1.5
+                  bg-accent text-white rounded-full md:rounded-lg
+                  w-10 h-10 md:w-auto md:h-auto md:px-3 md:py-2 md:flex-1
+                  text-sm font-medium
+                  hover:bg-accent/90 transition-all duration-150
+                  disabled:opacity-50 disabled:cursor-not-allowed
+                  shadow-lg md:shadow-none
+                "
+              >
+                {uploading ? (
+                  <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                ) : (
+                  <Plus size={18} />
+                )}
+                <span className="hidden md:inline">{uploading ? t('fileExplorer.uploading') : t('fileExplorer.uploadFile')}</span>
+              </button>
             )}
-            <span className="hidden md:inline">{uploading ? t('fileExplorer.uploading') : t('fileExplorer.uploadFile')}</span>
-          </button>
-          {canReveal && (
-            <button
-              type="button"
-              onClick={() => void handleReveal('')}
-              aria-label={t('fileExplorer.openProjectFolder')}
-              title={t('fileExplorer.openProjectFolder')}
-              className="
-                flex items-center justify-center shrink-0
-                w-10 h-10 md:w-9 md:h-9 rounded-full md:rounded-lg
-                border border-border bg-background text-secondary
-                hover:text-primary hover:bg-card-hover transition-colors duration-150
-                shadow-lg md:shadow-none
-              "
-            >
-              <FolderOpen size={16} aria-hidden />
-            </button>
-          )}
-        </div>
+            {canReveal && (
+              <button
+                type="button"
+                onClick={() => void handleReveal('')}
+                aria-label={t('fileExplorer.openProjectFolder')}
+                title={t('fileExplorer.openProjectFolder')}
+                className="
+                  flex items-center justify-center shrink-0
+                  w-10 h-10 md:w-9 md:h-9 rounded-full md:rounded-lg
+                  border border-border bg-background text-secondary
+                  hover:text-primary hover:bg-card-hover transition-colors duration-150
+                  shadow-lg md:shadow-none
+                "
+              >
+                <FolderOpen size={16} aria-hidden />
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {/* File Preview - right panel on desktop, full screen on mobile when viewing */}
