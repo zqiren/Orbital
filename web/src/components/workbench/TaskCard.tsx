@@ -52,6 +52,8 @@ import MarkdownContent from '../MarkdownContent';
 import InlineMarkdown from '../InlineMarkdown';
 import type { FeedItem } from './feedModel';
 import { AnchoredProjectPicker } from './ProjectPicker';
+import SourceMark from '../sources/SourceMark';
+import { feedSourceName } from '../sources/sourcesText';
 
 /** How long the name swap runs (the CSS animations end inside it). */
 const SWAP_MS = 620;
@@ -159,11 +161,13 @@ export interface TaskCardProps {
   /** Spec 180: the picker opened / closed on a picking card (a route answer
    *  waits for it). */
   onPickerOpen?: (item: FeedItem, open: boolean) => void;
+  /** Task sources: the card's source mark opens the panel at its entry. */
+  onOpenSource?: (item: FeedItem) => void;
 }
 
 export default function TaskCard({
   item, projectName, agentName, activity, phone, fresh, onOpen, onConfirm, onReply,
-  selected = false, onSelect, projects = [], onPickProject, onUnsend, onPickerOpen,
+  selected = false, onSelect, projects = [], onPickProject, onUnsend, onPickerOpen, onOpenSource,
 }: TaskCardProps) {
   const t = useT();
   const [reply, setReply] = useState('');
@@ -484,11 +488,24 @@ export default function TaskCard({
               {icon.src ? <img src={icon.src} alt={agentLabel} /> : null}
             </span>
             {slot}
+            {row?.source && (() => {
+              const src = row.source;
+              const nm = feedSourceName(t, src.type, src.name);
+              const inner = <><SourceMark type={src.type} size="sm" /><span className="t">{nm}</span></>;
+              return (
+                <>
+                  {slot ? <span className="wb-dsep"> · </span> : null}
+                  {onOpenSource ? (
+                    <button type="button" className="wb-src" title={nm} onClick={() => onOpenSource(item)} data-testid="wb-card-source">{inner}</button>
+                  ) : <span className="wb-src" title={nm} data-testid="wb-card-source">{inner}</span>}
+                </>
+              );
+            })()}
             {(detail || overdueDue) && (
               <span className={`wb-dt${detail?.warn ? ' is-warn' : ''}`}>
                 {detail && (
                   <>
-                    {slot ? <span className="wb-dsep"> · </span> : null}
+                    {slot || row?.source ? <span className="wb-dsep"> · </span> : null}
                     {detail.warn ? <span className="wb-warn">{detail.text}</span> : detail.text}
                   </>
                 )}

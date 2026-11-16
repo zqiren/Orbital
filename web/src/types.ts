@@ -1242,9 +1242,34 @@ export interface WorkbenchChangedEvent {
   project_id: string;
 }
 
+/** Task sources (`components/sources/types.ts` holds the payload shapes). */
+export interface SourcesChangedEvent {
+  type: 'sources.changed';
+  source: import('./components/sources/types').SourceSummary;
+}
+export interface SourcesRemovedEvent {
+  type: 'sources.removed';
+  source_id: string;
+}
+export interface SourcesEntryEvent {
+  type: 'sources.entry';
+  source_id: string;
+  entry: import('./components/sources/types').HistoryEntry;
+}
+export interface SourcesQrEvent {
+  type: 'sources.qr';
+  qr_id: string;
+  state: import('./components/sources/types').QrState;
+  label?: string | null;
+}
+
 export type WebSocketEvent =
   | AgentStatusEvent
   | WorkbenchChangedEvent
+  | SourcesChangedEvent
+  | SourcesRemovedEvent
+  | SourcesEntryEvent
+  | SourcesQrEvent
   | BudgetSpendUpdatedEvent
   | StreamDeltaEvent
   | ActivityEvent
@@ -1650,4 +1675,17 @@ export interface WorkbenchFeedRow {
   /** Spec 180: Orbital chose this project when the task was sent (the card's
    *  ✦); cleared when the user opens the card or moves the session. */
   routed_by?: 'model' | 'fallback' | null;
+  /** Task sources: the source this session came from (its mark on the card
+   *  opens the Task sources panel at that entry); null for any other task. */
+  source?: WorkbenchFeedSource | null;
+}
+
+/** Task sources: where a Workbench row came from (`GET /workbench/feed`). */
+export interface WorkbenchFeedSource {
+  source_id: string;
+  type: string;
+  name: string;
+  arrival_id: string | null;
+  /** The source was removed since; the mark stays, it opens nothing. */
+  removed?: boolean;
 }

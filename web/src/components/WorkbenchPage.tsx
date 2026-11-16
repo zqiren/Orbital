@@ -72,6 +72,9 @@ import {
 import TaskCard from './workbench/TaskCard';
 import WorkbenchComposer, { rememberLastProject } from './workbench/WorkbenchComposer';
 import WorkbenchPane from './workbench/WorkbenchPane';
+import SourcesPanel, { type SourcesFocus } from './sources/SourcesPanel';
+import { anyFailed, useSources } from './sources/sourcesStore';
+import { Inbox } from 'lucide-react';
 import type { StringKey } from '../i18n/strings';
 import './workbench/workbench.css';
 
@@ -112,6 +115,11 @@ export default function WorkbenchPage({
   const marks = useCheckedMarks();
   const { newSession, injectMessage } = useAgent();
   const [openError, setOpenError] = useState<string | null>(null);
+  // Task sources: the panel in the docked pane (the reading pane's place),
+  // opened by 任务来源 or by a card's source mark (at that entry).
+  const sources = useSources();
+  const [sourcesOpen, setSourcesOpen] = useState<SourcesFocus | null | false>(false);
+  const sourcesBad = anyFailed(sources.list);
 
   // A draft the last page load left unsent comes back into the composer.
   useEffect(() => {
@@ -155,8 +163,19 @@ export default function WorkbenchPage({
   const handleSelect = useCallback((item: FeedItem) => {
     const k = cardKeyOf(item);
     if (k !== selectedKey) clearMark(item);
+    setSourcesOpen(false);
     setSelectedKey((cur) => (cur === k ? null : k));
   }, [clearMark, selectedKey, cardKeyOf]);
+  // One pane at a time: the sources panel takes the reading pane's place.
+  const openSources = useCallback((focus: SourcesFocus | null) => {
+    setSelectedKey(null);
+    setSourcesOpen(focus);
+  }, []);
+  const handleOpenSource = useCallback((item: FeedItem) => {
+    const src = item.row?.source;
+    if (!src || src.removed) return;
+    openSources({ sourceId: src.source_id, arrivalId: src.arrival_id, nonce: Date.now() });
+  }, [openSources]);
 
   // Sidebar order, minus projects excluded from the Workbench.
   const pickable = useMemo(
@@ -350,9 +369,25 @@ export default function WorkbenchPage({
             managerModel={managerModel}
             onSend={handleSend}
           />
+          {/* The head of the task list: the summary, and 任务来源 at its
+              right end (shown with no tasks too: it is where tasks come from). */}
+          <div className="wb-bar" data-testid="workbench-bar">
+            <span className="wb-summary" data-testid={summary ? 'workbench-summary' : undefined}>{summary}</span>
+            <button
+              type="button"
+              className={`src-entry${sourcesOpen !== false ? ' is-open' : ''}`}
+              aria-expanded={sourcesOpen !== false}
+              onClick={() => (sourcesOpen !== false ? setSourcesOpen(false) : openSources(null))}
+              data-testid="workbench-sources"
+            >
+              <Inbox size={14} strokeWidth={1.9} aria-hidden="true" />
+              <span>{t('sources.title')}</span>
+              {sources.waiting > 0 && <span className="wc" data-testid="workbench-sources-waiting">{sources.waiting}</span>}
+              {sourcesBad && <span className="rd" aria-hidden="true" />}
+            </button>
+          </div>
           {items.length > 0 && (
             <>
-              <div className="wb-summary" data-testid="workbench-summary">{summary}</div>
               <div className="wb-cards" data-testid="workbench-cards">
                 {items.map((item) => (
                   <TaskCard
@@ -368,6 +403,7 @@ export default function WorkbenchPage({
                     onReply={handleReply}
                     selected={cardKeyOf(item) === selectedKey}
                     onSelect={item.row?.session_id ? handleSelect : undefined}
+                    onOpenSource={item.row?.source && !item.row.source.removed ? handleOpenSource : undefined}
                     projects={pickable}
                     onPickProject={(it, pid) => void handlePickProject(it, pid)}
                     onUnsend={(it) => { if (it.pending) unsendPending(it.pending.nonce); }}
@@ -379,6 +415,21 @@ export default function WorkbenchPage({
           )}
         </div>
       </div>
+      {sourcesOpen !== false && (
+        <>
+          {phone && <div className="wb-scrim" onClick={() => setSourcesOpen(false)} aria-hidden="true" />}
+          <aside className={phone ? 'wb-sheet' : 'wb-pane'} data-testid="wb-sources-pane" data-variant={phone ? 'sheet' : 'dock'} aria-label={t('sources.title')}>
+            {phone && <div className="wb-grab" aria-hidden="true" />}
+            <SourcesPanel
+              phone={phone}
+              projects={pickable}
+              focus={sourcesOpen}
+              onClose={() => setSourcesOpen(false)}
+              onOpenSession={(projectId, sessionId) => setRoute({ name: 'project', projectId, sessionId })}
+            />
+          </aside>
+        </>
+      )}
       {paneRow && paneProject && selected && (
         <WorkbenchPane
           project={paneProject}

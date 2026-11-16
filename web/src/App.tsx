@@ -52,6 +52,7 @@ import ErrorBoundary from './components/ErrorBoundary';
 import GlobalSettings, { requestedSettingsSection } from './components/GlobalSettings';
 import WorkbenchPage from './components/WorkbenchPage';
 import { useWorkbenchFeed, useWorkbenchFeedSync } from './hooks/useWorkbenchFeed';
+import { useSourcesSync } from './components/sources/sourcesStore';
 import { useCheckedMarks } from './hooks/useSeenReplies';
 import { useHomeShortcut } from './hooks/useHomeShortcut';
 import { noteAgentStatus } from './hooks/useFileHistory';
@@ -373,6 +374,8 @@ export default function App() {
   // Spec 154 §5.2: one App-level feed behind the Workbench, the strip
   // glyph's dot and the project-list counts (one predicate, one feed).
   useWorkbenchFeedSync(setupComplete === true);
+  // Task sources: the 任务来源 count and the panel, live (sources.* events).
+  useSourcesSync(setupComplete === true);
   const feed = useWorkbenchFeed();
   const checkedMarks = useCheckedMarks();
   const feedGroups = useMemo(() => buildFeedGroups(feed, checkedMarks), [feed, checkedMarks]);

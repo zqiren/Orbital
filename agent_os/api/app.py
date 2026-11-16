@@ -760,6 +760,51 @@ def _assemble_app(app: FastAPI, data_dir: str | None) -> FastAPI:
                                sub_agent_manager=sub_agent_manager)
     app.include_router(workbench_routes.router)
 
+    # 7c4b. Task sources (任务来源): outside services the daemon watches; each
+    # new item becomes a Workbench task through the spec-162 path above.
+    # State under {data_dir}/sources/ (new files; v0.22.0 never reads them).
+    from agent_os.api.routes import sources as source_routes
+    from agent_os.sources import core as sources_core
+    from agent_os.sources.registry import AdapterRegistry
+    from agent_os.sources.secrets import SourceSecretStore
+    from agent_os.sources.sessions import SessionLookup
+
+    def _project_name(pid):
+        p = project_store.get_project(pid) if pid else None
+        return (p.get("name") or pid) if p else None
+
+    def _sources_lang():
+        # Text Orbital composes (a website-down title) follows the rule of
+        # the daemon's own cards: the interface language the app last
+        # reported when it is zh or en, else the system locale.
+        from agent_os.onboarding.user_language import system_locale
+        ui = (getattr(settings_store.get(), "ui_language", None) or system_locale() or "")
+        ui = ui.split("-")[0].split("_")[0].lower()
+        return ui if ui in ("zh", "en") else "en"
+
+    sessions_lookup = SessionLookup(project_store, agent_manager, sub_agent_manager)
+    sources = sources_core.SourcesCore(
+        store_dir, registry=AdapterRegistry(), secret_store=SourceSecretStore(),
+        send=source_routes.workbench_sender(),
+        session_info=sessions_lookup.info,
+        session_refresh=sessions_lookup.mark_stale,
+        project_name=_project_name, broadcast=ws_manager.broadcast_global,
+        first_tick_delay_s=STARTUP_SWEEP_DELAY_S, lang_fn=_sources_lang)
+    sources_core.install(sources)
+    source_routes.configure(sources)
+    app.include_router(source_routes.router)
+
+    @app.on_event("startup")
+    async def _start_sources():
+        try:
+            await sources.start()
+        except Exception:
+            logger.warning("task sources failed to start", exc_info=True)
+
+    @app.on_event("shutdown")
+    async def _stop_sources():
+        await sources.stop()
+
     # 7c5. Onboarding import-discovery routes (backlog #34): read-only scan of
     # other CLI agents' (Claude Code, Codex) and Obsidian's on-disk project/vault
     # data, surfaced as ranked candidates the setup wizard confirms one-by-one.

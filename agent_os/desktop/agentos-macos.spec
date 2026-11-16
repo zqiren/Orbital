@@ -73,7 +73,9 @@ a = Analysis(
     ] + _httptools_hiddenimports
       # Spec 138 history readers are imported by name (onboarding.sources),
       # which analysis cannot see: the rc DMG shipped without claude_code + codex.
-      + collect_submodules('agent_os.onboarding.sources'),
+      + collect_submodules('agent_os.onboarding.sources')
+      # Task-source adapters are imported by type name (sources/registry.py).
+      + collect_submodules('agent_os.sources.adapters'),
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

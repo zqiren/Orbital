@@ -590,6 +590,8 @@ def feed_rows(project: dict, sessions: list[dict], now: datetime) -> list[dict]:
             "ask": ask,
             "result_line": result_line,
             "stop": stop,
+            # Task sources: the source this session's task came from, or None.
+            "source": _source_mark(row.get("session_id")),
         })
     # Asks no session opened (shell, an external agent, pre-146): their own rows.
     for ask_id, a in open_asks.items():
@@ -601,8 +603,15 @@ def feed_rows(project: dict, sessions: list[dict], now: datetime) -> list[dict]:
             "trigger_type": None, "routed_by": None, "last_user_at": None,
             "last_reply_at": None, "last_activity_at": None, "checked_reply_at": None,
             "ask": _feed_ask(project_id, a, tz, now), "result_line": None, "stop": None,
+            "source": None,
         })
     return out
+
+
+def _source_mark(session_id) -> dict | None:
+    """The task-source mark of a session (``agent_os/sources``), or None."""
+    from agent_os.sources.core import mark_for_session
+    return mark_for_session(session_id)
 
 
 def _feed_projects() -> list[dict]:

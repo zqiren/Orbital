@@ -57,6 +57,7 @@ vi.mock('../lib/attachment-upload', async (importOriginal) => {
 
 import WorkbenchPage from './WorkbenchPage';
 import { __resetWorkbenchFeed, refreshFeed } from '../hooks/useWorkbenchFeed';
+import { __resetSources } from './sources/sourcesStore';
 import { __resetCheckedMarks } from '../hooks/useSeenReplies';
 import { getWindowCovered } from '../hooks/useWindowCover';
 import { DRAFT_KEY } from './workbench/sendTask';
@@ -129,6 +130,7 @@ beforeEach(() => {
   __resetWorkbenchFeed();
   __resetCheckedMarks();
   localStorage.clear();
+  __resetSources();
 });
 
 describe('Workbench — list', () => {
@@ -164,7 +166,9 @@ describe('Workbench — list', () => {
     ]).toContain(greeting.textContent);
     const kids = [...greeting.parentElement!.children].map((el) => el.getAttribute('data-testid') ?? el.className);
     expect(kids[0]).toBe('workbench-greeting');
-    expect(kids.indexOf('workbench-cards')).toBe(kids.indexOf('workbench-summary') + 1);
+    // The head of the list (summary + 任务来源), then the cards.
+    expect(kids.indexOf('workbench-cards')).toBe(kids.indexOf('workbench-bar') + 1);
+    expect(within(screen.getByTestId('workbench-bar')).getByTestId('workbench-summary')).toBeInTheDocument();
     expect(screen.queryByTestId('workbench-mark')).toBeNull();
   });
 
@@ -252,6 +256,8 @@ describe('Workbench — list', () => {
   it('empty: the composer alone, with the same placeholder as always (the greeting says the rest)', async () => {
     await renderPage([]);
     expect(screen.queryByTestId('workbench-summary')).toBeNull();
+    // 任务来源 stays: it is where tasks come from.
+    expect(screen.getByTestId('workbench-sources')).toHaveTextContent('Task sources');
     expect(cards()).toHaveLength(0);
     expect(screen.getByTestId('wb-composer-input')).toHaveAttribute(
       'placeholder', 'What do you want done?',
@@ -1242,5 +1248,59 @@ describe('Workbench — spec 180: where a task goes, and moving it', () => {
     await waitFor(() => expect(screen.getByTestId('workbench-open-error')).toBeInTheDocument());
     expect(project(cardWith('Stuck'))).toHaveTextContent('Marketing');
     expect(cardWith('Stuck').querySelector('.wb-dot')!.className).not.toContain('is-idle');
+  });
+});
+
+describe('Workbench — task sources', () => {
+  const SRC_DETAIL = {
+    id: 'src_1', type: 'github', family: 'account', name: '', display_name: 'GitHub', label: 'mira', on: true,
+    is_new: false, registered_by: null, status: 'ok', failure: null, last_check_at: iso(1), waiting: 0, held: 0,
+    catch_up: null, created_at: iso(60), kinds: { assigned: {} }, account: 'mira', config: {}, secrets: {}, command: null,
+    instruction: '', history_more: false,
+    history: [{
+      id: 'arr_1', kind: 'item', state: 'routed', title: 'Cart total is wrong', sender: null, place: null, url: null,
+      arrived_at: iso(20), count: 1, updates: [], project_id: 'proj-a', project_name: 'Marketing', routed_by: 'model',
+      session_id: 's1', session_state: 'running', recovered_at: null, reason: null,
+    }],
+  };
+
+  it('任务来源 sits at the head of the list and opens the panel in the docked pane; a second press closes it', async () => {
+    await renderPage(FEED, { 'GET /api/v2/sources': () => ({ sources: [], waiting: 0 }) });
+    const entry = screen.getByTestId('workbench-sources');
+    expect(within(screen.getByTestId('workbench-bar')).getByTestId('workbench-sources')).toBe(entry);
+    expect(entry).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(entry);
+    expect(screen.getByTestId('wb-sources-pane')).toHaveAttribute('data-variant', 'dock');
+    expect(entry).toHaveAttribute('aria-expanded', 'true');
+    fireEvent.click(entry);
+    expect(screen.queryByTestId('wb-sources-pane')).toBeNull();
+  });
+
+  it('a card that came from a source carries its mark; the mark opens the panel at that source and entry', async () => {
+    const feed = [row({ session_id: 's1', name: 'Cart total is wrong', source: { source_id: 'src_1', type: 'github', name: 'GitHub', arrival_id: 'arr_1' } })];
+    const { setRoute } = await renderPage(feed, {
+      'GET /api/v2/sources/src_1': () => SRC_DETAIL,
+      'GET /api/v2/sources': () => ({ sources: [SRC_DETAIL], waiting: 0 }),
+    });
+    const mark = within(cards()[0]).getByTestId('wb-card-source');
+    expect(mark).toHaveTextContent('GitHub');
+    await act(async () => { fireEvent.click(mark); });
+    const detail = await screen.findByTestId('src-detail');
+    expect(detail).toHaveAttribute('data-id', 'src_1');
+    const entry = within(detail).getByTestId('src-arv');
+    expect(entry.className).toContain('hl');
+    // The title is the one link to the session.
+    fireEvent.click(within(entry).getByTestId('src-arv-title'));
+    expect(setRoute).toHaveBeenCalledWith({ name: 'project', projectId: 'proj-a', sessionId: 's1' });
+  });
+
+  it('opening a card in the reading pane closes the sources panel (one pane at a time)', async () => {
+    await renderPage(FEED, { 'GET /api/v2/sources': () => ({ sources: [], waiting: 0 }) });
+    fireEvent.click(screen.getByTestId('workbench-sources'));
+    expect(screen.getByTestId('wb-sources-pane')).toBeInTheDocument();
+    const selectable = cards().find((c) => c.className.includes('is-selectable'))!;
+    fireEvent.click(selectable);
+    expect(screen.queryByTestId('wb-sources-pane')).toBeNull();
+    expect(screen.getByTestId('wb-pane')).toBeInTheDocument();
   });
 });
