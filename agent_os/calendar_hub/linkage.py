@@ -15,6 +15,8 @@ import json
 import logging
 import os
 
+from agent_os.utils.atomic_write import atomic_write_text
+
 logger = logging.getLogger(__name__)
 
 
@@ -69,9 +71,6 @@ class Linkage:
         self._save()
 
     def _save(self) -> None:
-        os.makedirs(self._data_dir, exist_ok=True)
-        path = self._path()
-        tmp = path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump(self._links, fh, indent=2, ensure_ascii=False)
-        os.replace(tmp, path)  # atomic on POSIX + Windows
+        # fsynced temp + replace, retried on Windows (agent_os/utils/atomic_write.py).
+        atomic_write_text(self._path(), json.dumps(self._links, indent=2,
+                                                   ensure_ascii=False))

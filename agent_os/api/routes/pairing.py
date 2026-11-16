@@ -15,6 +15,8 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 
+from agent_os.utils.atomic_write import atomic_write_text
+
 router = APIRouter(prefix="/api/v2")
 
 _relay_client = None
@@ -43,7 +45,10 @@ def _load_devices() -> list[dict]:
 
 
 def _save_devices(devices: list[dict]):
-    _devices_file().write_text(json.dumps(devices, indent=2))
+    # Atomic: a truncated file loads as [] and the next pairing would drop
+    # every phone paired before it. ``encoding=None`` = write_text's default.
+    atomic_write_text(str(_devices_file()), json.dumps(devices, indent=2),
+                      encoding=None)
 
 
 def add_paired_device(phone_id: str):

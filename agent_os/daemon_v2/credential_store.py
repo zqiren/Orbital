@@ -9,6 +9,7 @@ import logging
 import os
 from datetime import datetime, timezone
 from urllib.parse import urlparse
+from agent_os.utils.atomic_write import atomic_write_text
 
 logger = logging.getLogger(__name__)
 
@@ -329,9 +330,9 @@ class UserCredentialStore:
         return {}
 
     def _save_meta(self) -> None:
-        os.makedirs(os.path.dirname(self._meta_path), exist_ok=True)
-        with open(self._meta_path, "w", encoding="utf-8") as f:
-            json.dump(self._meta, f, indent=2)
+        # Atomic: a truncated file would load as {} and the next save would
+        # make that permanent (see agent_os/utils/atomic_write.py).
+        atomic_write_text(self._meta_path, json.dumps(self._meta, indent=2))
 
     def store(self, name: str, domain: str, fields: dict[str, str]) -> None:
         """Store all field values in keychain + update metadata."""

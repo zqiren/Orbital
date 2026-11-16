@@ -17,16 +17,19 @@ nothing left to pair wrongly.
 import json
 import logging
 import os
+import threading
 from contextlib import contextmanager
 import time
 import sys
 import shutil
 from datetime import datetime, timezone
+from typing import Callable
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict
 
 from agent_os.daemon_v2.credential_store import ENV_CARD_ID, CardKeyStore
+from agent_os.utils.atomic_write import atomic_write_text, sweep_stray_temps
 from agent_os.utils.text_io import read_text_lenient
 
 logger = logging.getLogger(__name__)
@@ -297,6 +300,67 @@ def _migration_lock(data_dir: str, timeout: float = 60.0):
         os.close(fd)
 
 
+# ---------------------------------------------------------------------------
+# Safe persistence (2026-11-16 data loss)
+# ---------------------------------------------------------------------------
+#
+# Four browsers loaded the app at once; each load sends
+# ``PUT /settings/ui-language``. The store wrote with a truncating
+# ``open(path, "w")`` and answered any failed read with a fresh default
+# ``GlobalSettings()``, and the route read on the event loop while other
+# requests wrote from worker threads. A read that caught the file truncated
+# got defaults, set the language on them and wrote them back: every credential
+# card, the default card and the skip flag were gone, and the app fell back to
+# onboarding. Three rules make that impossible:
+#
+# 1. A write goes to a temp file in the same directory, is fsynced, then
+#    ``os.replace``d into place: a reader sees the old file or the new one,
+#    and an interrupted write leaves the old file untouched.
+# 2. Nothing ever writes over a file it could not read. A file that exists
+#    but is not JSON (disk damage, a hand edit) is renamed aside to
+#    ``settings.json.unreadable-<timestamp>`` — kept byte for byte, never
+#    deleted — and the store carries on as a fresh install would, so saves
+#    work again. A file that cannot be OPENED (permission, I/O: possibly
+#    transient) or whose JSON this version cannot load (possibly a newer
+#    version's) stays where it is and every write refuses
+#    (``SettingsUnreadableError``); readers still get defaults.
+# 3. Every read-modify-write runs under one per-file lock (``mutate`` for the
+#    plain settings, the same lock inside every card method), so concurrent
+#    writers cannot drop each other's changes.
+
+class SettingsUnreadableError(RuntimeError):
+    """settings.json exists but cannot be read: nothing may be written over it."""
+
+
+_PATH_LOCKS: dict[str, threading.RLock] = {}
+_PATH_LOCKS_GUARD = threading.Lock()
+
+
+def _lock_for(path: str) -> threading.RLock:
+    """One lock per settings file per process, shared by every store on it."""
+    key = os.path.normcase(os.path.abspath(path))
+    with _PATH_LOCKS_GUARD:
+        lock = _PATH_LOCKS.get(key)
+        if lock is None:
+            lock = _PATH_LOCKS[key] = threading.RLock()
+        return lock
+
+
+def _atomic_write_json(path: str, data: dict) -> None:
+    """Write ``data`` as the same JSON the store always wrote, atomically."""
+    atomic_write_text(path, json.dumps(data, indent=2))
+
+
+def _quarantine_name(path: str) -> str:
+    """A backup name beside ``path`` that no existing file uses."""
+    base = f"{path}.unreadable-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    name, n = base, 1
+    while os.path.lexists(name):
+        name = f"{base}-{n}"
+        n += 1
+    return name
+
+
 class SettingsStore:
     """Read/write global settings from a JSON file, and own the card list."""
 
@@ -304,6 +368,12 @@ class SettingsStore:
                  project_store=None, card_key_store=None, migrate: bool = True):
         self._path = os.path.join(data_dir, "settings.json")
         self._data_dir = data_dir
+        # Held by every read and every read-modify-write of this file.
+        self._lock = _lock_for(self._path)
+        # The last unreadable-file signature logged, so a storm of requests
+        # against a broken file logs it once, not once per request.
+        self._unreadable_logged: tuple | None = None
+        sweep_stray_temps(self._path)
         self._credential_store = credential_store
         self._project_store = project_store
         # Every key write goes through ``_cards.set``/``delete``; the wrapper
@@ -326,7 +396,9 @@ class SettingsStore:
                 # the winner's cards and do nothing, or both mint their own ids
                 # and the surviving settings name cards whose keys were written
                 # by the other process (the 2026-09-04 data loss).
-                with _migration_lock(self._data_dir):
+                # An unreadable settings.json raises out of the strict read
+                # here: it is not "never migrated", and it stays untouched.
+                with _migration_lock(self._data_dir), self._lock:
                     self.migrate_to_cards()
             except Exception:
                 logger.exception(
@@ -336,37 +408,126 @@ class SettingsStore:
     # -- plain settings -------------------------------------------------
 
     def get(self) -> GlobalSettings:
-        if not os.path.exists(self._path):
-            return GlobalSettings()
+        """The settings, for READING. Defaults when the file is absent — and
+        also when it is unreadable, so the daemon keeps serving; that answer
+        must never be written back, which is why every write path reads
+        through ``_read_raw``/``_settings_for_write`` instead."""
         try:
-            with open(self._path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            return GlobalSettings(**data)
-        except (json.JSONDecodeError, Exception):
+            return self._settings_for_write()
+        except SettingsUnreadableError:
             return GlobalSettings()
 
+    def mutate(self, fn: Callable[[GlobalSettings], bool | None]) -> GlobalSettings:
+        """One atomic read-modify-write of the plain settings.
+
+        ``fn`` edits the settings it is handed in place; returning ``False``
+        means "nothing changed" and skips the write. The read, ``fn`` and the
+        write all run under the file's lock, so no other writer in this
+        process can slip in between. Raises ``SettingsUnreadableError`` (and
+        writes nothing) when the file exists but cannot be read. Returns the
+        settings as they now stand.
+        """
+        with self._lock:
+            settings = self._settings_for_write()
+            if fn(settings) is False:
+                return settings
+            self._write_settings(settings)
+            return settings
+
     def update(self, settings: GlobalSettings) -> None:
-        os.makedirs(os.path.dirname(self._path), exist_ok=True)
+        """Replace the plain settings wholesale. Prefer ``mutate``: a caller
+        that read settings earlier and writes them here can still overwrite
+        a change made in between. Refuses over an unreadable file."""
+        with self._lock:
+            self._settings_for_write()  # the unreadable-file gate
+            self._write_settings(settings)
+
+    def _write_settings(self, settings: GlobalSettings) -> None:
         data = settings.model_dump()
         # Legacy LLM fields are dropped on save (§3.7 step 5). The block itself
         # stays so a rollback still parses the file.
         data["llm"] = {"fallback_models": data.get("llm", {}).get("fallback_models", [])}
-        with open(self._path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
+        self._write_raw(data)
+
+    def _settings_for_write(self) -> GlobalSettings:
+        """Strict parse: a file this version cannot read (a newer version's
+        shape, a hand edit) is unreadable, not "default settings"."""
+        with self._lock:
+            raw = self._read_raw()
+            try:
+                return GlobalSettings(**raw)
+            except Exception as exc:
+                raise self._unreadable(exc) from exc
 
     def _read_raw(self) -> dict:
-        if not os.path.exists(self._path):
-            return {}
+        """The file's JSON object, ``{}`` when there is none.
+
+        Every caller writes back what it read, so a file that could not be
+        opened raises ``SettingsUnreadableError`` rather than looking like an
+        empty one. A file that opened but is not a JSON object is moved aside
+        first (``_quarantine``), so ``{}`` then truly means "no file here".
+        """
+        with self._lock:
+            try:
+                with open(self._path, "rb") as f:
+                    blob = f.read()
+            except FileNotFoundError:
+                return {}
+            except OSError as exc:
+                # Permission or I/O: possibly transient, and the bytes may be
+                # fine. Never moved, never written over.
+                raise self._unreadable(exc) from exc
+            try:
+                data = json.loads(blob.decode("utf-8-sig"))
+                if not isinstance(data, dict):
+                    raise ValueError(
+                        f"top level is {type(data).__name__}, not an object")
+            except ValueError as exc:
+                self._quarantine(exc)
+                return {}
+            return data
+
+    def _quarantine(self, exc: BaseException) -> None:
+        """Rename an unparseable settings.json aside, keeping its bytes.
+
+        With atomic writes nothing Orbital does leaves such a file; it is
+        disk damage or a hand edit. Staying stuck on it (every save refused,
+        the app parked in onboarding) helps nobody; the user's bytes are kept
+        under a name no other file has, and the store goes on as a fresh
+        install. If the rename fails the file stays and writes refuse.
+        """
+        backup = _quarantine_name(self._path)
         try:
-            with open(self._path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except (json.JSONDecodeError, OSError):
-            return {}
+            os.rename(self._path, backup)
+        except FileNotFoundError:
+            return
+        except OSError as rename_exc:
+            raise self._unreadable(exc) from rename_exc
+        logger.error(
+            "settings: %s could not be parsed (%s: %s); it was moved to %s "
+            "unchanged and Orbital is starting from fresh settings. Restore "
+            "it by hand if it holds anything you need.",
+            self._path, type(exc).__name__, exc, backup,
+        )
 
     def _write_raw(self, data: dict) -> None:
-        os.makedirs(self._data_dir, exist_ok=True)
-        with open(self._path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
+        with self._lock:
+            _atomic_write_json(self._path, data)
+
+    def _unreadable(self, exc: BaseException) -> SettingsUnreadableError:
+        """Build the refusal, logging it loudly once per file state."""
+        try:
+            st = os.stat(self._path)
+            sig = (st.st_size, st.st_mtime_ns, type(exc).__name__)
+        except OSError:
+            sig = (None, None, type(exc).__name__)
+        msg = (f"{self._path} exists but cannot be read ({type(exc).__name__}: "
+               f"{exc}); it is left untouched and no setting can be saved "
+               f"until it is repaired or moved aside")
+        if sig != self._unreadable_logged:
+            self._unreadable_logged = sig
+            logger.error("settings: %s", msg)
+        return SettingsUnreadableError(msg)
 
     # -- cards ----------------------------------------------------------
 
@@ -376,11 +537,19 @@ class SettingsStore:
 
     def _save_cards(self, cards: list[CredentialCard],
                     default_card_id=_KEEP) -> None:
-        raw = self._read_raw()
-        raw["credential_cards"] = [c.model_dump() for c in cards]
-        if default_card_id is not _KEEP:
-            raw["default_card_id"] = default_card_id
-        self._write_raw(raw)
+        # Callers hold ``self._lock`` across the read that produced ``cards``
+        # and this write; the RLock makes the nested acquire free.
+        with self._lock:
+            raw = self._read_raw()
+            raw["credential_cards"] = [c.model_dump() for c in cards]
+            if default_card_id is not _KEEP:
+                raw["default_card_id"] = default_card_id
+            self._write_raw(raw)
+
+    def _cards_for_write(self) -> list[CredentialCard]:
+        """The stored cards via the STRICT read, for a path that writes them
+        back (``stored_cards`` answers [] for an unreadable file)."""
+        return list(self._settings_for_write().credential_cards or [])
 
     def env_card(self) -> CredentialCard | None:
         """The synthetic read-only ``AGENT_OS_API_KEY`` card, or None (D11).
@@ -531,8 +700,8 @@ class SettingsStore:
                     sdk: str | None = None, api_key: str | None = None,
                     make_default: bool | None = None) -> CredentialCard:
         """Persist a new card (and its key). The FIRST card becomes default."""
-        settings = self.get()
-        cards = list(settings.credential_cards or [])
+        # Refuse before touching the keychain when the file cannot be read.
+        self._settings_for_write()
         card = CredentialCard(
             id=_new_card_id(),
             name=name or default_card_name(provider, model),
@@ -542,16 +711,21 @@ class SettingsStore:
             model=model or "",
             created_at=_now_iso(),
         )
+        # The keychain write (it can take seconds) stays outside the lock;
+        # the id is new, so nothing else can be touching it.
         if api_key is not None:
             self._cards.set(card.id, api_key)
-        cards.append(card)
-        should_default = make_default if make_default is not None else (
-            settings.default_card_id is None or len(cards) == 1
-        )
-        self._save_cards(
-            cards,
-            card.id if should_default else settings.default_card_id,
-        )
+        with self._lock:
+            settings = self._settings_for_write()
+            cards = list(settings.credential_cards or [])
+            cards.append(card)
+            should_default = make_default if make_default is not None else (
+                settings.default_card_id is None or len(cards) == 1
+            )
+            self._save_cards(
+                cards,
+                card.id if should_default else settings.default_card_id,
+            )
         return card
 
     def update_card(self, card_id: str, **fields) -> CredentialCard:
@@ -562,24 +736,29 @@ class SettingsStore:
         """
         if card_id == ENV_CARD_ID:
             raise ValueError("the environment card is read-only")
-        cards = self.stored_cards()
         api_key = fields.pop("api_key", None)
-        found = None
-        for idx, card in enumerate(cards):
-            if card.id != card_id:
-                continue
-            data = card.model_dump()
-            for key, value in fields.items():
-                if key in data:
-                    data[key] = value
-            found = CredentialCard(**data)
-            cards[idx] = found
-            break
-        if found is None:
+
+        def patched(cards: list[CredentialCard]) -> CredentialCard:
+            for idx, card in enumerate(cards):
+                if card.id != card_id:
+                    continue
+                data = card.model_dump()
+                for key, value in fields.items():
+                    if key in data:
+                        data[key] = value
+                cards[idx] = CredentialCard(**data)
+                return cards[idx]
             raise KeyError(card_id)
+
+        # Validate (unknown card, unreadable file) before the key is written,
+        # as before; the keychain write itself stays outside the lock.
+        patched(self._cards_for_write())
         if api_key is not None:
             self._cards.set(card_id, api_key)
-        self._save_cards(cards)
+        with self._lock:
+            cards = self._cards_for_write()
+            found = patched(cards)
+            self._save_cards(cards)
         return found
 
     def set_card_key(self, card_id: str, api_key: str) -> dict:
@@ -591,18 +770,22 @@ class SettingsStore:
         """Remove a card and its key. Referrers are re-pointed by the route."""
         if card_id == ENV_CARD_ID:
             raise ValueError("the environment card is read-only")
-        cards = [c for c in self.stored_cards() if c.id != card_id]
-        settings = self.get()
-        default_id = settings.default_card_id
-        if default_id == card_id:
-            default_id = cards[0].id if cards else None
+        with self._lock:
+            settings = self._settings_for_write()
+            cards = [c for c in (settings.credential_cards or [])
+                     if c.id != card_id]
+            default_id = settings.default_card_id
+            if default_id == card_id:
+                default_id = cards[0].id if cards else None
+            self._save_cards(cards, default_id)
+        # The key goes after the row: a refused save keeps both.
         self._cards.delete(card_id)
-        self._save_cards(cards, default_id)
 
     def set_default_card(self, card_id: str) -> None:
-        raw = self._read_raw()
-        raw["default_card_id"] = card_id
-        self._write_raw(raw)
+        with self._lock:
+            raw = self._read_raw()
+            raw["default_card_id"] = card_id
+            self._write_raw(raw)
 
     def ensure_default_card(self) -> CredentialCard:
         """The stored default card, creating an empty one if there is none.
@@ -610,17 +793,24 @@ class SettingsStore:
         The ``PUT /settings/api-key`` shim needs somewhere to put a key before
         the wizard's later ``PUT /settings`` supplies provider and model.
         """
-        card = self.stored_default_card()
-        if card is not None:
-            return card
-        llm = self.get().llm
-        provider = llm.provider or "custom"
-        region, base = region_for_base_url(provider, llm.base_url)
-        return self.create_card(
-            provider=provider, model=llm.model or "", region=region,
-            base_url=base, sdk=llm.sdk if provider == "custom" else None,
-            make_default=True,
-        )
+        # Check-then-create under one lock: two racing callers must not mint
+        # two default cards. No keychain call happens in here.
+        with self._lock:
+            settings = self._settings_for_write()
+            cards = settings.credential_cards or []
+            for card in cards:
+                if card.id == settings.default_card_id:
+                    return card
+            if cards:
+                return cards[0]
+            llm = settings.llm
+            provider = llm.provider or "custom"
+            region, base = region_for_base_url(provider, llm.base_url)
+            return self.create_card(
+                provider=provider, model=llm.model or "", region=region,
+                base_url=base, sdk=llm.sdk if provider == "custom" else None,
+                make_default=True,
+            )
 
     def record_card_health(self, card_id: str, *, verified: bool = False,
                            error: dict | None = None) -> None:
@@ -631,36 +821,38 @@ class SettingsStore:
         """
         if not card_id or card_id == ENV_CARD_ID:
             return
-        cards = self.stored_cards()
-        changed = False
-        for idx, card in enumerate(cards):
-            if card.id != card_id:
-                continue
-            data = card.model_dump()
-            if verified:
-                data["verified_at"] = _now_iso()
-                data["last_error"] = None
-            else:
-                data["last_error"] = error
-            cards[idx] = CredentialCard(**data)
-            changed = True
-            break
-        if changed:
-            self._save_cards(cards)
+        with self._lock:
+            cards = self._cards_for_write()
+            changed = False
+            for idx, card in enumerate(cards):
+                if card.id != card_id:
+                    continue
+                data = card.model_dump()
+                if verified:
+                    data["verified_at"] = _now_iso()
+                    data["last_error"] = None
+                else:
+                    data["last_error"] = error
+                cards[idx] = CredentialCard(**data)
+                changed = True
+                break
+            if changed:
+                self._save_cards(cards)
 
     def touch_card_used(self, card_id: str | None) -> None:
         """Write ``last_used_at`` — once per run, at session start (§3.5)."""
         if not card_id or card_id == ENV_CARD_ID:
             return
-        cards = self.stored_cards()
-        for idx, card in enumerate(cards):
-            if card.id != card_id:
-                continue
-            data = card.model_dump()
-            data["last_used_at"] = _now_iso()
-            cards[idx] = CredentialCard(**data)
-            self._save_cards(cards)
-            return
+        with self._lock:
+            cards = self._cards_for_write()
+            for idx, card in enumerate(cards):
+                if card.id != card_id:
+                    continue
+                data = card.model_dump()
+                data["last_used_at"] = _now_iso()
+                cards[idx] = CredentialCard(**data)
+                self._save_cards(cards)
+                return
 
     # -- the derived masked view ----------------------------------------
 
@@ -817,6 +1009,12 @@ class SettingsStore:
             p_base = project.get("base_url")
             p_sdk = project.get("sdk") or "openai"
             p_name = project.get("name") or pid
+            if project.get("card_id") and not p_key and not p_model:
+                # Already on cards: this run follows a settings.json that
+                # was moved aside as unparseable. Leave the row pointing at
+                # its card, so restoring the backup by hand brings back
+                # exactly what was there.
+                continue
             update: dict = {"card_id": None, "migration_note": None}
 
             if p_key:
