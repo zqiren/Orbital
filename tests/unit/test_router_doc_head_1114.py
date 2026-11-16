@@ -39,5 +39,5 @@ def test_router_block_skips_the_seeded_agents_md(tmp_path):
 
     ws = tmp_path / "x"
     ws.mkdir()
-    (ws / "AGENTS.md").write_text(AGENT_MD_TEMPLATE)
+    (ws / "AGENTS.md").write_text(AGENT_MD_TEMPLATE, encoding="utf-8")
     assert "(head)" not in project_block({"project_id": "p", "workspace": str(ws)}, [])

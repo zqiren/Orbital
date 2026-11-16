@@ -1328,8 +1328,11 @@ describe('LLMProviderSettings — Save needs a PASSING Test Connection (8.png 20
     // 8.png: "Current key: sk-F...czrq (keychain)" + Remove key on an ADD form.
     expect(screen.queryByText(/sk-F\.\.\.czrq/)).toBeNull();
     expect(screen.queryByText('Remove key')).toBeNull();
-    // The Test button appears once the seeded model lands; wait for it.
-    await screen.findByTestId('card-test');
+    // The gate needs the model the form seeds from settings, in an effect
+    // that can land after the fields are on screen; the Test button is
+    // always there, so wait for the seeded model itself.
+    await waitFor(() =>
+      expect(screen.getByPlaceholderText(/model name/i)).toHaveValue('deepseek-v4-flash'));
     expect(save().disabled).toBe(true);
     expect(test().disabled).toBe(true);
     expect(screen.getByTestId('card-save-gate').textContent).toContain('Enter an API key');

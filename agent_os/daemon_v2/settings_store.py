@@ -29,7 +29,7 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict
 
 from agent_os.daemon_v2.credential_store import ENV_CARD_ID, CardKeyStore
-from agent_os.utils.atomic_write import atomic_write_text, sweep_stray_temps
+from agent_os.utils.atomic_write import atomic_write_text, read_bytes, sweep_stray_temps
 from agent_os.utils.text_io import read_text_lenient
 
 logger = logging.getLogger(__name__)
@@ -469,8 +469,7 @@ class SettingsStore:
         """
         with self._lock:
             try:
-                with open(self._path, "rb") as f:
-                    blob = f.read()
+                blob = read_bytes(self._path)
             except FileNotFoundError:
                 return {}
             except OSError as exc:

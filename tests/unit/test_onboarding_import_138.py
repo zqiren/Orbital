@@ -196,7 +196,12 @@ def test_a_folder_with_history_from_after_the_scan_is_listed_when_import_opens(a
     folder the user worked in with Claude Code after the daemon started never
     reached the sidebar Import. Opening Import re-reads what changed."""
     _ready(app_env.client)
-    first = app_env.client.get("/api/v2/onboarding/importable-projects").json()
+    # The first list starts the background repo walk; let it finish so the
+    # status below is about the history re-read, not the walk's timing.
+    deadline = time.time() + 10
+    while (first := app_env.client.get("/api/v2/onboarding/importable-projects").json())["status"] != "ready":
+        assert time.time() < deadline
+        time.sleep(0.05)
     fresh = app_env.home / "code" / "later"
     fresh.mkdir(parents=True)
     _transcript(app_env.home / ".claude" / "projects" / "later" / "l1.jsonl", "l1",

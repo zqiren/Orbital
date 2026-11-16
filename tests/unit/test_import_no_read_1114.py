@@ -232,7 +232,7 @@ def test_pointers_name_what_exists_as_paths(tmp_path, monkeypatch):
     assert pointers(str(ws)) == [] and pointer_row([]) is None
 
     (ws / "CLAUDE.md").write_text("# rules\n")
-    (ws / "AGENTS.md").write_text(AGENT_MD_TEMPLATE)          # the one Orbital seeds
+    (ws / "AGENTS.md").write_text(AGENT_MD_TEMPLATE, encoding="utf-8")  # the one Orbital seeds
     (ws / "readme.txt").write_text("x")
     (ws / "README.md").write_text("# App\n")
     d = _claude_transcript(home, ws)

@@ -32,6 +32,17 @@ def _isolate_native_session_homes(tmp_path_factory, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_real_drive_roots_in_repo_walk():
+    """Batch 1114: on Windows the import repo walk also starts at every fixed
+    drive's root, so a test walking its own temp home would also list the
+    machine's real repos (on CI the checkout on ``D:\\``). Tests that cover the
+    drive starts pass their own ``drives=``."""
+    with patch("agent_os.onboarding.import_scanner._windows_fixed_drives",
+               lambda: []):
+        yield
+
+
+@pytest.fixture(autouse=True)
 def _no_sub_agent_warm_up():
     """Spec 136: ``create_app()``'s lifespan starts a background sweep of
     every agent CLI. Unit tests that enter it must not probe the developer's

@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Orbital Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { useState, useEffect, useRef, type ReactNode } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, type ReactNode } from 'react';
 import { Check, X, Loader2 } from 'lucide-react';
 import type {
   CardMutationResponse,
@@ -823,7 +823,10 @@ export default function LLMProviderSettings({
   // save — running doSave here compared the form against whichever card was
   // default at mount (stale or none), refused, and its reason was folded
   // away with the fields: a dead button (9.png, 2026-09-08).
-  useEffect(() => {
+  // A layout effect: it runs inside the commit, so the ref never lags the
+  // screen. A passive effect can still be pending when the ref is read, and
+  // the previous render's doSave then judged a verdict it had not seen.
+  useLayoutEffect(() => {
     if (saveRef) saveRef.current = postSigninCollapsed ? async () => true : doSave;
     return () => { if (saveRef) saveRef.current = null; };
   });

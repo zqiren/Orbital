@@ -167,14 +167,19 @@ def test_a_reader_never_sees_a_partly_written_file(tmp_path):
     stop = threading.Event()
 
     def raw_reader():
+        # Outside the store's lock, like another process. It reads the way
+        # the store does: on Windows an open that lands on the replace is a
+        # sharing violation for a moment, retried by ``read_bytes``.
         while not stop.is_set():
             try:
-                with open(store._path, encoding="utf-8") as f:
-                    json.load(f)
+                json.loads(atomic_write.read_bytes(store._path).decode("utf-8-sig"))
             except FileNotFoundError:
                 bad.append("missing")
+            except PermissionError:
+                bad.append("denied")
             except ValueError:
                 bad.append("partial")
+            time.sleep(0.001)  # not a spin: the writer's replace needs gaps too
 
     t = threading.Thread(target=raw_reader)
     t.start()
@@ -401,6 +406,70 @@ def test_replace_retries_a_briefly_held_target(tmp_path, monkeypatch):
     monkeypatch.undo()
     assert calls["n"] == 3
     assert _on_disk(store)["ui_language"] == "zh"
+
+
+def _deny_reads(monkeypatch, store, times):
+    """``open(settings.json, "rb")`` fails with a sharing violation the first
+    ``times`` calls (every call when ``times`` is None)."""
+    import builtins
+    real = builtins.open
+    calls = {"n": 0}
+
+    def held(file, mode="r", *a, **k):
+        if os.fspath(file) == store._path and "r" in mode and "b" in mode:
+            calls["n"] += 1
+            if times is None or calls["n"] <= times:
+                raise PermissionError(13, "simulated: sharing violation")
+        return real(file, mode, *a, **k)
+
+    monkeypatch.setattr(builtins, "open", held)
+    return calls
+
+
+def test_a_read_retries_a_briefly_held_file_on_windows(tmp_path, monkeypatch):
+    """Windows: an open that lands while another process replaces or holds
+    settings.json fails for a moment. The read retries instead of answering
+    defaults (no cards: the app would drop to onboarding) or refusing the
+    save that read it."""
+    store = _store(tmp_path)
+    card = _seed(store)
+    monkeypatch.setattr(atomic_write, "_WINDOWS", True, raising=False)
+    calls = _deny_reads(monkeypatch, store, 2)
+    assert store.get().default_card_id == card.id
+    assert calls["n"] == 3
+    calls["n"] = 0
+    store.mutate(lambda s: setattr(s, "ui_language", "zh"))
+    monkeypatch.undo()
+    assert calls["n"] == 3
+    disk = _on_disk(store)
+    assert disk["ui_language"] == "zh" and disk["default_card_id"] == card.id
+
+
+def test_a_read_held_past_the_bound_still_refuses_writes(tmp_path, monkeypatch):
+    store = _store(tmp_path)
+    card = _seed(store)
+    before = open(store._path, "rb").read()
+    monkeypatch.setattr(atomic_write, "_WINDOWS", True)
+    monkeypatch.setattr(atomic_write, "READ_RETRY_S", 0.05)
+    _deny_reads(monkeypatch, store, None)
+    with pytest.raises(ss_mod.SettingsUnreadableError):
+        store.mutate(lambda s: setattr(s, "ui_language", "zh"))
+    assert store.get().credential_cards is None
+    monkeypatch.undo()
+    assert open(store._path, "rb").read() == before
+    assert store.get().default_card_id == card.id
+
+
+def test_a_permission_error_off_windows_is_not_retried(tmp_path, monkeypatch):
+    """POSIX has no share modes: a denied open is real, so the read does not
+    wait under the lock before refusing."""
+    store = _store(tmp_path)
+    _seed(store)
+    monkeypatch.setattr(atomic_write, "_WINDOWS", False)
+    calls = _deny_reads(monkeypatch, store, None)
+    with pytest.raises(ss_mod.SettingsUnreadableError):
+        store.mutate(lambda s: setattr(s, "ui_language", "zh"))
+    assert calls["n"] == 1
 
 
 # ---------------------------------------------------------------------------

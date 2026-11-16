@@ -31,6 +31,14 @@ from contextlib import suppress
 # as PermissionError) — an antivirus scan or an indexer, gone in
 # milliseconds. A truncating write is never the fallback.
 REPLACE_RETRY_S = 2.0
+# The reader's side of the same collision: on Windows an open that lands
+# while another process replaces the file, or holds it in a conflicting
+# share mode, fails with PermissionError for a moment. Shorter than the
+# writer's bound: a read waits under the store's lock, and a file that is
+# really denied refuses every write until it is fixed anyway. POSIX has no
+# share modes, so there a PermissionError is real and not retried.
+READ_RETRY_S = 0.5
+_WINDOWS = sys.platform == "win32"
 
 TMP_SUFFIX = ".tmp"
 
@@ -51,6 +59,21 @@ def _replace(src: str, dst: str) -> None:
             if time.monotonic() >= deadline:
                 raise
             time.sleep(0.05)
+
+
+def read_bytes(path: str) -> bytes:
+    """The file's bytes; on Windows a PermissionError (a sharing violation
+    while another process replaces or holds the file) is retried briefly.
+    Other errors, and one that outlasts ``READ_RETRY_S``, raise as usual."""
+    deadline = time.monotonic() + READ_RETRY_S
+    while True:
+        try:
+            with open(path, "rb") as f:
+                return f.read()
+        except PermissionError:
+            if not _WINDOWS or time.monotonic() >= deadline:
+                raise
+            time.sleep(0.01)
 
 
 def atomic_write_text(path: str, text: str, encoding: str | None = "utf-8") -> None:
