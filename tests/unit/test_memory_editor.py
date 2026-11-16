@@ -86,12 +86,14 @@ def _turn(**fields) -> E.TurnResult:
     return E.TurnResult(**base)
 
 
-def _archive_block(wf, key, block):
+def _archive_block(wf, key, block, heading=None):
     """What the Memory agent does to archive one entry: archive first (the
     daemon appends the section and regenerates the contents table), then
-    the live file without it."""
+    the live file without it. ``heading`` defaults to ``## [archived DATE]``;
+    an entry replaced by a live one goes under ``## [replaced DATE by id:X]``
+    (spec 182)."""
     from agent_os.agent import memory_entries as M
-    WF._append_archive_section(wf, M.ARCHIVE_OF[key], f"## [archived {TODAY}]", block)
+    WF._append_archive_section(wf, M.ARCHIVE_OF[key], heading or f"## [archived {TODAY}]", block)
     wf.write(key, wf.read(key).replace(block + "\n", ""))
 
 
@@ -209,6 +211,29 @@ async def test_pass_sees_prepassed_files_and_keeps_every_moved_line_in_an_archiv
     with open(os.path.join(result.backup_dir, "editor-run.json")) as f:
         record = json.load(f)
     assert record["outcome"] == "edited" and record["turn"]["tool_calls"] == 4
+
+
+@pytest.mark.asyncio
+async def test_pass_archives_a_replaced_decision_under_the_replaced_heading(wf):
+    """Spec 182 §5.4: the Memory session links a replaced entry to the live
+    entry that replaced it; the contents row carries the arrow and the
+    post-pass leaves the entry in the archive."""
+    from agent_os.agent import memory_entries as M
+    old = _decision("PenguinHarness → watchlist", "penguin").rstrip("\n")
+    live_ids = [b.id for b in state_blocks.parse(wf.read("decisions"))[1]]
+    keeper = [i for i in live_ids if i != "penguin"][0]
+
+    async def run_turn(task_text):
+        _archive_block(wf, "decisions", old, heading=f"## [replaced {TODAY} by id:{keeper}]")
+        return _turn(tool_calls=2)
+
+    result = await E.run_pass(wf, run_turn, today=TODAY)
+    assert result.ok and result.restored == []
+    archive = wf.read("decisions_archive")
+    assert f"## [replaced {TODAY} by id:{keeper}]" in archive
+    assert f"- id:penguin · replaced {TODAY} → id:{keeper} · " in archive
+    assert "id:penguin" not in wf.read("decisions")
+    assert M.archive_rows(archive)[0].kind == "replaced"
 
 
 @pytest.mark.asyncio

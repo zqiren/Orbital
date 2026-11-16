@@ -127,6 +127,10 @@ def test_goals_draft_is_written_in_the_users_language(tmp_path):
 def test_shape_rules_carry_the_one_supersedes_line():
     assert "supersedes: " in MEMORY_SHAPE_RULES
     assert "project_goals.md" in MEMORY_SHAPE_RULES
+    # Spec 182: the same line, for a decision or lesson that replaces another.
+    flat = " ".join(MEMORY_SHAPE_RULES.split())
+    assert "decision or lesson replaces an old one" in flat
+    assert "supersedes: <the old bullet line, word for word>" in flat
 
 
 # ---------------------------------------------------------------------------

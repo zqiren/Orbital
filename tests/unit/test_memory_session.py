@@ -890,3 +890,15 @@ def test_task_message_says_edit_and_write_never_the_shell_once():
     sentence = "Edit these files only with edit and write; never through the shell."
     assert text.count(sentence) == 1
     assert ("<!--mem …--> lines.\n" + sentence + "\n\nSIZES (bullet lines only") in text
+
+
+def test_rules_name_the_replaced_heading_for_an_entry_replaced_by_a_live_one():
+    """Spec 182 §5.4: the Memory session links a replaced entry to the live
+    entry that replaced it, the way a merge names its new entry."""
+    text = E.build_task_message(
+        sizes={k: (1, 10, 5) for k in E.LIVE_KEYS}, folded=[], over=["decisions"],
+        forced=False, pointer_paths=[], last_pass=None, sessions=[], today="2026-11-16", tool_cap=12,
+    )
+    flat = " ".join(text.split())
+    assert "`## [replaced 2026-11-16 by id:<that entry's id>]`" in flat
+    assert "`## [archived 2026-11-16]`" in flat and "`## [merged 2026-11-16 into id:<new id>]`" in flat
