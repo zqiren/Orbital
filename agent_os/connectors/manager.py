@@ -27,6 +27,7 @@ from typing import Awaitable, Callable
 
 import anyio
 import httpx
+from agent_os.utils.atomic_write import atomic_write_text
 
 from .manifest import ConnectorManifest, custom_manifest, load_catalog, manifest_from_dict
 from .mcp_client import streamable_http_opener
@@ -265,12 +266,12 @@ class ConnectorManager:
             logger.warning("failed to load custom connectors from %s", path, exc_info=True)
 
     def _save_custom(self) -> None:
-        os.makedirs(self._data_dir, exist_ok=True)
-        with open(self._custom_path(), "w", encoding="utf-8") as fh:
-            json.dump(
-                {"custom": [m.to_dict() for m in self._custom.values()]},
-                fh, indent=2, ensure_ascii=False,
-            )
+        # Atomic: a truncated file would load as no custom connectors and
+        # the next save would make that permanent.
+        atomic_write_text(self._custom_path(), json.dumps(
+            {"custom": [m.to_dict() for m in self._custom.values()]},
+            indent=2, ensure_ascii=False,
+        ))
 
     # ---- MCP sessions (lazy, cached, reconnect-on-drop) ----
 

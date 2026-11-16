@@ -19,6 +19,7 @@ import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+from agent_os.utils.atomic_write import atomic_write_text
 
 from agent_os.queue.models import (
     AttemptOutcome,
@@ -205,13 +206,8 @@ class QueueStore:
     def _save_locked(self) -> None:
         if self._state is None:
             return
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self._path.with_name(self._path.name + ".tmp")
-        tmp.write_text(
-            self._state.model_dump_json(indent=2),
-            encoding="utf-8",
-        )
-        tmp.replace(self._path)
+        # fsynced temp + replace, retried on Windows (agent_os/utils/atomic_write.py).
+        atomic_write_text(str(self._path), self._state.model_dump_json(indent=2))
 
     # ------------------------------------------------------------------
     # Item CRUD

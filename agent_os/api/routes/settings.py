@@ -5,6 +5,7 @@
 """Global settings endpoints."""
 
 import asyncio
+import contextlib
 import copy
 import hashlib
 import inspect
@@ -436,20 +437,25 @@ async def delete_card(card_id: str):
             if updates:
                 _project_store.update_project(pid, updates)
 
-    current = _settings_store.get()
-    kept = [fb for fb in (current.llm.fallback_models or [])
-            if fb.card_id != card_id]
-    if len(kept) != len(current.llm.fallback_models or []):
+    def drop_fallbacks(current) -> bool:
+        kept = [fb for fb in (current.llm.fallback_models or [])
+                if fb.card_id != card_id]
+        if len(kept) == len(current.llm.fallback_models or []):
+            return False
         current.llm.fallback_models = kept
-        _settings_store.update(current)
+        return True
 
-    _settings_store.delete_card(card_id)
-    if _settings_store.default_card() is None:
-        # No key left: the keyless mode the wizard's Skip leaves, so the
-        # first-run gate (no key and not skipped) never shows the wizard again.
-        current = _settings_store.get()
+    def mark_skipped(current) -> None:
         current.setup_api_key_skipped = True
-        _settings_store.update(current)
+
+    with _settings_write():
+        _settings_store.mutate(drop_fallbacks)
+        _settings_store.delete_card(card_id)
+        if _settings_store.default_card() is None:
+            # No key left: the keyless mode the wizard's Skip leaves, so the
+            # first-run gate (no key and not skipped) never shows the wizard
+            # again.
+            _settings_store.mutate(mark_skipped)
     _refresh_agents_in_background(_model_provider_slugs())
     return {"id": card_id, "deleted": True, "reassigned_projects": reassigned}
 
@@ -466,7 +472,8 @@ async def set_default_card(card_id: str):
 
     _card_or_404(card_id)
     if card_id != ENV_CARD_ID:
-        _settings_store.set_default_card(card_id)
+        with _settings_write():
+            _settings_store.set_default_card(card_id)
     effective = _settings_store.effective_default_card_id()
     return {"default_card_id": effective, "applied": effective == card_id}
 
@@ -575,11 +582,45 @@ async def _legacy_key_gate(req: UpdateSettingsRequest) -> None:
     await _store_only_if_passed(_candidate_card(base, **fields), key)
 
 
+@contextlib.contextmanager
+def _settings_write():
+    """A settings write that the store refused because settings.json exists
+    but cannot be read answers 500 with a clear reason; the file is kept."""
+    from agent_os.daemon_v2.settings_store import SettingsUnreadableError
+
+    try:
+        yield
+    except SettingsUnreadableError as exc:
+        raise HTTPException(status_code=500, detail={
+            "code": "settings_unreadable", "message": str(exc)})
+
+
 @router.put("/settings")
 async def update_settings(req: UpdateSettingsRequest):
     await _legacy_key_gate(req)
-    _apply_legacy_llm_fields(req)
-    current = _settings_store.get()
+    with _settings_write():
+        _apply_legacy_llm_fields(req)
+        _settings_store.mutate(lambda current: _apply_settings_fields(req, current))
+
+    # Most keys arrive here, not through PUT /settings/api-key — this is the
+    # write the provider dropdown uses — and this path emitted nothing, so
+    # `key_set` under-counted. Emitted after the update so a request that sets
+    # provider and key together reports the provider the key belongs to.
+    if req.llm_api_key is not None:
+        card = _settings_store.default_card()
+        telemetry.emit("key_set",
+                       {"provider": card.provider if card else "custom"})
+        telemetry.latch("key_set")
+    if req.setup_api_key_skipped:
+        # Spec 138: the wizard's "Skip for now" on the Orbital-agent key step.
+        telemetry.latch("key_skipped")
+
+    return await asyncio.to_thread(_settings_store.get_masked)
+
+
+def _apply_settings_fields(req: UpdateSettingsRequest, current) -> None:
+    """The plain-settings half of ``PUT /settings``, applied to ``current``
+    inside the store's read-modify-write (``SettingsStore.mutate``)."""
     if req.llm_fallback_models is not None:
         from agent_os.daemon_v2.settings_store import FallbackModelConfig
         current.llm.fallback_models = [
@@ -626,23 +667,6 @@ async def update_settings(req: UpdateSettingsRequest):
         with open(memory_path, "w", encoding="utf-8") as f:
             f.write(req.user_memory_content)
 
-    _settings_store.update(current)
-
-    # Most keys arrive here, not through PUT /settings/api-key — this is the
-    # write the provider dropdown uses — and this path emitted nothing, so
-    # `key_set` under-counted. Emitted after the update so a request that sets
-    # provider and key together reports the provider the key belongs to.
-    if req.llm_api_key is not None:
-        card = _settings_store.default_card()
-        telemetry.emit("key_set",
-                       {"provider": card.provider if card else "custom"})
-        telemetry.latch("key_set")
-    if req.setup_api_key_skipped:
-        # Spec 138: the wizard's "Skip for now" on the Orbital-agent key step.
-        telemetry.latch("key_skipped")
-
-    return await asyncio.to_thread(_settings_store.get_masked)
-
 
 class UiLanguageRequest(BaseModel):
     ui_language: str | None = None
@@ -657,18 +681,24 @@ async def set_ui_language(req: UiLanguageRequest):
     the file is written only on a change."""
     from agent_os.onboarding.user_language import clean_tag, clean_tags
 
-    current = _settings_store.get()
     ui = clean_tag(req.ui_language) if req.ui_language is not None else None
     langs = clean_tags(req.ui_languages) if req.ui_languages is not None else None
-    changed = False
-    if ui is not None and ui != current.ui_language:
-        current.ui_language = ui
-        changed = True
-    if langs is not None and langs != current.ui_languages:
-        current.ui_languages = langs
-        changed = True
-    if changed:
-        await asyncio.to_thread(_settings_store.update, current)
+
+    def apply(current) -> bool:
+        changed = False
+        if ui is not None and ui != current.ui_language:
+            current.ui_language = ui
+            changed = True
+        if langs is not None and langs != current.ui_languages:
+            current.ui_languages = langs
+            changed = True
+        return changed
+
+    # Read, change and write as ONE locked step, off the loop. Every page
+    # load sends this, so several devices loading together race here — the
+    # 2026-11-16 settings wipe.
+    with _settings_write():
+        current = await asyncio.to_thread(_settings_store.mutate, apply)
     return {"ui_language": current.ui_language, "ui_languages": current.ui_languages}
 
 

@@ -24,6 +24,7 @@ import threading
 from dataclasses import dataclass
 
 from agent_os.daemon_v2.models import detect_os
+from agent_os.utils.atomic_write import atomic_write_text
 
 logger = logging.getLogger(__name__)
 
@@ -404,11 +405,9 @@ class SubAgentConfigStore:
             self._data = {}
 
     def _save(self) -> None:
-        os.makedirs(os.path.dirname(self._path), exist_ok=True)
-        tmp = self._path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(self._data, f, indent=2, ensure_ascii=False)
-        os.replace(tmp, self._path)
+        # fsynced temp + replace, retried on Windows (agent_os/utils/atomic_write.py).
+        atomic_write_text(self._path, json.dumps(self._data, indent=2,
+                                                 ensure_ascii=False))
 
     @staticmethod
     def _params_of(entry: dict[str, object]) -> dict[str, str]:
