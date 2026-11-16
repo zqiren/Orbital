@@ -2470,6 +2470,16 @@ async def patch_session(project_id: str, session_id: str, req: SessionPatchReque
                     "AGENTS.md reseed at pin time failed for %s", project_id,
                     exc_info=True,
                 )
+            # Spec 184 §5.1: a worker Orbital started in this chat, now
+            # pinned, is rebuilt in the background (resume) so it can hand
+            # work on. Never awaited; a no-op when there is nothing to do.
+            take_seat = getattr(_sub_agent_manager, "take_seat", None)
+            if callable(take_seat):
+                try:
+                    take_seat(project_id, req.pinned_target, session_id=session_id)
+                except Exception:
+                    logger.warning("pin-time takeover check failed for %s/%s",
+                                   project_id, session_id, exc_info=True)
         # Unpin / retarget (spec 074 §3.5 trigger 1): any change AWAY from a
         # currently pinned worker fires the consolidation pass — detached,
         # single-flight; this PATCH response never waits on it.

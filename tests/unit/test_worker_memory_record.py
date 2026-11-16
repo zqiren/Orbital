@@ -175,6 +175,8 @@ async def test_pinned_worker_completion_sends_the_worker_variant_as_its_next_tur
     assert kwargs["session_id"] == SID
     assert kwargs["initiator"] == "user_pinned"
     assert kwargs["dispatch_id"]
+    # Spec 184: a daemon turn, never a takeover that rebuilds the worker.
+    assert kwargs["daemon_turn"] is True
 
     rows = session.get_messages()
     reminder = rows[-1]

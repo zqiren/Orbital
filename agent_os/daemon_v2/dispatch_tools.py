@@ -109,6 +109,18 @@ def seat_note(ctx: DispatchContext) -> str | None:
             f"your shell: its reply would never reach the user.")
 
 
+def no_dispatch_note() -> str:
+    """The first-turn line for a seat-holder that ended up without the tool
+    (spec 184 §5.3): a failed Codex mount, an ACP agent without HTTP MCP, Pi
+    below 0.99, pipe/PTY, no endpoint. Without it the worker improvises when
+    the user asks for another agent (that agent's CLI from its shell, or
+    computer use on the Orbital window)."""
+    return ("You cannot hand tasks to other agents from this chat. If the user "
+            "asks for another agent, do not try to reach it through your shell, "
+            "a browser or computer use. Tell the user to switch this chat to "
+            "that agent, or to Orbital, in the agent picker.")
+
+
 async def dispatch(sub_agent_manager, ctx: DispatchContext, agent: str, task: str,
                    fresh: bool = False) -> str:
     """Send ``task`` to ``agent`` on behalf of the seat-holder ``ctx``."""

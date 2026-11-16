@@ -33,6 +33,7 @@ from agent_os.daemon_v2.dispatch_tools import (
     TOKEN_ENV as DISPATCH_TOKEN_ENV,
     TOP_INITIATORS,
     DispatchContext,
+    no_dispatch_note,
     seat_note,
 )
 from agent_os.daemon_v2.sub_agent_visibility import resolve_visible_sub_agent_slugs
@@ -60,6 +61,36 @@ class _QueuedPrompt:
     dispatch_id: str
     transcript_path: str
     initiator: str = "management_agent"
+    # Spec 184: a turn the daemon started (memory reminder, worker result,
+    # job message) — never a user taking the worker over.
+    daemon_turn: bool = False
+
+
+#: The loopback entries every seat-holder needs in NO_PROXY (spec 184 §5.2).
+_LOOPBACK_NO_PROXY = ("127.0.0.1", "localhost")
+
+
+def _loopback_no_proxy(env: dict | None, inherited, *,
+                       windows: bool = os.name == "nt") -> dict:
+    """``NO_PROXY`` / ``no_proxy`` for a seat-holder's spawn env, each built
+    from the value the worker would actually get (its own ``env`` entry, else
+    the daemon's ``inherited`` one, else empty) with the loopback entries it
+    lacks appended. ``config.env`` overrides the inherited environment in
+    every transport, so building from the daemon's value alone would
+    overwrite a user's own entry. Returns only those keys: on Windows one,
+    ``NO_PROXY`` (names are case-insensitive there, so two spellings would
+    be a duplicate entry in the child's environment block)."""
+    out = {}
+    for name in (("NO_PROXY",) if windows else ("NO_PROXY", "no_proxy")):
+        if env and name in env and env[name] is not None:
+            value = str(env[name])
+        else:
+            value = str(inherited.get(name) or "") if inherited else ""
+        entries = [e.strip() for e in value.split(",")]
+        missing = [h for h in _LOOPBACK_NO_PROXY if h not in entries]
+        kept = value.strip().rstrip(",")
+        out[name] = ",".join(([kept] if kept else []) + missing) if missing else value
+    return out
 
 
 class SubAgentManager:
@@ -188,6 +219,12 @@ class SubAgentManager:
         # the dispatch tool.
         self._dispatch_tokens: dict[str, DispatchContext] = {}
         self._dispatch_url: str | None = None
+        # Spec 184 §5.1: the one in-flight takeover rebuild per (project,
+        # session, handle). A send for that key waits for it; nothing else
+        # starts a second one. Keys in ``_quiet_respawn`` push no status
+        # between the old process and its successor (no chip blink).
+        self._takeover_flights: dict[tuple[str, str, str], asyncio.Task] = {}
+        self._quiet_respawn: set[tuple[str, str, str]] = set()
         # The last ``sub_agent.status`` broadcast per (project, session,
         # handle): ``_publish_status`` sends only when this changes.
         self._last_status: dict[tuple[str, str, str], tuple] = {}
@@ -1523,6 +1560,11 @@ class SubAgentManager:
                 # Transports without an HTTP MCP route (pipe, PTY).
                 self._dispatch_tokens.pop(dispatch_token, None)
                 dispatch_token = None
+        if dispatch_token is not None:
+            # Spec 184 §5.2: the endpoint is loopback; a user's HTTP(S)_PROXY
+            # must not carry the worker's MCP request away to the proxy.
+            config.env = {**(config.env or {}),
+                          **_loopback_no_proxy(config.env, os.environ)}
 
         # Spec 166: whatever the worker reports as its own commands goes to
         # the `/` picker's store under (slug, workspace).
@@ -1597,6 +1639,10 @@ class SubAgentManager:
         adapter._orbital_first_turn_note = (
             jobs_hint if transport_kind == "codex-appserver" else None)
         adapter._dispatch_token = dispatch_token
+        # Spec 184 §5.1: how this process was started, whatever the mount
+        # did. A worker Orbital started is rebuilt once when the user takes
+        # it over; a top spawn (even with a failed mount) never is.
+        adapter._spawned_top = initiator in TOP_INITIATORS
 
         lock = self._get_lock(project_id, session_id=session_id)
         fork_start_error: Exception | None = None
@@ -1647,11 +1693,15 @@ class SubAgentManager:
         # Every seat-holder that still holds a live token learns about the
         # tool the same way, whatever its transport (spec 168).
         dctx = self._dispatch_tokens.get(dispatch_token) if dispatch_token else None
+        note = None
         if dctx is not None:
             note = seat_note(dctx)
-            if note:
-                adapter._orbital_first_turn_note = "\n\n".join(
-                    n for n in (adapter._orbital_first_turn_note, note) if n)
+        elif initiator in TOP_INITIATORS and any(p != handle for p in peer_slugs):
+            # Spec 184 §5.3: a seat-holder without the tool is told so, once.
+            note = no_dispatch_note()
+        if note:
+            adapter._orbital_first_turn_note = "\n\n".join(
+                n for n in (adapter._orbital_first_turn_note, note) if n)
 
         # ACP session/load is the authority on whether continuity actually
         # happened.  The pre-start resume decision only says an attempt is
@@ -1782,10 +1832,158 @@ class SubAgentManager:
             return False
         return isinstance(current, str) and current != recorded
 
+    # ------------------------------------------------------------------
+    # Spec 184 §5.1: the user takes over a worker Orbital started
+    # ------------------------------------------------------------------
+
+    def _takeover_due(self, adapter, initiator: str, daemon_turn: bool) -> bool:
+        """The one takeover test, evaluated at three moments (the pin, a
+        send, a turn close): a message from the user or an automation
+        (``TOP_INITIATORS`` and not a daemon turn) reaches a live worker that
+        was NOT spawned at the top of its session, while the dispatch
+        endpoint exists. Such a worker has no dispatch tool: its tool list
+        was fixed when its process started, so it is rebuilt once, resuming
+        its thread.
+
+        ``daemon_turn`` is what tells the daemon's own turns apart: the
+        memory reminder and worker-result delivery
+        (``AgentManager._send_worker_daemon_turn``) and the job message
+        (``AgentManager.deliver_job_message_to_worker``) carry
+        ``user_pinned`` too. A new daemon sender that omits the flag would
+        cost one rebuild with resume, nothing worse.
+
+        Reads how the adapter was spawned, never whether it holds a token: a
+        transport that cannot mount, or a failed mount, has no token and
+        would otherwise be rebuilt on every message. An adapter with no
+        record (legacy path, test doubles) is never rebuilt."""
+        return (initiator in TOP_INITIATORS and not daemon_turn
+                and bool(self._dispatch_url) and adapter is not None
+                and getattr(adapter, "_spawned_top", None) is False)
+
+    def _flights(self) -> dict:
+        flights = getattr(self, "_takeover_flights", None)
+        if flights is None:   # built without __init__ (test doubles)
+            flights = self._takeover_flights = {}
+        return flights
+
+    def take_seat(self, project_id: str, handle: str, *,
+                  session_id: str | None = None):
+        """The chat was just pinned to ``handle``: if a worker Orbital started
+        sits idle in it, rebuild it now, in the background, so it is ready
+        (with the dispatch tool) before the user finishes typing. Returns
+        the rebuild task, or None when there is nothing to do.
+
+        Nothing here when the worker is mid-turn, has queued work, is dead
+        or broken, or has live background work: ``send`` and the turn close
+        run the same test later (the catch-all for those, queue items,
+        automations and any pin path not hooked). A message that arrives
+        meanwhile waits for this rebuild in ``send``. Writes nothing to the
+        transcript and sends no model request; the chip does not blink
+        (``_quiet_respawn``) and the successor reads idle."""
+        session_id = self._resolve_session_id(session_id)
+        key = (project_id, session_id, handle)
+        if key in self._flights():
+            return None
+        adapter = self._adapters.get(
+            make_session_key(project_id, session_id), {}).get(handle)
+        if (adapter is None or getattr(adapter, "_broken", False) is True
+                or key in self._prompt_active or self._prompt_queues.get(key)
+                or not self._takeover_due(adapter, "user_pinned", False)):
+            return None
+        is_alive = getattr(adapter, "is_alive", None)
+        if callable(is_alive) and is_alive() is False:
+            return None
+        from agent_os.daemon_v2.background_work import BackgroundWorkRegistry
+        registry = getattr(self._process_manager, "background_work", None)
+        if isinstance(registry, BackgroundWorkRegistry) and registry.live_commands(
+                project_id, session_id, handle):
+            # The teardown would report the lost work in the chat; the
+            # user's first message decides instead.
+            return None
+        return self._start_takeover(project_id, session_id, handle,
+                                    initiator="user_pinned")
+
+    def _start_takeover(self, project_id: str, session_id: str, handle: str, *,
+                        initiator: str) -> asyncio.Task:
+        """The in-flight takeover rebuild for this key, started if none is."""
+        key = (project_id, session_id, handle)
+        flights = self._flights()
+        task = flights.get(key)
+        if task is None:
+            task = asyncio.create_task(
+                self._takeover_rebuild(project_id, session_id, handle,
+                                       initiator=initiator),
+                name=f"takeover-{project_id}-{handle}")
+            flights[key] = task
+
+            def _done(t, _key=key):
+                if flights.get(_key) is t:
+                    del flights[_key]
+            task.add_done_callback(_done)
+        return task
+
+    async def _await_takeover(self, task: asyncio.Task) -> None:
+        """Wait for a takeover rebuild without being able to cancel it."""
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            if task.cancelled():
+                return
+            raise
+        except Exception:
+            pass   # logged by the rebuild itself; the send re-checks the slot
+
+    async def _takeover_rebuild(self, project_id: str, session_id: str,
+                                handle: str, *, initiator: str) -> str:
+        """Stop the worker and start it again as the top of its session,
+        resuming its thread: the same rebuild a changed key gets, with the
+        initiator that mints the dispatch token."""
+        key = (project_id, session_id, handle)
+        started = time.monotonic()
+        logger.info(
+            "takeover: %s/%s (session %s) was started by Orbital and now "
+            "takes the user's messages — rebuilding it with resume so it gets "
+            "the dispatch tool", project_id, handle, session_id)
+        quiet = self.__dict__.setdefault("_quiet_respawn", set())
+        quiet.add(key)
+        try:
+            try:
+                await self.stop(project_id, handle, session_id=session_id)
+                if handle in self._adapters.get(
+                        make_session_key(project_id, session_id), {}):
+                    result = "Error: the old process could not be stopped"
+                else:
+                    result = await self.start(
+                        project_id, handle, session_id=session_id,
+                        announce=False, pinned=(initiator == "user_pinned"),
+                        initiator=initiator)
+            except Exception as e:
+                logger.exception("takeover rebuild of %s/%s raised",
+                                 project_id, handle)
+                result = f"Error: takeover rebuild raised: {e}"
+            logger.info("takeover: %s/%s rebuilt in %.2fs: %s", project_id,
+                        handle, time.monotonic() - started, result)
+            return result
+        finally:
+            # A fresh adapter reads "running" until its first turn ends (no
+            # spawn used to go undispatched); this one has no turn open.
+            successor = self._adapters.get(
+                make_session_key(project_id, session_id), {}).get(handle)
+            if successor is not None and key not in self._prompt_active:
+                try:
+                    successor._idle = True
+                except Exception:
+                    pass
+            quiet.discard(key)
+            # A successor with the same status sends nothing; an empty slot
+            # (the start failed) takes the chip back.
+            self._publish_status(project_id, session_id, handle)
+
     async def send(self, project_id: str, handle: str, message: str,
                    *, session_id: str | None = None, depth: int = 0,
                    fresh: bool = False, dispatch_id: str | None = None,
-                   initiator: str = "management_agent") -> str:
+                   initiator: str = "management_agent",
+                   daemon_turn: bool = False) -> str:
         """Dispatch message to adapter, spawning the sub-agent if needed.
 
         Returns immediately with a transcript path acknowledgement.
@@ -1836,6 +2034,11 @@ class SubAgentManager:
         (``disabled_sub_agents``) is refused with an ``Error: …`` string
         before anything spawns (2026-11-09). The manager's own dispatches are
         already limited to the visible list.
+
+        ``daemon_turn`` (spec 184) marks a turn the daemon started with a
+        user-side initiator (memory reminder, worker result, job message):
+        it never counts as the user taking a worker over
+        (``_takeover_due``).
         """
         session_id = self._resolve_session_id(session_id)
         if initiator in TOP_INITIATORS and self._project_store is not None:
@@ -1852,6 +2055,25 @@ class SubAgentManager:
             dispatch_id = f"{session_id}:{uuid4().hex[:8]}"
         sk = make_session_key(project_id, session_id)
         prompt_key = (project_id, session_id, handle)
+        # Spec 184: a takeover rebuild of this worker is in flight (started
+        # at pin time, or by a concurrent send): wait for it, then send into
+        # whatever it left in the slot. Never a second rebuild.
+        flight = self._flights().get(prompt_key)
+        if flight is not None:
+            # Waiters go through one FIFO lock, so two messages sent during
+            # the rebuild keep their order (the rest of send awaits threads).
+            waits = self.__dict__.setdefault("_takeover_waits", {})
+            order = waits.setdefault(prompt_key, asyncio.Lock())
+            try:
+                async with order:
+                    await self._await_takeover(flight)
+                    return await self.send(
+                        project_id, handle, message, session_id=session_id,
+                        depth=depth, fresh=fresh, dispatch_id=dispatch_id,
+                        initiator=initiator, daemon_turn=daemon_turn)
+            finally:
+                if not order.locked() and waits.get(prompt_key) is order:
+                    del waits[prompt_key]
         # Spec 149: a model pick made before this session had a file — the
         # send that created it can now persist it.
         if (project_id, session_id) in self._session_params_unsaved:
@@ -1864,6 +2086,7 @@ class SubAgentManager:
         # stop() takes the same per-session lock internally.
         if fresh and handle in self._adapters.get(sk, {}):
             await self.stop(project_id, handle, session_id=session_id)
+
 
         # A handle whose transport died under it (spec 098: the SDK reader
         # hit a fatal stdout error) is still in the slate, and dispatching
@@ -1894,6 +2117,18 @@ class SubAgentManager:
                 "changed — rebuilding it with resume before dispatch",
                 project_id, handle)
             await self.stop(project_id, handle, session_id=session_id)
+            existing = None
+
+        # Spec 184 §5.1: the user's (or an automation's) first message to an
+        # idle worker Orbital started rebuilds it as the top of the session,
+        # resuming its thread, so it has the dispatch tool. Mid-turn the
+        # prompt queues and the turn close runs the same test on the head.
+        if (existing is not None
+                and getattr(existing, "_broken", False) is not True
+                and prompt_key not in self._prompt_active
+                and self._takeover_due(existing, initiator, daemon_turn)):
+            await self._await_takeover(self._start_takeover(
+                project_id, session_id, handle, initiator=initiator))
 
         # Spawn-on-demand pre-step, OUTSIDE the dispatch lock: start() takes
         # the same per-session lifecycle lock internally (non-reentrant), so
@@ -1958,6 +2193,7 @@ class SubAgentManager:
                 dispatch_id=dispatch_id,
                 transcript_path=transcript_path,
                 initiator=initiator,
+                daemon_turn=daemon_turn,
             )
             if prompt_key in self._prompt_active:
                 self._prompt_queues.setdefault(prompt_key, deque()).append(queued)
@@ -2321,9 +2557,15 @@ class SubAgentManager:
             transport_dead = callable(is_alive) and is_alive() is False
             # The turn that just closed killed the transport (spec 098), or
             # the user's settings moved on while it ran (a key saved
-            # mid-turn): the queued prompts must reach a rebuilt process.
-            if transport_dead or await self._spawn_config_stale(
-                    project_id, handle, adapter, session_id=session_id):
+            # mid-turn), or (spec 184) the next prompt is the user taking
+            # over a worker Orbital started: the queued prompts must reach a
+            # rebuilt process. Only the head counts; a user message behind a
+            # daemon turn is handled when it reaches the head.
+            head = queue[0]
+            if transport_dead or self._takeover_due(
+                    adapter, head.initiator, head.daemon_turn) \
+                    or await self._spawn_config_stale(
+                        project_id, handle, adapter, session_id=session_id):
                 # Rebuilding takes stop()/start(), which need this lock and
                 # cancel the consumer task we are running in, so hand off.
                 task = asyncio.create_task(
@@ -2385,6 +2627,7 @@ class SubAgentManager:
                     project_id, handle, prompt.message,
                     session_id=session_id, dispatch_id=prompt.dispatch_id,
                     initiator=prompt.initiator,
+                    daemon_turn=prompt.daemon_turn,
                 )
             except Exception:
                 logger.exception("rebuild of %s/%s for a queued prompt failed",
@@ -3266,6 +3509,11 @@ class SubAgentManager:
                             project_id, session_id, handle)
                 name = getattr(current, "display_name", handle)
             key = (project_id, session_id, handle)
+            if key in getattr(self, "_quiet_respawn", ()):
+                # Spec 184: a takeover rebuild is between the old process and
+                # its successor; the chip stays as it was
+                # (``_takeover_rebuild`` publishes once it is over).
+                return
             snapshot = (status, awaiting, tuple(commands), name)
             if self._last_status.get(key) == snapshot:
                 return

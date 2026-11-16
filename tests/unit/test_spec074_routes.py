@@ -195,6 +195,45 @@ class TestPatchSideEffects:
                      json={"pinned_target": None})
         recorder.trigger.assert_called_once_with(pid, sid, reason="unpin")
 
+    def test_pin_asks_the_sub_agent_manager_to_take_the_seat(self, client, tmp_path):
+        # Spec 184 §5.1 (owner change): the rebuild of a worker Orbital
+        # started happens at pin time, in the background; the PATCH never
+        # waits on it, and an unpin asks nothing.
+        pid, ws = _make_project(client, tmp_path, "seat")
+        sid = _make_session(ws)
+        sam = _routes_mod()._sub_agent_manager
+        calls = []
+        original = sam.take_seat
+        sam.take_seat = lambda *a, **kw: calls.append((a, kw))
+        try:
+            resp = client.patch(f"/api/v2/agents/{pid}/sessions/{sid}",
+                                json={"pinned_target": "codex"})
+            assert resp.status_code == 200, resp.text
+            assert calls == [((pid, "codex"), {"session_id": sid})]
+            client.patch(f"/api/v2/agents/{pid}/sessions/{sid}",
+                         json={"pinned_target": None})
+            client.patch(f"/api/v2/agents/{pid}/sessions/{sid}",
+                         json={"name": "renamed"})
+            assert len(calls) == 1
+        finally:
+            sam.take_seat = original
+
+    def test_a_failing_seat_check_never_fails_the_pin(self, client, tmp_path):
+        pid, ws = _make_project(client, tmp_path, "seatfail")
+        sid = _make_session(ws)
+        sam = _routes_mod()._sub_agent_manager
+        original = sam.take_seat
+
+        def boom(*a, **kw):
+            raise RuntimeError("boom")
+        sam.take_seat = boom
+        try:
+            resp = client.patch(f"/api/v2/agents/{pid}/sessions/{sid}",
+                                json={"pinned_target": "codex"})
+            assert resp.status_code == 200, resp.text
+        finally:
+            sam.take_seat = original
+
     def test_pin_time_reseed_never_touches_user_edited_agents_md(
             self, client, tmp_path):
         pid, ws = _make_project(client, tmp_path, "seedguard")
