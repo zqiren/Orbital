@@ -765,6 +765,7 @@ import ClaudemdWarningBanner, { type ClaudemdWarning } from './ClaudemdWarningBa
 import PendingInputNotice from './PendingInputNotice';
 import SubAgentStatusBar from './SubAgentStatusBar';
 import { useSubAgentStatus } from '../hooks/useSubAgentStatus';
+import { isTurnInFlight } from '../utils/turnInFlight';
 import FanoutCard, { isTerminal, type FanoutTaskState } from './FanoutCard';
 import SubAgentDrillIn from './SubAgentDrillIn';
 import InlineMarkdown from './InlineMarkdown';
@@ -1404,6 +1405,13 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   // prior session's content.
   const agentStatusRef = useRef(agentStatus);
   agentStatusRef.current = agentStatus;
+  // Spec 185: the viewed session's workers, read by the same two gates as
+  // `agentStatusRef`. The hook reports only the viewed session's list (empty
+  // until it is known after a switch), so a worker of another session never
+  // counts. A pinned worker's turn keeps the manager idle, so without this a
+  // mid-turn send's reseed wiped the worker's whole running turn.
+  const subAgentsRef = useRef(subAgentStatus.agents);
+  subAgentsRef.current = subAgentStatus.agents;
   const itemsRef = useRef(items);
   itemsRef.current = items;
   const itemsSessionRef = useRef<string | undefined>(undefined);
@@ -1490,9 +1498,13 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     // of stranding the prior session's stale overlay. On idle the catch-up
     // (refreshRawMessages → historyItems change) re-runs this with the turn no
     // longer in flight, restoring canonical server history.
+    //
+    // Spec 185: "in flight" is the shared definition: the manager running or
+    // waiting, OR a worker of the viewed session running (a pinned worker's
+    // turn keeps the manager idle). The worker's catch-up is the terminal-
+    // event refetch (handleSubAgentTerminal), which lands with it idle.
     const viewedIsHolder = sessionIdRef.current !== undefined;
-    const turnInFlight =
-      agentStatusRef.current === 'running' || agentStatusRef.current === 'waiting';
+    const turnInFlight = isTurnInFlight(agentStatusRef.current, subAgentsRef.current);
     const itemsAreForViewedSession = itemsSessionRef.current === sessionIdRef.current;
     if (viewedIsHolder && turnInFlight && itemsAreForViewedSession && itemsRef.current.length > 0) {
       return;
@@ -2087,10 +2099,10 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       //    a pane that has since filled up. Same site, same root — treat an
       //    empty entry as a miss and let the fetch decide.
       const cached = chatHistoryCache.get(cacheKey);
-      // Committed ref, not effect-closure state: this effect is deliberately
-      // NOT keyed on agentStatus (see the seed effect's dep-array note).
-      const turnInFlight =
-        agentStatusRef.current === 'running' || agentStatusRef.current === 'waiting';
+      // Committed refs, not effect-closure state: this effect is deliberately
+      // NOT keyed on agentStatus (see the seed effect's dep-array note). Same
+      // definition as the seed guard (spec 185).
+      const turnInFlight = isTurnInFlight(agentStatusRef.current, subAgentsRef.current);
       const paintCached = cached !== undefined && cached.messages.length > 0 && !turnInFlight;
       if (paintCached) {
         setRawMessages(cached.messages);
@@ -2124,6 +2136,15 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
 
         if (chatResult) {
           const { data: messages, total } = chatResult;
+          // Spec 185 R1: this fetch answers a session open, so it is
+          // authoritative over the cached page painted above. A worker's
+          // status can arrive between that paint and this answer (the hook
+          // reads it asynchronously), which would arm the seed guard and pin
+          // the stale page for the rest of the turn. Forget whose `items`
+          // these are so the seed effect replaces them. Only after a cached
+          // paint: otherwise `items` are empty or another session's (both
+          // seed anyway), and a same-session re-run keeps the guard as before.
+          if (paintCached) itemsSessionRef.current = undefined;
           // FE-1: store RAW messages; the transform-once memo turns them into
           // DisplayItems and seeds `items`. No per-page transform here.
           setRawMessages(messages);
@@ -3017,6 +3038,13 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     // session terminal row and the transcript turn boundary (no awaits in
     // between on the daemon's loop), so the refetched /chat page carries the
     // server-synthesized response bubble and the reseed becomes harmless.
+    //
+    // Spec 185: while the worker runs, the seed guard now counts its turn as
+    // in flight, so a send DURING the turn no longer wipes it. This refetch
+    // stays the only catch-up: the worker's `idle` status is pushed before the
+    // terminal row is written, so only this event sees complete history. If
+    // the worker is running again when it lands (a chained turn), the guard
+    // skips it; the chain's last terminal seeds.
     function handleSubAgentTerminal(event: WebSocketEvent) {
       const e = event as SubAgentLifecycleEvent;
       if (e.project_id !== projectId) return;

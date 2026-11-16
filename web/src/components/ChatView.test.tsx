@@ -73,6 +73,9 @@ let chatLatestResponse: unknown[] = [];
 const projectPutCalls: Array<{ path: string; body: unknown }> = [];
 // Spec 132: GET /projects/{pid}/skill-catalog (the `/` skill picker).
 let skillCatalogResponse: unknown[] = [];
+// Spec 185: the daemon's sub-agent status list per session, as GET
+// /sub-agents/status answers it. Empty by default (the old catch-all answer).
+const subAgentStatusBySession = new Map<string, Map<string, Record<string, unknown>>>();
 // Spec 166: per-path answer (the `?worker=` pin), when a test sets one.
 let skillCatalogResponder: ((path: string) => unknown[]) | null = null;
 // Spec 065: GET /files/history/status and /files/history/turn. null = the
@@ -131,6 +134,10 @@ vi.mock('../config', () => ({
     }
     if (path.includes('/session-asks')) {
       return sessionAsksResponse;
+    }
+    if (!opts?.method && path.includes('/sub-agents/status')) {
+      const sid = new URLSearchParams(path.split('?')[1] ?? '').get('session_id') ?? '';
+      return { session_id: sid || null, agents: [...(subAgentStatusBySession.get(sid)?.values() ?? [])] };
     }
     // /chat?limit=N (the idle catch-up / REST fallback).
     if (!opts?.method && /\/chat\?limit=\d+/.test(path)) {
@@ -400,6 +407,7 @@ beforeEach(() => {
   projectPutCalls.length = 0;
   skillCatalogResponse = [];
   skillCatalogResponder = null;
+  subAgentStatusBySession.clear();
   historyStatusResponse = null;
   historyTurnResponse = null;
   forkCalls.length = 0;
@@ -6340,5 +6348,259 @@ describe('ChatView: PinTargetSelect is memoised (spec 171 A8)', () => {
     await flushEffects();
     expect(memoRenders.pin).toBeGreaterThan(before);
     expect(sessionsPatchCalls.length).toBeGreaterThan(0);
+  });
+});
+
+// Spec 185: a message sent while a WORKER of the viewed session is mid-turn
+// pushes the optimistic bubble into rawMessages; the seed effect's turn-in-
+// flight guard knew only the manager's status, so the wholesale reseed wiped
+// every live worker bubble and tool row of the running turn. A worker of the
+// viewed session with status `running` now counts as a turn in flight.
+describe('Spec 185: a send while a worker is mid-turn keeps that turn on screen', () => {
+  const CC = [{ slug: 'claude-code', name: 'Claude Code' }, { slug: 'codex', name: 'Codex' }];
+  const firstTask = {
+    role: 'user', content: 'first-task-185', source: 'user', timestamp: '2026-11-16T09:17:00.000Z',
+  };
+
+  function workerStatus(handle: string, status: string, sid = 's1') {
+    const info = { handle, display_name: handle, status, awaiting_approval: false, background_commands: [] };
+    if (!subAgentStatusBySession.has(sid)) subAgentStatusBySession.set(sid, new Map());
+    subAgentStatusBySession.get(sid)!.set(handle, info);
+    emitWs('sub_agent.status', {
+      type: 'sub_agent.status', project_id: 'p1', session_id: sid, handle,
+      display_name: handle, status, awaiting_approval: false, background_commands: [],
+    });
+  }
+  function workerSays(handle: string, content: string, sid = 's1') {
+    emitWs('chat.sub_agent_message', {
+      type: 'chat.sub_agent_message', project_id: 'p1', session_id: sid,
+      content, source: handle, timestamp: new Date().toISOString(),
+    });
+  }
+  // The running turn: status `running`, two replies and a tool row between.
+  async function liveWorkerTurn(handle: string, sid = 's1') {
+    await act(async () => {
+      workerStatus(handle, 'running', sid);
+      workerSays(handle, 'live-reply-one', sid);
+      emitWs('agent.activity', workerTool({
+        source: handle, session_id: sid, tool_call_id: `t185-${handle}`,
+        arguments: { file_path: 'C:/tmp/p1/live-185.txt' },
+      }));
+      workerSays(handle, 'live-reply-two', sid);
+    });
+    expect(container.textContent ?? '').toContain('live-reply-one');
+    expect(container.textContent ?? '').toContain('live-reply-two');
+  }
+  async function sendText(text: string) {
+    await act(async () => { typeInComposer(text); });
+    const btn = (container.querySelector('button[aria-label="Send"]') as HTMLButtonElement | null)
+      ?? ([...container.querySelectorAll('button')].find(
+        (b) => (b.textContent ?? '').trim() === 'Queue',
+      ) as HTMLButtonElement);
+    await act(async () => {
+      btn.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await flushEffects();
+  }
+  // The worker's tool row survived: its capsule is on screen and, expanded,
+  // shows the row.
+  async function expectToolRowKept() {
+    const run = container.querySelector('[data-testid="agent_run"]') as HTMLElement | null;
+    expect(run).toBeTruthy();
+    if (!(container.textContent ?? '').includes('live-185.txt')) {
+      await act(async () => { (run!.querySelector('button') as HTMLButtonElement).click(); });
+    }
+    expect(container.textContent ?? '').toContain('live-185.txt');
+  }
+  function expectInOrder(...texts: string[]) {
+    const all = container.textContent ?? '';
+    const at = texts.map((t) => all.indexOf(t));
+    for (const i of at) expect(i).toBeGreaterThanOrEqual(0);
+    for (let i = 1; i < at.length; i += 1) expect(at[i]).toBeGreaterThan(at[i - 1]);
+  }
+
+  it('pinned worker running, manager idle: the turn stays and the new message follows it', async () => {
+    sessionsListResponse = [
+      { session_id: 's1', session_uuid: 'u1', status: 'idle', last_terminal_event: null, pinned_target: 'claude-code' },
+    ];
+    injectMessageMock = async () => ({ status: 'queued' });
+    chatInitialResponse = { data: [firstTask], total: 1 };
+    await renderChat({ agentStatus: 'idle', sessionId: 's1', agents: CC });
+    await flushEffects();
+    await liveWorkerTurn('claude-code');
+
+    await sendText('second-message-185');
+    expect(injectCalls).toHaveLength(1);
+    expect(injectCalls[0][2]).toBe('claude-code');
+
+    expectInOrder('first-task-185', 'live-reply-one', 'live-reply-two', 'second-message-185');
+    await expectToolRowKept();
+  });
+
+  it('dispatched worker running, manager idle (U1): the same', async () => {
+    chatInitialResponse = { data: [firstTask], total: 1 };
+    await renderChat({ agentStatus: 'idle', sessionId: 's1', agents: CC });
+    await flushEffects();
+    await liveWorkerTurn('codex');
+
+    await sendText('second-message-185');
+    expect(injectCalls).toHaveLength(1);
+    expect(injectCalls[0][2]).toBeUndefined();
+
+    expectInOrder('first-task-185', 'live-reply-one', 'live-reply-two', 'second-message-185');
+    await expectToolRowKept();
+  });
+
+  it('a worker in background-running does not hold the screen: the send reseeds as before', async () => {
+    chatInitialResponse = { data: [firstTask], total: 1 };
+    await renderChat({ agentStatus: 'idle', sessionId: 's1', agents: CC });
+    await flushEffects();
+    await liveWorkerTurn('codex');
+    await act(async () => { workerStatus('codex', 'background-running'); });
+
+    await sendText('second-message-185');
+    // Not in flight: history (which never held the live bubbles) seeds.
+    expect(container.textContent ?? '').not.toContain('live-reply-one');
+    expectInOrder('first-task-185', 'second-message-185');
+  });
+
+  it('R2: the turn ends (idle, then the terminal event): one refetch, and history seeds', async () => {
+    chatInitialResponse = { data: [firstTask], total: 1 };
+    await renderChat({ agentStatus: 'idle', sessionId: 's1', agents: CC });
+    await flushEffects();
+    await liveWorkerTurn('codex');
+    await sendText('second-message-185');
+
+    chatInitialResponse = {
+      data: [
+        firstTask,
+        { role: 'assistant', content: 'persisted-turn-one', source: 'sub_agent', sub_agent_handle: 'codex',
+          sub_agent_tool_rows: [], timestamp: '2026-11-16T09:20:00.000Z', session_id: 's1' },
+        { role: 'user', content: 'second-message-185', source: 'user', timestamp: '2026-11-16T09:21:00.000Z' },
+      ],
+      total: 3,
+    };
+    const before = apiWithTotalCalls.length;
+    await act(async () => { workerStatus('codex', 'idle'); });
+    await act(async () => {
+      emitWs('sub_agent.completed', {
+        type: 'sub_agent.completed', project_id: 'p1', session_id: 's1', handle: 'codex', summary: 'done',
+      });
+    });
+    await flushEffects();
+
+    expect(apiWithTotalCalls.length - before).toBe(1);
+    expect(container.textContent ?? '').toContain('persisted-turn-one');
+    expect(container.textContent ?? '').not.toContain('live-reply-one');
+    expectInOrder('first-task-185', 'persisted-turn-one', 'second-message-185');
+  });
+
+  it('R2: two chained turns stay complete throughout and seed after the last terminal', async () => {
+    chatInitialResponse = { data: [firstTask], total: 1 };
+    await renderChat({ agentStatus: 'idle', sessionId: 's1', agents: CC });
+    await flushEffects();
+    await liveWorkerTurn('codex');
+    await sendText('second-message-185');
+
+    // Turn one ends; its refetch is held while the queued message starts
+    // turn two, so it lands with the worker running again and is skipped.
+    const turnOne = { role: 'assistant', content: 'persisted-turn-one', source: 'sub_agent',
+      sub_agent_handle: 'codex', sub_agent_tool_rows: [], timestamp: '2026-11-16T09:20:00.000Z', session_id: 's1' };
+    const second = { role: 'user', content: 'second-message-185', source: 'user', timestamp: '2026-11-16T09:21:00.000Z' };
+    chatInitialResponse = { data: [firstTask, turnOne, second], total: 3 };
+    let release!: () => void;
+    chatResponseGate = new Promise<void>((r) => { release = r; });
+    await act(async () => { workerStatus('codex', 'idle'); });
+    await act(async () => {
+      emitWs('sub_agent.completed', {
+        type: 'sub_agent.completed', project_id: 'p1', session_id: 's1', handle: 'codex', summary: 'one',
+      });
+    });
+    await act(async () => { workerStatus('codex', 'running'); });
+    release();
+    chatResponseGate = null;
+    await flushEffects();
+    expectInOrder('live-reply-one', 'live-reply-two', 'second-message-185');
+
+    await act(async () => { workerSays('codex', 'live-turn-two-reply'); });
+    expectInOrder('live-reply-one', 'live-reply-two', 'second-message-185', 'live-turn-two-reply');
+
+    // Turn two ends: this refetch lands with the worker idle and seeds.
+    const turnTwo = { role: 'assistant', content: 'persisted-turn-two', source: 'sub_agent',
+      sub_agent_handle: 'codex', sub_agent_tool_rows: [], timestamp: '2026-11-16T09:23:00.000Z', session_id: 's1' };
+    chatInitialResponse = { data: [firstTask, turnOne, second, turnTwo], total: 4 };
+    const before = apiWithTotalCalls.length;
+    await act(async () => { workerStatus('codex', 'idle'); });
+    await act(async () => {
+      emitWs('sub_agent.completed', {
+        type: 'sub_agent.completed', project_id: 'p1', session_id: 's1', handle: 'codex', summary: 'two',
+      });
+    });
+    await flushEffects();
+    expect(apiWithTotalCalls.length - before).toBe(1);
+    expectInOrder('first-task-185', 'persisted-turn-one', 'second-message-185', 'persisted-turn-two');
+    expect(container.textContent ?? '').not.toContain('live-turn-two-reply');
+  });
+
+  it('R1: opening a session with a cached page while its worker runs renders the fetched page', async () => {
+    const roundTwo = { role: 'user', content: 'round-two-185', source: 'user', timestamp: '2026-11-16T09:30:00.000Z' };
+    // Visit s1 once (caches a one-row page), then s2.
+    chatInitialResponse = { data: [firstTask], total: 1 };
+    await renderChat({ agentStatus: 'idle', sessionId: 's1', agents: CC });
+    await flushEffects();
+    chatInitialResponse = { data: [], total: 0 };
+    await renderChat({ agentStatus: 'idle', sessionId: 's2', agents: CC });
+    await flushEffects();
+
+    // Back to s1, whose worker is running; the fetch is held.
+    chatInitialResponse = { data: [firstTask, roundTwo], total: 2 };
+    let release!: () => void;
+    chatResponseGate = new Promise<void>((r) => { release = r; });
+    await renderChat({ agentStatus: 'idle', sessionId: 's1', agents: CC });
+    await flushEffects();
+    // The cached page painted (the worker's status was not known yet).
+    expect(container.textContent ?? '').toContain('first-task-185');
+    // The status arrives after the paint.
+    await act(async () => { workerStatus('codex', 'running'); });
+    release();
+    chatResponseGate = null;
+    await flushEffects();
+
+    expect(container.textContent ?? '').toContain('round-two-185');
+  });
+
+  it('R4: switching sessions mid-turn shows the other session, painted from its cache', async () => {
+    // Visit s2 once so it is cached.
+    chatInitialResponse = {
+      data: [{ role: 'user', content: 's2-only-185', source: 'user', timestamp: '2026-11-16T08:00:00.000Z' }],
+      total: 1,
+    };
+    await renderChat({ agentStatus: 'idle', sessionId: 's2', agents: CC });
+    await flushEffects();
+    // s1: its worker is mid-turn.
+    chatInitialResponse = { data: [firstTask], total: 1 };
+    await renderChat({ agentStatus: 'idle', sessionId: 's1', agents: CC });
+    await flushEffects();
+    await liveWorkerTurn('codex');
+
+    // Switch to s2 with its fetch held: s1's running worker is not s2's, so
+    // s2's cached page paints at once, and none of s1's turn is left on it.
+    chatInitialResponse = {
+      data: [{ role: 'user', content: 's2-only-185', source: 'user', timestamp: '2026-11-16T08:00:00.000Z' }],
+      total: 1,
+    };
+    let release!: () => void;
+    chatResponseGate = new Promise<void>((r) => { release = r; });
+    await renderChat({ agentStatus: 'idle', sessionId: 's2', agents: CC });
+    expect(container.textContent ?? '').toContain('s2-only-185');
+    expect(container.textContent ?? '').not.toContain('live-reply-one');
+    release();
+    chatResponseGate = null;
+    await flushEffects();
+    expect(container.textContent ?? '').toContain('s2-only-185');
+    expect(container.textContent ?? '').not.toContain('live-reply-one');
+    expect(container.textContent ?? '').not.toContain('first-task-185');
   });
 });

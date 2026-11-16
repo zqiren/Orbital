@@ -32,6 +32,8 @@ export interface SubAgentStatusState {
   refresh: () => Promise<void>;
 }
 
+const NO_AGENTS: SubAgentInfo[] = [];
+
 /** A pushed status, or null for a worker that left (`stopped`). */
 function fromEvent(e: SubAgentStatusEvent): SubAgentInfo | null {
   if (e.status === 'stopped') return null;
@@ -59,7 +61,28 @@ export function useSubAgentStatus(
   sessionId: string | undefined,
   { enabled = true }: { enabled?: boolean } = {},
 ): SubAgentStatusState {
-  const [agents, setAgents] = useState<SubAgentInfo[]>([]);
+  // The list is stored with the session prop it was read for (spec 185):
+  // after a session switch the previous session's workers must not be
+  // reported for the new one while its fetch is in flight. Until the new
+  // session's list is known it reads as empty ("no worker running").
+  const [owned, setOwned] = useState<{ session: string | undefined; agents: SubAgentInfo[] }>(
+    () => ({ session: sessionId, agents: [] }),
+  );
+  const agents = owned.session === sessionId ? owned.agents : NO_AGENTS;
+  // Apply `change` to the list of THIS session (empty if the stored one is
+  // another session's), keeping the previous object when nothing changed.
+  const setAgents = useCallback(
+    (change: (prev: SubAgentInfo[]) => SubAgentInfo[]) => {
+      setOwned((prev) => {
+        const base = prev.session === sessionId ? prev.agents : NO_AGENTS;
+        const next = change(base);
+        return prev.session === sessionId && next === prev.agents
+          ? prev
+          : { session: sessionId, agents: next };
+      });
+    },
+    [sessionId],
+  );
   const { on, off, connectionState } = useWebSocket();
   const alive = useRef(true);
   // The session the list belongs to: the prop, or (without one) the holder
@@ -100,7 +123,7 @@ export function useSubAgentStatus(
     } finally {
       if (abortRef.current === controller) sinceFetch.current = null;
     }
-  }, [projectId, sessionId]);
+  }, [projectId, sessionId, setAgents]);
 
   // Read the list on mount, then apply each pushed status.
   useEffect(() => {
@@ -123,7 +146,7 @@ export function useSubAgentStatus(
       abortRef.current?.abort();
       off('sub_agent.status', handler);
     };
-  }, [enabled, projectId, sessionId, on, off, refresh]);
+  }, [enabled, projectId, sessionId, on, off, refresh, setAgents]);
 
   // A reconnect: whatever was pushed while the socket was down is lost.
   const lastConnection = useRef(connectionState);
