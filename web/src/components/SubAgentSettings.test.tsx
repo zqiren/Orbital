@@ -42,6 +42,14 @@ function emit(type: string, payload: Record<string, unknown>) {
   });
 }
 
+// A card subscribes to login.* in an effect that can run after its first
+// paint on a loaded runner; an event emitted before that is dropped. The list
+// holds one login.failed handler itself (the CLI-missing watcher), so two
+// means the card is listening (see renderClaudeCodeLoginCard).
+async function cardListening() {
+  await waitFor(() => expect(wsHandlers.get('login.failed')?.size ?? 0).toBeGreaterThanOrEqual(2));
+}
+
 interface InstallInfo {
   supported: boolean;
   state: 'installed' | 'installing' | 'failed' | 'not_installed';
@@ -532,6 +540,7 @@ describe('SubAgentSettings — version floor / Update (spec 116)', () => {
     api.mockResolvedValue([oldClaude(overrides)]);
     render(<SubAgentSettings />);
     await waitFor(() => expect(screen.getByText('Claude Code')).toBeInTheDocument());
+    await cardListening();
   }
 
   it('shows the needs-update notice and an Update button, and no Login button', async () => {
@@ -718,6 +727,7 @@ describe('SubAgentSettings — update removed the CLI (1018 bench item 5)', () =
     })]);
     render(<SubAgentSettings />);
     await waitFor(() => expect(screen.getByText('Claude Code')).toBeInTheDocument());
+    await cardListening();
     emit('login.failed', {
       slug: 'claude-code', job_id: 'upd1', kind: 'update', return_code: 1, reason: 'nonzero_exit',
     });

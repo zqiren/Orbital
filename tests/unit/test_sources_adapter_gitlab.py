@@ -39,9 +39,9 @@ pytestmark = pytest.mark.skipif(sys.platform == "win32",
 _FAKE = textwrap.dedent("""\
     #!{python}
     import json, os, sys
-    state = json.load(open(os.environ["FAKE_GLAB_STATE"]))
+    state = json.load(open(os.environ["FAKE_GLAB_STATE"], encoding="utf-8"))
     args = sys.argv[1:]
-    with open(os.environ["FAKE_GLAB_STATE"] + ".calls", "a") as f:
+    with open(os.environ["FAKE_GLAB_STATE"] + ".calls", "a", encoding="utf-8") as f:
         f.write(json.dumps({{"args": args, "cwd": os.getcwd(),
                              "no_prompt": os.environ.get("GLAB_NO_PROMPT")}}) + "\\n")
     def out(code, stdout="", stderr=""):
@@ -93,7 +93,7 @@ def glab(tmp_path, monkeypatch):
     bindir = tmp_path / "bin"
     bindir.mkdir()
     exe = bindir / "glab"
-    exe.write_text(_FAKE.format(python=sys.executable))
+    exe.write_text(_FAKE.format(python=sys.executable), encoding="utf-8")
     exe.chmod(0o755)
     state_file = tmp_path / "glab.json"
 
@@ -101,13 +101,13 @@ def glab(tmp_path, monkeypatch):
         state = {"status": {"hosts": []}, "status_code": 1, "hosts": {}}
 
         def save(self):
-            state_file.write_text(json.dumps(self.state))
+            state_file.write_text(json.dumps(self.state), encoding="utf-8")
 
         def calls(self):
             p = str(state_file) + ".calls"
             if not os.path.exists(p):
                 return []
-            return [json.loads(line) for line in open(p)]
+            return [json.loads(line) for line in open(p, encoding="utf-8")]
 
     g = G()
     g.save()

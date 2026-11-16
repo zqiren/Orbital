@@ -105,9 +105,9 @@ def test_every_verify_reason_has_a_line():
 
 
 def test_every_unrouted_reason_has_a_line():
-    reasons = set(re.findall(r'SendError\("([a-z_]+)"', (SOURCES / "core.py").read_text()))
+    reasons = set(re.findall(r'SendError\("([a-z_]+)"', (SOURCES / "core.py").read_text(encoding="utf-8")))
     reasons |= {"routing_failed", "missing_api_key", "no_project", "send_failed"}
-    routes = (ROOT / "agent_os" / "api" / "routes" / "sources.py").read_text()
+    routes = (ROOT / "agent_os" / "api" / "routes" / "sources.py").read_text(encoding="utf-8")
     reasons |= set(re.findall(r'reason = "([a-z_]+)"', routes))
     for r in reasons:
         s = _string(f"sources.unrouted.{r}")

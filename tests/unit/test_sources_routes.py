@@ -167,7 +167,7 @@ def test_feed_rows_carry_the_source_mark(tmp_path, monkeypatch):
 
 def test_command_path_for_reveal(client, tmp_path):
     script = tmp_path / "check.py"
-    script.write_text("print('[]')")
+    script.write_text("print('[]')", encoding="utf-8")
     r = client.post("/api/v2/sources/register", json={
         "type": "command", "command": {"run": f"python3 '{script}' --since 1h", "cwd": str(tmp_path)}})
     sid = r.json()["source"]["id"]
