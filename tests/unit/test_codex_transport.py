@@ -1181,3 +1181,168 @@ class TestWindowsSandboxNote:
         [event] = _drain(t)
         assert event.event_type == "message"
         assert t.take_notes() == [WINDOWS_SANDBOX_NOTE]
+
+
+# ---------------------------------------------------------------------------
+# Spec 184 §5.3: Codex reports whether the dispatch tool mounted, with one
+# mcpServerStatus/list under one explicit budget, decided from `tools` only.
+# ---------------------------------------------------------------------------
+
+
+def _status_entry(name="orbital", tools=("dispatch",), runtime="connected"):
+    return {"name": name, "tools": {t: {"name": t} for t in tools},
+            "runtimeStatus": runtime, "authStatus": "bearerToken"}
+
+
+class TestDispatchMountCheck:
+    def _t(self):
+        t = _transport(dispatch_url="http://127.0.0.1:8541/mcp")
+        calls = []
+        return t, calls
+
+    def _answer(self, t, calls, result=None, exc=None):
+        async def fake_request(method, params=None, timeout=30.0):
+            calls.append((method, params, timeout))
+            if exc is not None:
+                raise exc
+            return result
+        t._request = fake_request
+
+    def test_a_seat_holder_starts_out_mounted_and_a_plain_worker_does_not(self):
+        assert CodexTransport(dispatch_url="http://127.0.0.1:1/mcp").dispatch_mounted is True
+        assert CodexTransport().dispatch_mounted is False
+
+    @pytest.mark.asyncio
+    async def test_orbital_with_dispatch_is_mounted(self):
+        t, calls = self._t()
+        self._answer(t, calls, {"data": [_status_entry("computer-use", ("click",)),
+                                         _status_entry()]})
+        await t._check_dispatch_mount()
+        assert t.dispatch_mounted is True
+        from agent_os.agent.transports.codex_transport import DISPATCH_CHECK_BUDGET_S
+        assert calls == [("mcpServerStatus/list",
+                          {"threadId": "T1", "detail": "toolsAndAuthOnly"},
+                          DISPATCH_CHECK_BUDGET_S)]
+        assert DISPATCH_CHECK_BUDGET_S == 6.0
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("runtime", ["connected", "starting", "failed", None])
+    async def test_orbital_without_dispatch_is_not_mounted_whatever_runtime_says(self, runtime):
+        t, calls = self._t()
+        self._answer(t, calls, {"data": [_status_entry(tools=(), runtime=runtime)]})
+        await t._check_dispatch_mount()
+        assert t.dispatch_mounted is False
+        assert len(calls) == 1
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("result", [
+        {"data": []},                                    # no orbital entry
+        {"data": [_status_entry("other", ())]},
+        {},
+    ])
+    async def test_no_orbital_entry_stays_mounted(self, result):
+        t, calls = self._t()
+        self._answer(t, calls, result)
+        await t._check_dispatch_mount()
+        assert t.dispatch_mounted is True
+
+    @pytest.mark.asyncio
+    async def test_a_failed_request_stays_mounted(self):
+        from agent_os.agent.transports.codex_transport import CodexRpcError
+        t, calls = self._t()
+        self._answer(t, calls, exc=CodexRpcError("mcpServerStatus/list",
+                                                 {"code": -32601, "message": "no method"}))
+        await t._check_dispatch_mount()
+        assert t.dispatch_mounted is True
+        assert len(calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_a_timeout_stays_mounted_and_returns_within_the_budget(self, monkeypatch):
+        import time
+        from agent_os.agent.transports import codex_transport as ct
+        monkeypatch.setattr(ct, "DISPATCH_CHECK_BUDGET_S", 0.2)
+        t, stdin = _wired(dispatch_url="http://127.0.0.1:8541/mcp")
+        started = time.monotonic()
+        await t._check_dispatch_mount()          # nobody ever answers
+        assert time.monotonic() - started < 1.0
+        assert t.dispatch_mounted is True
+        assert [f["method"] for f in stdin.frames] == ["mcpServerStatus/list"]
+        assert t._response_futures == {}
+
+    @pytest.mark.asyncio
+    async def test_start_runs_the_check_once_after_the_thread_opens_for_a_seat_holder(
+            self, monkeypatch):
+        t = CodexTransport(dispatch_url="http://127.0.0.1:8541/mcp")
+        order = []
+        await self._start(t, monkeypatch, order)
+        assert order == ["open", "check"]
+
+    @pytest.mark.asyncio
+    async def test_start_skips_the_check_without_a_dispatch_url(self, monkeypatch):
+        t = CodexTransport()
+        order = []
+        await self._start(t, monkeypatch, order)
+        assert order == ["open"]
+
+    async def _start(self, t, monkeypatch, order):
+        from agent_os.agent.transports import codex_transport as ct
+
+        class _P:
+            pid = os.getpid()
+            stdin = _FakeStdin()
+            returncode = None
+
+        async def fake_exec(*a, **kw):
+            return _P()
+
+        async def nothing(*a, **kw):
+            return None
+
+        async def fake_request(method, params=None, timeout=30.0):
+            return {}
+
+        async def open_thread(workspace):
+            order.append("open")
+
+        async def check():
+            order.append("check")
+
+        monkeypatch.setattr(ct.asyncio, "create_subprocess_exec", fake_exec)
+        monkeypatch.setattr(t, "_read_loop", nothing)
+        monkeypatch.setattr(t, "_drain_stderr", nothing)
+        monkeypatch.setattr(t, "_publish_rate_limits", nothing)
+        monkeypatch.setattr(t, "_publish_skills", nothing)
+        monkeypatch.setattr(t, "_request", fake_request)
+        monkeypatch.setattr(t, "_notify", nothing)
+        monkeypatch.setattr(t, "_open_thread", open_thread)
+        monkeypatch.setattr(t, "_check_dispatch_mount", check)
+        monkeypatch.setattr("agent_os.utils.windows_job.assign_worker", lambda pid: None)
+        await t.start("/fake/codex", [], "/ws", {})
+
+    @pytest.mark.asyncio
+    async def test_a_failed_startup_notification_for_orbital_logs_one_warning(self, caplog):
+        t, _ = self._t()
+        with caplog.at_level("WARNING", logger="agent_os.agent.transports.codex_transport"):
+            await t._route_server_message({"jsonrpc": "2.0",
+                "method": "mcpServer/startupStatus/updated",
+                "params": {"name": "orbital", "status": "failed", "threadId": "T1",
+                           "error": "MCP client for `orbital` failed to start: refused"}})
+        warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+        assert len(warnings) == 1
+        assert "failed to start: refused" in warnings[0].getMessage()
+        assert t.dispatch_mounted is True      # logging only, no state
+        assert _drain(t) == []
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("params", [
+        {"name": "computer-use", "status": "failed", "error": "nope"},
+        {"name": "orbital", "status": "starting"},
+        {"name": "orbital", "status": "ready"},
+    ])
+    async def test_other_startup_notifications_say_nothing(self, caplog, params):
+        t, _ = self._t()
+        with caplog.at_level("WARNING", logger="agent_os.agent.transports.codex_transport"):
+            await t._route_server_message({"jsonrpc": "2.0",
+                "method": "mcpServer/startupStatus/updated", "params": params})
+        assert [r for r in caplog.records if r.levelname == "WARNING"] == []
+        assert _drain(t) == []

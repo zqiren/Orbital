@@ -32,6 +32,7 @@ import json
 import logging
 import os
 import re
+import time
 import uuid
 from typing import AsyncIterator
 
@@ -136,6 +137,12 @@ WINDOWS_SANDBOX_NOTE = (
 # Spec 161: mirrors agent_os.daemon_v2.dispatch_tools.TOKEN_ENV (kept literal
 # so the transport layer does not import the daemon layer).
 _DISPATCH_TOKEN_ENV = "ORBITAL_DISPATCH_TOKEN"
+#: Spec 184 §5.3: the whole budget of the one ``mcpServerStatus/list`` that
+#: says whether Orbital's dispatch tool mounted. Measured on macOS (codex
+#: 0.157.1): ~1.4 s with a healthy endpoint, 1.5-1.8 s with a dead one; the
+#: query does its own handshake, so a slow MCP config costs more. On a
+#: timeout the chat continues as before the check existed.
+DISPATCH_CHECK_BUDGET_S = 6.0
 
 _APPROVAL_METHODS = {
     "item/commandExecution/requestApproval": "commandExecution",
@@ -164,6 +171,10 @@ class CodexTransport(AgentTransport):
         # at the top of its session (the token is in the spawn env under
         # ORBITAL_DISPATCH_TOKEN), else None.
         self._dispatch_url: str | None = dispatch_url
+        # Spec 184 §5.3: the ``dispatch_mounted`` contract ACP and Pi keep.
+        # True until Codex answers that the ``orbital`` server is there
+        # without the ``dispatch`` tool (``_check_dispatch_mount``).
+        self.dispatch_mounted = bool(dispatch_url)
         # Same attribute name as SDKTransport: the manager's honesty
         # downgrade (sub_agent_manager.py ~731) compares it to the record.
         self._resume_session_id: str | None = record.get("session_id")
@@ -407,6 +418,14 @@ class CodexTransport(AgentTransport):
             # row.
             from agent_os.daemon_v2.quota_store import publish_codex_snapshot
             publish_codex_snapshot(params.get("rateLimits"), push=True)
+            return
+        if (method == "mcpServer/startupStatus/updated"
+                and params.get("name") == "orbital"
+                and params.get("status") == "failed"):
+            # Spec 184 §5.3: logging only — the line a user's log bundle
+            # shows. Decides nothing; the status query does.
+            logger.warning("CodexTransport: Orbital's dispatch MCP server "
+                           "failed to start in Codex: %s", params.get("error"))
             return
         # thread/started, thread/status/changed, mcpServer/* — supplementary
         # only. NEVER drives idle (TEST RULE 1) and not worth a transcript row.
@@ -1000,6 +1019,42 @@ class CodexTransport(AgentTransport):
             self._publish_skills(), name=f"codex-skills-{id(self)}")
 
         await self._open_thread(workspace)
+        if self._dispatch_url:
+            await self._check_dispatch_mount()
+
+    async def _check_dispatch_mount(self) -> None:
+        """Spec 184 §5.3: ask Codex once whether Orbital's dispatch tool is
+        there. ``mcpServerStatus/list`` waits for the server's handshake by
+        itself (probe 2026-11-16), so no notification is awaited first and
+        ``DISPATCH_CHECK_BUDGET_S`` is the whole budget: no retry, no second
+        check. Decided from the ``orbital`` entry's ``tools`` only
+        (``runtimeStatus`` races Codex's own retry). Anything but "listed
+        without ``dispatch``" leaves ``dispatch_mounted`` True: a timeout, an
+        error (an older Codex without the method), no entry. Never fails the
+        start."""
+        started = time.monotonic()
+        outcome = "unknown"
+        try:
+            result = await self._request(
+                "mcpServerStatus/list",
+                {"threadId": self._thread_id, "detail": "toolsAndAuthOnly"},
+                timeout=DISPATCH_CHECK_BUDGET_S)
+        except asyncio.TimeoutError:
+            outcome = "timed out"
+        except Exception as e:  # noqa: BLE001 — never fail the start on it
+            outcome = f"failed ({str(e) or type(e).__name__})"
+        else:
+            entry = next((e for e in (result.get("data") or [])
+                          if isinstance(e, dict) and e.get("name") == "orbital"), None)
+            if entry is not None:
+                tools = entry.get("tools") or {}
+                self.dispatch_mounted = "dispatch" in tools
+                outcome = "mounted" if self.dispatch_mounted else "not mounted"
+            else:
+                outcome = "no orbital entry"
+        log = logger.info if outcome == "mounted" else logger.warning
+        log("CodexTransport: dispatch mount check %s in %.2fs", outcome,
+            time.monotonic() - started)
 
     async def _open_thread(self, workspace: str) -> None:
         """Open the handle's thread: resume, fork when the resume is refused

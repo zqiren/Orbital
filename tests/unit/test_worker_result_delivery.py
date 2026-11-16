@@ -78,6 +78,8 @@ async def test_delivery_persists_a_hidden_row_and_sends_with_the_parents_own_ini
     assert args == (P, PARENT, TEXT)
     assert kwargs["session_id"] == S and kwargs["initiator"] == own
     assert kwargs["dispatch_id"].startswith(f"{S}:")
+    # Spec 184: a daemon turn, never a takeover that rebuilds the worker.
+    assert kwargs["daemon_turn"] is True
     # The follow-up is an ordinary turn: nothing marks its rows as bookkeeping.
     assert mgr._worker_memory_records == set()
 
@@ -171,3 +173,17 @@ def test_the_managers_context_never_sees_the_hidden_row():
     instruction addressed to the worker that dispatched is not its message."""
     from agent_os.agent.context import WINDOW_EXCLUDED_KINDS
     assert WORKER_RESULT_KIND in WINDOW_EXCLUDED_KINDS
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("own, expected", [("user_pinned", "user_pinned"),
+                                           ("management_agent", "management_agent")])
+async def test_a_job_message_to_a_worker_is_a_daemon_turn(tmp_path, own, expected):
+    # Spec 184 §5.1: a background job ending is the daemon talking, never the
+    # user taking a worker over, so it never rebuilds the worker.
+    mgr, sub, _ = _manager(tmp_path, parent_initiator=own)
+    await mgr.deliver_job_message_to_worker(P, S, PARENT, "[job] build finished")
+    sub.send.assert_awaited_once()
+    kwargs = sub.send.call_args.kwargs
+    assert kwargs["initiator"] == expected
+    assert kwargs["daemon_turn"] is True

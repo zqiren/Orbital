@@ -3150,9 +3150,12 @@ class AgentManager:
                 if goals_draft:
                     self._worker_goals_drafts.add(key)
             dispatch_id = f"{resolved}:{uuid4().hex[:8]}"
+            # Spec 184: the daemon's turn, never the user taking the worker
+            # over — it must not rebuild a worker Orbital started.
             result = await self._sub_agent_manager.send(
                 project_id, handle, text, session_id=resolved,
                 dispatch_id=dispatch_id, initiator=initiator,
+                daemon_turn=True,
             )
             if isinstance(result, str) and result.startswith("Error"):
                 self._worker_memory_records.discard(key)
@@ -4096,7 +4099,8 @@ class AgentManager:
             pinned = False
         return await self._sub_agent_manager.send(
             project_id, handle, content, session_id=session_id,
-            initiator="user_pinned" if pinned else "management_agent")
+            initiator="user_pinned" if pinned else "management_agent",
+            daemon_turn=True)
 
     def list_pending(self, project_id: str) -> list[dict]:
         """Return queued messages for GET /pending recovery (§12 R3/R4).

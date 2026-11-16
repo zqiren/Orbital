@@ -70,3 +70,18 @@ async def test_success_text_carries_the_ack_and_tells_the_model_to_end_its_turn(
 async def test_send_errors_pass_through_unchanged(err):
     out = await dispatch(_sam(err), CTX, "codex", "x")
     assert out == err
+
+
+# Spec 184 §5.3: a seat-holder without a live token is told, once, that it
+# cannot hand work on, so it says so instead of improvising (another agent's
+# CLI from its shell, computer use on the Orbital window).
+
+def test_no_dispatch_note_names_the_switch_and_bans_the_workarounds():
+    from agent_os.daemon_v2.dispatch_tools import no_dispatch_note
+    note = no_dispatch_note()
+    assert "cannot hand tasks to other agents" in note
+    for banned in ("shell", "browser", "computer use"):
+        assert banned in note
+    assert "agent picker" in note
+    # About 50 tokens: once per spawn, in the first-turn note.
+    assert len(note.split()) < 60
