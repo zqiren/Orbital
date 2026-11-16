@@ -137,6 +137,40 @@ describe('useSubAgentStatus — pushed status', () => {
   });
 });
 
+// Spec 185: ChatView reads "a worker of the viewed session is running" from
+// this list, so it must never report the previous session's workers.
+describe('useSubAgentStatus — session switch', () => {
+  it('drops the previous session\'s list until the new session\'s is known', async () => {
+    apiMock.mockResolvedValue({ ...idleList, agents: [{ ...idleList.agents[0], status: 'running' }] });
+    const { result, rerender } = renderHook(({ sid }) => useSubAgentStatus('p1', sid), {
+      initialProps: { sid: 's1' },
+    });
+    await waitFor(() => expect(result.current.agents[0]?.status).toBe('running'));
+
+    let answer: (v: unknown) => void = () => {};
+    apiMock.mockReturnValue(new Promise((r) => { answer = r; }));
+    rerender({ sid: 's2' });
+    expect(result.current.agents).toEqual([]);
+
+    await act(async () => { answer({ session_id: 's2', agents: idleList.agents }); });
+    expect(result.current.agents).toEqual(idleList.agents);
+  });
+
+  it('an event for the new session lands on an empty list, not the old one', async () => {
+    apiMock.mockResolvedValue({ session_id: 's1', agents: [
+      { handle: 'codex', display_name: 'Codex', status: 'running', background_commands: [] },
+    ] });
+    const { result, rerender } = renderHook(({ sid }) => useSubAgentStatus('p1', sid), {
+      initialProps: { sid: 's1' },
+    });
+    await waitFor(() => expect(result.current.agents).toHaveLength(1));
+    apiMock.mockReturnValue(new Promise(() => {}));
+    rerender({ sid: 's2' });
+    emit('sub_agent.status', statusEvent({ session_id: 's2', status: 'idle' }));
+    expect(result.current.agents.map((a) => a.handle)).toEqual(['claude-code']);
+  });
+});
+
 describe('useSubAgentStatus — reconnect', () => {
   it('refetches when the WebSocket reconnects', async () => {
     apiMock.mockResolvedValue(idleList);
