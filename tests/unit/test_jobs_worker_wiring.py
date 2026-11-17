@@ -103,6 +103,7 @@ def test_pi_gets_the_paragraph_in_its_system_prompt(tmp_path):
 async def test_codex_gets_the_paragraph_on_its_first_dispatch_only(tmp_path):
     mgr = SubAgentManager.__new__(SubAgentManager)
     mgr._lifecycle_observer = None
+    mgr._project_store = None  # no project: no skills listing to prepend
     mgr._process_manager = MagicMock()
     mgr._build_recap = AsyncMock(return_value="RECAP\n")
     mgr._dispatch_async = AsyncMock()
