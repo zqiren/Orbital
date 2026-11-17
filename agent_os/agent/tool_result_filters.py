@@ -33,9 +33,10 @@ _JSON_API_TOOLS = frozenset({
 
 
 def _is_json_api_tool(tool_name: str) -> bool:
-    # Connector shims are named "<connector_id>.<tool>" (connectors/reflection.py);
-    # no built-in tool name has a dot.
-    return tool_name in _JSON_API_TOOLS or "." in tool_name
+    # Connector shims are named "<connector_id>__<tool>" (connectors/reflection.py;
+    # "<connector_id>.<tool>" before connectors were shared across agents);
+    # no built-in tool name has a dot or a double underscore.
+    return tool_name in _JSON_API_TOOLS or "." in tool_name or "__" in tool_name
 
 
 def dispatch_prefilter(tool_name: str, arguments: dict, content: str | list) -> str | list:

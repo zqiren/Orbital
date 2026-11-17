@@ -68,6 +68,11 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+#: Connectors shared with workers: how long Claude Code waits on one call to
+#: Orbital's MCP server when that server carries connector tools (a write
+#: waits there for the user's approval).
+CONNECTOR_TOOL_TIMEOUT_MS = 3_600_000
+
 
 class _NoWindowAnyio:
     """``anyio`` as the SDK's subprocess transport sees it, except that
@@ -416,6 +421,12 @@ class SDKTransport(AgentTransport):
                 "url": self.dispatch_mcp["url"],
                 "headers": {"Authorization": f"Bearer {self.dispatch_mcp['token']}"},
             }}
+            if self.dispatch_mcp.get("connectors"):
+                # Connectors shared with workers: a write waits on the user's
+                # approval inside the call; Claude Code's per-server tool
+                # timeout (ms) otherwise gives up after 60 s (live 2026-11-17).
+                options_kwargs["mcp_servers"]["orbital"]["timeout"] = \
+                    CONNECTOR_TOOL_TIMEOUT_MS
         if self._model is not None:
             options_kwargs["model"] = self._model
         if self._effort is not None and "effort" in getattr(

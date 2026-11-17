@@ -742,8 +742,14 @@ def _assemble_app(app: FastAPI, data_dir: str | None) -> FastAPI:
 
     # 7c2. Connector routes (spec 011)
     from agent_os.api.routes import connectors as connector_routes
-    connector_routes.configure(connector_manager)
+    connector_routes.configure(connector_manager, agent_registry=registry,
+                               setup_engine=setup_engine)
     app.include_router(connector_routes.router)
+
+    # 7c2a. Global skills ({data_dir}/skills, listed in every project).
+    from agent_os.api.routes import skills_global as skills_global_routes
+    skills_global_routes.configure(store_dir, project_store=project_store)
+    app.include_router(skills_global_routes.router)
 
     # 7c3. (The Calendar page's REST routes were removed on 2026-11-04; the
     # hub above still serves the agent's calendar_read tool and the Workbench.)
@@ -962,7 +968,7 @@ def _assemble_app(app: FastAPI, data_dir: str | None) -> FastAPI:
     # to the worker that dispatched it. Before the SPA catch-all below.
     from agent_os.daemon_v2.dispatch_tools import attach_dispatch_server
     lifecycle_observer.worker_terminal_hook = agent_manager._deliver_worker_result
-    attach_dispatch_server(app, sub_agent_manager)
+    attach_dispatch_server(app, sub_agent_manager, connector_manager=connector_manager)
 
     # 9. SPA static file serving (must be LAST — catch-all for non-API paths)
     spa_dir = os.environ.get(

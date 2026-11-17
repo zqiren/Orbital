@@ -16,9 +16,7 @@ import os
 import re
 import shutil
 import socket
-import tempfile
 import time
-import zipfile
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Query, UploadFile, File
@@ -4514,126 +4512,21 @@ async def upload_skill(project_id: str, file: UploadFile = File(...)):
     filename = file.filename or ""
     content_bytes = await file.read()
 
-    if filename.endswith(".zip"):
-        return _handle_zip_upload(workspace, content_bytes)
-    elif filename.endswith(".md"):
-        return _handle_md_upload(workspace, content_bytes)
-    else:
-        raise HTTPException(status_code=400, detail="File must be .zip or .md")
-
-
-def _validate_skill_content(text: str) -> tuple[str, str]:
-    """Extract and validate skill name and description from SKILL.md content.
-
-    Returns (name, description) or raises HTTPException 400.
-    """
-    name = None
-    description = None
-    for line in text.splitlines()[:20]:
-        stripped = line.rstrip()
-        if stripped.startswith("# ") and name is None:
-            name = stripped[2:].strip()
-        elif name is not None and stripped.strip():
-            description = stripped.strip()
-            break
-
-    if not name or not description:
-        raise HTTPException(
-            status_code=400,
-            detail="SKILL.md must have a # heading and a description line"
-        )
-    return name, description
-
-
-def _sanitize_skill_dir_name(name: str) -> str:
-    """Convert a skill name to a safe directory name."""
-    sanitized = re.sub(r'[^a-z0-9_-]', '-', name.lower()).strip('-')
-    if not sanitized:
-        raise HTTPException(status_code=400, detail="Skill name produces invalid directory name")
-    return sanitized
-
-
-def _handle_md_upload(workspace: str, content_bytes: bytes) -> dict:
-    """Handle uploading a single .md file as a skill."""
-    from agent_os.agent.project_paths import ProjectPaths
-    text = content_bytes.decode("utf-8", errors="replace")
-    name, description = _validate_skill_content(text)
-
-    dir_name = _sanitize_skill_dir_name(name)
-    skill_dir = os.path.join(ProjectPaths(workspace).skills_dir, dir_name)
-
-    if os.path.exists(skill_dir):
-        raise HTTPException(status_code=409, detail=f"Skill already exists: {dir_name}")
-
-    os.makedirs(skill_dir, exist_ok=True)
-    skill_md_path = os.path.join(skill_dir, "SKILL.md")
-    with open(skill_md_path, "w", encoding="utf-8") as f:
-        f.write(text)
-
-    return {"name": name, "description": description, "path": skill_md_path, "dir_name": dir_name}
-
-
-def _handle_zip_upload(workspace: str, content_bytes: bytes) -> dict:
-    """Handle uploading a .zip file containing a skill."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        zip_path = os.path.join(tmpdir, "upload.zip")
-        with open(zip_path, "wb") as f:
-            f.write(content_bytes)
-
-        try:
-            with zipfile.ZipFile(zip_path, "r") as zf:
-                # Guard against zip slip (path traversal)
-                real_tmpdir = os.path.realpath(tmpdir)
-                for member in zf.namelist():
-                    member_path = os.path.realpath(os.path.join(tmpdir, member))
-                    if not member_path.startswith(real_tmpdir + os.sep) and member_path != real_tmpdir:
-                        raise HTTPException(status_code=400, detail="Zip contains path traversal entry")
-                zf.extractall(tmpdir)
-        except zipfile.BadZipFile:
-            raise HTTPException(status_code=400, detail="Invalid zip file")
-
-        # Find SKILL.md in extracted content
-        skill_md_path = None
-        for root, _dirs, files in os.walk(tmpdir):
-            if "SKILL.md" in files:
-                skill_md_path = os.path.join(root, "SKILL.md")
-                break
-
-        if skill_md_path is None:
-            raise HTTPException(status_code=400, detail="No SKILL.md found in zip")
-
-        with open(skill_md_path, "r", encoding="utf-8") as f:
-            text = f.read()
-
-        name, description = _validate_skill_content(text)
-
-        # Determine the skill directory name from the zip structure
-        # Use the parent directory of SKILL.md if it's not the tmpdir itself
-        skill_src_dir = os.path.dirname(skill_md_path)
-        if os.path.normpath(skill_src_dir) == os.path.normpath(tmpdir):
-            # SKILL.md was at the root of the zip; use the skill name
-            dir_name = _sanitize_skill_dir_name(name)
-        else:
-            dir_name = os.path.basename(skill_src_dir)
-
-        from agent_os.agent.project_paths import ProjectPaths
-        dest_dir = os.path.join(ProjectPaths(workspace).skills_dir, dir_name)
-        if os.path.exists(dest_dir):
-            raise HTTPException(status_code=409, detail=f"Skill already exists: {dir_name}")
-
-        # Copy the skill directory (or just SKILL.md if at zip root)
-        if os.path.normpath(skill_src_dir) == os.path.normpath(tmpdir):
-            os.makedirs(dest_dir, exist_ok=True)
-            shutil.copy2(skill_md_path, os.path.join(dest_dir, "SKILL.md"))
-        else:
-            shutil.copytree(skill_src_dir, dest_dir)
-
-        return {
-            "name": name,
-            "description": description,
-            "path": os.path.join(dest_dir, "SKILL.md"),
-            "dir_name": dir_name,
-        }
+    # Shared with the global skills upload (agent_os.agent.skills); the
+    # project keeps its rules: heading form, ASCII folder names, a zip's own
+    # folder name as-is, no size cap, never an overwrite.
+    from agent_os.agent.skills import (
+        SkillInstallError, install_skill_upload, sanitize_skill_dir_name,
+        validate_skill_heading,
+    )
+    try:
+        row = install_skill_upload(
+            ProjectPaths(workspace).skills_dir, filename, content_bytes,
+            validate=validate_skill_heading, sanitize=sanitize_skill_dir_name)
+    except SkillInstallError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail)
+    row.pop("replaced", None)
+    return row
 
 
 # ---- Sub-Agent MEMORY.md Endpoints ----

@@ -27,11 +27,24 @@
  *
  * Per-project enablement is NOT here — it rides the project-update flow via
  * `enabled_connectors` (see ProjectConnectorToggles).
+ *
+ * Each CONNECTED card also carries who may use it (ConnectorAccessControl):
+ * all agents by default, or selected ones. A change saves at once through
+ * PUT /api/v2/connectors/{id}/access — optimistic, and put back to the last
+ * saved value, with the API's error on the card, when the save fails.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, ApiError } from '../config';
-import type { Connector, ConnectorListResponse } from '../types';
+import type {
+  Connector,
+  ConnectorAccess,
+  ConnectorAgent,
+  ConnectorAgentsResponse,
+  ConnectorListResponse,
+} from '../types';
+import ConnectorAccessControl, { DEFAULT_ACCESS } from './ConnectorAccessControl';
+import { AgentLogo } from './history/AgentLogo';
 import { useT } from '../i18n/useT';
 import { LabelWithHint } from './SettingsSection';
 import Select from './Select';
@@ -44,6 +57,21 @@ function providerLabel(provider: string): string {
 
 function isCustom(c: Connector): boolean {
   return c.id.startsWith('custom-');
+}
+
+/**
+ * The slot for a small "comes from" mark beside a connector's name: the
+ * logo of the agent the connector came from. Nothing supplies an origin yet
+ * (no API for it), so every row passes undefined and this renders nothing;
+ * it exists so the row's layout already has the place when one does.
+ */
+export function ConnectorOrigin({ agent }: { agent?: string }) {
+  if (!agent) return null;
+  return (
+    <span className="inline-flex shrink-0" data-testid="connector-origin">
+      <AgentLogo slug={agent} />
+    </span>
+  );
 }
 
 interface CardError {
@@ -72,9 +100,19 @@ export default function ConnectorSettings() {
   const [adding, setAdding] = useState(false);
   const [customError, setCustomError] = useState('');
 
+  // Agents a connector can be shared with; null = loading.
+  const [agents, setAgents] = useState<ConnectorAgent[] | null | 'error'>(null);
+  /** Last access value the daemon confirmed, per connector — what a failed
+   *  save goes back to. */
+  const savedAccess = useRef<Record<string, ConnectorAccess>>({});
+  /** Latest access save per connector, so a slow earlier reply cannot
+   *  overwrite a newer choice. */
+  const accessSeq = useRef<Record<string, number>>({});
+
   const refresh = useCallback(async () => {
     try {
       const data = await api<ConnectorListResponse>('/api/v2/connectors');
+      for (const c of data.connectors) savedAccess.current[c.id] = c.access ?? DEFAULT_ACCESS;
       setConnectors(data.connectors);
       setLoadError(false);
     } catch {
@@ -87,6 +125,52 @@ export default function ConnectorSettings() {
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    let cancelled = false;
+    api<ConnectorAgentsResponse>('/api/v2/connectors/agents')
+      .then((data) => {
+        if (!cancelled) setAgents(Array.isArray(data?.agents) ? data.agents : []);
+      })
+      .catch(() => {
+        if (!cancelled) setAgents('error');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  function setAccess(id: string, access: ConnectorAccess) {
+    setConnectors((prev) => prev?.map((x) => (x.id === id ? { ...x, access } : x)) ?? prev);
+  }
+
+  async function handleAccessChange(c: Connector, next: ConnectorAccess) {
+    setCardError(null);
+    const seq = (accessSeq.current[c.id] ?? 0) + 1;
+    accessSeq.current[c.id] = seq;
+    setAccess(c.id, next);
+    try {
+      const res = await api<{ id: string; access?: ConnectorAccess }>(
+        `/api/v2/connectors/${encodeURIComponent(c.id)}/access`,
+        { method: 'PUT', body: JSON.stringify(next) },
+      );
+      const saved = res?.access ?? next;
+      savedAccess.current[c.id] = saved;
+      if (accessSeq.current[c.id] === seq) setAccess(c.id, saved);
+    } catch (e) {
+      if (accessSeq.current[c.id] !== seq) return;
+      setAccess(c.id, savedAccess.current[c.id] ?? DEFAULT_ACCESS);
+      setCardError({
+        id: c.id,
+        // 422 carries FastAPI's validation list, not a sentence.
+        message:
+          e instanceof ApiError && e.status !== 422 && e.detail
+            ? e.detail
+            : t('connectors.access.saveError'),
+        clientHint: false,
+      });
+    }
+  }
 
   async function handleConnect(c: Connector) {
     setCardError(null);
@@ -196,7 +280,7 @@ export default function ConnectorSettings() {
               <li
                 key={c.id}
                 data-testid={`connector-card-${c.id}`}
-                className="surface-float-static px-3 py-2.5"
+                className="surface-float-static relative px-3 py-2.5"
               >
                 <div className="flex items-center gap-3">
                   <span className="text-xl shrink-0" aria-hidden="true">
@@ -207,6 +291,10 @@ export default function ConnectorSettings() {
                       <span className="text-sm font-medium text-primary truncate">
                         {c.name}
                       </span>
+                      {/* Reserved: where a connector came from (e.g. an
+                          agent's own MCP server), as that agent's logo. No
+                          source feeds it yet, so nothing renders. */}
+                      <ConnectorOrigin agent={undefined} />
                       {pending && (
                         <span
                           data-testid={`connector-pending-${c.id}`}
@@ -231,7 +319,16 @@ export default function ConnectorSettings() {
                       <p className="text-xs text-error truncate">{c.enabled_error}</p>
                     )}
                   </div>
-                  <div className="flex items-center gap-2 shrink-0">
+                  <div className="flex items-center gap-1 shrink-0">
+                    {c.connected && (
+                      <ConnectorAccessControl
+                        connectorId={c.id}
+                        connectorName={c.name}
+                        access={c.access ?? DEFAULT_ACCESS}
+                        agents={agents}
+                        onChange={(next) => void handleAccessChange(c, next)}
+                      />
+                    )}
                     {c.connected ? (
                       <button
                         type="button"

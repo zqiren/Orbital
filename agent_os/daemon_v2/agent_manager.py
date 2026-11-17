@@ -545,6 +545,20 @@ class AgentManager:
             except Exception:
                 logger.debug("moved-from read roots failed for %s/%s",
                              project_id, session_id, exc_info=True)
+        # Shared skills the prompt lists (Orbital's global folder, the
+        # user's ~/.agents, ~/.claude, ~/.codex skill folders): in safe mode
+        # each folder ITSELF (realpath, never its parent) is a read-only root
+        # of the read tool, when it exists and (home folders) while one of
+        # its skills is switched on. Not a grep/glob root.
+        try:
+            if self._project_safe_mode(project_id):
+                from agent_os.agent.skill_catalog import shared_read_roots
+                for real in shared_read_roots():
+                    if real not in roots and real not in extra:
+                        extra.append(real)
+        except Exception:
+            logger.debug("shared skill read roots failed for %s", project_id,
+                         exc_info=True)
         if not extra:
             return roots
         return [*roots, *extra]
@@ -1314,11 +1328,22 @@ class AgentManager:
         # closed to write/approval inside the shims). A dead or unreachable
         # connector must not brick agent start — the agent just runs without
         # those tools this session.
+        # Connectors shared across agents: the manager is the agent ``orbital``;
+        # a connector whose access leaves it out is skipped. The names of the
+        # write-classified ones go to the interceptor (one approval rule).
+        connector_writes: frozenset[str] = frozenset()
         if getattr(config, "enabled_connectors", None) and self._connector_manager is not None:
             from agent_os.connectors import register_connector_tools
+            from agent_os.daemon_v2.connector_sharing import MANAGER_AGENT_ID
             try:
-                await register_connector_tools(
-                    registry, self._connector_manager, config.enabled_connectors)
+                shared = getattr(self._connector_manager, "shared_ids", None)
+                enabled = (await asyncio.to_thread(
+                    shared, config.enabled_connectors, MANAGER_AGENT_ID)
+                    if shared is not None else config.enabled_connectors)
+                shims = await register_connector_tools(
+                    registry, self._connector_manager, enabled)
+                connector_writes = frozenset(
+                    s.name for s in (shims or []) if getattr(s, "is_write", True))
             except Exception as exc:
                 logger.warning("connector tool reflection failed for %s: %s",
                                project_id, exc)
@@ -1438,6 +1463,7 @@ class AgentManager:
             user_credential_store=self._user_credential_store,
             session_id=session_id,
             safe_mode_cb=lambda: self._project_safe_mode(project_id),
+            connector_writes=connector_writes,
         )
 
         # Push this project's TOFU network grants to the platform provider so
@@ -2502,6 +2528,10 @@ class AgentManager:
             ) or ""),
             enabled_sub_agents=enabled_sub_agents or [],
             disabled_sub_agents=list(disabled),
+            # Spec 011: never carried here since the field was added (02b9473e),
+            # so the manager's connector reflection never ran.
+            enabled_connectors=[c for c in (project.get("enabled_connectors") or [])
+                                if isinstance(c, str)],
             is_scratch=project.get("is_scratch", False),
             agent_name=project.get("agent_name", project.get("name", "")),
             agent_slug=project.get("agent_slug", "built-in"),

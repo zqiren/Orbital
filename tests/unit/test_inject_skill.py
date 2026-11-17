@@ -52,6 +52,7 @@ def home(tmp_path, monkeypatch):
     h.mkdir()
     monkeypatch.setenv("HOME", str(h))
     monkeypatch.setenv("USERPROFILE", str(h))
+    monkeypatch.setenv("ORBITAL_SKILLS_HOME", str(h))
     return h
 
 

@@ -65,6 +65,12 @@ def _sanitize_handle(handle: str) -> str:
     return handle.replace(":", "__")
 
 
+def global_skills_dir(data_dir: str) -> str:
+    """Orbital's own skills for every project: ``{data_dir}/skills``, beside
+    ``projects.json`` / ``connectors.json`` (the daemon's user data dir)."""
+    return os.path.join(data_dir, _SKILLS)
+
+
 class ProjectPaths:
     """Pure path calculator for all Orbital on-disk locations.
 

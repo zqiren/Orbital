@@ -757,7 +757,12 @@ class PromptBuilder:
         if self._skill_loader is None:
             return None
         skills = self._skill_loader.scan()
-        if not skills:
+        # Skills every project shares (Orbital's global folder, then the
+        # user's ~/.agents, ~/.claude, ~/.codex ones), minus switched-off ones
+        # and names the project has itself. Only appended to this listing, in
+        # a fixed order, so with none the prompt is unchanged.
+        shared = self._skill_loader.scan_shared(shadowed_by=skills)
+        if not skills and not shared:
             # 1109 R1/R2: the File Writing Rule duplicated the cached "### File
             # Creation" block and told the model to re-read every file it wrote.
             return (
@@ -780,6 +785,8 @@ class PromptBuilder:
         for skill in skills:
             rel = f"orbital/skills/{skill.get('dir_name') or os.path.basename(os.path.dirname(skill['path']))}/SKILL.md"
             lines.append(f"- {skill['name']}: {skill['description']} (at {rel})")
+        for skill in shared:
+            lines.append(f"- {skill['name']}: {skill['description']} (at {skill['path']})")
         return "\n".join(lines)
 
     def _runtime(self, context: PromptContext) -> str:

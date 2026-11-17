@@ -19,6 +19,11 @@ dies with the adapter. The tool is a thin wrapper over
 ``SubAgentManager.send`` — the only dispatch verb — with
 ``initiator="worker:<handle>"``, which is what routes the child's dispatch
 marker and terminal back to this worker (``LifecycleObserver``).
+
+The same endpoint also serves a worker its shared connectors
+(``connector_sharing``): the token's context lists them, and a worker below
+the seat holds a connectors-only token (``can_dispatch=False``) that never
+lists or runs ``dispatch``.
 """
 
 from __future__ import annotations
@@ -30,6 +35,7 @@ from dataclasses import dataclass
 from typing import Annotated
 
 from mcp.server.fastmcp import Context, FastMCP
+from mcp.types import CallToolResult, TextContent
 from pydantic import Field
 from mcp.server.fastmcp.server import StreamableHTTPASGIApp
 from starlette.routing import Route
@@ -76,6 +82,13 @@ class DispatchContext:
     # The project's enabled slugs at spawn time, named in the tool
     # description so the model needs no lookup.
     agents: tuple[str, ...] = ()
+    # Connectors shared with workers: a worker below the seat (dispatched by
+    # the manager or by a worker) holds a token only for its connectors, and
+    # must not gain ``dispatch`` through it.
+    can_dispatch: bool = True
+    # The connectors this worker got at spawn (connected, enabled for the
+    # project, allowed for this agent); re-checked on every list and call.
+    connectors: tuple[str, ...] = ()
 
 
 def dispatch_url() -> str | None:
@@ -136,6 +149,13 @@ async def dispatch(sub_agent_manager, ctx: DispatchContext, agent: str, task: st
             f"message. End your turn now and wait for it.")
 
 
+def _request_of(ctx):
+    try:
+        return ctx.request_context.request
+    except Exception:  # noqa: BLE001 — no request in scope
+        return None
+
+
 def _bearer(request) -> str | None:
     if request is None:
         return None
@@ -153,6 +173,8 @@ class DispatchServer:
 
     def __init__(self, sub_agent_manager):
         self._sam = sub_agent_manager
+        from agent_os.daemon_v2.connector_sharing import WorkerConnectorTools
+        self._connectors = WorkerConnectorTools(sub_agent_manager)
         server_self = self
 
         class _Server(FastMCP):
@@ -162,7 +184,28 @@ class DispatchServer:
                 for tool in tools:
                     if tool.name == TOOL_NAME:
                         tool.description = tool_description(ctx)
+                if ctx is not None and not ctx.can_dispatch:
+                    tools = [t for t in tools if t.name != TOOL_NAME]
+                if ctx is not None and ctx.connectors:
+                    shared = await server_self._connectors.list(ctx)
+                    logger.info("orbital MCP tools/list for %s/%s: dispatch=%s, "
+                                "%d connector tools", ctx.project_id, ctx.handle,
+                                ctx.can_dispatch, len(shared))
+                    tools = tools + shared
                 return tools
+
+            async def call_tool(self, name, arguments):
+                ctx = server_self._context_of(self.get_context())
+                if name == TOOL_NAME and ctx is not None and not ctx.can_dispatch:
+                    return CallToolResult(isError=True, content=[TextContent(
+                        type="text", text="Error: this agent cannot hand tasks to "
+                        "other agents. Do the task yourself or tell the user.")])
+                if name != TOOL_NAME and ctx is not None and ctx.connectors:
+                    result = await server_self._connectors.call(
+                        ctx, name, arguments, request=_request_of(self.get_context()))
+                    if result is not None:
+                        return result
+                return await super().call_tool(name, arguments)
 
         mcp = _Server(SERVER_NAME, stateless_http=True, json_response=True,
                       streamable_http_path="/mcp")
@@ -255,11 +298,15 @@ class BoundPortProbe:
         await self._app(scope, receive, send)
 
 
-def attach_dispatch_server(app, sub_agent_manager) -> DispatchServer:
+def attach_dispatch_server(app, sub_agent_manager, connector_manager=None) -> DispatchServer:
     """Mount ``/mcp`` on ``app`` and tell the sub-agent manager its URL.
 
     The URL comes from ``AGENT_OS_PORT`` when set; otherwise from the port
-    the first request shows the daemon is bound to (``BoundPortProbe``)."""
+    the first request shows the daemon is bound to (``BoundPortProbe``).
+    ``connector_manager`` (connectors shared with workers) is what the same
+    endpoint serves a worker's connector tools from."""
+    if connector_manager is not None:
+        sub_agent_manager._connector_manager = connector_manager
     server = DispatchServer(sub_agent_manager)
     app.router.routes.append(server.route)
     app.on_event("startup")(server.start)
