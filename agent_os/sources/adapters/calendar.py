@@ -20,10 +20,18 @@ Kinds:
   for an event that already started (a Mac waking from sleep sends no
   stale reminders).
 
-Permission: the macOS Calendar prompt is only ever asked for from
-``verify`` (the user pressing connect). A poll only reads the current
-authorisation and, without full access, fails with ``calendar_permission``
-(the panel offers opening System Settings) — it never prompts.
+Calendars: ``config.calendars`` absent means every calendar, including
+ones added to Calendar.app later. A list of ``calendarIdentifier`` values
+reads only those; ids that no longer exist are skipped, and when none is
+left the poll reads nothing (EventKit is never asked with an empty list).
+The form lists them through ``choices(…, "calendars")``, grouped by account.
+
+Permission: the macOS Calendar prompt is only ever asked for from a user's
+own gesture — ``verify`` (pressing connect) or ``choices`` (opening the
+calendar list) — when the access is undecided or "Add Events Only". A poll
+only reads the current authorisation and, without full access, fails with
+``calendar_permission`` (the panel offers opening System Settings) — it
+never prompts.
 """
 
 from __future__ import annotations
@@ -35,7 +43,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 from agent_os.sources.adapters import Adapter
-from agent_os.sources.model import Item, SourceFailure, Verified, VerifyError
+from agent_os.sources.model import Choice, Item, SourceFailure, Verified, VerifyError
 
 NEW_WINDOW_DAYS = 60
 DEFAULT_MINUTES = 30
@@ -120,17 +128,34 @@ class EventKitReader:
         from agent_os.calendar_hub.sources.eventkit import EventKitSource
         return EventKitSource().available
 
-    def events(self, start: datetime, end: datetime) -> list[CalEvent]:
+    @staticmethod
+    def calendars() -> list[dict]:
+        """Blocking. ``[{"id", "title", "account"}]``; only called with full
+        access."""
+        from agent_os.calendar_hub.sources.eventkit import EventKitSource
+        return EventKitSource().list_calendars()
+
+    def events(self, start: datetime, end: datetime,
+               calendars: list[str] | None = None) -> list[CalEvent]:
         """Blocking. Only called with full access (so the store's own access
-        check passes without a prompt)."""
+        check passes without a prompt). ``calendars``: None = every one."""
         from agent_os.calendar_hub.sources.eventkit import EventKitSource
 
         class _Src(EventKitSource):
             def _map(self, ev):
                 return to_cal_event(super()._map(ev), ev)
         src = _Src()
-        rows = asyncio.run(src.list_events(_iso(start), _iso(end)))
+        rows = asyncio.run(src.list_events(_iso(start), _iso(end), calendars=calendars))
         return [r for r in rows if isinstance(r, CalEvent) and r.start is not None]
+
+
+def selected_calendars(config: dict | None) -> list[str] | None:
+    """The source's calendars: None (no key) = every calendar; otherwise the
+    stored ``calendarIdentifier`` strings, exactly as stored."""
+    sel = (config or {}).get("calendars")
+    if not isinstance(sel, list):
+        return None
+    return [s for s in sel if isinstance(s, str) and s]
 
 
 class CalendarAdapter(Adapter):
@@ -143,17 +168,31 @@ class CalendarAdapter(Adapter):
 
     # -- verify -------------------------------------------------------------
 
-    async def verify(self, ctx) -> Verified:
+    async def _ask_once(self, ctx) -> None:
+        """A user's gesture (connect, opening the calendar list): the one
+        place macOS may ask. "Add Events Only" (write-only) gets the same
+        single ask for full access; if macOS shows nothing, the panel's line
+        says where to switch Orbital to Full Access."""
         status = await ctx.to_thread(self.reader.status)
         if status is None:
             raise VerifyError("error", None, "the calendar cannot be read on this computer")
-        if status == NOT_DETERMINED:
-            # The user just pressed connect: this is the one place macOS may ask.
+        if status in (NOT_DETERMINED, WRITE_ONLY):
             granted = await ctx.to_thread(self.reader.request_access)
             status = FULL_ACCESS if granted else await ctx.to_thread(self.reader.status)
         if status != FULL_ACCESS:
             raise VerifyError("permission", None, "Orbital has no access to Calendar")
+
+    async def verify(self, ctx) -> Verified:
+        await self._ask_once(ctx)
         return Verified(label=None)
+
+    async def choices(self, ctx, list_name: str, params: dict) -> list:
+        if list_name != "calendars":
+            return []
+        await self._ask_once(ctx)
+        rows = await ctx.to_thread(self.reader.calendars)
+        return [Choice(value=r["id"], label=r.get("title") or r["id"], group=r.get("account") or "")
+                for r in rows or [] if isinstance(r, dict) and r.get("id")]
 
     # -- poll ---------------------------------------------------------------
 
@@ -178,9 +217,12 @@ class CalendarAdapter(Adapter):
                 minutes = DEFAULT_MINUTES
         if not want_new and before is None:
             return []
+        calendars = selected_calendars(ctx.config)
+        if calendars == []:
+            return []  # nothing picked: never ask EventKit with an empty list
         end = now + (timedelta(days=NEW_WINDOW_DAYS) if want_new else timedelta(minutes=minutes + 1))
         try:
-            events = await ctx.to_thread(self.reader.events, now - timedelta(minutes=1), end)
+            events = await ctx.to_thread(self.reader.events, now - timedelta(minutes=1), end, calendars)
         except Exception:
             raise SourceFailure("error")
         out: list = []

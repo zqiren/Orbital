@@ -5,7 +5,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   connectGroups, createBody, draftReady, fieldRows, initDraft, kindsReady, setField, setParam, toggleKind,
-  markedField, verifyMessageKey, websiteHost,
+  markedField, pickGroups, pickPayload, pickState, togglePick, verifyMessageKey, websiteHost,
 } from './formModel';
 import { CALENDAR, EMAIL, FEISHU, GITHUB, TELEGRAM, WEBSITE } from './testFixtures';
 import type { Catalog, CatalogType } from './types';
@@ -95,8 +95,8 @@ describe('readiness', () => {
     const m = setField(FEISHU, setField(FEISHU, { ...d, manual: true }, 'appid', 'cli_1'), 'appsec', 's');
     expect(draftReady(FEISHU, m)).toBe(true);
   });
-  it('calendar needs nothing filled', () => {
-    expect(draftReady(CALENDAR, initDraft(CALENDAR))).toBe(true);
+  it('calendar needs nothing filled once its list is read', () => {
+    expect(draftReady(CALENDAR, { ...initDraft(CALENDAR), pick: { all: ['a'], on: ['a'] } })).toBe(true);
   });
 });
 
@@ -163,5 +163,53 @@ describe('markedField', () => {
     expect(markedField(GITHUB, 'repo')).toBe('repo');
     expect(markedField(GITHUB, 'nothing')).toBeNull();
     expect(markedField(TELEGRAM, null)).toBeNull();
+  });
+});
+
+describe('the calendar list', () => {
+  const ITEMS = [
+    { value: 'ic-home', label: 'Home', group: 'iCloud' },
+    { value: 'ex-team', label: 'Team', group: 'Exchange' },
+    { value: 'ic-kids', label: 'Kids', group: 'iCloud' },
+  ];
+  it('is being read when the form opens: connect waits', () => {
+    const d = initDraft(CALENDAR);
+    expect(d.pick).toBe('loading');
+    expect(draftReady(CALENDAR, d)).toBe(false);
+    expect(initDraft(GITHUB).pick).toBeUndefined();
+  });
+  it('every calendar ticked sends null (no key: calendars added later are read too)', () => {
+    const d = { ...initDraft(CALENDAR), pick: pickState(null, ITEMS) };
+    expect(d.pick.on).toEqual(['ic-home', 'ex-team', 'ic-kids']);
+    expect(draftReady(CALENDAR, d)).toBe(true);
+    const body = createBody(CALENDAR, d);
+    expect('calendars' in body.config).toBe(true);
+    expect(body.config.calendars).toBeNull();
+  });
+  it('unticking some sends the exact ids; none ticked cannot connect', () => {
+    let p = togglePick(pickState(null, ITEMS), 'ex-team');
+    expect(createBody(CALENDAR, { ...initDraft(CALENDAR), pick: p }).config.calendars).toEqual(['ic-home', 'ic-kids']);
+    p = togglePick(togglePick(p, 'ic-home'), 'ic-kids');
+    expect(p.on).toEqual([]);
+    expect(draftReady(CALENDAR, { ...initDraft(CALENDAR), pick: p })).toBe(false);
+    // ticking back keeps the listed order
+    p = togglePick(togglePick(p, 'ic-kids'), 'ic-home');
+    expect(pickPayload(p)).toEqual(['ic-home', 'ic-kids']);
+    expect(pickPayload(togglePick(p, 'ex-team'))).toBeNull();
+  });
+  it('an unreadable list connects every calendar', () => {
+    const d = { ...initDraft(CALENDAR), pick: null };
+    expect(draftReady(CALENDAR, d)).toBe(true);
+    expect(createBody(CALENDAR, d).config.calendars).toBeNull();
+  });
+  it('a stored list ticks its ids; a deleted calendar is not shown', () => {
+    expect(pickState(['ex-team', 'gone'], ITEMS).on).toEqual(['ex-team']);
+    expect(pickState(['gone'], ITEMS).on).toEqual([]);
+    expect(pickState(undefined, ITEMS).on).toHaveLength(3);
+  });
+  it('groups by account in the order listed', () => {
+    expect(pickGroups(ITEMS).map((g) => [g.group, g.items.map((i) => i.value)])).toEqual([
+      ['iCloud', ['ic-home', 'ic-kids']], ['Exchange', ['ex-team']],
+    ]);
   });
 });

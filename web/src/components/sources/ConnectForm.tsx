@@ -9,7 +9,7 @@
  * Order (prototype `detailView` draft + `credBlock`): 交给 Agent 设置 (types
  * with fields), the one setup link, the fields (secrets masked, an eye to
  * show), or the QR scan with its fallback to fields; the CLI account; what
- * counts as an arrival. One primary button at the foot, 添加并开启: nothing
+ * counts as an arrival (calendar: which calendars above it, all ticked). One primary button at the foot, 添加并开启: nothing
  * exists until the daemon's check passes; a refusal marks the field it
  * failed on.
  */
@@ -23,17 +23,17 @@ import { useWebSocket } from '../../hooks/useWebSocket';
 import type { WebSocketEvent } from '../../types';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
 import SourceMark from './SourceMark';
-import { AccountField, AgentLogo, Dots, KindsCard } from './parts';
+import { AccountField, AgentLogo, Dots, KindsCard, PickCard } from './parts';
 import {
-  createBody, credentials, draftReady, fieldRows, formFields, initDraft, markedField, setField, usesQr, verifyMessageKey,
-  type Draft,
+  createBody, credentials, draftReady, fieldRows, formFields, initDraft, markedField, pickOf, pickState, setField, togglePick,
+  usesQr, verifyMessageKey, type Draft,
 } from './formModel';
 import {
   createSource, fetchChoices, fetchQr, openSettingsPane, reconnectSource, sourceError, startQr,
 } from './sourcesApi';
 import { putDetail } from './sourcesStore';
 import { cjkSpacing, hasKey, labelText, placeholderText, typeName } from './sourcesText';
-import type { AccountsResponse, CatalogField, CatalogType, SourceDetail } from './types';
+import type { AccountsResponse, CatalogField, CatalogType, ChoiceItem, SourceDetail, SourceError } from './types';
 
 interface VerifyState { st: 'checking' | 'fail'; field: string | null; text: string | null; reason?: string | null }
 
@@ -221,6 +221,9 @@ export default function ConnectForm({ typeDef, source, accounts, onAccountsCheck
   const svc = typeName(t, typeDef.type);
   const method = typeDef.connect.method;
   const qr = usesQr(typeDef, draft);
+  const pick = reconnect ? null : pickOf(typeDef);
+  const [pickItems, setPickItems] = useState<ChoiceItem[] | null>(null);
+  const pickReq = useRef<Promise<ChoiceItem[]> | null>(null);
 
   // A CLI type defaults to the CLI's active account (until one is picked).
   const defaultLogin = method === 'cli_account' && accounts?.state === 'signed_in'
@@ -236,6 +239,35 @@ export default function ConnectForm({ typeDef, source, accounts, onAccountsCheck
     setDraftState((d) => setField(typeDef, d, k, v));
     if (verify?.st === 'fail' && (verify.field === k || verify.field === null)) setVerify(null);
   }
+
+  /** A refusal (connect, or reading the list) as the line it shows. */
+  const failState = (err: SourceError): VerifyState => {
+    const field = markedField(typeDef, err.field);
+    const secret = !!formFields(typeDef).find((f) => f.key === field)?.secret;
+    const key = verifyMessageKey(typeDef.type, err.reason ?? (err.code === 'invalid' ? 'invalid' : null), secret);
+    return { st: 'fail', field, text: hasKey(key) ? cjkSpacing(t(key, { svc }), svc, t(key)) : t('sources.verify.error'), reason: err.reason };
+  };
+
+  // Calendar: its calendars, all ticked. Opening the form is the user's
+  // gesture, so reading them may ask macOS for access (once). One read per
+  // form, also under StrictMode's double effect.
+  useEffect(() => {
+    if (!pick) return;
+    let dead = false;
+    pickReq.current ??= fetchChoices({ type: typeDef.type, list: pick.choices, params: {} }).then((r) => r.items ?? []);
+    pickReq.current.then((items) => {
+      if (dead) return;
+      setPickItems(items);
+      setDraftState((d) => ({ ...d, pick: pickState(null, items) }));
+    }).catch((e) => {
+      if (dead) return;
+      // Unreadable (no access): no list; connecting means every calendar, and asks again.
+      setPickItems([]);
+      setDraftState((d) => ({ ...d, pick: null }));
+      setVerify(failState(sourceError(e)));
+    });
+    return () => { dead = true; };
+  }, [pick, typeDef.type]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadChoices = useCallback(async (list: string, params: Record<string, unknown>) => {
     const { config, secrets } = credentials(typeDef, effective);
@@ -260,11 +292,7 @@ export default function ConnectForm({ typeDef, source, accounts, onAccountsCheck
       setVerify(null);
       onDone(d);
     } catch (e) {
-      const err = sourceError(e);
-      const field = markedField(typeDef, err.field);
-      const secret = !!formFields(typeDef).find((f) => f.key === field)?.secret;
-      const key = verifyMessageKey(typeDef.type, err.reason ?? (err.code === 'invalid' ? 'invalid' : null), secret);
-      setVerify({ st: 'fail', field, text: hasKey(key) ? cjkSpacing(t(key, { svc }), svc) : t('sources.verify.error'), reason: err.reason });
+      setVerify(failState(sourceError(e)));
     }
   }
 
@@ -332,6 +360,14 @@ export default function ConnectForm({ typeDef, source, accounts, onAccountsCheck
               onPick={(login) => { clearIf('account'); setDraftState((d) => ({ ...d, account: login })); }}
               onCheck={onAccountsCheck}
               bad={verify?.st === 'fail' && verify.field === 'account' ? verify.text : null}
+            />
+          )}
+          {pick && (
+            <PickCard
+              items={pickItems}
+              on={draft.pick && draft.pick !== 'loading' ? draft.pick.on : []}
+              label={t('sources.calendar.list')}
+              onToggle={(v) => setDraftState((d) => (d.pick && d.pick !== 'loading' ? { ...d, pick: togglePick(d.pick, v) } : d))}
             />
           )}
           {!reconnect && (

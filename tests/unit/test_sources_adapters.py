@@ -242,14 +242,174 @@ async def test_github_verify_checks_repo_and_label():
     assert e.value.field == "repo"
 
 
+def _rest_rows(*nums, repo="acme/web", pr=()):
+    """The same issues as ``_rows`` in the REST issue list's shape."""
+    rows = []
+    for n in nums:
+        kind = "pull" if n in pr else "issues"
+        r = {"number": n, "title": f"issue {n}", "html_url": f"https://github.com/{repo}/{kind}/{n}",
+             "url": f"https://api.github.com/repos/{repo}/issues/{n}",
+             "repository_url": f"https://api.github.com/repos/{repo}", "updated_at": "2026-11-16T07:00:00Z",
+             "user": {"login": "li-na"}, "body": "b"}
+        if n in pr:
+            r["pull_request"] = {"url": f"https://api.github.com/repos/{repo}/pulls/{n}"}
+        rows.append(r)
+    return json.dumps(rows)
+
+
+def _search_rows_pr(*nums, repo="acme/web", pr=()):
+    return json.dumps([{"number": n, "title": f"issue {n}",
+                        "url": f"https://github.com/{repo}/{'pull' if n in pr else 'issues'}/{n}",
+                        "repository": {"nameWithOwner": repo}, "updatedAt": "2026-11-16T07:00:00Z",
+                        "author": {"login": "li-na"}, "body": "b", "isPullRequest": n in pr} for n in nums])
+
+
+def _lang_ctx(lang, **kw):
+    ctx = _ctx("github", **kw)
+    ctx.lang = lang
+    return ctx
+
+
+async def test_github_label_reads_the_repo_issue_list_not_search():
+    gh = FakeGh([
+        (("auth", "token"), RunResult(0, "gho_T\n", "")),
+        (("api", "repos/acme/web/issues"), RunResult(0, _rest_rows(3, 4, pr=(4,)), "")),
+    ])
+    items = await gh.poll(_ctx("github", kinds={"label": {"repo": "acme/web", "label": "bug"}}, account="mira"))
+    assert [i.id for i in items] == ["label:acme/web#3", "label:acme/web#4"]
+    api = [args for args, tok in gh.calls if "api" in args]
+    assert len(api) == 1 and gh.calls[-1][1] == "gho_T"
+    args = api[0]
+    assert "GET" in args and "labels=bug" in args and "state=open" in args
+    assert "sort=updated" in args and "direction=desc" in args and "per_page=50" in args
+    # no search and no per-poll repo view on this path
+    assert not any("search" in a or "view" in a for a, _ in gh.calls)
+
+
+async def test_github_same_issue_via_search_and_rest_is_the_same_item():
+    a = GitHubAdapter._item("label", json.loads(_search_rows_pr(7, 8, pr=(8,)))[0])
+    b = GitHubAdapter._item_rest("label", json.loads(_rest_rows(7, 8, pr=(8,)))[0], "acme/web")
+    assert a == b
+    a = GitHubAdapter._item("label", json.loads(_search_rows_pr(7, 8, pr=(8,)))[1])
+    b = GitHubAdapter._item_rest("label", json.loads(_rest_rows(7, 8, pr=(8,)))[1], "acme/web")
+    assert a == b and a.url.endswith("/pull/8")
+
+
+async def test_github_rest_ids_use_githubs_spelling_of_the_repo():
+    # a repo typed in another case still yields the ids search gave
+    row = json.loads(_rest_rows(5, repo="Acme/Web"))[0]
+    assert GitHubAdapter._item_rest("label", row, "acme/web").id == "label:Acme/Web#5"
+    row.pop("repository_url")
+    assert GitHubAdapter._item_rest("label", row, "acme/web").id == "label:acme/web#5"
+
+
+async def test_github_upgrade_from_search_to_rest_brings_no_duplicate_arrivals(tmp_path):
+    """A v0.23.0 source recorded its label items through search; the first
+    polls on the REST list record nothing new (same ids, the core's seen
+    set), and a really new issue still arrives once."""
+    answers = [
+        (("auth", "token"), RunResult(0, "t", "")),
+        (("repo", "view", "acme/web"), RunResult(0, "{}", "")),
+        (("label", "list"), RunResult(0, json.dumps([{"name": "bug"}]), "")),
+        (("api", "repos/acme/web/issues"), RunResult(0, _rest_rows(1, 2, 3), "")),
+    ]
+
+    class Upgraded(FakeGh):
+        old = True
+
+        async def poll(self, ctx):
+            if self.old:  # what v0.23.0 produced: search rows through _item
+                return [self._item("label", r) for r in json.loads(_search_rows_pr(1, 2, 3))]
+            return await super().poll(ctx)
+
+    gh = Upgraded(answers)
+    gh.DESCRIPTOR = None
+    sent = []
+
+    async def send(text, project_id):
+        sent.append(text)
+        return {"project_id": "proj_a", "session_id": f"s{len(sent)}", "by": "model"}
+
+    core = SourcesCore(str(tmp_path), registry=AdapterRegistry(overrides={"github": gh}),
+                       secret_store=MemorySecretStore(), send=send)
+    core.load()
+    sid = (await core.create({"type": "github", "account": "mira",
+                              "kinds": {"label": {"repo": "acme/web", "label": "bug"}}}))["id"]
+    await core._poll_one(core.store.get(sid))  # baseline on the old path
+    await core._poll_one(core.store.get(sid))
+    before = list(core.store.rt(sid)["entries"])
+    gh.old = False
+    await core._poll_one(core.store.get(sid))
+    await core._poll_one(core.store.get(sid))
+    assert core.store.rt(sid)["entries"] == before
+    assert any("api" in a for a, _ in gh.calls)
+    gh.answers[-1] = (("api", "repos/acme/web/issues"), RunResult(0, _rest_rows(4, 1, 2, 3), ""))
+    await core._poll_one(core.store.get(sid))
+    new = [e for e in core.store.rt(sid)["entries"] if e not in before]
+    assert len(new) == 1 and "#4" in json.dumps(new[0], ensure_ascii=False)
+
+
+async def test_github_label_with_a_comma_stays_on_search():
+    gh = FakeGh([
+        (("auth", "token"), RunResult(0, "t", "")),
+        (("repo", "view", "acme/web"), RunResult(0, "{}", "")),
+        (("search", "--label", "a,b"), RunResult(0, _rows(9), "")),
+    ])
+    items = await gh.poll(_ctx("github", kinds={"label": {"repo": "acme/web", "label": "a,b"}}, account="mira"))
+    assert [i.id for i in items] == ["label:acme/web#9"]
+    assert not any("api" in a for a, _ in gh.calls)
+
+
 async def test_github_label_repo_gone_is_repo_not_found():
+    gh = FakeGh([
+        (("auth", "token"), RunResult(0, "t", "")),
+        (("api", "repos/acme/gone/issues"), RunResult(
+            1, '{"message":"Not Found","status":"404"}', "gh: Not Found (HTTP 404)")),
+    ])
+    with pytest.raises(SourceFailure) as e:
+        await gh.poll(_ctx("github", kinds={"label": {"repo": "acme/gone", "label": "bug"}}, account="mira"))
+    assert e.value.code == "repo_not_found" and e.value.params == {"repo": "acme/gone"}
+
+
+async def test_github_label_rest_other_failures_keep_their_code():
+    gh = FakeGh([
+        (("auth", "token"), RunResult(0, "t", "")),
+        (("api", "repos/acme/web/issues"), RunResult(1, "", "gh: Bad credentials (HTTP 401)")),
+    ])
+    with pytest.raises(SourceFailure) as e:
+        await gh.poll(_ctx("github", kinds={"label": {"repo": "acme/web", "label": "bug"}}, account="mira"))
+    assert e.value.code == "auth_expired"
+
+
+async def test_github_comma_label_repo_gone_via_search_is_still_repo_not_found():
     gh = FakeGh([
         (("auth", "token"), RunResult(0, "t", "")),
         (("repo", "view"), RunResult(1, "", "GraphQL: Could not resolve to a Repository with the name 'acme/gone'.")),
     ])
     with pytest.raises(SourceFailure) as e:
-        await gh.poll(_ctx("github", kinds={"label": {"repo": "acme/gone", "label": "bug"}}, account="mira"))
+        await gh.poll(_ctx("github", kinds={"label": {"repo": "acme/gone", "label": "a,b"}}, account="mira"))
     assert e.value.code == "repo_not_found" and e.value.params == {"repo": "acme/gone"}
+
+
+async def test_github_body_line_is_unchanged_whatever_the_interface_language():
+    # what the agent receives stays as before (localizing it is out of scope)
+    answers = [
+        (("auth", "token"), RunResult(0, "t", "")),
+        (("api", "repos/acme/web/issues"), RunResult(0, _rest_rows(1, 2, pr=(2,)), "")),
+        (("--assignee",), RunResult(0, _search_rows_pr(5, 6, pr=(6,)), "")),
+    ]
+    kinds = {"label": {"repo": "acme/web", "label": "bug"}, "assigned": {}}
+    for lang in ("zh", "en"):
+        items = await FakeGh(answers).poll(_lang_ctx(lang, kinds=kinds, account="mira"))
+        assert {i.id: i.body for i in items} == {
+            "assigned:acme/web#5": "Issue in acme/web\n\nb", "assigned:acme/web#6": "Pull request in acme/web\n\nb",
+            "label:acme/web#1": "Issue in acme/web\n\nb", "label:acme/web#2": "Pull request in acme/web\n\nb"}
+
+
+def test_github_polls_every_minute():
+    from agent_os.sources.catalog import _BASE
+    assert GitHubAdapter.interval_s == 60
+    assert _BASE["github"]["interval_s"] == 60
 
 
 # ── language of titles Orbital composes ────────────────────────────────────

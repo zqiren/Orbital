@@ -549,6 +549,19 @@ class SourcesCore:
                                          "message": f"{f['key']} is required"})
                 else:
                     out[f["key"]] = ""
+        pick = catalog.multi_pick(entry)
+        if pick and pick["key"] in config:
+            key, v = pick["key"], config[pick["key"]]
+            if v is None:
+                # Back to every one (including ones added later). Deleted, not
+                # omitted: a PATCH merges over the old config.
+                out.pop(key, None)
+            elif isinstance(v, list) and v and all(isinstance(x, str) and x for x in v):
+                # Opaque ids (EventKit calendarIdentifier): kept exactly.
+                out[key] = list(dict.fromkeys(v))
+            else:
+                raise ApiError(422, {"code": "invalid", "field": key,
+                                     "message": f"{key} must be a non-empty list of ids, or null"})
         return out
 
     def _validate_secrets(self, entry: dict, secrets, *, required: bool) -> dict:
@@ -725,6 +738,12 @@ class SourcesCore:
                 new["config"] = {**(new.get("config") or {}), **(getattr(verified, "config", None) or {})}
                 rt["failure"] = None
                 rt["fail_count"] = 0
+        pick = catalog.multi_pick(entry)
+        if pick and (new.get("config") or {}).get(pick["key"]) != (cfg.get("config") or {}).get(pick["key"]):
+            # Another selection (e.g. a calendar newly ticked) starts from
+            # now: what was created there before is not new. In place, so a
+            # poll already holding this dict keeps it.
+            rt.setdefault("state", {})["since"] = _iso(self._now())
         if "kinds" in new and new.get("kinds") != cfg.get("kinds"):
             # A kind switched on (or re-pointed, e.g. another label) starts
             # from now: its first poll is a baseline again.

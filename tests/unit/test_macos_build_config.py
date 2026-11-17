@@ -53,6 +53,25 @@ class TestMacOSSpec:
             "LSMinimumSystemVersion must be 13.0 (Ventura)"
         )
 
+    def test_spec_has_calendar_usage_strings(self, spec_content):
+        # without them macOS never shows the Calendar prompt for the bundle
+        assert "'NSCalendarsFullAccessUsageDescription'" in spec_content  # macOS 14+
+        assert "'NSCalendarsUsageDescription'" in spec_content  # macOS 13
+
+
+def test_entitlements_grant_calendar_access_and_parse():
+    import plistlib
+    path = os.path.join(PROJECT_ROOT, 'agent_os', 'desktop', 'Orbital.entitlements')
+    with open(path, 'rb') as f:
+        ent = plistlib.load(f)
+    assert ent.get('com.apple.security.personal-information.calendars') is True
+    # the existing hardened-runtime exceptions stay
+    for key in ('com.apple.security.cs.allow-jit',
+                'com.apple.security.cs.allow-unsigned-executable-memory',
+                'com.apple.security.cs.disable-library-validation',
+                'com.apple.security.cs.allow-dyld-environment-variables'):
+        assert ent.get(key) is True, key
+
 
 class TestMacOSBuildScript:
     """Validate the macOS build script."""

@@ -11,6 +11,9 @@
   - allow-unsigned-executable-memory / allow-jit: CPython and some deps allocate
     executable memory.
   - allow-dyld-environment-variables: the PyInstaller bootloader relies on DYLD_*.
+  - personal-information.calendars: the Calendar task source reads events
+    through EventKit; under the hardened runtime, Calendar access needs this
+    entitlement (with NSCalendars*UsageDescription in Info.plist).
 
   NOTE: these are permitted for Developer ID + notarization (our distribution
   model). They are NOT permitted on the Mac App Store — intentionally, since we
@@ -25,6 +28,8 @@
     <key>com.apple.security.cs.disable-library-validation</key>
     <true/>
     <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+    <true/>
+    <key>com.apple.security.personal-information.calendars</key>
     <true/>
 </dict>
 </plist>

@@ -55,6 +55,14 @@ describe('cjkSpacing', () => {
     expect(cjkSpacing('Slack rejected this token', 'Slack')).toBe('Slack rejected this token');
     expect(cjkSpacing('找不到文件夹 其他文件夹', '邮箱')).toBe('找不到文件夹 其他文件夹');
   });
+  it('the Calendar permission line names where to set Full Access, spacing intact', () => {
+    // 日历 is also the service's name; it is a settings pane here, not {svc}
+    expect(failureText(zh, f('calendar_permission'), 'calendar')).toBe('在系统设置 › 隐私与安全性 › 日历 中，把 Orbital 设为“完全访问”');
+    expect(failureText(en, f('calendar_permission'), 'calendar')).toBe('In System Settings › Privacy & Security › Calendars, set Orbital to Full Access');
+    const tpl = zh('sources.verify.permission');
+    expect(cjkSpacing(tpl, '日历', tpl)).toBe(tpl);
+    expect(cjkSpacing('钉钉 不认这个令牌', '钉钉', '{svc} 不认这个令牌')).toBe('钉钉不认这个令牌');
+  });
   it('failure and verify lines with a Chinese service name read without the gap', () => {
     expect(failureText(zh, f('token_rejected', { field: 'csec' }), 'dingtalk')).toBe('钉钉令牌已失效');
   });

@@ -27,7 +27,7 @@ import { projectDisplayName } from '../../utils/projectDisplayName';
 import { canRevealInFileManager, revealLabelKey } from '../../utils/clientPlatform';
 import { AnchoredProjectPicker } from '../workbench/ProjectPicker';
 import SourceMark from './SourceMark';
-import { AccountField, AgentLogo, AnchoredMenu, CommandRow, Dots, KindsCard, MenuOption, Switch } from './parts';
+import { AccountField, AgentLogo, AnchoredMenu, CommandRow, Dots, KindsCard, MenuOption, PickCard, Switch } from './parts';
 import { buildHistoryRows, dateLabel, gapLabel, type HistoryRow } from './historyModel';
 import {
   catchUp, checkSource, deleteSource, dismissHeld, fetchChoices, openSettingsPane, patchSource, revealSource,
@@ -35,8 +35,8 @@ import {
 } from './sourcesApi';
 import { dropSource, loadDetail, loadOlder, patchLocal, putDetail } from './sourcesStore';
 import { failureText, labelText, placeName, placeholderText, relTime, sourceName } from './sourcesText';
-import type { AccountsResponse, CatalogType, HistoryItem, SourceDetail as Detail } from './types';
-import type { Kinds } from './formModel';
+import type { AccountsResponse, CatalogType, ChoiceItem, HistoryItem, SourceDetail as Detail } from './types';
+import { pickOf, pickPayload, pickState, togglePick, type Kinds } from './formModel';
 
 export interface SourceDetailProps {
   source: Detail;
@@ -383,6 +383,37 @@ export default function SourceDetail({
   const loadChoices = async (list: string, params: Record<string, unknown>) =>
     (await fetchChoices({ source_id: source.id, list, params })).items ?? [];
 
+  // Calendar: which calendars, read when the source opens (nothing stored = every one ticked).
+  const pick = typeDef ? pickOf(typeDef) : null;
+  const [pickItems, setPickItems] = useState<ChoiceItem[] | null>(null);
+  const pickReq = useRef<{ id: string; p: Promise<ChoiceItem[]> } | null>(null);
+  useEffect(() => {
+    if (!pick) return;
+    let dead = false;
+    if (pickReq.current?.id !== source.id) {
+      setPickItems(null);
+      pickReq.current = { id: source.id, p: fetchChoices({ source_id: source.id, list: pick.choices, params: {} }).then((r) => r.items ?? []) };
+    }
+    pickReq.current.p.then((items) => { if (!dead) setPickItems(items); }).catch(() => { if (!dead) setPickItems([]); });
+    return () => { dead = true; };
+  }, [source.id, pick]);
+  const pickCard = pick ? (
+    <PickCard
+      items={pickItems}
+      on={pickState(source.config?.[pick.key], pickItems ?? []).on}
+      label={t('sources.calendar.list')}
+      onToggle={(v) => {
+        const next = togglePick(pickState(source.config?.[pick.key], pickItems ?? []), v);
+        if (!next.on.length) return; // the last one stays ticked
+        const value = pickPayload(next);
+        const config = { ...source.config };
+        if (value === null) delete config[pick.key]; else config[pick.key] = value;
+        putDetail({ ...source, config });
+        void patch({ config: { [pick.key]: value } });
+      }}
+    />
+  ) : null;
+
   const kindsCard = typeDef && source.type !== 'command' ? (
     <KindsCard
       typeDef={typeDef}
@@ -446,6 +477,7 @@ export default function SourceDetail({
           )}
           {websiteCard}
           {source.type === 'command' && <CommandCard source={source} toast={toast} />}
+          {pickCard}
           {kindsCard}
           <Instruction source={source} toast={toast} />
           {(rows.length > 0 || catchup) && (

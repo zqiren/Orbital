@@ -82,7 +82,7 @@ export const FEISHU: CatalogType = {
 
 export const CALENDAR: CatalogType = {
   ...base, type: 'calendar', family: 'account', platforms: ['darwin'],
-  connect: { method: 'none' },
+  connect: { method: 'none', pick: { key: 'calendars', choices: 'calendars', multi: true } },
   kinds: [
     { key: 'new_event', label_key: 'pick.newev', default: false, params: [] },
     { key: 'before', label_key: 'pick.before', default: true, params: [

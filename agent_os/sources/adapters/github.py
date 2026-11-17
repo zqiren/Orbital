@@ -12,7 +12,11 @@ stored or logged.
 
 Kinds: assigned to me / mentions me (across every repository the account
 sees, ``gh search issues --assignee|--mentions @me``, pull requests
-included) and with a label in one repository. Each poll re-reads the most
+included) and with a label in one repository. The label kind reads the
+repository's own issue list (``gh api repos/{repo}/issues?labels=…``), which
+shows a new issue at once, where search lags behind its index; a label
+whose name holds a comma (the list's separator) still goes through search.
+Both give the same items (ids ``kind:repo#n``). Each poll re-reads the most
 recently updated open items; the core records each id once.
 """
 
@@ -49,7 +53,7 @@ def _classify(stderr: str) -> str:
 
 class GitHubAdapter(Adapter):
     mode = "poll"
-    interval_s = 300
+    interval_s = 60
 
     # -- the CLI ------------------------------------------------------------
 
@@ -196,6 +200,9 @@ class GitHubAdapter(Adapter):
                 repo, name = params.get("repo"), params.get("label")
                 if not repo or not name:
                     continue
+                if "," not in name:
+                    out.extend(await self._label_rest(ctx, repo, name, token))
+                    continue
                 exists = await self._run(ctx, ["repo", "view", repo, "--json", "nameWithOwner"], token=token)
                 if exists.code != 0:
                     code = _classify(exists.stderr)
@@ -210,24 +217,73 @@ class GitHubAdapter(Adapter):
                     out.append(item)
         return out
 
+    async def _label_rest(self, ctx, repo: str, name: str, token: str) -> list:
+        """Open issues and pull requests carrying the label, newest update
+        first, from the repository's issue list. A 404 means the repository
+        is gone (or no longer visible to the account)."""
+        args = ["api", "--method", "GET", f"repos/{repo}/issues", "-f", f"labels={name}",
+                "-f", "state=open", "-f", "sort=updated", "-f", "direction=desc",
+                "-f", f"per_page={SEARCH_LIMIT}"]
+        try:
+            res = await self._run(ctx, args, token=token)
+        except CommandNotFound:
+            raise SourceFailure("cli_missing", {"cli": "gh"})
+        except CommandTimeout as t:
+            raise SourceFailure("unreachable", {"host": HOST, "seconds": t.seconds})
+        if res.code != 0:
+            if "http 404" in (res.stderr or "").lower():
+                raise SourceFailure("repo_not_found", {"repo": repo})
+            code = _classify(res.stderr)
+            raise SourceFailure(code, {"host": HOST} if code == "unreachable" else {})
+        try:
+            rows = json.loads(res.stdout or "null")
+        except ValueError:
+            raise SourceFailure("error")
+        out = []
+        for r in rows if isinstance(rows, list) else []:
+            item = self._item_rest("label", r, repo)
+            if item is not None:
+                out.append(item)
+        return out
+
     @staticmethod
-    def _item(kind: str, r: dict) -> Item | None:
-        if not isinstance(r, dict) or not r.get("number"):
-            return None
-        repo = (r.get("repository") or {}).get("nameWithOwner") or ""
-        n = r["number"]
+    def _make(kind: str, repo: str, n, title, body, is_pr: bool, url, sender, at) -> Item:
         subject = f"{repo}#{n}"
         return Item(
             id=f"{kind}:{subject}",
             kind=kind,
             subject=subject,
-            title=f"#{n} {r.get('title') or ''}".strip(),
-            body=(f"{'Pull request' if r.get('isPullRequest') else 'Issue'} in {repo}\n\n"
-                  + (r.get("body") or "")),
-            url=r.get("url"),
-            sender=(r.get("author") or {}).get("login"),
-            at=r.get("updatedAt"),
+            title=f"#{n} {title or ''}".strip(),
+            body=f"{'Pull request' if is_pr else 'Issue'} in {repo}\n\n" + (body or ""),
+            url=url,
+            sender=sender,
+            at=at,
         )
+
+    @classmethod
+    def _item(cls, kind: str, r: dict) -> Item | None:
+        """One row of ``gh search issues --json``."""
+        if not isinstance(r, dict) or not r.get("number"):
+            return None
+        repo = (r.get("repository") or {}).get("nameWithOwner") or ""
+        return cls._make(kind, repo, r["number"], r.get("title"), r.get("body"),
+                         bool(r.get("isPullRequest")), r.get("url"),
+                         (r.get("author") or {}).get("login"), r.get("updatedAt"))
+
+    @classmethod
+    def _item_rest(cls, kind: str, r: dict, repo: str) -> Item | None:
+        """One row of the REST issue list. The repository's name comes from
+        the row's ``repository_url`` (GitHub's own spelling, as search gives
+        it), so the ids match the search path's exactly; the requested name
+        is the fallback."""
+        if not isinstance(r, dict) or not r.get("number"):
+            return None
+        api_repo = r.get("repository_url") or ""
+        marker = "/repos/"
+        canonical = api_repo.split(marker, 1)[1] if marker in api_repo else ""
+        return cls._make(kind, canonical or repo, r["number"], r.get("title"), r.get("body"),
+                         r.get("pull_request") is not None, r.get("html_url"),
+                         (r.get("user") or {}).get("login"), r.get("updated_at"))
 
 
 ADAPTER = GitHubAdapter

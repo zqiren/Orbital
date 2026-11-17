@@ -146,6 +146,13 @@
 .src-panel .pill2.on svg { color: var(--color-accent); }
 .src-panel .pill2 .num { display: inline-flex; align-items: center; height: 22px; padding: 0 7px; margin: 0 1px; border-radius: 6px; background: var(--src-layer); box-shadow: 0 0 0 .5px color-mix(in srgb, var(--color-muted) 40%, transparent); font-variant-numeric: tabular-nums; cursor: pointer; }
 .src-panel .pill2 .num:hover, .src-panel .pill2 .num.is-open { box-shadow: 0 0 0 1.5px var(--color-accent); }
+/* a source-level list to tick (calendar: which calendars) */
+.src-panel .pk.pkl .pkg + .pkg { margin-top: 12px; }
+.src-panel .pk.pkl .pkg > .cap { margin: 0 2px 8px; }
+.src-panel .pk.pkl .cap .t { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.src-panel .pk.pkl .pill2 { max-width: 100%; }
+.src-panel .pk.pkl .pill2 .t { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.src-panel .pk.pkl[data-loading] { display: flex; justify-content: center; padding: 16px 12px; }
 .src-panel .pk-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 10px 0 0 -2px; min-height: 26px; }
 .src-panel .chip { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 8px 0 7px; border-radius: 999px; font-size: 12px; color: var(--color-secondary); white-space: nowrap; min-width: 0; max-width: 100%; }
 .src-panel .chip:hover, .src-panel .chip.is-open { background: var(--src-tint); color: var(--color-primary); }
@@ -263,12 +270,13 @@
 .src-panel .xf { display: flex; justify-content: flex-end; margin: -4px -2px 0; }
 
 /* a failed source */
-.src-panel .fail { display: flex; align-items: center; gap: 9px; min-height: 40px; padding: 4px 6px 4px 12px; border-radius: 12px; background: rgb(245 158 11 / .09); }
-.src-panel .fail .ft { flex: 1; min-width: 0; font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* The phone's layout at every width: the line (which can be an instruction,
+   e.g. Calendar's Full Access path) gets the row and wraps; the actions
+   follow below it instead of squeezing it to an ellipsis. */
+.src-panel .fail { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 9px; min-height: 40px; padding: 6px 6px 6px 12px; border-radius: 12px; background: rgb(245 158 11 / .09); }
+.src-panel .fail .ft { flex: 1 1 calc(100% - 80px); min-width: 0; font-size: 12.5px; line-height: 17px; overflow-wrap: anywhere; }
 .src-panel .fail .fa { font-size: 11.5px; color: var(--color-muted); white-space: nowrap; flex: none; }
 .src-panel .fail.checking .sd { animation: src-breathe 1s ease-in-out infinite; }
-.src-panel.is-phone .fail { flex-wrap: wrap; padding: 6px 6px 6px 12px; }
-.src-panel.is-phone .fail .ft { flex-basis: calc(100% - 80px); }
 
 /* history */
 .src-panel .hist { margin-top: 22px !important; }

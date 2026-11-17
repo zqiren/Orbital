@@ -50,6 +50,16 @@ export interface CatalogConnect {
   install_command?: string;
   install_url?: string;
   fields?: CatalogField[];
+  /** A source-level multi-select (calendar: which calendars). Nothing stored = every one. */
+  pick?: CatalogPick;
+}
+
+export interface CatalogPick {
+  /** The config key it is stored under. */
+  key: string;
+  /** The list name for `POST /sources/choices`. */
+  choices: string;
+  multi: boolean;
 }
 
 export interface CatalogType {
@@ -201,6 +211,8 @@ export interface QrStatus {
 export interface ChoiceItem {
   value: string;
   label: string;
+  /** What the list groups it under (a calendar's account). */
+  group?: string | null;
 }
 
 /** `400 verify_failed` / `422 invalid` / `409` details, parsed. */

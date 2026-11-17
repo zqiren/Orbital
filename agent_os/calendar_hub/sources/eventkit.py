@@ -94,7 +94,33 @@ class EventKitSource:
         done.wait(timeout=_ACCESS_TIMEOUT)
         return outcome["granted"]
 
-    async def list_events(self, start: str, end: str) -> list[NormalizedEvent]:
+    def list_calendars(self) -> list[dict]:
+        """The event calendars Calendar.app holds: ``{"id", "title",
+        "account"}`` each (``calendarIdentifier``, its title, its account's
+        title). Empty when the store cannot be used."""
+        store = self._ensure_store()
+        if store is None:
+            return []
+        out = []
+        try:
+            for cal in store.calendarsForEntityType_(_ENTITY_EVENT) or []:
+                src = cal.source()
+                out.append({
+                    "id": str(cal.calendarIdentifier()),
+                    "title": str(cal.title() or ""),
+                    "account": str(src.title() or "") if src is not None else "",
+                })
+        except Exception:
+            logger.warning("EventKit list_calendars failed", exc_info=True)
+            return []
+        return out
+
+    async def list_events(self, start: str, end: str,
+                          calendars: list[str] | None = None) -> list[NormalizedEvent]:
+        """Events in ``[start, end]``. ``calendars``: ``None`` reads every
+        calendar; a list of ``calendarIdentifier`` values reads only those
+        (ids that no longer exist are skipped, and when none is left nothing
+        is read — EventKit is never handed an empty list)."""
         store = self._ensure_store()
         if store is None:
             return []
@@ -106,10 +132,16 @@ class EventKitSource:
             end_dt = _parse_iso(end)
             if start_dt is None or end_dt is None:
                 return []
+            picked = None
+            if calendars is not None:
+                picked = [c for c in (store.calendarWithIdentifier_(i) for i in calendars)
+                          if c is not None]
+                if not picked:
+                    return []
             ns_start = NSDate.dateWithTimeIntervalSince1970_(start_dt.timestamp())
             ns_end = NSDate.dateWithTimeIntervalSince1970_(end_dt.timestamp())
             predicate = store.predicateForEventsWithStartDate_endDate_calendars_(
-                ns_start, ns_end, None
+                ns_start, ns_end, picked
             )
             ek_events = store.eventsMatchingPredicate_(predicate) or []
             return [self._map(ev) for ev in ek_events]

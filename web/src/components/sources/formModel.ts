@@ -11,7 +11,7 @@
 
 import type { Locale } from '../../i18n/locales';
 import type { CreateBody } from './sourcesApi';
-import type { Catalog, CatalogField, CatalogType, QrState } from './types';
+import type { Catalog, CatalogField, CatalogPick, CatalogType, ChoiceItem, QrState } from './types';
 
 export type Kinds = Record<string, Record<string, unknown>>;
 
@@ -31,6 +31,52 @@ export interface Draft {
   manual: boolean;
   /** E-mail: the server was filled from the address (the user has not typed one). */
   autoServer?: boolean;
+  /**
+   * A type with a source-level list (calendar: which calendars): the listed
+   * values and the ticked ones; 'loading' while it is read; null when it
+   * could not be read (connecting then means every one, the default).
+   */
+  pick?: PickState | 'loading' | null;
+}
+
+/** A source-level multi-select: every value listed, and the ticked ones. */
+export interface PickState { all: string[]; on: string[] }
+
+export const pickOf = (t: CatalogType): CatalogPick | null => (t.connect.pick?.multi ? t.connect.pick : null);
+
+/** Ticked for a stored value: nothing stored means every listed one; stored ids no longer listed are not shown. */
+export function pickState(stored: unknown, items: ChoiceItem[]): PickState {
+  const all = items.map((i) => i.value);
+  if (!Array.isArray(stored)) return { all, on: [...all] };
+  const kept = new Set(stored.filter((x): x is string => typeof x === 'string'));
+  return { all, on: all.filter((v) => kept.has(v)) };
+}
+
+export function togglePick(p: PickState, value: string): PickState {
+  const on = p.on.includes(value) ? p.on.filter((v) => v !== value) : p.all.filter((v) => v === value || p.on.includes(v));
+  return { ...p, on };
+}
+
+/**
+ * What a connect or a change sends: everything ticked is null (no key is
+ * stored, so calendars added later are read too, and a PATCH drops an older
+ * narrowed list); otherwise the ticked ids, exactly as listed.
+ */
+export function pickPayload(p: PickState | 'loading' | null | undefined): string[] | null {
+  if (!p || p === 'loading') return null;
+  if (p.all.every((v) => p.on.includes(v))) return null;
+  return p.all.filter((v) => p.on.includes(v));
+}
+
+/** The list's groups (a calendar's account), in the order the service lists them. */
+export function pickGroups(items: ChoiceItem[]): Array<{ group: string; items: ChoiceItem[] }> {
+  const out: Array<{ group: string; items: ChoiceItem[] }> = [];
+  for (const it of items) {
+    const g = it.group ?? '';
+    const hit = out.find((x) => x.group === g);
+    if (hit) hit.items.push(it); else out.push({ group: g, items: [it] });
+  }
+  return out;
 }
 
 /** The connect list: my accounts, then my bots (the reader's likely ones first), then the website check. */
@@ -84,7 +130,10 @@ export function initDraft(t: CatalogType): Draft {
   if (!Object.keys(kinds).length && t.kinds[0]) kinds[t.kinds[0].key] = kindDefaults(t, t.kinds[0].key);
   const config: Record<string, string> = {};
   for (const f of formFields(t)) if (!f.secret && f.default) config[f.key] = f.default;
-  return { type: t.type, name: '', kinds, account: null, config, secrets: {}, qrId: null, qrState: null, manual: false };
+  return {
+    type: t.type, name: '', kinds, account: null, config, secrets: {}, qrId: null, qrState: null, manual: false,
+    ...(pickOf(t) ? { pick: 'loading' as const } : {}),
+  };
 }
 
 /** A kind on or off; the last kind on stays on (a source brings in something). */
@@ -155,6 +204,11 @@ export function fieldsReady(t: CatalogType, d: Draft): boolean {
 
 export function draftReady(t: CatalogType, d: Draft): boolean {
   if (!kindsReady(t, d.kinds)) return false;
+  if (pickOf(t)) {
+    if (d.pick === 'loading') return false;
+    // A listed one must stay ticked; no list (unreadable, or none) connects every one.
+    if (d.pick && d.pick.all.length > 0 && d.pick.on.length === 0) return false;
+  }
   switch (t.connect.method) {
     case 'cli_account': return filled(d.account);
     case 'qr': return usesQr(t, d) ? d.qrState === 'done' && !!d.qrId : fieldsReady(t, d);
@@ -185,6 +239,8 @@ export function credentials(t: CatalogType, d: Draft): { config: Record<string, 
 
 export function createBody(t: CatalogType, d: Draft): CreateBody {
   const { config, secrets } = credentials(t, d);
+  const pick = pickOf(t);
+  if (pick) config[pick.key] = pickPayload(d.pick);
   return {
     type: t.type,
     name: d.name.trim(),

@@ -179,7 +179,7 @@ _BASE: dict[str, dict] = {
             _p("repo", "repo.ph", choices="repos"),
             _p("label", "label.ph", choices="labels", depends_on="repo"),
         ]),
-    ], interval_s=300),
+    ], interval_s=60),
     "gitlab": _entry("gitlab", "account", _cli("glab", "gitlab.com", "https://gitlab.com/gitlab-org/cli"), [
         _k("assigned", "pick.assigned", default=True),
         _k("mention", "pick.mention"),
@@ -200,7 +200,11 @@ _BASE: dict[str, dict] = {
         _p("folder", "fl.folder", choices="folders", default="INBOX", required=False),
         _p("unread_only", "pick.unread", type="bool", default=True, required=False),
     ])], interval_s=120),
-    "calendar": _entry("calendar", "account", {"method": "none", "permission": "calendar"}, [
+    # ``pick``: one source-level multi-select both kinds read (no key stored
+    # = every calendar; see ``SourcesCore._validate_config``).
+    "calendar": _entry("calendar", "account", {"method": "none", "permission": "calendar",
+                                               "pick": {"key": "calendars", "choices": "calendars",
+                                                        "multi": True}}, [
         _k("new_event", "pick.newev"),
         _k("before", "pick.before", default=True, params=[
             _p("minutes", "mins", options=[10, 15, 30, 60], default=30, required=False),
@@ -268,6 +272,12 @@ def secret_fields(entry: dict) -> list[str]:
 
 def plain_fields(entry: dict) -> list[dict]:
     return [f for f in (entry.get("connect") or {}).get("fields", []) if not f.get("secret")]
+
+
+def multi_pick(entry: dict) -> dict | None:
+    """The connect's source-level multi-select (calendar: which calendars)."""
+    pick = (entry.get("connect") or {}).get("pick")
+    return pick if isinstance(pick, dict) and pick.get("multi") and pick.get("key") else None
 
 
 def default_kinds(entry: dict) -> dict:

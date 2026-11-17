@@ -98,6 +98,133 @@ describe('the connect list', () => {
 });
 
 describe('a connect form', () => {
+  it('Calendar without full access says where to set Orbital to Full Access, with the settings button (en + zh)', async () => {
+    const refuse = { 'POST /api/v2/sources': () => { throw new ApiError(400, JSON.stringify({ code: 'verify_failed', field: null, reason: 'permission', message: 'x' })); } };
+    const open = async () => {
+      fireEvent.click(screen.getByTestId('src-plus'));
+      // the calendar list is read first (the mock answers with none)
+      await act(async () => { fireEvent.click(screen.getAllByTestId('src-kind-row').find((r) => r.dataset.type === 'calendar')!); });
+      const form = screen.getByTestId('src-connect');
+      await act(async () => { fireEvent.click(within(form).getByTestId('src-submit')); });
+      return form;
+    };
+    await renderPanel([summary({ id: 'a' })], refuse);
+    let form = await open();
+    expect(within(form).getByTestId('src-form-error')).toHaveTextContent('In System Settings › Privacy & Security › Calendars, set Orbital to Full Access');
+    expect(within(form).getByTestId('src-form-settings')).toBeInTheDocument();
+    cleanup();
+    window.localStorage.setItem('orbital.locale', 'zh');
+    try {
+      const { LocaleProvider } = await import('../../i18n/LocaleContext');
+      setApi({
+        'GET /api/v2/sources/catalog': () => CATALOG,
+        'GET /api/v2/sources': () => ({ sources: [summary({ id: 'a' })], waiting: 0 }),
+        'GET /api/v2/sources/accounts?type=github': () => SIGNED_IN,
+        'GET /api/v2/sources/accounts?type=gitlab': () => SIGNED_OUT,
+        ...refuse,
+      });
+      await act(async () => { await refreshSources(); });
+      await act(async () => {
+        render(<LocaleProvider><SourcesPanel phone={false} projects={PROJECTS} focus={null} onClose={vi.fn()} onOpenSession={vi.fn()} /></LocaleProvider>);
+      });
+      form = await open();
+      // 日历 is the settings pane's name here: its spacing stays
+      expect(within(form).getByTestId('src-form-error').firstChild?.textContent).toBe('在系统设置 › 隐私与安全性 › 日历 中，把 Orbital 设为“完全访问”');
+    } finally {
+      window.localStorage.removeItem('orbital.locale');
+    }
+  });
+
+  const CALS = { items: [
+    { value: 'ic-home', label: 'Home', group: 'iCloud' },
+    { value: 'ex-team', label: 'Team', group: 'Exchange' },
+    { value: 'ic-kids', label: 'Kids', group: 'iCloud' },
+  ] };
+  const openCalendar = async () => {
+    fireEvent.click(screen.getByTestId('src-plus'));
+    await act(async () => { fireEvent.click(screen.getAllByTestId('src-kind-row').find((r) => r.dataset.type === 'calendar')!); });
+    return screen.getByTestId('src-connect');
+  };
+
+  it('Calendar lists the calendars by account, all ticked; all ticked connects with calendars: null', async () => {
+    const created = detail({ id: 'src_c', type: 'calendar', label: null, kinds: { before: { minutes: 30 } } });
+    await renderPanel([summary({ id: 'a' })], {
+      'POST /api/v2/sources/choices': () => CALS,
+      'POST /api/v2/sources': () => created,
+      'GET /api/v2/sources/src_c': () => created,
+    });
+    const form = await openCalendar();
+    expect(calls.find((c) => c.key === 'POST /api/v2/sources/choices')!.body).toMatchObject({ type: 'calendar', list: 'calendars' });
+    const groups = within(form).getAllByTestId('src-pick-group');
+    expect(groups.map((g) => g.textContent)).toEqual(['iCloudHomeKids', 'ExchangeTeam']);
+    const items = within(form).getAllByTestId('src-pick-item');
+    expect(items.map((i) => i.getAttribute('aria-pressed'))).toEqual(['true', 'true', 'true']);
+    await act(async () => { fireEvent.click(within(form).getByTestId('src-submit')); });
+    const body = calls.find((c) => c.key === 'POST /api/v2/sources')!.body as { config: Record<string, unknown> };
+    expect(body.config).toEqual({ calendars: null });
+  });
+
+  it('Calendar: unticking narrows to the exact ids; none ticked cannot connect', async () => {
+    await renderPanel([summary({ id: 'a' })], {
+      'POST /api/v2/sources/choices': () => CALS,
+      'POST /api/v2/sources': () => detail({ id: 'src_c', type: 'calendar' }),
+    });
+    const form = await openCalendar();
+    const item = (v: string) => within(form).getAllByTestId('src-pick-item').find((i) => i.dataset.value === v)!;
+    fireEvent.click(item('ic-home'));
+    fireEvent.click(item('ic-kids'));
+    expect(within(form).getByTestId('src-submit')).toBeEnabled();
+    fireEvent.click(item('ex-team'));
+    expect(within(form).getByTestId('src-submit')).toBeDisabled();
+    fireEvent.click(item('ic-kids'));
+    await act(async () => { fireEvent.click(within(form).getByTestId('src-submit')); });
+    expect((calls.find((c) => c.key === 'POST /api/v2/sources')!.body as { config: unknown }).config).toEqual({ calendars: ['ic-kids'] });
+  });
+
+  it('Calendar: a list it cannot read shows the Full Access line, and connect still asks', async () => {
+    const refuse = () => { throw new ApiError(400, JSON.stringify({ code: 'verify_failed', field: null, reason: 'permission', message: 'x' })); };
+    await renderPanel([summary({ id: 'a' })], { 'POST /api/v2/sources/choices': refuse, 'POST /api/v2/sources': refuse });
+    const form = await openCalendar();
+    expect(within(form).queryByTestId('src-pick-item')).toBeNull();
+    expect(within(form).getByTestId('src-form-error')).toHaveTextContent('set Orbital to Full Access');
+    expect(within(form).getByTestId('src-form-settings')).toBeInTheDocument();
+    expect(within(form).getByTestId('src-submit')).toBeEnabled();
+    await act(async () => { fireEvent.click(within(form).getByTestId('src-submit')); });
+    expect((calls.find((c) => c.key === 'POST /api/v2/sources')!.body as { config: unknown }).config).toEqual({ calendars: null });
+  });
+
+  it('Calendar detail: the same list; a narrowed one is a list, all re-ticked is null, the last stays', async () => {
+    let d = detail({ id: 'c', type: 'calendar', label: null, account: null, kinds: { before: { minutes: 30 } }, config: {} });
+    await renderPanel([d], {
+      'GET /api/v2/sources/c': () => d,
+      'POST /api/v2/sources/choices': () => CALS,
+      'PATCH /api/v2/sources/c': (init) => {
+        const cfg = JSON.parse(init!.body!).config as Record<string, unknown>;
+        const config = { ...d.config, ...cfg };
+        if (cfg.calendars === null) delete config.calendars;
+        d = { ...d, config };
+        return d;
+      },
+    });
+    await act(async () => { fireEvent.click(screen.getByTestId('src-row')); });
+    const det = await screen.findByTestId('src-detail');
+    await waitFor(() => expect(within(det).getAllByTestId('src-pick-item')).toHaveLength(3));
+    expect(calls.find((c) => c.key === 'POST /api/v2/sources/choices')!.body).toMatchObject({ source_id: 'c', list: 'calendars' });
+    const item = (v: string) => within(screen.getByTestId('src-detail')).getAllByTestId('src-pick-item').find((i) => i.dataset.value === v)!;
+    expect(item('ex-team')).toHaveAttribute('aria-pressed', 'true'); // no key: every one ticked
+    await act(async () => { fireEvent.click(item('ex-team')); });
+    const patches = () => calls.filter((c) => c.key === 'PATCH /api/v2/sources/c').map((c) => c.body);
+    expect(patches()).toEqual([{ config: { calendars: ['ic-home', 'ic-kids'] } }]);
+    expect(item('ex-team')).toHaveAttribute('aria-pressed', 'false');
+    await act(async () => { fireEvent.click(item('ex-team')); });
+    expect(patches()[1]).toEqual({ config: { calendars: null } });
+    await act(async () => { fireEvent.click(item('ic-home')); });
+    await act(async () => { fireEvent.click(item('ic-kids')); });
+    await act(async () => { fireEvent.click(item('ex-team')); }); // the last one: stays
+    expect(patches()).toHaveLength(4);
+    expect(item('ex-team')).toHaveAttribute('aria-pressed', 'true');
+  });
+
   it('a refused token marks its field; nothing is created; fixing it and pressing again creates the source', async () => {
     let attempt = 0;
     const created = detail({ id: 'src_t', type: 'telegram', family: 'bot', label: '@mira_bot', kinds: { dm: {}, at: {} } });

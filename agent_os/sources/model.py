@@ -68,9 +68,15 @@ class Verified:
 class Choice:
     value: str
     label: str | None = None
+    #: What the form groups the item under (a calendar's account). Only in
+    #: the answer when set, so the shape stays the same for every other list.
+    group: str | None = None
 
     def to_json(self) -> dict:
-        return {"value": self.value, "label": self.label if self.label is not None else self.value}
+        out = {"value": self.value, "label": self.label if self.label is not None else self.value}
+        if self.group is not None:
+            out["group"] = self.group
+        return out
 
 
 @dataclass

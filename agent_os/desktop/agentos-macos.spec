@@ -123,5 +123,11 @@ app = BUNDLE(
         'LSMinimumSystemVersion': '13.0',
         'CFBundleDisplayName': 'Orbital',
         'NSHumanReadableCopyright': 'Copyright © 2026 Orbital. GPL-3.0.',
+        # The Calendar task source reads events through EventKit inside this
+        # process (the daemon runs in-process). macOS shows the Calendar
+        # prompt only when the bundle carries a usage string: the FullAccess
+        # key on macOS 14+, the plain one on macOS 13.
+        'NSCalendarsFullAccessUsageDescription': 'Orbital reads the calendars you choose to turn events into tasks.',
+        'NSCalendarsUsageDescription': 'Orbital reads the calendars you choose to turn events into tasks.',
     },
 )

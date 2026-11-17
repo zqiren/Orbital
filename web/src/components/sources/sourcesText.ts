@@ -71,14 +71,17 @@ export function failureText(t: T, f: SourceFailure, type: string): string {
   if (!hasKey(k)) return t('sources.fail.error');
   const tpl = t(k);
   for (const m of tpl.matchAll(/\{(\w+)\}/g)) if (vars[m[1]] === undefined) vars[m[1]] = '';
-  return cjkSpacing(t(k, vars).replace(/\s{2,}/g, ' ').trim(), String(vars.svc));
+  return cjkSpacing(t(k, vars).replace(/\s{2,}/g, ' ').trim(), String(vars.svc), tpl);
 }
 
 /** «钉钉 不认这个令牌» → «钉钉不认这个令牌»: the service name dropped into a
- *  zh line keeps its space only beside Latin text. */
-export function cjkSpacing(s: string, name: string): string {
+ *  zh line keeps its space only beside Latin text. Given the line's
+ *  template, only a name that came from `{svc}` is touched (the Calendar
+ *  permission line names 日历 as a settings pane and keeps its spacing). */
+export function cjkSpacing(s: string, name: string, tpl?: string): string {
   const cjk = /[\u3400-\u9fff]/;
   if (!name || !cjk.test(name.slice(-1))) return s;
+  if (tpl !== undefined && !tpl.includes('{svc}')) return s;
   const i = s.indexOf(name + ' ');
   if (i < 0 || !cjk.test(s.charAt(i + name.length + 1))) return s;
   return s.slice(0, i + name.length) + s.slice(i + name.length + 1);

@@ -20,7 +20,7 @@ import { getAgentIcon, MAIN_AGENT_HANDLE } from '../../utils/agentIcons';
 import { placePopover } from '../workbench/ProjectPicker';
 import SourceMark from './SourceMark';
 import { accountLine, labelText } from './sourcesText';
-import { kindsReady, setParam, toggleKind, type Kinds } from './formModel';
+import { kindsReady, pickGroups, setParam, toggleKind, type Kinds } from './formModel';
 import type { AccountsResponse, CatalogParam, CatalogType, ChoiceItem } from './types';
 
 export function Switch({ on, onChange, label, disabled, testId }: {
@@ -438,6 +438,40 @@ export function KindsCard({ typeDef, kinds, onChange, who, loadChoices, bad }: {
       </div>
       {foot.length > 0 && <div className="pk-foot">{foot}</div>}
       {badLine}
+    </div>
+  );
+}
+
+/**
+ * A source-level list to tick (calendar: which calendars), grouped by the
+ * service's own group (the account). The kinds' pill rows; a group's name
+ * only when there is more than one. `items` null: being read.
+ */
+export function PickCard({ items, on, onToggle, label }: {
+  items: ChoiceItem[] | null; on: string[]; onToggle: (value: string) => void; label: string;
+}) {
+  const t = useT();
+  if (items === null) return <div className="pk pkl" data-testid="src-pick" data-loading="true"><Dots /></div>;
+  if (!items.length) return null;
+  const groups = pickGroups(items);
+  return (
+    <div className="pk pkl" role="group" aria-label={label} data-testid="src-pick">
+      {groups.map((g) => (
+        <div className="pkg" key={g.group} data-testid="src-pick-group">
+          {groups.length > 1 && <div className="cap"><span className="t">{g.group || t('sources.calendar.other')}</span></div>}
+          <div className="pills2">
+            {g.items.map((it) => {
+              const ticked = on.includes(it.value);
+              return (
+                <button key={it.value} type="button" className={`pill2${ticked ? ' on' : ''}`} aria-pressed={ticked} title={it.label}
+                  onClick={() => onToggle(it.value)} data-testid="src-pick-item" data-value={it.value}>
+                  {ticked && <Check size={12} strokeWidth={2.4} aria-hidden="true" />}<span className="t">{it.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
