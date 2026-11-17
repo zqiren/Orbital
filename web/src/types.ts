@@ -1397,6 +1397,14 @@ export interface DirectoryListing {
   entries: FileEntry[];
 }
 
+/** Spec 187: one row of `GET /projects/{pid}/files/recent`, newest first. */
+export interface RecentFile {
+  /** Workspace-relative, POSIX separators. */
+  path: string;
+  /** `st_mtime`, epoch seconds. */
+  modified_at: number;
+}
+
 /** Spec 090 — document formats the client renders from raw bytes. */
 export type DocumentFormat = 'pdf' | 'doc' | 'docx' | 'xlsx' | 'xls' | 'csv';
 

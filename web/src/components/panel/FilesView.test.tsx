@@ -5,9 +5,10 @@
 // @vitest-environment jsdom
 
 /**
- * Spec 078 §5.3 (D10) / §10 — the Files view: tree with touched badges and a
- * pinned "Touched this session" group, swapping to the preview on click, and
- * the three annotation forms a quote can take.
+ * Spec 078 §5.3 (D10) / §10 — the Files view: tree with touched badges, the
+ * spec 187 最近修改 / Recent group above it (which replaced "Touched this
+ * session"), swapping to the preview on click, and the three annotation forms
+ * a quote can take.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
@@ -25,7 +26,10 @@ const getFileContent = vi.fn<(projectId: string, path: string, ifRevision?: stri
 const resolvePath = vi.fn<(projectId: string, path: string) => Promise<string[] | null>>();
 const revealPath = vi.fn<(projectId: string, path: string) => Promise<boolean>>();
 
-vi.mock('../../hooks/useFiles', () => ({
+vi.mock('../../hooks/useFiles', async (importOriginal) => ({
+  // The real listRecent / useRecentFiles (spec 187): their request goes
+  // through the `api` mock below, so 404 / 503 take the real failure path.
+  ...(await importOriginal<typeof import('../../hooks/useFiles')>()),
   useFiles: () => ({
     directory: null,
     fileContent: null,
@@ -38,6 +42,17 @@ vi.mock('../../hooks/useFiles', () => ({
     revealPath,
   }),
 }));
+
+// Spec 187: GET /files/recent. Anything else keeps the real `api`.
+const recentApi = vi.fn<(path: string) => Promise<unknown>>();
+vi.mock('../../config', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../config')>();
+  return {
+    ...actual,
+    api: (path: string, options?: RequestInit) =>
+      path.includes('/files/recent') ? recentApi(path) : actual.api(path, options),
+  };
+});
 
 // The live event stream that drives the panel's refresh. One handler per type
 // is enough here; `emit` plays a daemon broadcast.
@@ -66,6 +81,11 @@ vi.mock('../FilePreview', () => ({
 }));
 
 import FilesView from './FilesView';
+import TouchedGroup from './TouchedGroup';
+import { ApiError } from '../../config';
+import { LocaleProvider } from '../../i18n/LocaleContext';
+import { LOCALE_STORAGE_KEY } from '../../i18n/locales';
+import type { RecentFile } from '../../types';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -129,6 +149,8 @@ beforeEach(() => {
     type: 'text',
   }));
   resolvePath.mockResolvedValue([]);
+  recentApi.mockReset();
+  recentApi.mockResolvedValue({ files: [] });
 });
 afterEach(() => cleanup());
 
@@ -185,51 +207,292 @@ describe('FilesView — tree state', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Touched group
+// Spec 187 — 最近修改 / Recent group. It replaced "Touched this session" at
+// the top of the tree (owner decision §10.1): the project's latest-modified
+// files from GET /files/recent, five shown, 更多 / More expanding to all.
 // ---------------------------------------------------------------------------
 
-describe('FilesView — "Touched this session" group', () => {
-  it('is absent when nothing was touched', async () => {
-    renderView({ touched: [] });
+const nowS = () => Date.now() / 1000;
+
+/** `n` files, newest first, a minute apart, the newest two minutes old. */
+function recentFiles(n: number): RecentFile[] {
+  return Array.from({ length: n }, (_, i) => ({
+    path: `out/f${i}.md`,
+    modified_at: nowS() - 120 - i * 60,
+  }));
+}
+
+function recentRows(): HTMLElement[] {
+  return screen.queryAllByTestId('panel-recent-row');
+}
+
+describe('FilesView — 最近修改 / Recent group (spec 187)', () => {
+  it('asks the recent route for this project on mount', async () => {
+    renderView();
+    await settle();
+    expect(recentApi).toHaveBeenCalledWith('/api/v2/projects/proj-1/files/recent');
+  });
+
+  it('is hidden when the project has no recent files', async () => {
+    renderView();
+    await settle();
+    expect(screen.queryByTestId('panel-recent-group')).toBeNull();
+    expect(screen.getByText('README.md')).toBeInTheDocument();
+  });
+
+  it.each([
+    ['404 from an older daemon', 404, 'Not Found'],
+    ['503 when ripgrep is missing', 503, 'ripgrep not found'],
+  ])('is hidden when the first request fails: %s', async (_label, status, detail) => {
+    recentApi.mockRejectedValue(new ApiError(status, detail));
+    renderView();
+    await settle();
+    expect(screen.queryByTestId('panel-recent-group')).toBeNull();
+    // The tree is unaffected.
+    expect(screen.getByText('README.md')).toBeInTheDocument();
+  });
+
+  it('replaces the touched group: none even when the manager touched files', async () => {
+    recentApi.mockResolvedValue({ files: recentFiles(2) });
+    renderView({ touched: [{ path: 'README.md', op: 'read' }] });
     await settle();
     expect(screen.queryByTestId('panel-touched-group')).toBeNull();
+    // A capped list carries no count in its header.
+    expect(screen.getByTestId('panel-recent-group')).toHaveTextContent(/^Recent$/);
+    // The tree badges from `touched` stay (spec 078 D10).
+    expect(screen.getAllByText('read')).not.toHaveLength(0);
   });
 
-  it('uses the singular string for one file and the counted string for more', async () => {
-    const one = renderView({ touched: [{ path: 'README.md', op: 'read' }] });
+  it('shows the newest five; More expands to all, Less collapses back', async () => {
+    recentApi.mockResolvedValue({ files: recentFiles(7) });
+    renderView();
     await settle();
-    expect(screen.getByTestId('panel-touched-group')).toHaveTextContent('Touched this session (1)');
-    one.unmount();
+    expect(recentRows().map((row) => row.title)).toEqual([
+      'out/f0.md', 'out/f1.md', 'out/f2.md', 'out/f3.md', 'out/f4.md',
+    ]);
+    const more = screen.getByTestId('panel-recent-more');
+    expect(more).toHaveTextContent('More');
 
-    renderView({
-      touched: [
-        { path: 'README.md', op: 'read' },
-        { path: 'src/app.ts', op: 'edited' },
-      ],
+    fireEvent.click(more);
+    expect(recentRows()).toHaveLength(7);
+    expect(more).toHaveTextContent('Less');
+
+    fireEvent.click(more);
+    expect(recentRows()).toHaveLength(5);
+  });
+
+  it('has no More row with five files or fewer', async () => {
+    recentApi.mockResolvedValue({ files: recentFiles(5) });
+    renderView();
+    await settle();
+    expect(recentRows()).toHaveLength(5);
+    expect(screen.queryByTestId('panel-recent-more')).toBeNull();
+  });
+
+  it('shows the basename with its folder, and a click opens the full path', async () => {
+    recentApi.mockResolvedValue({
+      files: [{ path: 'docs/reports/q3.pdf', modified_at: nowS() - 600 }],
     });
+    const { props } = renderView();
     await settle();
-    expect(screen.getByTestId('panel-touched-group')).toHaveTextContent('Touched this session (2)');
+    const [row] = recentRows();
+    expect(row).toHaveTextContent('q3.pdf');
+    expect(row).toHaveTextContent('docs/reports');
+    fireEvent.click(row);
+    expect(props.onSelectFile).toHaveBeenCalledWith('docs/reports/q3.pdf');
   });
 
-  it('collapses and re-expands on click', async () => {
-    renderView({ touched: [{ path: 'src/app.ts', op: 'edited' }] });
+  it('collapses and re-expands on its header', async () => {
+    recentApi.mockResolvedValue({ files: recentFiles(2) });
+    renderView();
     await settle();
-    const group = screen.getByTestId('panel-touched-group');
-    expect(screen.getByText('src/app.ts')).toBeInTheDocument();
+    const group = screen.getByTestId('panel-recent-group');
+    expect(recentRows()).toHaveLength(2);
 
     fireEvent.click(group);
-    expect(screen.queryByText('src/app.ts')).toBeNull();
+    expect(recentRows()).toHaveLength(0);
     expect(group).toHaveAttribute('aria-expanded', 'false');
 
     fireEvent.click(group);
-    expect(screen.getByText('src/app.ts')).toBeInTheDocument();
+    expect(recentRows()).toHaveLength(2);
+  });
+});
+
+describe('FilesView — Recent refresh (spec 187)', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  async function emit(type: string, event: Record<string, unknown> = {}) {
+    await act(async () => {
+      wsHandlers.get(type)?.({ type, project_id: 'proj-1', ...event });
+      await vi.advanceTimersByTimeAsync(300);
+    });
+  }
+
+  it('refetches on sub-agent output and shows what the worker wrote', async () => {
+    renderView();
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(recentApi).toHaveBeenCalledTimes(1);
+
+    recentApi.mockResolvedValue({ files: [{ path: 'chart.png', modified_at: nowS() }] });
+    await emit('chat.sub_agent_message');
+
+    expect(recentApi).toHaveBeenCalledTimes(2);
+    expect(screen.getByText('chart.png')).toBeInTheDocument();
   });
 
-  it('selecting a row in the group opens that file', async () => {
-    const { props } = renderView({ touched: [{ path: 'src/app.ts', op: 'edited' }] });
+  it('never fetches in preview state', async () => {
+    renderView({ file: 'README.md' });
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    await emit('agent.activity', { category: 'tool_result' });
+    await emit('chat.sub_agent_message');
+    await emit('agent.status', { status: 'idle' });
+    expect(recentApi).not.toHaveBeenCalled();
+  });
+
+  it('a failed refresh keeps the list already shown', async () => {
+    recentApi.mockResolvedValue({ files: [{ path: 'kept.md', modified_at: nowS() }] });
+    renderView();
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(screen.getByText('kept.md')).toBeInTheDocument();
+
+    recentApi.mockRejectedValue(new ApiError(503, 'ripgrep not found'));
+    await emit('agent.activity', { category: 'tool_result' });
+
+    expect(recentApi).toHaveBeenCalledTimes(2);
+    expect(screen.getByText('kept.md')).toBeInTheDocument();
+  });
+
+  it('a slow request: ticks landing mid-flight bring exactly one follow-up', async () => {
+    let finish: (value: unknown) => void = () => {};
+    recentApi.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    renderView();
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(recentApi).toHaveBeenCalledTimes(1);
+
+    // Three separate ticks while the first scan is still running.
+    await emit('agent.activity', { category: 'tool_result' });
+    await emit('chat.sub_agent_message');
+    await emit('agent.status', { status: 'running' });
+    expect(recentApi).toHaveBeenCalledTimes(1);
+
+    recentApi.mockResolvedValue({ files: [{ path: 'after.md', modified_at: nowS() }] });
+    await act(async () => {
+      finish({ files: [{ path: 'first.md', modified_at: nowS() }] });
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+
+    expect(recentApi).toHaveBeenCalledTimes(2);
+    expect(screen.getByText('after.md')).toBeInTheDocument();
+  });
+
+  it('a project switch mid-flight drops the late answer and its follow-up', async () => {
+    let finish: (value: unknown) => void = () => {};
+    recentApi.mockImplementation((path: string) =>
+      path.includes('/proj-1/')
+        ? new Promise((resolve) => { finish = resolve; })
+        : Promise.resolve({ files: [{ path: 'two.md', modified_at: nowS() }] }),
+    );
+    const { rerender, props } = renderView();
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    // A tick during the request: the follow-up is now pending.
+    await emit('agent.activity', { category: 'tool_result' });
+
+    rerender(<FilesView {...props} projectId="proj-2" />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(screen.getByText('two.md')).toBeInTheDocument();
+
+    await act(async () => {
+      finish({ files: [{ path: 'stale.md', modified_at: nowS() }] });
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+
+    expect(screen.queryByText('stale.md')).toBeNull();
+    expect(screen.getByText('two.md')).toBeInTheDocument();
+    const proj1Calls = recentApi.mock.calls.filter(([path]) => path.includes('/proj-1/'));
+    expect(proj1Calls).toHaveLength(1);
+  });
+});
+
+describe('FilesView — Recent ages, en and zh (spec 187)', () => {
+  const AGES: [number, string, string][] = [
+    [30, 'just now', '刚刚'],
+    [5 * 60, '5m ago', '5 分钟前'],
+    [3 * 3600, '3h ago', '3 小时前'],
+    [2 * 86400, '2d ago', '2 天前'],
+  ];
+  const FORTY_FIVE_DAYS = 45 * 86400;
+
+  function agedFiles(): RecentFile[] {
+    const now = nowS();
+    return [
+      ...AGES.map(([age], i) => ({ path: `a${i}.md`, modified_at: now - age })),
+      { path: 'old.md', modified_at: now - FORTY_FIVE_DAYS },
+    ];
+  }
+
+  function rowText(name: string): string {
+    const row = recentRows().find((r) => r.title === name);
+    return row?.textContent ?? '';
+  }
+
+  it('in English', async () => {
+    const files = agedFiles();
+    recentApi.mockResolvedValue({ files });
+    renderView();
     await settle();
+    AGES.forEach(([, en], i) => expect(rowText(`a${i}.md`)).toContain(en));
+    const date = new Date(files[4].modified_at * 1000).toLocaleDateString();
+    expect(rowText('old.md')).toContain(date);
+  });
+
+  it('in Chinese, with the zh header and More / Less', async () => {
+    localStorage.setItem(LOCALE_STORAGE_KEY, 'zh');
+    try {
+      const files = [...agedFiles(), ...recentFiles(2)];
+      recentApi.mockResolvedValue({ files });
+      render(
+        <LocaleProvider>
+          <FilesView
+            projectId="proj-1"
+            touched={[]}
+            file={null}
+            onSelectFile={vi.fn()}
+            onAddAnnotation={vi.fn()}
+          />
+        </LocaleProvider>,
+      );
+      await settle();
+      expect(screen.getByTestId('panel-recent-group')).toHaveTextContent('最近修改');
+      const more = screen.getByTestId('panel-recent-more');
+      expect(more).toHaveTextContent('更多');
+      fireEvent.click(more);
+      expect(more).toHaveTextContent('收起');
+      AGES.forEach(([, , zh], i) => expect(rowText(`a${i}.md`)).toContain(zh));
+      const date = new Date(files[4].modified_at * 1000).toLocaleDateString();
+      expect(rowText('old.md')).toContain(date);
+    } finally {
+      localStorage.removeItem(LOCALE_STORAGE_KEY);
+    }
+  });
+});
+
+// The old group is kept, unrendered, so restoring it is one line (§10.1).
+describe('TouchedGroup — kept for a one-line restore', () => {
+  it('still renders its counted header and opens a row', () => {
+    const onSelectFile = vi.fn();
+    render(
+      <TouchedGroup
+        touched={[
+          { path: 'README.md', op: 'read' },
+          { path: 'src/app.ts', op: 'edited' },
+        ]}
+        onSelectFile={onSelectFile}
+      />,
+    );
+    expect(screen.getByTestId('panel-touched-group')).toHaveTextContent('Touched this session (2)');
     fireEvent.click(screen.getByText('src/app.ts'));
-    expect(props.onSelectFile).toHaveBeenCalledWith('src/app.ts');
+    expect(onSelectFile).toHaveBeenCalledWith('src/app.ts');
   });
 });
 
