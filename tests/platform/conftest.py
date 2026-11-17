@@ -69,6 +69,14 @@ skip_no_seatbelt = pytest.mark.skipif(
 # --- Fixtures ---
 
 
+@pytest.fixture(autouse=True)
+def _isolate_shared_skills_home(tmp_path_factory, monkeypatch):
+    """The manager's prompt lists the ~/.agents, ~/.claude, ~/.codex skill
+    folders; read them under an empty home so no developer's skills leak in."""
+    monkeypatch.setenv("ORBITAL_SKILLS_HOME", str(tmp_path_factory.mktemp("skills-home")))
+    yield
+
+
 @pytest.fixture
 def temp_workspace(tmp_path):
     """Creates a temporary workspace directory, cleaned up after the test."""

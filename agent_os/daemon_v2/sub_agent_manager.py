@@ -8,6 +8,7 @@ Owns all sub-agent adapters. Provides interface for AgentMessageTool.
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -219,6 +220,11 @@ class SubAgentManager:
         # the dispatch tool.
         self._dispatch_tokens: dict[str, DispatchContext] = {}
         self._dispatch_url: str | None = None
+        # Connectors shared with workers: the ConnectorManager (set by
+        # ``attach_dispatch_server``; None = no worker gets connectors) and
+        # the writes waiting on the user, request id -> {key, future, ...}.
+        self._connector_manager = None
+        self._connector_approvals: dict[str, dict] = {}
         # Spec 184 §5.1: the one in-flight takeover rebuild per (project,
         # session, handle). A send for that key waits for it; nothing else
         # starts a second one. Keys in ``_quiet_respawn`` push no status
@@ -637,6 +643,10 @@ class SubAgentManager:
             from agent_os.daemon_v2 import worker_commands
             transport.set_commands_sink(
                 lambda cmds, _s=slug, _w=workspace: worker_commands.publish(_s, _w, cmds))
+        # The MCP servers the worker reports as its own (agent_connectors).
+        if hasattr(transport, "set_mcp_servers_sink"):
+            from agent_os.daemon_v2 import agent_connectors
+            transport.set_mcp_servers_sink(agent_connectors.make_sink(slug))
 
     def _attach_thread_sink(self, transport, project_id: str, session_id: str | None,
                             handle: str) -> None:
@@ -796,6 +806,8 @@ class SubAgentManager:
                 autonomy=autonomy,
                 resume_record=resume_record,
                 dispatch_url=(dispatch_mcp or {}).get("url"),
+                serves_dispatch=(dispatch_mcp or {}).get("dispatch", True),
+                long_tool_calls=bool((dispatch_mcp or {}).get("connectors")),
             )
         elif transport_type == "pi-rpc":
             from agent_os.agent.transports.pi_rpc_transport import PiRPCTransport
@@ -1172,7 +1184,128 @@ class SubAgentManager:
     def _revoke_dispatch_token(self, adapter) -> None:
         token = getattr(adapter, "_dispatch_token", None) if adapter is not None else None
         if isinstance(token, str):
-            self._dispatch_tokens.pop(token, None)
+            ctx = self._dispatch_tokens.pop(token, None)
+            if ctx is not None and ctx.connectors:
+                # The process that asked is gone: what it waited on is denied.
+                self._deny_connector_approvals(
+                    (ctx.project_id, ctx.session_id, ctx.handle))
+
+    # ------------------------------------------------------------------
+    # Connectors shared with workers
+    # ------------------------------------------------------------------
+
+    def _effective_connector_ids(self, project, handle: str) -> tuple[str, ...]:
+        """The connectors ``handle`` gets in ``project``: connected, enabled
+        for the project, allowed for this agent. () without a connector
+        manager or with none enabled (no credential-store read then). May
+        read the keychain: call it off the loop."""
+        cm = getattr(self, "_connector_manager", None)
+        enabled = project.get("enabled_connectors") if isinstance(project, dict) else None
+        if cm is None or not enabled:
+            return ()
+        try:
+            return tuple(cm.shared_ids(enabled, handle))
+        except Exception:  # noqa: BLE001 — connectors never cost the worker
+            logger.warning("connector access check failed for %s", handle, exc_info=True)
+            return ()
+
+    def live_connector_ids(self, project_id: str, handle: str) -> tuple[str, ...]:
+        """What ``handle`` may use in ``project_id`` right now (the MCP
+        endpoint re-checks every list and call against it)."""
+        project = (self._project_store.get_project(project_id)
+                   if self._project_store else None) or {}
+        return self._effective_connector_ids(project, handle)
+
+    def project_autonomy(self, project_id: str) -> Autonomy:
+        """The project's autonomy setting, read the way the manager reads it
+        (missing or unknown is hands-off). A worker's connector write follows
+        it at call time: hands-off runs, check-in and supervised ask."""
+        project = (self._project_store.get_project(project_id)
+                   if self._project_store else None) or {}
+        try:
+            return Autonomy(project.get("autonomy", "hands_off"))
+        except ValueError:
+            return Autonomy.HANDS_OFF
+
+    def _connector_waits(self) -> dict:
+        waits = getattr(self, "_connector_approvals", None)
+        if waits is None:   # built without __init__ (test doubles)
+            waits = self._connector_approvals = {}
+        return waits
+
+    async def request_connector_approval(self, ctx: DispatchContext, tool_name: str,
+                                         tool_input: dict) -> bool:
+        """Ask the user before a worker's connector write runs, on the card
+        a worker's own permission prompt raises (``approval.request`` with
+        the worker as ``source``), answered through
+        ``resolve_sub_agent_approval``. Blocks until answered. Orbital's
+        ten-minute "approve all" for this worker counts as an answer."""
+        key = (ctx.project_id, ctx.session_id, ctx.handle)
+        if self._permission_bypass_until.get(key, 0.0) > time.monotonic():
+            return True
+        from uuid import uuid4
+        request_id = f"connector-{uuid4().hex[:16]}"
+        future = asyncio.get_running_loop().create_future()
+        waits = self._connector_waits()
+        waits[request_id] = {"key": key, "future": future, "tool_name": tool_name,
+                             "tool_input": dict(tool_input or {})}
+        self._publish_status(*key)
+        ws = self._ws()
+        if ws is not None:
+            ws.broadcast(ctx.project_id, {
+                "type": "approval.request",
+                "project_id": ctx.project_id,
+                "session_id": ctx.session_id,
+                "what": f"Sub-agent {ctx.handle} requests approval",
+                "tool_name": tool_name,
+                "tool_call_id": request_id,
+                "tool_args": dict(tool_input or {}),
+                "source": ctx.handle,
+                "recent_activity": [],
+            })
+        try:
+            return bool(await future)
+        except asyncio.CancelledError:
+            # The worker gave up on the call (its MCP request closed): take
+            # the card down, never leave an answer that runs nothing.
+            self._broadcast_connector_resolved(ctx.project_id, ctx.session_id,
+                                               request_id)
+            raise
+        finally:
+            waits.pop(request_id, None)
+            self._publish_status(*key)
+
+    def _broadcast_connector_resolved(self, project_id, session_id, request_id) -> None:
+        ws = self._ws()
+        if ws is not None:
+            ws.broadcast(project_id, {
+                "type": "approval.resolved", "project_id": project_id,
+                "session_id": session_id, "tool_call_id": request_id,
+                "resolution": "denied",
+            })
+
+    def _deny_connector_approvals(self, key: tuple) -> None:
+        for request_id, entry in list(self._connector_waits().items()):
+            if entry["key"] == key and not entry["future"].done():
+                entry["future"].set_result(False)
+                self._broadcast_connector_resolved(key[0], key[1], request_id)
+
+    def _pending_connector_approval(self, project_id: str,
+                                    session_id: str | None) -> dict | None:
+        for request_id, entry in self._connector_waits().items():
+            pid, sid, handle = entry["key"]
+            if pid != project_id or (session_id is not None and sid != session_id):
+                continue
+            if entry["future"].done():
+                continue
+            return {
+                "tool_call_id": request_id,
+                "tool_name": entry["tool_name"],
+                "tool_args": dict(entry["tool_input"]),
+                "what": f"Sub-agent {handle} requests approval: {entry['tool_name']}",
+                "source": handle,
+            }
+        return None
 
     def has_live_adapter(self, handle: str) -> bool:
         """Spec 116 D8: is an adapter for ``handle`` registered in ANY session
@@ -1535,17 +1668,34 @@ class SubAgentManager:
         # Spec 161 §5.2: the top of the session (the user's pin, an
         # automation assigned to this worker) gets the dispatch tool; a
         # worker the manager or another worker dispatched gets nothing.
+        # Connectors shared with workers: the top of the session AND a worker
+        # the manager or a worker dispatched get the connectors that are
+        # connected, enabled here and allowed for this agent, on the same
+        # mount. Below the seat the token carries connectors only
+        # (``can_dispatch=False``); with none, nothing changes from above.
+        top = initiator in TOP_INITIATORS
+        connector_ids: tuple[str, ...] = ()
+        if self._dispatch_url:
+            connector_ids = await asyncio.to_thread(
+                self._effective_connector_ids, project, handle)
         dispatch_token: str | None = None
-        if initiator in TOP_INITIATORS and self._dispatch_url:
+        if self._dispatch_url and (top or connector_ids):
             dispatch_token = secrets.token_urlsafe(32)
             self._dispatch_tokens[dispatch_token] = DispatchContext(
-                project_id, session_id, handle, agents=peer_slugs)
+                project_id, session_id, handle, agents=peer_slugs,
+                can_dispatch=top, connectors=connector_ids)
+        dispatch_mcp = None
+        if dispatch_token:
+            dispatch_mcp = {"url": self._dispatch_url, "token": dispatch_token}
+            if connector_ids:
+                dispatch_mcp["connectors"] = True
+            if not top:
+                dispatch_mcp["dispatch"] = False
         try:
             transport = self._resolve_transport(
                 manifest, config_dict, autonomy=autonomy, system_prompt=system_prompt,
                 resume_record=resume_record,
-                dispatch_mcp=({"url": self._dispatch_url, "token": dispatch_token}
-                              if dispatch_token else None),
+                dispatch_mcp=dispatch_mcp,
             )
         except ValueError as e:
             self._dispatch_tokens.pop(dispatch_token, None)
@@ -1643,6 +1793,14 @@ class SubAgentManager:
         # did. A worker Orbital started is rebuilt once when the user takes
         # it over; a top spawn (even with a failed mount) never is.
         adapter._spawned_top = initiator in TOP_INITIATORS
+        # The connector set this spawn was built for, whatever the mount did
+        # (like ``_spawned_top``): ``_spawn_config_stale`` rebuilds the worker
+        # at its next message when the set has changed. None for a transport
+        # that can never mount (pipe, PTY) or no endpoint: never rebuilt for it.
+        adapter._connector_ids = (
+            connector_ids if self._dispatch_url and transport is not None and (
+                hasattr(transport, "dispatch_mcp") or hasattr(transport, "_dispatch_url"))
+            else None)
 
         lock = self._get_lock(project_id, session_id=session_id)
         fork_start_error: Exception | None = None
@@ -1694,11 +1852,18 @@ class SubAgentManager:
         # tool the same way, whatever its transport (spec 168).
         dctx = self._dispatch_tokens.get(dispatch_token) if dispatch_token else None
         note = None
-        if dctx is not None:
+        if dctx is not None and dctx.can_dispatch:
             note = seat_note(dctx)
-        elif initiator in TOP_INITIATORS and any(p != handle for p in peer_slugs):
+        elif (dctx is None and initiator in TOP_INITIATORS
+              and any(p != handle for p in peer_slugs)):
             # Spec 184 §5.3: a seat-holder without the tool is told so, once.
             note = no_dispatch_note()
+        if dctx is not None and dctx.connectors:
+            from agent_os.daemon_v2.connector_sharing import connectors_note
+            cm = self._connector_manager
+            names = [(cm.get_manifest(c).name if cm is not None and cm.get_manifest(c)
+                      else c) for c in dctx.connectors]
+            note = "\n\n".join(n for n in (note, connectors_note(names)) if n)
         if note:
             adapter._orbital_first_turn_note = "\n\n".join(
                 n for n in (adapter._orbital_first_turn_note, note) if n)
@@ -1810,6 +1975,17 @@ class SubAgentManager:
         none) or no current one (the binary vanished, the config can't be
         built) keeps the live process, which is the best thing there is.
         """
+        # Connectors shared with workers: the set it was built for changed
+        # (access, the project toggle, connect / disconnect). A worker cannot
+        # take new tools mid-session, so it is rebuilt here, resuming.
+        recorded_connectors = getattr(adapter, "_connector_ids", None)
+        if isinstance(recorded_connectors, tuple) and self._dispatch_url:
+            current_connectors = await asyncio.to_thread(
+                self.live_connector_ids, project_id, handle)
+            if current_connectors != recorded_connectors:
+                logger.info("%s/%s: its connectors changed (%s -> %s)", project_id,
+                            handle, list(recorded_connectors), list(current_connectors))
+                return True
         recorded_params = getattr(adapter, "_session_params", None)
         if session_id is not None and isinstance(recorded_params, dict):
             current_params = await asyncio.to_thread(
@@ -2240,6 +2416,10 @@ class SubAgentManager:
         # path — pinned, @mention, manager dispatch — gets the same block.
         preamble = await self._build_recap(
             adapter, project_id, session_id, handle, message=prompt.message)
+        skills_note = await self._worker_skills_note(
+            adapter, project_id, session_id, handle)
+        if skills_note:
+            preamble = f"{skills_note}\n\n{preamble}"
         first_turn = getattr(adapter, "_orbital_first_turn_note", None)
         if isinstance(first_turn, str) and first_turn:
             preamble = f"{first_turn}\n\n{preamble}"
@@ -2262,6 +2442,44 @@ class SubAgentManager:
                 session_id=session_id,
                 dispatch_id=prompt.dispatch_id,
             )
+
+    async def _worker_skills_note(self, adapter, project_id: str, session_id: str,
+                                  handle: str) -> str:
+        """The skills listing for this dispatch, or "" (workers learn the
+        skills). The manager's enabled set minus what this worker loads
+        itself (``skills.worker_skills``). Sent once per worker session
+        (project, session, worker), again only when the listing's hash
+        changed since it was last sent there, or when the worker's thread
+        started over. Never raises: a failure dispatches without it."""
+        from agent_os.agent import skills as _skills
+        store = self._project_store
+
+        def build() -> str:
+            project = (store.get_project(project_id) if store is not None else None) or {}
+            workspace = project.get("workspace", "") if isinstance(project, dict) else ""
+            return _skills.worker_skills_note(
+                _skills.worker_skills(workspace or "", handle))
+
+        try:
+            note = await asyncio.to_thread(build)
+        except Exception:
+            logger.warning("skills listing failed for %s/%s — dispatching without",
+                           project_id, handle, exc_info=True)
+            return ""
+        digest = hashlib.sha256(note.encode("utf-8")).hexdigest() if note else ""
+        status = getattr(adapter, "_resume_status", None)
+        thread_new = (isinstance(status, tuple) and bool(status) and status[0] == "fresh"
+                      and getattr(adapter, "_skills_note_primed", None) is not True)
+        try:
+            adapter._skills_note_primed = True
+        except Exception:
+            pass
+        sent = self.__dict__.setdefault("_skills_note_sent", {})
+        key = (project_id, session_id, handle)
+        if not thread_new and sent.get(key) == digest:
+            return ""
+        sent[key] = digest
+        return note
 
     async def _build_recap(self, adapter, project_id: str, session_id: str,
                            handle: str, *, message: str | None = None) -> str:
@@ -3426,6 +3644,10 @@ class SubAgentManager:
         """The worker's open turn waits on a permission prompt the user has
         to answer. A request the 10-minute "approve all" bypass is about to
         answer, or one already answered (a done future), is not waiting."""
+        key = (project_id, session_id, handle)
+        if any(e["key"] == key and not e["future"].done()
+               for e in self._connector_waits().values()):
+            return True
         transport = getattr(adapter, "_transport", None)
         pending = getattr(transport, "_pending_approvals", None)
         if not isinstance(pending, dict) or not pending:
@@ -3569,6 +3791,9 @@ class SubAgentManager:
         mirroring the None-tolerance of ``resolve_sub_agent_approval``. A
         provided ``session_id`` narrows to that one slate.
         """
+        connector = self._pending_connector_approval(project_id, session_id)
+        if connector is not None:
+            return connector
         if session_id is None:
             slates = [
                 adapters for (pid, _sid), adapters in self._adapters.items()
@@ -3654,7 +3879,21 @@ class SubAgentManager:
         surface accepts guidance (ACP itself currently does not). ``approve_all`` activates Orbital's existing
         ten-minute, in-memory bypass; it is deliberately not translated into
         a provider-persistent ``allow_always`` grant.
+
+        A worker's connector write (``request_connector_approval``) is
+        answered here too, by the same id.
         """
+        entry = self._connector_waits().get(tool_call_id)
+        if entry is not None:
+            pid, sid, handle = entry["key"]
+            if pid != project_id or (session_id is not None and sid != session_id):
+                return False
+            if approve_all and approved:
+                self._permission_bypass_until[entry["key"]] = time.monotonic() + 600.0
+            if entry["future"].done():
+                return False
+            entry["future"].set_result(bool(approved))
+            return True
         if session_id is None:
             slates = [
                 adapters for (pid, _sid), adapters in self._adapters.items()

@@ -6,7 +6,8 @@
 
 For each connector enabled on a project (and globally connected), the manager's
 remote tools are listed and wrapped in namespaced ``<connector_id>.<tool_name>``
-shim ``Tool`` s that forward call → MCP → tool-result. Each shim carries an
+shim ``Tool`` s (named ``<connector_id>__<tool>``, ``exposed_tool_name``)
+that forward call → MCP → tool-result. Each shim carries an
 ``is_write`` flag the autonomy/approval layer keys off (Spec 011 §0.9):
 
     manifest tool_overrides  →  MCP readOnlyHint  →  default True (fail closed)
@@ -16,13 +17,34 @@ into ``AgentManager.start_agent`` right after ``_register_tools`` (an async
 seam). It never raises for one bad connector — it logs and moves on.
 """
 
+import hashlib
 import logging
+import re
 
 from agent_os.agent.tools.base import Tool, ToolResult
 
 from .manifest import ConnectorManifest
 
 logger = logging.getLogger(__name__)
+
+#: Connectors shared across agents: one name rule for the manager and for
+#: workers. ``<id>.<tool>`` (the old manager form) is not a valid function name
+#: for the OpenAI or Anthropic APIs (``^[A-Za-z0-9_-]{1,64}$``), and Claude Code
+#: prefixes a worker's MCP tools with ``mcp__orbital__`` (14 characters).
+MAX_TOOL_NAME = 50
+TOOL_NAME_SEP = "__"
+_INVALID_NAME_CHARS = re.compile(r"[^A-Za-z0-9_-]")
+
+
+def exposed_tool_name(connector_id: str, tool: str) -> str:
+    """``<connector_id>__<tool>`` cut to valid characters and 50 long, with a
+    short hash when cut, so the name is stable and unique."""
+    raw = f"{connector_id}{TOOL_NAME_SEP}{tool}"
+    name = _INVALID_NAME_CHARS.sub("_", raw)
+    if len(name) <= MAX_TOOL_NAME:
+        return name
+    digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:8]
+    return f"{name[:MAX_TOOL_NAME - 9]}_{digest}"
 
 
 def classify_is_write(manifest: ConnectorManifest, tool) -> bool:
@@ -55,7 +77,7 @@ class ReflectedConnectorTool(Tool):
         self._manager = manager
         self._connector_id = manifest.id
         self._tool_name = mcp_tool.name
-        self.name = f"{manifest.id}.{mcp_tool.name}"
+        self.name = exposed_tool_name(manifest.id, mcp_tool.name)
         self.description = mcp_tool.description or f"{manifest.name}: {mcp_tool.name}"
         # Pass the MCP inputSchema through unchanged; default to an open object.
         self.parameters = mcp_tool.inputSchema or {"type": "object", "properties": {}}
@@ -112,15 +134,20 @@ async def build_connector_tools(manager, enabled_ids) -> list[ReflectedConnector
     return shims
 
 
-async def register_connector_tools(registry, manager, enabled_ids) -> None:
+async def register_connector_tools(registry, manager, enabled_ids) -> list[ReflectedConnectorTool]:
     """Reflect + register every enabled connector's tools into ``registry``.
 
     The single call site the coordinator wires into ``start_agent`` (guarded by
-    a non-empty ``config.enabled_connectors``)."""
+    a non-empty ``config.enabled_connectors``). Returns the shims it registered
+    (the caller hands the write-classified names to the approval layer)."""
     shims = await build_connector_tools(manager, enabled_ids)
+    registered: list[ReflectedConnectorTool] = []
     for shim in shims:
         try:
             registry.register(shim)
         except ValueError:
             # Duplicate name (already registered) — skip rather than crash start.
             logger.warning("connector tool %s already registered; skipping", shim.name)
+            continue
+        registered.append(shim)
+    return registered

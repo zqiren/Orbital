@@ -386,11 +386,101 @@ export interface Connector {
   /** Non-null when the connector is enabled somewhere but unusable (e.g. its
    *  MCP session failed) — dynamic backend text, rendered untranslated. */
   enabled_error: string | null;
+  /** Which agents may use this connector. Always sent by daemons that know
+   *  about sharing; absent from older ones, which means "all agents". */
+  access?: ConnectorAccess;
+}
+
+/**
+ * Who may use a connector. `agents` only counts when `mode` is 'selected'
+ * ('selected' with no agents = nobody); under 'all' it keeps the last
+ * selection so switching back can restore it.
+ */
+export interface ConnectorAccess {
+  mode: 'all' | 'selected';
+  agents: string[];
+}
+
+/** One row of GET /api/v2/connectors/agents (manager first). */
+export interface ConnectorAgent {
+  id: string;
+  name: string;
+  kind: 'manager' | 'worker';
+  /** null = no setup check has run yet (not the same as false). */
+  installed: boolean | null;
+  /** false = the agent's transport can never mount a connector. */
+  supported: boolean;
+  /** Machine-readable code when unsupported (e.g. 'no_mcp_mount'). */
+  reason: string | null;
+}
+
+export interface ConnectorAgentsResponse {
+  agents: ConnectorAgent[];
+}
+
+/** One connector an agent holds itself (its own MCP server), read-only. */
+export interface AgentHeldConnector {
+  /** Display name (account / plugin prefixes stripped). */
+  name: string;
+  /** What the agent itself calls it. */
+  raw_name: string;
+  /** The agent's own word: 'connected' | 'pending' | 'needs-auth' | 'failed' | 'idle' … */
+  status: string;
+}
+
+/** One row of GET /api/v2/connectors/agent-held. */
+export interface AgentHeldConnectors {
+  id: string;
+  name: string;
+  connectors: AgentHeldConnector[];
+  last_seen: string | null;
+}
+
+export interface AgentHeldConnectorsResponse {
+  agents: AgentHeldConnectors[];
 }
 
 /** Response shape of GET /api/v2/connectors. */
 export interface ConnectorListResponse {
   connectors: Connector[];
+}
+
+/** Where a global skill row was found (GET /api/v2/skills). */
+export type GlobalSkillSource = 'global' | 'claude' | 'codex' | 'agents';
+
+export interface GlobalSkill {
+  name: string;
+  description: string;
+  source: GlobalSkillSource;
+  /** Absolute path of the skill's SKILL.md. */
+  path: string;
+  dir_name: string;
+  /** Only Orbital's own (source 'global') skills can be deleted. */
+  editable: boolean;
+  /** `<source>:<lowercased name>`; what the on/off switch takes (contract v3). */
+  id?: string;
+  /** Off = not offered to any agent. Absent from older daemons = on. */
+  enabled?: boolean;
+  /** Id of an enabled same-name skill that wins over this one, else null. */
+  hidden_by?: string | null;  /** Requested from the skills builder (REQUESTS.txt): the home folders
+   *  that also link this same folder (e.g. ['claude'] for a ~/.claude entry
+   *  that symlinks into ~/.agents). Optional; absent = none known. */
+  linked_from?: GlobalSkillSource[];
+}
+
+export interface GlobalSkillGroup {
+  source: GlobalSkillSource;
+  /** The folder this group lists. */
+  path: string;
+  editable: boolean;
+  exists: boolean;
+  skills: GlobalSkill[];
+}
+
+/** Response shape of GET /api/v2/skills: always four groups, in precedence
+ *  order (v3: global, agents, claude, codex). */
+export interface GlobalSkillsResponse {
+  groups: GlobalSkillGroup[];
 }
 
 export interface ToolCallFunction {

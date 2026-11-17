@@ -19,6 +19,7 @@ import BrowserSignInCard from './BrowserSignInCard';
 import PairPhone from './PairPhone';
 import SubAgentSettings from './SubAgentSettings';
 import ConnectorSettings from './ConnectorSettings';
+import GlobalSkillsSettings from './GlobalSkillsSettings';
 import TelemetrySettings from './TelemetrySettings';
 import SendFeedback from './SendFeedback';
 import AboutSection from './AboutSection';
@@ -77,6 +78,7 @@ export const GLOBAL_SETTINGS_SECTIONS: SettingsRailSection[] = [
   { id: 'credentials', labelKey: 'global.credentials.label', groupKey: 'settings.group.capabilities' },
   { id: 'browser-sign-in', labelKey: 'global.browserSignIn.title', groupKey: 'settings.group.capabilities' },
   { id: 'connectors', labelKey: 'settingsRail.connectors', groupKey: 'settings.group.capabilities' },
+  { id: 'skills', labelKey: 'settings.skills.label', groupKey: 'settings.group.capabilities' },
   { id: 'sub-agents', labelKey: 'global.subAgents.heading', groupKey: 'settings.group.capabilities' },
   { id: 'phone-pairing', labelKey: 'settingsRail.phone', groupKey: 'settings.group.device' },
   { id: 'privacy', labelKey: 'telemetry.heading', groupKey: 'settings.group.device' },
@@ -357,6 +359,16 @@ export default function GlobalSettings({ onBack, onTakeTour, canTakeTour, scroll
                 }
               >
                 <ConnectorSettings />
+              </SettingsSection>
+
+              {/* Global skills: Orbital's own (every project), then the ones
+                  already in the user's home folders, read-only. */}
+              <SettingsSection
+                id="skills"
+                title={t('settings.skills.label')}
+                description={t('global.skills.hint')}
+              >
+                <GlobalSkillsSettings />
               </SettingsSection>
 
               <SettingsSection

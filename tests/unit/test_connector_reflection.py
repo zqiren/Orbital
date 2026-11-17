@@ -7,6 +7,7 @@
 Fail-closed classification (Spec 011 §0.9): manifest override wins, then the
 MCP ``readOnlyHint``, then default to write."""
 
+import re
 from dataclasses import replace
 
 import pytest
@@ -74,7 +75,10 @@ async def test_build_connector_tools_namespaces_and_classifies(tmp_path):
     mgr = await _manager_with_custom(tmp_path)
     tools = await build_connector_tools(mgr, ["custom-mock-server"])
     by_name = {t.name for t in tools}
-    assert by_name == {"custom-mock-server.echo_read", "custom-mock-server.echo_write"}
+    # The manager's names follow the worker rule (connectors shared across
+    # agents): ``<id>__<tool>``. The old ``<id>.<tool>`` form is not a valid
+    # function name for the OpenAI or Anthropic APIs.
+    assert by_name == {"custom-mock-server__echo_read", "custom-mock-server__echo_write"}
 
     read_shim = next(t for t in tools if t.name.endswith("echo_read"))
     write_shim = next(t for t in tools if t.name.endswith("echo_write"))
@@ -92,13 +96,14 @@ async def test_register_into_registry_and_dispatch(tmp_path):
     await register_connector_tools(registry, mgr, ["custom-mock-server"])
 
     names = set(registry.tool_names())
-    assert "custom-mock-server.echo_read" in names
-    assert "custom-mock-server.echo_write" in names
+    assert "custom-mock-server__echo_read" in names
+    assert "custom-mock-server__echo_write" in names
+    assert all(re.match(r"^[A-Za-z0-9_-]{1,64}$", n) for n in names)
     # Reflected shims are async in the registry.
-    assert registry.is_async("custom-mock-server.echo_read") is True
+    assert registry.is_async("custom-mock-server__echo_read") is True
 
     result = await registry.execute_async(
-        "custom-mock-server.echo_read", {"text": "hi"}
+        "custom-mock-server__echo_read", {"text": "hi"}
     )
     assert "read:hi" in (result.content if isinstance(result.content, str) else "")
 

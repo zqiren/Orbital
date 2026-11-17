@@ -35,6 +35,12 @@ from .oauth import LoopbackOAuthFlow, OAuthClientConfig, OAuthError, TokenSet
 
 logger = logging.getLogger(__name__)
 
+# Per-connector agent access (connectors shared across agents). "all" is the
+# default and today's behaviour; "selected" names the agents allowed, the
+# manager among them as ``orbital``.
+ACCESS_MODES = ("all", "selected")
+_DEFAULT_ACCESS = {"mode": "all", "agents": []}
+
 # Fields persisted per stored token (all strings, keychain-compatible).
 _TOKEN_FIELDS = ("access_token", "refresh_token", "expiry", "scopes", "account")
 
@@ -111,6 +117,9 @@ class ConnectorManager:
         self._flow_timeout = flow_timeout
 
         self._custom: dict[str, ConnectorManifest] = {}
+        # connector id -> {"mode": "all"|"selected", "agents": [...]}; an id
+        # without an entry is shared with every agent.
+        self._access: dict[str, dict] = {}
         self._sessions: dict[str, _LiveSession] = {}
         self._locks: dict[str, asyncio.Lock] = {}
         self._load_custom()
@@ -143,8 +152,58 @@ class ConnectorManager:
                 "connected": connected,
                 "account": account,
                 "enabled_error": None,
+                "access": self.get_access(m.id),
             })
         return out
+
+    # ---- Agent access (connectors shared across agents) ----
+
+    def get_access(self, connector_id: str) -> dict:
+        """``{"mode", "agents"}`` for a connector; "all" when never set."""
+        entry = self._access.get(connector_id) or _DEFAULT_ACCESS
+        return {"mode": entry["mode"], "agents": list(entry["agents"])}
+
+    def set_access(self, connector_id: str, mode: str, agents) -> dict:
+        """Persist who may use a connector. ``agents`` is kept under "all"
+        too (the last selection, ignored by ``allows``) so the control can
+        switch back to it. Raises ``ConnectorError`` for an unknown id and
+        ``ValueError`` for a mode that is not one of ``ACCESS_MODES``."""
+        self._require_manifest(connector_id)
+        if mode not in ACCESS_MODES:
+            raise ValueError(f"access mode must be one of {ACCESS_MODES}, not {mode!r}")
+        seen: list[str] = []
+        for a in agents or []:
+            if isinstance(a, str) and a and a not in seen:
+                seen.append(a)
+        self._access[connector_id] = {"mode": mode, "agents": seen}
+        self._save_custom()
+        return self.get_access(connector_id)
+
+    def allows(self, connector_id: str, agent_id: str) -> bool:
+        entry = self._access.get(connector_id)
+        if entry is None or entry["mode"] == "all":
+            return True
+        return agent_id in entry["agents"]
+
+    def shared_ids(self, enabled_ids, agent_id: str) -> tuple[str, ...]:
+        """The connectors ``agent_id`` gets in a project whose enabled list is
+        ``enabled_ids``: enabled, connected, and allowed for that agent, in
+        the project's order. Reads the credential store (oauth connectors),
+        so call it off the event loop where that can block."""
+        wanted: list[str] = []
+        for cid in enabled_ids or []:
+            if isinstance(cid, str) and cid not in wanted:
+                wanted.append(cid)
+        if not wanted:
+            return ()
+        out = []
+        for cid in wanted:
+            m = self.get_manifest(cid)
+            if m is None or not self.allows(cid, agent_id):
+                continue
+            if self._connection_state(m)[0]:
+                out.append(cid)
+        return tuple(out)
 
     def _connection_state(self, m: ConnectorManifest) -> tuple[bool, str | None]:
         if m.auth_type == "none":
@@ -242,6 +301,7 @@ class ConnectorManager:
         if connector_id not in self._custom:
             raise ConnectorError(f"{connector_id} is not a custom connector")
         m = self._custom.pop(connector_id)
+        self._access.pop(connector_id, None)
         self._save_custom()
         await self._close_session(connector_id)
         if m.auth_type == "oauth2":
@@ -262,15 +322,30 @@ class ConnectorManager:
             for d in data.get("custom", []):
                 m = manifest_from_dict(d)
                 self._custom[m.id] = m
-        except (json.JSONDecodeError, OSError, ValueError):
+        except (json.JSONDecodeError, OSError, ValueError, AttributeError):
             logger.warning("failed to load custom connectors from %s", path, exc_info=True)
+            return
+        access = data.get("access") if isinstance(data, dict) else None
+        for cid, entry in (access.items() if isinstance(access, dict) else ()):
+            if not (isinstance(entry, dict) and entry.get("mode") in ACCESS_MODES):
+                continue
+            agents = entry.get("agents")
+            self._access[cid] = {
+                "mode": entry["mode"],
+                "agents": [a for a in (agents if isinstance(agents, list) else [])
+                           if isinstance(a, str) and a],
+            }
 
     def _save_custom(self) -> None:
         # Atomic: a truncated file would load as no custom connectors and
-        # the next save would make that permanent.
+        # the next save would make that permanent. ``access`` is written only
+        # once the user has set one, so a file nobody touched keeps the shape
+        # older builds wrote (they read ``custom`` and ignore the rest).
+        data: dict = {"custom": [m.to_dict() for m in self._custom.values()]}
+        if self._access:
+            data["access"] = {cid: dict(e) for cid, e in self._access.items()}
         atomic_write_text(self._custom_path(), json.dumps(
-            {"custom": [m.to_dict() for m in self._custom.values()]},
-            indent=2, ensure_ascii=False,
+            data, indent=2, ensure_ascii=False,
         ))
 
     # ---- MCP sessions (lazy, cached, reconnect-on-drop) ----

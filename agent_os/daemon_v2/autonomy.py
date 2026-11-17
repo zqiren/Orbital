@@ -43,8 +43,14 @@ class AutonomyInterceptor:
 
     def __init__(self, preset: Autonomy, ws_manager, project_id: str,
                  user_credential_store=None, *, session_id: str | None = None,
-                 safe_mode_cb: Callable[[], bool] | None = None):
+                 safe_mode_cb: Callable[[], bool] | None = None,
+                 connector_writes: frozenset[str] = frozenset()):
         self._preset = preset
+        # Connectors shared across agents: the names of this loop's
+        # write-classified connector tools (``ReflectedConnectorTool.is_write``).
+        # One rule with the workers': ask under check-in and supervised, run
+        # under hands-off. Reads are never asked about because of it.
+        self._connector_writes = frozenset(connector_writes or ())
         self._ws = ws_manager
         self._project_id = project_id
         # Spec 117 D3: read per call. On an open project the network ask is
@@ -118,7 +124,9 @@ class AutonomyInterceptor:
 
         if self._preset == Autonomy.CHECK_IN:
             # glob and grep are strictly read-only, treat them like read.
-            return name in ("shell", "request_access", "write")
+            # A connector write (send a mail, create an event) is outward-facing.
+            return (name in ("shell", "request_access", "write")
+                    or name in self._connector_writes)
 
         if self._preset == Autonomy.SUPERVISED:
             # glob and grep are read-only; auto-approve alongside read.

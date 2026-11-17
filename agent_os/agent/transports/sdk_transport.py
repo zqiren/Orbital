@@ -68,6 +68,11 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+#: Connectors shared with workers: how long Claude Code waits on one call to
+#: Orbital's MCP server when that server carries connector tools (a write
+#: waits there for the user's approval).
+CONNECTOR_TOOL_TIMEOUT_MS = 3_600_000
+
 
 class _NoWindowAnyio:
     """``anyio`` as the SDK's subprocess transport sees it, except that
@@ -416,6 +421,12 @@ class SDKTransport(AgentTransport):
                 "url": self.dispatch_mcp["url"],
                 "headers": {"Authorization": f"Bearer {self.dispatch_mcp['token']}"},
             }}
+            if self.dispatch_mcp.get("connectors"):
+                # Connectors shared with workers: a write waits on the user's
+                # approval inside the call; Claude Code's per-server tool
+                # timeout (ms) otherwise gives up after 60 s (live 2026-11-17).
+                options_kwargs["mcp_servers"]["orbital"]["timeout"] = \
+                    CONNECTOR_TOOL_TIMEOUT_MS
         if self._model is not None:
             options_kwargs["model"] = self._model
         if self._effort is not None and "effort" in getattr(
@@ -669,6 +680,48 @@ class SDKTransport(AgentTransport):
             await self._event_queue.put(event)
         if isinstance(msg, ResultMessage):
             self._on_result(bool(getattr(msg, "is_error", False)))
+            self._maybe_ask_mcp_status()
+
+    # Agent-held connectors: Claude Code's own MCP servers, as it reports
+    # them. Every turn's init lists them; claude.ai servers are often still
+    # ``pending`` there, so one get_mcp_status after such a turn settles it.
+    _mcp_pending = False
+    _mcp_status_task = None
+    #: The whole budget of that one follow-up request.
+    MCP_STATUS_BUDGET_S = 10.0
+
+    def _report_mcp_servers(self, mcp_servers) -> None:
+        from agent_os.daemon_v2.agent_connectors import claude_servers
+        servers = claude_servers(mcp_servers)
+        if servers is None:
+            return
+        self._mcp_pending = any(s["status"] == "pending" for s in servers)
+        self._publish_mcp_servers(servers)
+
+    def _maybe_ask_mcp_status(self) -> None:
+        """Once per process, after a turn whose init said ``pending``, in the
+        background: never delays the turn's end or the next dispatch."""
+        if (not self._mcp_pending or self._mcp_status_task is not None
+                or self._mcp_servers_sink is None or self._client is None):
+            return
+        try:
+            self._mcp_status_task = asyncio.get_running_loop().create_task(
+                self._ask_mcp_status(), name=f"sdk-mcp-status-{id(self)}")
+        except RuntimeError:
+            pass
+
+    async def _ask_mcp_status(self) -> None:
+        from agent_os.daemon_v2.agent_connectors import claude_servers
+        try:
+            result = await asyncio.wait_for(self._client.get_mcp_status(),
+                                            self.MCP_STATUS_BUDGET_S)
+        except Exception as exc:  # noqa: BLE001 — display data only
+            logger.debug("SDKTransport: get_mcp_status failed (%s)", exc)
+            return
+        servers = claude_servers(result.get("mcpServers")
+                                 if isinstance(result, dict) else None)
+        if servers is not None:
+            self._publish_mcp_servers(servers)
 
     def _on_result(self, is_error: bool) -> None:
         if not self._pending_dispatch:
@@ -1081,6 +1134,8 @@ class SDKTransport(AgentTransport):
             # init frame establishes the resume identity.
             data = getattr(msg, "data", None) or {}
             sid = data.get("session_id")
+            if getattr(msg, "subtype", None) == "init":
+                self._report_mcp_servers(data.get("mcp_servers"))
             if (getattr(msg, "subtype", None) == "init"
                     and sid and self._session_id != sid):
                 self._session_id = sid

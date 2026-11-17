@@ -117,6 +117,26 @@ class AgentTransport(ABC):
             logging.getLogger(__name__).warning(
                 "worker commands sink failed", exc_info=True)
 
+    # Agent-held connectors: the MCP servers the worker reports as its own
+    # (Claude's init / get_mcp_status, Codex's mcpServerStatus/list), as
+    # ``[{name, status}]``, handed to the daemon's registry. Never raises.
+    _mcp_servers_sink = None
+
+    def set_mcp_servers_sink(self, sink) -> None:
+        """``sink(servers)`` receives each report."""
+        self._mcp_servers_sink = sink
+
+    def _publish_mcp_servers(self, servers) -> None:
+        sink = self._mcp_servers_sink
+        if sink is None or servers is None:
+            return
+        try:
+            sink(servers)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).debug(
+                "mcp servers sink failed", exc_info=True)
+
     # Batch 1110 item 13: the native thread id as soon as the worker has one
     # (Claude's init frame, Codex's thread/start), so a daemon restart during
     # the FIRST turn can still resume it. The completion-time record keeps

@@ -143,6 +143,10 @@ _DISPATCH_TOKEN_ENV = "ORBITAL_DISPATCH_TOKEN"
 #: query does its own handshake, so a slow MCP config costs more. On a
 #: timeout the chat continues as before the check existed.
 DISPATCH_CHECK_BUDGET_S = 6.0
+#: Connectors shared with workers: a connector write waits on the user's
+#: approval inside the MCP call, and Codex's own MCP tool timeout is 60 s by
+#: default. Set only for a worker that got connectors (argv otherwise as before).
+CONNECTOR_TOOL_TIMEOUT_S = 3600
 
 _APPROVAL_METHODS = {
     "item/commandExecution/requestApproval": "commandExecution",
@@ -165,7 +169,9 @@ class CodexTransport(AgentTransport):
     def __init__(self, autonomy: "Autonomy | None" = None,
                  resume_record: dict | None = None,
                  external_sandbox: bool = False,
-                 dispatch_url: str | None = None):
+                 dispatch_url: str | None = None,
+                 serves_dispatch: bool = True,
+                 long_tool_calls: bool = False):
         record = resume_record or {}
         # Spec 161: the daemon's dispatch MCP endpoint when this worker sits
         # at the top of its session (the token is in the spawn env under
@@ -175,6 +181,11 @@ class CodexTransport(AgentTransport):
         # True until Codex answers that the ``orbital`` server is there
         # without the ``dispatch`` tool (``_check_dispatch_mount``).
         self.dispatch_mounted = bool(dispatch_url)
+        # Connectors shared with workers: a worker below the seat mounts the
+        # same server for its connectors only (no ``dispatch`` tool there), and
+        # a connector write can wait on the user longer than Codex's default.
+        self._serves_dispatch = serves_dispatch
+        self._long_tool_calls = long_tool_calls
         # Same attribute name as SDKTransport: the manager's honesty
         # downgrade (sub_agent_manager.py ~731) compares it to the record.
         self._resume_session_id: str | None = record.get("session_id")
@@ -799,11 +810,14 @@ class CodexTransport(AgentTransport):
         seat; Codex's policy for every other tool is untouched."""
         if not self._dispatch_url:
             return []
-        return [
+        argv = [
             "-c", f"mcp_servers.orbital.url={self._dispatch_url}",
             "-c", f"mcp_servers.orbital.bearer_token_env_var={_DISPATCH_TOKEN_ENV}",
             "-c", 'mcp_servers.orbital.default_tools_approval_mode="approve"',
         ]
+        if self._long_tool_calls:
+            argv += ["-c", f"mcp_servers.orbital.tool_timeout_sec={CONNECTOR_TOOL_TIMEOUT_S}"]
+        return argv
 
     @staticmethod
     def _argv_model(args: list[str]) -> str | None:
@@ -1021,6 +1035,31 @@ class CodexTransport(AgentTransport):
         await self._open_thread(workspace)
         if self._dispatch_url:
             await self._check_dispatch_mount()
+        self._schedule_mcp_status()
+
+    # Agent-held connectors: Codex's own MCP servers, from the same
+    # ``mcpServerStatus/list`` the mount check sends (its answer is reported
+    # there). A worker without Orbital's mount asks once, in the background.
+    _mcp_status_task = None
+
+    def _schedule_mcp_status(self) -> None:
+        if self._dispatch_url or self._mcp_servers_sink is None:
+            return
+        self._mcp_status_task = asyncio.create_task(
+            self._publish_mcp_status(), name=f"codex-mcpstatus-{id(self)}")
+
+    async def _publish_mcp_status(self) -> None:
+        from agent_os.daemon_v2.agent_connectors import codex_servers
+        try:
+            result = await self._request(
+                "mcpServerStatus/list",
+                {"threadId": self._thread_id, "detail": "toolsAndAuthOnly"},
+                timeout=DISPATCH_CHECK_BUDGET_S)
+        except Exception as e:  # noqa: BLE001 — display data only
+            logger.debug("CodexTransport: mcpServerStatus/list failed (%s)",
+                         str(e) or type(e).__name__)
+            return
+        self._publish_mcp_servers(codex_servers(result))
 
     async def _check_dispatch_mount(self) -> None:
         """Spec 184 §5.3: ask Codex once whether Orbital's dispatch tool is
@@ -1044,11 +1083,16 @@ class CodexTransport(AgentTransport):
         except Exception as e:  # noqa: BLE001 — never fail the start on it
             outcome = f"failed ({str(e) or type(e).__name__})"
         else:
+            from agent_os.daemon_v2.agent_connectors import codex_servers
+            self._publish_mcp_servers(codex_servers(result))
             entry = next((e for e in (result.get("data") or [])
                           if isinstance(e, dict) and e.get("name") == "orbital"), None)
             if entry is not None:
                 tools = entry.get("tools") or {}
-                self.dispatch_mounted = "dispatch" in tools
+                # A connectors-only mount has no ``dispatch``: any tool listed
+                # means the server came up.
+                self.dispatch_mounted = (("dispatch" in tools) if self._serves_dispatch
+                                         else bool(tools))
                 outcome = "mounted" if self.dispatch_mounted else "not mounted"
             else:
                 outcome = "no orbital entry"

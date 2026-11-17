@@ -7,6 +7,10 @@
 Global catalog + OAuth live here; per-project enablement rides the existing
 project-update route via ``enabled_connectors`` (not exposed here). The
 ConnectorManager singleton is injected by the app factory via ``configure``.
+
+Connectors shared across agents: each connector carries its agent ``access``
+(``PUT /{id}/access`` sets it) and ``GET /agents`` lists who it can be shared
+with. Contract: run/1117-share/CONTRACT-connectors.md.
 """
 
 import logging
@@ -23,18 +27,28 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v2/connectors")
 
 _manager = None
+_agent_registry = None
+_setup_engine = None
 
 
-def configure(connector_manager):
-    """Called by the app factory to inject the ConnectorManager singleton."""
-    global _manager
+def configure(connector_manager, *, agent_registry=None, setup_engine=None):
+    """Called by the app factory to inject the ConnectorManager singleton
+    (and the agent registry + setup engine the agents list reads)."""
+    global _manager, _agent_registry, _setup_engine
     _manager = connector_manager
+    _agent_registry = agent_registry
+    _setup_engine = setup_engine
 
 
 class CustomServerRequest(BaseModel):
     name: str
     url: str
     auth_type: Literal["none", "oauth2"] = "none"
+
+
+class AccessRequest(BaseModel):
+    mode: Literal["all", "selected"]
+    agents: list[str] = []
 
 
 def _require_manager():
@@ -51,7 +65,38 @@ def _serialize(entry: dict) -> dict:
         "connected": entry["connected"],
         "account": entry["account"],
         "enabled_error": entry["enabled_error"],
+        "access": entry.get("access") or {"mode": "all", "agents": []},
     }
+
+
+def _agents() -> list[dict]:
+    """The manager first, then every worker manifest by name (``built-in`` is
+    the legacy manager manifest, not a worker)."""
+    from agent_os.daemon_v2.connector_sharing import (
+        MANAGER_AGENT_ID, MANAGER_NAME, support_of)
+    out = [{"id": MANAGER_AGENT_ID, "name": MANAGER_NAME, "kind": "manager",
+            "installed": True, "supported": True, "reason": None}]
+    manifests = _agent_registry.list_all() if _agent_registry is not None else []
+    workers = []
+    for m in manifests:
+        if m.slug in ("built-in", MANAGER_AGENT_ID) or getattr(
+                m.runtime, "adapter", None) == "built_in":
+            continue
+        supported, reason = support_of(m)
+        installed = None
+        cached = getattr(_setup_engine, "cached_status", None)
+        if cached is not None:
+            try:
+                status = cached(m.slug)
+            except Exception:  # noqa: BLE001 — a status read never fails the list
+                status = None
+            if status is not None:
+                installed = bool(getattr(status, "installed", False))
+        workers.append({"id": m.slug, "name": m.name, "kind": "worker",
+                        "installed": installed, "supported": supported,
+                        "reason": reason})
+    workers.sort(key=lambda a: a["name"].lower())
+    return out + workers
 
 
 @router.get("")
@@ -59,6 +104,51 @@ async def list_connectors():
     """Catalog + custom servers with per-connector connection status."""
     mgr = _require_manager()
     return {"connectors": [_serialize(e) for e in mgr.list_connectors()]}
+
+
+@router.get("/agents")
+async def list_agents():
+    """The agents a connector can be shared with (CONTRACT-connectors.md §3)."""
+    _require_manager()
+    return {"agents": _agents()}
+
+
+@router.get("/agent-held")
+async def list_agent_held():
+    """Each agent's own connectors, as it last reported them while running
+    (``agent_connectors``; CONTRACT-connectors.md v1.3). Read-only: only that
+    agent can use them. An agent never seen running, or holding nothing, is
+    not listed."""
+    from agent_os.daemon_v2 import agent_connectors
+    out = []
+    for agent in agent_connectors.known_agents():
+        held = agent_connectors.held(agent)
+        if not held:
+            continue
+        manifest = _agent_registry.get(agent) if _agent_registry is not None else None
+        out.append({"id": agent, "name": getattr(manifest, "name", None) or agent,
+                    "connectors": held, "last_seen": agent_connectors.last_seen(agent)})
+    out.sort(key=lambda a: (a["name"].casefold(), a["id"]))
+    return {"agents": out}
+
+
+@router.put("/{connector_id}/access")
+async def set_access(connector_id: str, req: AccessRequest):
+    """Set which agents may use a connector (CONTRACT-connectors.md §2)."""
+    mgr = _require_manager()
+    if mgr.get_manifest(connector_id) is None:
+        raise HTTPException(status_code=404, detail=f"unknown connector: {connector_id}")
+    known = {a["id"] for a in _agents()}
+    for agent in req.agents:
+        if agent not in known:
+            raise HTTPException(status_code=400, detail=f"unknown agent: {agent}")
+    try:
+        access = mgr.set_access(connector_id, req.mode, req.agents)
+    except ConnectorError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"id": connector_id, "access": access}
 
 
 @router.post("/custom")

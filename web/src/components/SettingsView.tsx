@@ -30,6 +30,7 @@ import { UnsandboxedRunsSection, allowlistExecutable } from './UnsandboxedRunsSe
 import { FolderAccessSection } from './FolderAccessSection';
 import SafeModeSwitch from './SafeModeSwitch';
 import type {
+  GlobalSkillsResponse,
   GrantedFolder,
   PendingDomainRequest,
   PendingUnsandboxedRun,
@@ -40,6 +41,8 @@ import SettingsRail, {
   type SettingsRailSection,
 } from './SettingsRail';
 import SettingsSection, { SettingsGroup, LabelWithHint } from './SettingsSection';
+import { SkillRow, SkillUpload } from './SkillList';
+import MakeGlobalSkillButton from './MakeGlobalSkillButton';
 import { useT } from '../i18n/useT';
 import type { StringKey } from '../i18n/strings';
 
@@ -165,6 +168,9 @@ export default function SettingsView({
 
   // Skills state
   const [skills, setSkills] = useState<SkillMeta[]>([]);
+  // Lowercased names + folder names of Orbital's global skills, so a project
+  // skill already shared with all projects shows as such after a reload.
+  const [globalSkillNames, setGlobalSkillNames] = useState<Set<string>>(() => new Set());
   const [skillError, setSkillError] = useState('');
   const [skillSuccess, setSkillSuccess] = useState('');
   const [uploading, setUploading] = useState(false);
@@ -308,6 +314,20 @@ export default function SettingsView({
       setSkills(data);
     } catch {
       // silently ignore — skills section just shows empty
+    }
+    try {
+      const all = await api<GlobalSkillsResponse>('/api/v2/skills');
+      const names = new Set<string>();
+      for (const g of all?.groups ?? []) {
+        if (g.source !== 'global') continue;
+        for (const s of g.skills) {
+          names.add(s.name.toLowerCase());
+          names.add(s.dir_name.toLowerCase());
+        }
+      }
+      setGlobalSkillNames(names);
+    } catch {
+      // No list = every row offers the share action; a copy then answers 409.
     }
   }, [pid, project.is_scratch]);
 
@@ -662,30 +682,25 @@ export default function SettingsView({
             {skills.length > 0 ? (
               <div className="space-y-2 mb-3">
                 {skills.map((s) => (
-                  <div
+                  <SkillRow
                     key={s.name}
-                    className="flex items-center justify-between surface-float-static surface-float-nested px-3 py-2"
-                  >
-                    <div className="min-w-0 mr-2">
-                      <span className="text-sm font-medium text-primary block truncate">
-                        {s.name}
-                      </span>
-                      <span className="text-xs text-secondary block truncate">
-                        {s.description}
-                      </span>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => handleDeleteSkill(s.dir_name || s.name)}
-                      className="shrink-0 text-secondary hover:text-error transition-colors p-1 max-md:min-w-[44px] max-md:min-h-[44px] flex items-center justify-center"
-                      title={t('settings.skills.deleteTitle', { name: s.name })}
-                    >
-                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <polyline points="3 6 5 6 21 6" />
-                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                      </svg>
-                    </button>
-                  </div>
+                    name={s.name}
+                    description={s.description}
+                    onDelete={() => handleDeleteSkill(s.dir_name || s.name)}
+                    actions={
+                      <MakeGlobalSkillButton
+                        projectId={pid}
+                        dirName={s.dir_name || s.name}
+                        name={s.name}
+                        onMessage={setSkillError}
+                        alreadyGlobal={
+                          globalSkillNames.has(s.name.toLowerCase()) ||
+                          globalSkillNames.has((s.dir_name || s.name).toLowerCase())
+                        }
+                        testId={`make-global-${s.dir_name || s.name}`}
+                      />
+                    }
+                  />
                 ))}
               </div>
             ) : (
@@ -694,22 +709,7 @@ export default function SettingsView({
               </p>
             )}
 
-            <label className="flex items-center justify-center border border-dashed border-border rounded-lg px-3 py-3 cursor-pointer hover:border-accent/50 hover:bg-accent/5 transition-all duration-150 max-md:min-h-[44px]">
-              <span className="text-sm text-secondary">
-                {uploading ? t('settings.skills.uploading') : t('settings.skills.uploadCta')}
-              </span>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".md,.zip"
-                className="hidden"
-                disabled={uploading}
-                onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  if (f) handleSkillUpload(f);
-                }}
-              />
-            </label>
+            <SkillUpload ref={fileInputRef} uploading={uploading} onFile={handleSkillUpload} />
           </SettingsSection>
         )}
 

@@ -28,6 +28,10 @@ def _isolate_native_session_homes(tmp_path_factory, monkeypatch):
     monkeypatch.setenv("DSH_HOME", str(empty / "dsh"))
     # Spec 138: pi / Kimi Code / MiniMax Code stores are read under this home.
     monkeypatch.setenv("ORBITAL_HISTORY_HOME", str(empty / "history-home"))
+    # Shared skills: the ~/.agents, ~/.claude, ~/.codex skill folders the
+    # manager's prompt and the `/` picker list are read under this home, so
+    # the developer's own skills never reach a prompt snapshot.
+    monkeypatch.setenv("ORBITAL_SKILLS_HOME", str(empty / "skills-home"))
     yield
 
 
