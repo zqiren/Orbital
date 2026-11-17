@@ -12,9 +12,18 @@ import { parseSkillBlock } from '../lib/skill-parsing';
 import { splitQuotesBlock } from '../utils/annotations';
 import AttachmentChip from './AttachmentChip';
 import SkillChip from './SkillChip';
-import MarkdownContent from './MarkdownContent';
+import MarkdownContent, { renderAnchor } from './MarkdownContent';
 import MessageAvatar from './MessageAvatar';
 import CopyButton from './CopyButton';
+import SourceMark from './sources/SourceMark';
+import { typeName } from './sources/sourcesText';
+import {
+  parseSourceTask,
+  sourceKindKey,
+  sourceTaskCopyText,
+  sourceTaskPartText,
+  type SourceTask,
+} from '../lib/source-task-parsing';
 import { useT } from '../i18n/useT';
 import { agentTint, MAIN_AGENT_HANDLE } from '../utils/agentIcons';
 
@@ -243,6 +252,83 @@ function formatTime(timestamp: string): string {
   return `${hh}:${mm}`;
 }
 
+/** A quoted item's own time: HH:MM, with the date in front when it isn't the
+ *  message's day; empty when the source wrote no parseable time. */
+function formatItemTime(at: string | null, messageTs: string): string {
+  if (!at) return '';
+  const hm = formatTime(at);
+  if (!hm) return '';
+  const d = new Date(at);
+  const m = new Date(messageTs);
+  if (Number.isNaN(m.getTime()) || d.toDateString() === m.toDateString()) return hm;
+  return `${d.getMonth() + 1}/${d.getDate()} ${hm}`;
+}
+
+/** A link's text without the scheme: the bubble is not a URL bar. */
+function linkLabel(url: string): string {
+  return url.replace(/^https?:\/\//i, '').replace(/\/$/, '');
+}
+
+/**
+ * Spec 188 §2.4 — a routed task's first message. The row keeps the framing
+ * the agent reads; the bubble shows the item it quotes: the source's mark in
+ * the label line where 你 would be, the title, who and where, the body, the
+ * link. Copy carries the item; no edit or retry (ChatView's gate).
+ */
+function SourceTaskMessage({ task, timestamp }: { task: SourceTask; timestamp: string }) {
+  const t = useT();
+  const time = formatTime(timestamp);
+  const kindKey = sourceKindKey(task.kind);
+  // The command source has no catalogue name, and its mark says enough.
+  const typeWord = task.type && task.type !== 'command' ? typeName(t, task.type) : '';
+  const labelWords = [typeWord, kindKey ? t(kindKey) : ''].filter(Boolean).join(' · ');
+  const many = task.parts.length > 1;
+  return (
+    <div
+      className="group relative flex flex-col items-end"
+      title={timestamp}
+      data-testid="user-message"
+      data-source-task={task.type ?? 'unknown'}
+    >
+      <div className="font-mono text-[11px] mb-1 flex items-center gap-1.5" data-testid="source-task-label">
+        <SourceMark type={task.type ?? 'unknown'} size="sm" title={typeWord || undefined} />
+        {labelWords && <span className="text-secondary">{labelWords}</span>}
+        {time && <span className="text-muted">· {time}</span>}
+      </div>
+      <div className="float-bubble inline-block max-w-[min(70%,680px)] rounded-lg rounded-tr-sm bg-bubble px-3 py-2 text-[13px] leading-[1.55] text-bubble-text break-words">
+        <div className="font-medium" data-testid="source-task-title">{task.title}</div>
+        {task.parts.map((p, idx) => {
+          // A DM's kind already says 私聊; the marker only adds to a name.
+          const where = p.dm && task.kind !== 'dm' ? t('sources.place.dm') : '';
+          const who = [p.from ?? '', where].filter(Boolean).join(' · ');
+          const at = many ? formatItemTime(p.at, timestamp) : '';
+          const by = [who, at].filter(Boolean).join(' · ');
+          const text = sourceTaskPartText(task, idx);
+          return (
+            <div key={idx} className={idx > 0 ? 'mt-2.5' : undefined} data-testid="source-task-part">
+              {by && <div className="mt-0.5 text-[12px] text-muted" data-testid="source-task-from">{by}</div>}
+              {text && <div className="mt-1.5 whitespace-pre-wrap">{text}</div>}
+            </div>
+          );
+        })}
+        {task.link && (
+          <div className="mt-1.5 truncate text-[12px] [&_a]:text-link [&_a]:no-underline [&_a:hover]:underline" data-testid="source-task-link">
+            {renderAnchor(task.link, linkLabel(task.link))}
+          </div>
+        )}
+      </div>
+      <ActionRow side="right">
+        <CopyButton
+          text={sourceTaskCopyText(task)}
+          ariaLabel={t('chat.message.copyAria')}
+          data-testid="user-message-copy"
+          className={COPY_BTN}
+        />
+      </ActionRow>
+    </div>
+  );
+}
+
 /**
  * One message row. The two speakers are laid out asymmetrically:
  *
@@ -287,6 +373,9 @@ export default function ChatMessage({
   const [quotesOpen, setQuotesOpen] = useState(false);
 
   if (message.type === 'user_message') {
+    // Spec 188: a routed task's framing renders as the item it quotes.
+    const sourceTask = parseSourceTask(stripTurnNote(message.content));
+    if (sourceTask) return <SourceTaskMessage task={sourceTask} timestamp={message.timestamp} />;
     // An automation run's header line: the heading and the list row already
     // name the automation, so the bubble carries the task text only.
     const { strippedContent: afterTrigger } = parseTriggerHeader(stripTurnNote(message.content));
