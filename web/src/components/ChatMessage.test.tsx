@@ -3,10 +3,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { fireEvent, render, screen } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import ChatMessage from './ChatMessage';
 import type { DisplayItem } from '../utils/chatTransform';
 import { QUOTES_HEADING } from '../utils/annotations';
+import { LocaleProvider } from '../i18n/LocaleContext';
+import sourceSamples from '../../../tests/fixtures/source_task_samples.json';
 
 type UserMessage = Extract<DisplayItem, { type: 'user_message' }>;
 type AgentMessage = Extract<DisplayItem, { type: 'agent_message' }>;
@@ -512,5 +514,112 @@ describe('ChatMessage — inline editor (spec 156 §5.2)', () => {
     const cls = screen.getByTestId('message-editor').className;
     expect(cls).toContain('w-[min(70%,680px)]');
     expect(cls).toContain('max-md:w-full');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Spec 188 §2.5.2 — a routed task's first message shows the item
+// ---------------------------------------------------------------------------
+
+describe('ChatMessage — a routed task from a source', () => {
+  const sample = (name: string) => {
+    const s = (sourceSamples as { samples: Array<{ name: string; text: string }> }).samples.find((x) => x.name === name);
+    if (!s) throw new Error(name);
+    return s.text;
+  };
+
+  beforeEach(() => {
+    localStorage.setItem('orbital.locale', 'zh');
+  });
+  afterEach(() => {
+    localStorage.removeItem('orbital.locale');
+  });
+
+  const renderZh = (content: string, props: Partial<Parameters<typeof ChatMessage>[0]> = {}) =>
+    render(<LocaleProvider><ChatMessage message={userMsg(content)} {...props} /></LocaleProvider>);
+
+  it('shows the mark, the zh kind, the title once, the sender and the link; no wrapper', () => {
+    const text = sample('github_label_long_zh_title');
+    const { container } = renderZh(text);
+    expect(container.querySelector('.src-mk[data-type="github"]')).not.toBeNull();
+    const label = screen.getByTestId('source-task-label');
+    expect(label.textContent).toContain('GitHub · 带标签');
+    expect(label.textContent).not.toContain('你');
+    const title = text.split('\n')[0];
+    expect(screen.getAllByText(title)).toHaveLength(1);
+    expect(screen.getByTestId('source-task-from').textContent).toBe('zqiren');
+    const link = screen.getByTestId('source-task-link').querySelector('a');
+    expect(link?.getAttribute('href')).toBe('https://github.com/zqiren/xiaoman-budget/issues/3');
+    const dom = container.textContent ?? '';
+    for (const wire of ['<source_item>', 'source_item', '[Task source', 'From:', 'At:', 'Title:', 'outside material']) {
+      expect(dom).not.toContain(wire);
+    }
+  });
+
+  it('a Feishu DM without a sender: no 你, no "direct message"', () => {
+    const { container } = renderZh(sample('feishu_dm_no_sender'));
+    expect(container.querySelector('.src-mk[data-type="feishu"]')).not.toBeNull();
+    expect(screen.getByTestId('source-task-label').textContent).toContain('飞书 · 私聊机器人');
+    expect(container.textContent).not.toContain('direct message');
+    // The kind already says DM: no attribution line restating it.
+    expect(screen.queryByTestId('source-task-from')).toBeNull();
+  });
+
+  it('a group @ keeps the attribution string as written', () => {
+    renderZh(sample('feishu_group_at_with_sender'));
+    expect(screen.getByTestId('source-task-from').textContent).toBe('王小明 · 小满产品群');
+  });
+
+  it('a DM sender under an unknown kind reads 私聊', () => {
+    // The source's name is a kind word too, so the kind is ambiguous.
+    const text = sample('telegram_dm_with_sender').replace('[Task source: Telegram · @acme_bot ·', '[Task source: Telegram · New mail ·');
+    renderZh(text);
+    expect(screen.getByTestId('source-task-from').textContent).toBe('Alice · 私聊');
+  });
+
+  it('merged updates render in order with their own time', () => {
+    renderZh(sample('three_merged_parts'));
+    const parts = screen.getAllByTestId('source-task-part');
+    expect(parts).toHaveLength(3);
+    const froms = screen.getAllByTestId('source-task-from').map((n) => n.textContent ?? '');
+    expect(froms).toHaveLength(3);
+    for (const f of froms) expect(f).toMatch(/^李雷 · (\d+\/\d+ )?\d\d:\d\d$/);
+    expect(parts[1].textContent).toContain('控制台显示 500');
+  });
+
+  it('copy gives title + body + link', async () => {
+    const writes: string[] = [];
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText: async (s: string) => { writes.push(s); } },
+      configurable: true,
+      writable: true,
+    });
+    const text = sample('github_label_long_zh_title');
+    renderZh(text);
+    fireEvent.click(screen.getByTestId('user-message-copy'));
+    await Promise.resolve();
+    expect(writes).toHaveLength(1);
+    expect(writes[0].startsWith(text.split('\n')[0] + '\n\nIssue in zqiren/xiaoman-budget')).toBe(true);
+    expect(writes[0].endsWith('https://github.com/zqiren/xiaoman-budget/issues/3')).toBe(true);
+    expect(writes[0]).not.toContain('source_item');
+  });
+
+  it('never offers edit or retry, even when the caller would allow them', () => {
+    renderZh(sample('github_assigned_with_link'), { canEdit: true, canRetry: true, onEdit: () => {}, onRetry: () => {} });
+    expect(screen.queryByTestId('message-edit')).toBeNull();
+    expect(screen.queryByTestId('message-retry')).toBeNull();
+  });
+
+  it('English follows the UI language', () => {
+    localStorage.setItem('orbital.locale', 'en');
+    renderZh(sample('calendar_before_zh'));
+    expect(screen.getByTestId('source-task-label').textContent).toContain('Calendar · Starting soon');
+  });
+
+  it('plain text that starts like the header renders as typed', () => {
+    const text = sample('plain_text_starting_like_header');
+    renderZh(text);
+    expect(screen.queryByTestId('source-task-label')).toBeNull();
+    expect(screen.getByText(/\[Task source: GitHub · mine\]/)).toBeInTheDocument();
   });
 });

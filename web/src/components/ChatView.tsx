@@ -61,7 +61,7 @@ import {
 import ComposerDisabledPrompt from './ComposerDisabledPrompt';
 import AskCard from './AskCard';
 import { useSessionAsks, type SessionAsk } from '../hooks/useSessionAsks';
-import { formatAskAnswer } from '../utils/askAnswer';
+import { formatAskAnswer, stripTurnNote } from '../utils/askAnswer';
 import { changeOptionPrefill, isChangeOption } from '../utils/changeOptionPrefill';
 import PinTargetSelect, { resolveSendTarget } from './PinTargetSelect';
 import { useConversationModels } from '../hooks/useConversationModels';
@@ -85,6 +85,7 @@ import { historyApi, requestHistoryFocus, useCapsuleTurn, useSeenOnce } from '..
 import type { TurnRef } from './history/TurnUndoSheet';
 import { classifySessionName } from '../lib/sessionLabel';
 import { parseTriggerHeader } from '../lib/trigger-parsing';
+import { parseSourceTask } from '../lib/source-task-parsing';
 import { forkSessionName, rebuildEditedContent, splitUserWire, stashForkSend, takeForkSend } from '../utils/editMessage';
 
 type AgentRunItem = Extract<DisplayItem, { type: 'agent_run' }>;
@@ -916,6 +917,8 @@ function isPersistedHumanInput(
   if (item.isHistorical) return false;
   if (optimistic.has(item.timestamp)) return false;
   if (QUEUE_ITEM_RE.test(item.content)) return false;
+  // Spec 188: a routed task's framing is Orbital's, not the user's words.
+  if (parseSourceTask(stripTurnNote(item.content)) !== null) return false;
   return parseTriggerHeader(item.content).trigger === null;
 }
 

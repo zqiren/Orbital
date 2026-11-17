@@ -314,6 +314,7 @@ export const STRINGS = {
   "chat.skill.empty": { en: "No skills installed — add one in Project settings → Skills", zh: "尚未安装技能 —— 可在 项目设置 → 技能 中添加" },
   "chat.skill.menuAria": { en: "Skills", zh: "技能" },
   "chat.skill.removeAria": { en: "Remove skill {name}", zh: "移除技能 {name}" },
+  "chat.sourceTask.before": { zh: "即将开始", en: "Starting soon" },
   "chat.stop": { en: "Stop", zh: "停止" },
   "chat.subActivity.backgroundLost": { en: "teardown killed {n} background process(es): {commands} — this work did not finish", zh: "清理时终止了 {n} 个后台进程：{commands} —— 这些工作未完成" },
   "chat.subActivity.completed": { en: "completed: {summary}", zh: "已完成：{summary}" },
