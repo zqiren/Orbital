@@ -2,9 +2,9 @@
 // Copyright (C) 2026 Orbital Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, apiBytes } from '../config';
-import type { DirectoryListing, FileContent } from '../types';
+import type { DirectoryListing, FileContent, RecentFile } from '../types';
 
 export type FileBytesState =
   | { status: 'idle'; bytes: null; error: null }
@@ -78,6 +78,95 @@ export async function revealPath(projectId: string, path: string): Promise<boole
   } catch {
     return false;
   }
+}
+
+/**
+ * Spec 187 — the project's 50 most recently modified files, newest first.
+ * `null` on any failure (404 from an older daemon, 503 when ripgrep is
+ * missing, a network error): the caller has one failure path.
+ */
+export async function listRecent(projectId: string): Promise<RecentFile[] | null> {
+  try {
+    const data = await api<{ files: RecentFile[] }>(
+      `/api/v2/projects/${encodeURIComponent(projectId)}/files/recent`,
+    );
+    return Array.isArray(data?.files) ? data.files : null;
+  } catch {
+    return null;
+  }
+}
+
+/** One request at a time per project; ticks that land mid-flight collapse
+ *  into a single follow-up. `alive` dies with the effect that made it. */
+interface RecentGeneration {
+  projectId: string;
+  alive: boolean;
+  inFlight: boolean;
+  pending: boolean;
+}
+
+/**
+ * Spec 187 — the panel's Recent list. Fetches on mount (and project switch)
+ * and whenever `tick` moves while `active` (tree state). No polling, no
+ * cache, no retry. A failed request keeps the list already held; a first
+ * failure leaves it empty, which the caller renders as nothing.
+ *
+ * A scan can outlast the 150 ms tick coalesce on a big workspace, so at most
+ * one request is in flight and a tick during it sets `pending`, answered by
+ * exactly one follow-up. A project switch or unmount kills the generation:
+ * its late response is dropped and its pending follow-up never fires.
+ */
+export function useRecentFiles(projectId: string, tick: number, active: boolean): RecentFile[] {
+  const [files, setFiles] = useState<RecentFile[]>([]);
+  const genRef = useRef<RecentGeneration | null>(null);
+  const activeRef = useRef(active);
+  useEffect(() => {
+    activeRef.current = active;
+  });
+
+  const request = useCallback((gen: RecentGeneration) => {
+    if (gen.inFlight) {
+      gen.pending = true;
+      return;
+    }
+    gen.inFlight = true;
+    const run = () => {
+      void listRecent(gen.projectId).then((result) => {
+        gen.inFlight = false;
+        if (!gen.alive) return;
+        if (result !== null) setFiles(result);
+        if (gen.pending) {
+          gen.pending = false;
+          if (activeRef.current) {
+            gen.inFlight = true;
+            run();
+          }
+        }
+      });
+    };
+    run();
+  }, []);
+
+  useEffect(() => {
+    const gen: RecentGeneration = { projectId, alive: true, inFlight: false, pending: false };
+    genRef.current = gen;
+    setFiles([]);
+    if (activeRef.current) request(gen);
+    return () => {
+      gen.alive = false;
+      if (genRef.current === gen) genRef.current = null;
+    };
+  }, [projectId, request]);
+
+  useEffect(() => {
+    // Tick 0 is the mount, which the effect above already fetched for.
+    if (tick === 0 || !active || genRef.current === null) return;
+    request(genRef.current);
+    // `active` is read, not watched: leaving the preview bumps the tick.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tick, request]);
+
+  return files;
 }
 
 export function useFiles() {

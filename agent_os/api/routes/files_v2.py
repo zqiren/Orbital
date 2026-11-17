@@ -10,9 +10,11 @@ Provides directory listing, file content preview, upload, download, and
 
 import asyncio
 import base64
+import heapq
 import logging
 import mimetypes
 import os
+import stat as stat_mod
 import subprocess
 import sys
 from urllib.parse import quote
@@ -21,6 +23,8 @@ from fastapi import APIRouter, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
+from agent_os.agent.project_paths import ProjectPaths
+from agent_os.history import rules as history_rules
 from agent_os.queue.models import ItemState, QueueRunState
 from agent_os.utils.subprocess_flags import win_no_window_flags
 
@@ -146,6 +150,81 @@ def _list_files_sync(project_id: str, path: str):
             except OSError:
                 entries.append({"name": name, "type": "file", "size": 0})
     return {"path": path, "entries": entries}
+
+
+# Spec 187: the right panel's 最近修改 group always takes this many; there is
+# no limit parameter because its only consumer never asks for another number.
+RECENT_FILES_MAX = 50
+
+
+@router.get("/projects/{project_id}/files/recent")
+async def recent_files(project_id: str):
+    """The project's most recently modified files, newest first.
+
+    Membership is file history's rule (``history.rules.list_tracked``: rg
+    with gitignore semantics, minus the deny list that drops ``orbital/``,
+    ``.git``, ``node_modules`` and venvs), minus any dot-path, plus the one
+    deliverable folder inside ``orbital/``: the PDFs the agent saves. The
+    time is the disk's mtime. Read-only: nothing is created, not even
+    ``orbital/`` in an untouched imported folder.
+    """
+    # Spec 103 (R4): one rg run plus a stat per file, off the event loop.
+    return await asyncio.to_thread(_recent_files_sync, project_id)
+
+
+def _nested_roots(project_id: str, workspace: str) -> tuple[str, ...]:
+    """Workspace-relative roots of other registered projects inside this one
+    (that project owns those files), as file history computes them."""
+    real = os.path.realpath(workspace)
+    roots = set()
+    for other in _project_store.list_projects():
+        other_ws = other.get("workspace")
+        if other.get("project_id") == project_id or not other_ws:
+            continue
+        other_real = os.path.realpath(other_ws)
+        if other_real.startswith(real + os.sep):
+            roots.add(history_rules.to_rel(other_real[len(real) + 1:]))
+    return tuple(sorted(roots))
+
+
+def _saved_pdfs(workspace: str) -> list[str]:
+    """The files directly in ``ProjectPaths.pdfs_dir`` (where the browser
+    tool saves PDFs), workspace-relative. The deny list drops all of
+    ``orbital/``, but these are deliverables. Looked at, never created."""
+    pdfs_dir = ProjectPaths(workspace).pdfs_dir
+    rel_dir = history_rules.to_rel(os.path.relpath(pdfs_dir, workspace))
+    out = []
+    try:
+        with os.scandir(pdfs_dir) as it:
+            for entry in it:
+                if entry.name.startswith(".") or not entry.is_file(follow_symlinks=False):
+                    continue
+                out.append(f"{rel_dir}/{entry.name}")
+    except OSError:  # absent (the usual case) or unreadable
+        return []
+    return out
+
+
+def _recent_files_sync(project_id: str):
+    workspace, _root = _resolve_path(project_id, "")
+    try:
+        listing = history_rules.list_tracked(workspace, _nested_roots(project_id, workspace))
+    except history_rules.ListingUnavailable as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    candidates = [rel for rel in listing if not any(seg.startswith(".") for seg in rel.split("/"))]
+    candidates += _saved_pdfs(workspace)
+    stamped = []
+    for rel in candidates:
+        try:
+            # lstat: a symlink is never a recent file, so its target (which
+            # may sit outside the workspace) is never stat'ed or shown.
+            st = os.lstat(os.path.join(workspace, rel))
+        except OSError:  # deleted or renamed since the listing
+            continue
+        if stat_mod.S_ISREG(st.st_mode):
+            stamped.append((st.st_mtime, rel))
+    newest = heapq.nsmallest(RECENT_FILES_MAX, stamped, key=lambda item: (-item[0], item[1]))
+    return {"files": [{"path": rel, "modified_at": mtime} for mtime, rel in newest]}
 
 
 # Directories resolve never descends into: VCS/dependency internals are huge

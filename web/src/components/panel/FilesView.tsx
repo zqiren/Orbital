@@ -3,8 +3,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 /**
- * Spec 078 §5.3 (D10) — Files view: tree state (workspace tree, touched files
- * badged + "Touched this session" group) ⇄ preview state (FilePreview in
+ * Spec 078 §5.3 (D10) — Files view: tree state (workspace tree with touched
+ * files badged, under spec 187's 最近修改 / Recent group, which replaced the
+ * "Touched this session" group) ⇄ preview state (FilePreview in
  * place; since spec 088 its one header row carries Back and a More menu with
  * "Open full width" — spec 137's maximize, which replaced the Files tab).
  * Never both at once.
@@ -20,16 +21,18 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ChevronRight, File, Folder } from 'lucide-react';
-import type { FileContent, FileEntry, WebSocketEvent } from '../../types';
+import type { FileContent, FileEntry, RecentFile, WebSocketEvent } from '../../types';
 import type { AnnotationDraft } from '../../utils/annotations';
 import type { TouchedFile, TouchedOp } from '../../utils/panelSelectors';
 import { fetchPathWithFallback } from '../../utils/openPathWithFallback';
 import { canRevealInFileManager } from '../../utils/clientPlatform';
-import { useFiles } from '../../hooks/useFiles';
+import { useFiles, useRecentFiles } from '../../hooks/useFiles';
 import { useWebSocket } from '../../hooks/useWebSocket';
 import { bumpFileHistory, SETTLE_MS } from '../../hooks/useFileHistory';
-import { useT } from '../../i18n/useT';
+import { translate, useT } from '../../i18n/useT';
+import { useLocale } from '../../i18n/LocaleContext';
 import type { StringKey } from '../../i18n/strings';
+import { relativeTime, type CardTranslate } from '../../utils/cardHealth';
 import FilePreview from '../FilePreview';
 
 export interface FilesViewProps {
@@ -106,6 +109,90 @@ function sortEntries(entries: FileEntry[]): FileEntry[] {
   });
 }
 
+/** Rows shown before 更多 / More; expanding shows all the daemon sent (≤ 50). */
+const RECENT_VISIBLE = 5;
+
+/**
+ * Spec 187 — 最近修改 / Recent: the project's latest-modified files, newest
+ * first, above the tree. Hidden when there is nothing (empty project, or the
+ * first request failed). Each row: basename, parent folder (muted, truncates
+ * first), age. No op badge: "modified" is the whole meaning of the list.
+ */
+function RecentGroup({
+  files,
+  onSelectFile,
+}: {
+  files: RecentFile[];
+  onSelectFile: (path: string) => void;
+}) {
+  const t = useT();
+  const { locale } = useLocale();
+  // relativeTime is a non-React helper: bind its translator to the locale.
+  const tr = useMemo<CardTranslate>(() => (key, vars) => translate(locale, key, vars), [locale]);
+  const [open, setOpen] = useState(true);
+  const [showAll, setShowAll] = useState(false);
+  if (files.length === 0) return null;
+  const rows = showAll ? files : files.slice(0, RECENT_VISIBLE);
+  return (
+    <div className="shrink-0 border-b border-border p-2">
+      <button
+        type="button"
+        onClick={() => setOpen((prev) => !prev)}
+        aria-expanded={open}
+        data-testid="panel-recent-group"
+        className="flex items-center gap-1.5 w-full text-left py-1 px-1 rounded-md text-xs font-medium text-secondary hover:text-primary hover:bg-card-hover transition-colors"
+      >
+        {open ? (
+          <ChevronDown size={13} className="shrink-0" aria-hidden />
+        ) : (
+          <ChevronRight size={13} className="shrink-0" aria-hidden />
+        )}
+        {t('panel.files.recent')}
+      </button>
+      {open && (
+        <>
+          {rows.map((entry) => {
+            const cut = entry.path.lastIndexOf('/');
+            const name = cut === -1 ? entry.path : entry.path.slice(cut + 1);
+            const folder = cut === -1 ? '' : entry.path.slice(0, cut);
+            return (
+              <button
+                key={entry.path}
+                type="button"
+                title={entry.path}
+                onClick={() => onSelectFile(entry.path)}
+                data-testid="panel-recent-row"
+                className="flex items-center gap-1.5 w-full min-w-0 text-left py-1 px-2 rounded-md text-xs text-primary hover:bg-card-hover transition-colors"
+              >
+                <File size={13} className="shrink-0 text-secondary" aria-hidden />
+                <span className="truncate min-w-0">{name}</span>
+                {/* The folder only takes space the name leaves (flex-basis 0),
+                    so it truncates first and a long name truncates only once
+                    the folder is gone. It also pushes the age to the edge. */}
+                <span className="flex-1 truncate min-w-0 text-2xs text-secondary">{folder}</span>
+                <span className="shrink-0 pl-2 text-2xs text-secondary whitespace-nowrap">
+                  {relativeTime(new Date(entry.modified_at * 1000).toISOString(), tr)}
+                </span>
+              </button>
+            );
+          })}
+          {files.length > RECENT_VISIBLE && (
+            <button
+              type="button"
+              onClick={() => setShowAll((prev) => !prev)}
+              aria-expanded={showAll}
+              data-testid="panel-recent-more"
+              className="flex items-center w-full text-left py-1 px-2 pl-[27px] rounded-md text-2xs text-secondary hover:text-primary hover:bg-card-hover transition-colors"
+            >
+              {showAll ? t('panel.files.less') : t('panel.files.more')}
+            </button>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function FilesView({
   projectId,
   touched,
@@ -123,7 +210,6 @@ export default function FilesView({
   const [dirs, setDirs] = useState<Map<string, FileEntry[]>>(() => new Map());
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [pendingDirs, setPendingDirs] = useState<Set<string>>(() => new Set());
-  const [touchedOpen, setTouchedOpen] = useState(true);
   // Directories already requested — a ref, so two callers in one tick cannot
   // both decide to fetch (state would still be the pre-update value for the
   // second one).
@@ -199,6 +285,10 @@ export default function FilesView({
   useEffect(() => {
     if (refreshKey !== 0) setRefreshTick((n) => n + 1);
   }, [refreshKey]);
+
+  // Spec 187: the project's latest-modified files ride the same ticks, in
+  // tree state only (the same gate as the directory re-list below).
+  const recent = useRecentFiles(projectId, refreshTick, file === null);
 
   // Re-list what is on screen: the root and the folders currently expanded
   // (spec 103 R3 — not every folder ever listed, and nothing at all in preview
@@ -501,41 +591,10 @@ export default function FilesView({
 
   return (
     <div className="flex flex-col h-full min-h-0 overflow-y-auto" data-testid="files-view-tree">
-      {touched.length > 0 && (
-        <div className="shrink-0 border-b border-border p-2">
-          <button
-            type="button"
-            onClick={() => setTouchedOpen((prev) => !prev)}
-            aria-expanded={touchedOpen}
-            data-testid="panel-touched-group"
-            className="flex items-center gap-1.5 w-full text-left py-1 px-1 rounded-md text-xs font-medium text-secondary hover:text-primary hover:bg-card-hover transition-colors"
-          >
-            {touchedOpen ? (
-              <ChevronDown size={13} className="shrink-0" aria-hidden />
-            ) : (
-              <ChevronRight size={13} className="shrink-0" aria-hidden />
-            )}
-            {touched.length === 1
-              ? t('panel.files.touched.one')
-              : t('panel.files.touched.other', { n: touched.length })}
-          </button>
-          {touchedOpen &&
-            touched.map((entry) => (
-              <button
-                key={entry.path}
-                type="button"
-                onClick={() => onSelectFile(entry.path)}
-                className="flex items-center gap-1.5 w-full text-left py-1 px-2 rounded-md text-xs text-primary hover:bg-card-hover transition-colors"
-              >
-                <File size={13} className="shrink-0 text-secondary" aria-hidden />
-                <span className="truncate">{entry.path}</span>
-                <span className="ml-auto shrink-0 text-2xs text-secondary font-mono">
-                  {t(OP_LABEL[entry.op])}
-                </span>
-              </button>
-            ))}
-        </div>
-      )}
+      {/* Spec 187: 最近修改 replaced "Touched this session" here (owner
+          decision §10.1). Restoring the old group is this one line:
+          <TouchedGroup touched={touched} onSelectFile={onSelectFile} /> */}
+      <RecentGroup key={projectId} files={recent} onSelectFile={onSelectFile} />
       <div className="flex-1 min-h-0 p-2">{renderDir('', 0)}</div>
     </div>
   );
