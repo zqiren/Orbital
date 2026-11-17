@@ -1035,6 +1035,31 @@ class CodexTransport(AgentTransport):
         await self._open_thread(workspace)
         if self._dispatch_url:
             await self._check_dispatch_mount()
+        self._schedule_mcp_status()
+
+    # Agent-held connectors: Codex's own MCP servers, from the same
+    # ``mcpServerStatus/list`` the mount check sends (its answer is reported
+    # there). A worker without Orbital's mount asks once, in the background.
+    _mcp_status_task = None
+
+    def _schedule_mcp_status(self) -> None:
+        if self._dispatch_url or self._mcp_servers_sink is None:
+            return
+        self._mcp_status_task = asyncio.create_task(
+            self._publish_mcp_status(), name=f"codex-mcpstatus-{id(self)}")
+
+    async def _publish_mcp_status(self) -> None:
+        from agent_os.daemon_v2.agent_connectors import codex_servers
+        try:
+            result = await self._request(
+                "mcpServerStatus/list",
+                {"threadId": self._thread_id, "detail": "toolsAndAuthOnly"},
+                timeout=DISPATCH_CHECK_BUDGET_S)
+        except Exception as e:  # noqa: BLE001 — display data only
+            logger.debug("CodexTransport: mcpServerStatus/list failed (%s)",
+                         str(e) or type(e).__name__)
+            return
+        self._publish_mcp_servers(codex_servers(result))
 
     async def _check_dispatch_mount(self) -> None:
         """Spec 184 §5.3: ask Codex once whether Orbital's dispatch tool is
@@ -1058,6 +1083,8 @@ class CodexTransport(AgentTransport):
         except Exception as e:  # noqa: BLE001 — never fail the start on it
             outcome = f"failed ({str(e) or type(e).__name__})"
         else:
+            from agent_os.daemon_v2.agent_connectors import codex_servers
+            self._publish_mcp_servers(codex_servers(result))
             entry = next((e for e in (result.get("data") or [])
                           if isinstance(e, dict) and e.get("name") == "orbital"), None)
             if entry is not None:

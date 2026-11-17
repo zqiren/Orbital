@@ -100,11 +100,25 @@ def dispatch_url() -> str | None:
     return f"http://127.0.0.1:{port}/mcp"
 
 
+def _agents_text(others: list[str]) -> tuple[str, bool]:
+    """``"claude-code (its own connectors: Figma, Gmail), codex"`` and
+    whether any agent named connectors: the connectors each other agent
+    holds itself (``agent_connectors``), so a task needing one is handed to
+    it. An agent with nothing known is its bare id, as before."""
+    from agent_os.daemon_v2.agent_connectors import roster_names
+    parts, any_own = [], False
+    for a in others:
+        own = roster_names(a)
+        any_own = any_own or bool(own)
+        parts.append(f"{a} (its own connectors: {own})" if own else a)
+    return ", ".join(parts), any_own
+
+
 def tool_description(ctx: DispatchContext | None) -> str:
     others = [a for a in (ctx.agents if ctx else ()) if a != (ctx.handle if ctx else None)]
     if not others:
         return _DESCRIPTION
-    return f"{_DESCRIPTION} Agents: {', '.join(others)}."
+    return f"{_DESCRIPTION} Agents: {_agents_text(others)[0]}."
 
 
 def seat_note(ctx: DispatchContext) -> str | None:
@@ -116,8 +130,11 @@ def seat_note(ctx: DispatchContext) -> str | None:
     others = [a for a in ctx.agents if a != ctx.handle]
     if not others:
         return None
-    return (f"Other agents in this project: {', '.join(others)}. When the user "
-            f"asks for one of them, hand it the task with the `{TOOL_NAME}` tool "
+    agents, any_own = _agents_text(others)
+    when = ("asks for one of them, or for a task that needs one of their own "
+            "connectors," if any_own else "asks for one of them,")
+    return (f"Other agents in this project: {agents}. When the user "
+            f"{when} hand it the task with the `{TOOL_NAME}` tool "
             f"of the `{SERVER_NAME}` MCP server. Never run that agent's CLI from "
             f"your shell: its reply would never reach the user.")
 

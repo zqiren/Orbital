@@ -418,6 +418,28 @@ export interface ConnectorAgentsResponse {
   agents: ConnectorAgent[];
 }
 
+/** One connector an agent holds itself (its own MCP server), read-only. */
+export interface AgentHeldConnector {
+  /** Display name (account / plugin prefixes stripped). */
+  name: string;
+  /** What the agent itself calls it. */
+  raw_name: string;
+  /** The agent's own word: 'connected' | 'pending' | 'needs-auth' | 'failed' | 'idle' … */
+  status: string;
+}
+
+/** One row of GET /api/v2/connectors/agent-held. */
+export interface AgentHeldConnectors {
+  id: string;
+  name: string;
+  connectors: AgentHeldConnector[];
+  last_seen: string | null;
+}
+
+export interface AgentHeldConnectorsResponse {
+  agents: AgentHeldConnectors[];
+}
+
 /** Response shape of GET /api/v2/connectors. */
 export interface ConnectorListResponse {
   connectors: Connector[];

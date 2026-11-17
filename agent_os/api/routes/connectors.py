@@ -113,6 +113,25 @@ async def list_agents():
     return {"agents": _agents()}
 
 
+@router.get("/agent-held")
+async def list_agent_held():
+    """Each agent's own connectors, as it last reported them while running
+    (``agent_connectors``; CONTRACT-connectors.md v1.3). Read-only: only that
+    agent can use them. An agent never seen running, or holding nothing, is
+    not listed."""
+    from agent_os.daemon_v2 import agent_connectors
+    out = []
+    for agent in agent_connectors.known_agents():
+        held = agent_connectors.held(agent)
+        if not held:
+            continue
+        manifest = _agent_registry.get(agent) if _agent_registry is not None else None
+        out.append({"id": agent, "name": getattr(manifest, "name", None) or agent,
+                    "connectors": held, "last_seen": agent_connectors.last_seen(agent)})
+    out.sort(key=lambda a: (a["name"].casefold(), a["id"]))
+    return {"agents": out}
+
+
 @router.put("/{connector_id}/access")
 async def set_access(connector_id: str, req: AccessRequest):
     """Set which agents may use a connector (CONTRACT-connectors.md §2)."""

@@ -669,6 +669,14 @@ class PromptBuilder:
             handle = agent["handle"]
             display_name = agent["display_name"]
             lines.append(f"- **{handle}** ({display_name}): {agent.get('type', 'cli')} agent.")
+            # Connectors this agent holds itself (its own MCP servers, as it
+            # last reported them): only it can use them, so a task needing
+            # one goes to it. Names only; nothing known adds nothing.
+            from agent_os.daemon_v2.agent_connectors import roster_names
+            own = roster_names(handle)
+            if own:
+                lines.append("  Its own connectors (only it can use them; hand it "
+                             f"tasks that need one): {own}")
             skills = agent.get("skills")
             if skills:
                 lines.append(f"  Skills: {', '.join(skills)}")

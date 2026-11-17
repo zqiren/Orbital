@@ -238,6 +238,85 @@ class SkillLoader:
 
 
 # ---------------------------------------------------------------------------
+# The listing a worker is sent (read-only)
+# ---------------------------------------------------------------------------
+
+# The skill folders each worker loads by itself, so Orbital never lists those
+# to it. Established by asking the live CLIs, 2026-11-17, with one probe
+# skill per folder under a scratch HOME and workspace:
+#   Claude Code 2.1.326, init ``skills``: ~/.claude/skills, <ws>/.claude/skills.
+#   Codex 0.157.1, ``skills/list``: ~/.agents/skills, ~/.codex/skills,
+#     <ws>/.agents/skills, <ws>/.codex/skills.
+# ("home" folders are under ``skills_home()``; an agent not named here
+# loads none of Orbital's sources and gets the full list.)
+WORKER_NATIVE_SKILL_FOLDERS: dict[str, tuple[tuple[str, str], ...]] = {
+    "claude-code": (("home", ".claude"), ("workspace", ".claude")),
+    "codex": (("home", ".agents"), ("home", ".codex"),
+              ("workspace", ".agents"), ("workspace", ".codex")),
+}
+# One line per skill in the worker's note.
+WORKER_SKILL_DESCRIPTION_MAX = 200
+
+
+def _native_skills(agent: str, workspace: str, home: str) -> tuple[set[str], set[str]]:
+    """``(skill dir realpaths, normalized names)`` the agent loads itself."""
+    from agent_os.agent.skill_catalog import _folder_entries
+    reals: set[str] = set()
+    names: set[str] = set()
+    for base, dot in WORKER_NATIVE_SKILL_FOLDERS.get(agent, ()):
+        root_base = home if base == "home" else workspace
+        if not root_base:
+            continue
+        for entry, dir_real in _folder_entries(os.path.join(root_base, dot, "skills")):
+            reals.add(dir_real)
+            meta = parse_skill_md(os.path.join(entry.path, "SKILL.md")) or {}
+            names.add(normalize_skill_name(meta.get("name") or entry.name))
+    return reals, names
+
+
+def worker_skills(workspace: str, agent: str, *, home: str | None = None,
+                  global_dir=_UNSET, disabled=None) -> list[dict]:
+    """The skills to tell worker ``agent`` about: the manager's listing (the
+    project's own skills, then the shared ones, switched-off and shadowed
+    ones left out) minus every skill the agent loads natively, by folder
+    (realpath, so a symlink from its folder counts) or by name.
+    ``[{name, description, path}]`` with absolute paths, in the manager's
+    order."""
+    from agent_os.agent.skill_catalog import scan_shared
+    home = home if home is not None else skills_home()
+    gdir = _global_skills_dir if global_dir is _UNSET else global_dir
+    project = SkillLoader(workspace, global_dir=gdir, home=home).scan() if workspace else []
+    shared = scan_shared(shadowed_by=project, home=home, global_dir=gdir,
+                         disabled=disabled, require_description=True)
+    native_reals, native_names = _native_skills(agent, workspace, home)
+    out = []
+    for row in [*project, *shared]:
+        path = os.path.abspath(row["path"])
+        if (os.path.realpath(os.path.dirname(path)) in native_reals
+                or normalize_skill_name(row["name"]) in native_names):
+            continue
+        out.append({"name": row["name"], "description": row.get("description") or "",
+                    "path": path})
+    return out
+
+
+def worker_skills_note(skills: list[dict]) -> str:
+    """The text a worker is sent: one instruction line, then ``- name:
+    description (path)`` per skill. ``""`` with nothing to tell."""
+    if not skills:
+        return ""
+    lines = ["Skills you can use (from Orbital): when your task matches one, "
+             "read its SKILL.md first and follow it."]
+    for s in skills:
+        desc = " ".join(str(s.get("description") or "").split())
+        if len(desc) > WORKER_SKILL_DESCRIPTION_MAX:
+            desc = desc[:WORKER_SKILL_DESCRIPTION_MAX - 1].rstrip() + "…"
+        lines.append(f"- {s['name']}: {desc} ({s['path']})" if desc
+                     else f"- {s['name']} ({s['path']})")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # Installing a skill (shared by the project and the global upload routes)
 # ---------------------------------------------------------------------------
 

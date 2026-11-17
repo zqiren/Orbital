@@ -44,6 +44,7 @@ import type {
   ConnectorListResponse,
 } from '../types';
 import ConnectorAccessControl, { DEFAULT_ACCESS } from './ConnectorAccessControl';
+import AgentHeldConnectors from './AgentHeldConnectors';
 import { AgentLogo } from './history/AgentLogo';
 import { useT } from '../i18n/useT';
 import { LabelWithHint } from './SettingsSection';
@@ -418,6 +419,9 @@ export default function ConnectorSettings() {
           })}
         </ul>
       )}
+
+      {/* The connectors each agent holds itself: read-only, below Orbital's. */}
+      <AgentHeldConnectors />
 
       {/* Custom MCP server (Tier-0, Spec 011 §3): a power-user escape hatch —
           paste a server URL, no catalog work required. */}

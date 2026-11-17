@@ -8,6 +8,7 @@ Owns all sub-agent adapters. Provides interface for AgentMessageTool.
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -642,6 +643,10 @@ class SubAgentManager:
             from agent_os.daemon_v2 import worker_commands
             transport.set_commands_sink(
                 lambda cmds, _s=slug, _w=workspace: worker_commands.publish(_s, _w, cmds))
+        # The MCP servers the worker reports as its own (agent_connectors).
+        if hasattr(transport, "set_mcp_servers_sink"):
+            from agent_os.daemon_v2 import agent_connectors
+            transport.set_mcp_servers_sink(agent_connectors.make_sink(slug))
 
     def _attach_thread_sink(self, transport, project_id: str, session_id: str | None,
                             handle: str) -> None:
@@ -2411,6 +2416,10 @@ class SubAgentManager:
         # path — pinned, @mention, manager dispatch — gets the same block.
         preamble = await self._build_recap(
             adapter, project_id, session_id, handle, message=prompt.message)
+        skills_note = await self._worker_skills_note(
+            adapter, project_id, session_id, handle)
+        if skills_note:
+            preamble = f"{skills_note}\n\n{preamble}"
         first_turn = getattr(adapter, "_orbital_first_turn_note", None)
         if isinstance(first_turn, str) and first_turn:
             preamble = f"{first_turn}\n\n{preamble}"
@@ -2433,6 +2442,44 @@ class SubAgentManager:
                 session_id=session_id,
                 dispatch_id=prompt.dispatch_id,
             )
+
+    async def _worker_skills_note(self, adapter, project_id: str, session_id: str,
+                                  handle: str) -> str:
+        """The skills listing for this dispatch, or "" (workers learn the
+        skills). The manager's enabled set minus what this worker loads
+        itself (``skills.worker_skills``). Sent once per worker session
+        (project, session, worker), again only when the listing's hash
+        changed since it was last sent there, or when the worker's thread
+        started over. Never raises: a failure dispatches without it."""
+        from agent_os.agent import skills as _skills
+        store = self._project_store
+
+        def build() -> str:
+            project = (store.get_project(project_id) if store is not None else None) or {}
+            workspace = project.get("workspace", "") if isinstance(project, dict) else ""
+            return _skills.worker_skills_note(
+                _skills.worker_skills(workspace or "", handle))
+
+        try:
+            note = await asyncio.to_thread(build)
+        except Exception:
+            logger.warning("skills listing failed for %s/%s — dispatching without",
+                           project_id, handle, exc_info=True)
+            return ""
+        digest = hashlib.sha256(note.encode("utf-8")).hexdigest() if note else ""
+        status = getattr(adapter, "_resume_status", None)
+        thread_new = (isinstance(status, tuple) and bool(status) and status[0] == "fresh"
+                      and getattr(adapter, "_skills_note_primed", None) is not True)
+        try:
+            adapter._skills_note_primed = True
+        except Exception:
+            pass
+        sent = self.__dict__.setdefault("_skills_note_sent", {})
+        key = (project_id, session_id, handle)
+        if not thread_new and sent.get(key) == digest:
+            return ""
+        sent[key] = digest
+        return note
 
     async def _build_recap(self, adapter, project_id: str, session_id: str,
                            handle: str, *, message: str | None = None) -> str:

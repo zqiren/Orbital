@@ -745,6 +745,9 @@ def _assemble_app(app: FastAPI, data_dir: str | None) -> FastAPI:
     connector_routes.configure(connector_manager, agent_registry=registry,
                                setup_engine=setup_engine)
     app.include_router(connector_routes.router)
+    # Connectors each agent holds itself ({data_dir}/agent-connectors.json).
+    from agent_os.daemon_v2 import agent_connectors
+    agent_connectors.configure(store_dir)
 
     # 7c2a. Global skills ({data_dir}/skills, listed in every project).
     from agent_os.api.routes import skills_global as skills_global_routes
