@@ -1577,3 +1577,45 @@ async def test_the_auto_reopen_is_not_logged_as_user_input():
     finally:
         await h.finish()
     assert session.meta == []
+
+
+class _StrictScreencastCDP(FakeCDPSession):
+    """Chrome refuses a second ``Page.startScreencast`` on a session whose
+    screencast is running, and the attach's ``Page.getFrameTree`` round trip
+    takes real time (the window the viewer's first size message lands in)."""
+
+    def __init__(self):
+        super().__init__()
+        self._casting = False
+
+    async def send(self, method: str, params: dict | None = None):
+        if method == "Page.getFrameTree":
+            await asyncio.sleep(0.05)
+        if method == "Page.startScreencast":
+            if self._casting:
+                raise RuntimeError(
+                    "Protocol error (Page.startScreencast): Screencast is already active")
+            self._casting = True
+        if method == "Page.stopScreencast":
+            self._casting = False
+        return await super().send(method, params)
+
+
+@pytest.mark.asyncio
+async def test_a_size_arriving_while_the_page_attaches_does_not_break_the_attach():
+    """The view opens on a page the agent already has: the client's first
+    viewport message (with its dpr) lands while ``_attach`` is still between
+    creating the CDP session and starting the screencast. It must not start
+    the screencast itself, or the attach's own start fails and the stream
+    stays stuck on a page it never sized."""
+    cdp = _StrictScreencastCDP()
+    page = FakePage(cdp)
+    ws = FakeWebSocket([{"type": "viewport", "width": 772, "height": 822, "dpr": 2}])
+    h = start(ws, FakeBrowserManager([page]), cdp, dpr=2)
+    try:
+        await h.wait(lambda: page.viewport_calls or ws.of_type("error"))
+        assert ws.of_type("error") == []
+        assert page.viewport_calls == [{"width": 772, "height": 822}]
+        assert len(cdp.calls("Page.startScreencast")) == 1
+    finally:
+        await h.finish()
