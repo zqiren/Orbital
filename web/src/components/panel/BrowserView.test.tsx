@@ -5,7 +5,7 @@
 // @vitest-environment jsdom
 
 import { describe, it, expect, vi, beforeEach, afterEach, beforeAll } from 'vitest';
-import { render, screen, fireEvent, cleanup, act } from '@testing-library/react';
+import { render, screen, fireEvent, cleanup, act, waitFor } from '@testing-library/react';
 import { LocaleProvider } from '../../i18n/LocaleContext';
 import type { BrowserLive } from '../../hooks/useBrowserLive';
 import type { BrowserViewProps } from './BrowserView';
@@ -46,7 +46,7 @@ vi.mock('./AnnotateOverlay', () => ({
   ),
 }));
 
-import BrowserView from './BrowserView';
+import BrowserView, { SIZE_SETTLE_MS, clearFallbackCache } from './BrowserView';
 
 /** A BrowserLive value with every field the view reads, overridable. */
 function live(partial: Partial<BrowserLive>): BrowserLive {
@@ -109,6 +109,7 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
+  clearFallbackCache();
   liveMock.mockReset();
   getFileContentMock.mockReset();
   liveMock.mockReturnValue(live({ status: 'idle', frame: null, title: '', send: vi.fn() }));
@@ -323,11 +324,13 @@ describe('BrowserView — annotating', () => {
 describe('BrowserView — after the page closes', () => {
   it('keeps the last frame on screen labelled "Last screenshot" and forwards no input', () => {
     const send = vi.fn();
+    const nav = vi.fn();
     liveMock.mockReturnValue(live({
       status: 'closed',
       frame: { jpegDataUrl: 'data:image/jpeg;base64,AAAA', width: 1000, height: 500 },
       title: 'Example Domain',
       send,
+      nav,
     }));
     renderView();
     expect(screen.getByText('Last screenshot')).toBeInTheDocument();
@@ -338,6 +341,90 @@ describe('BrowserView — after the page closes', () => {
     fireEvent.pointerUp(canvas, { clientX: 10, clientY: 10, button: 0, pointerId: 1 });
     fireEvent.keyDown(canvas, { key: 'Enter', code: 'Enter' });
     expect(send).not.toHaveBeenCalled();
+    // The click is not page input: it asks for the closed page back.
+    expect(nav.mock.calls).toEqual([['reopen']]);
+  });
+
+  it('a right-click or an annotating click on the stale frame does not reopen', () => {
+    const nav = vi.fn();
+    liveMock.mockReturnValue(live({
+      status: 'closed',
+      frame: { jpegDataUrl: 'data:image/jpeg;base64,AAAA', width: 1000, height: 500 },
+      title: 'Example Domain',
+      nav,
+    }));
+    renderView({ annotating: true });
+    const canvas = screen.getByRole('img') as HTMLCanvasElement;
+    fireEvent.pointerDown(canvas, { clientX: 10, clientY: 10, button: 0 });
+    cleanup();
+    renderView();
+    fireEvent.pointerDown(screen.getByRole('img'), { clientX: 10, clientY: 10, button: 2 });
+    expect(nav).not.toHaveBeenCalled();
+  });
+});
+
+describe('BrowserView — reopening after the idle close (2026-11-18)', () => {
+  const shot = { type: 'image', mime: 'image/png', content: 'U0hPVA==' };
+
+  it('shows the last screenshot, not the connecting line, while the route reopens the page', async () => {
+    getFileContentMock.mockResolvedValue(shot);
+    liveMock.mockReturnValue(live({ status: 'connecting' }));
+    renderView({ fallback: { path: 'orbital/shot.png', title: 'Shot' } });
+    const img = await screen.findByAltText('Shot');
+    expect(img).toHaveAttribute('src', 'data:image/png;base64,U0hPVA==');
+    expect(screen.queryByText('Connecting to the browser…')).toBeNull();
+    // No new words on screen: the same caption as any last screenshot.
+    expect(screen.getByText('Last screenshot · Shot')).toBeInTheDocument();
+  });
+
+  it('keeps the screenshot when the page is attached but its first frame has not landed', async () => {
+    getFileContentMock.mockResolvedValue(shot);
+    liveMock.mockReturnValue(live({ status: 'open', url: 'https://example.com/', frame: null }));
+    renderView({ fallback: { path: 'orbital/shot.png', title: 'Shot' } });
+    expect(await screen.findByAltText('Shot')).toBeInTheDocument();
+  });
+
+  it('a click on the screenshot asks for the page back', async () => {
+    getFileContentMock.mockResolvedValue(shot);
+    const nav = vi.fn();
+    liveMock.mockReturnValue(live({ status: 'no_browser', nav }));
+    renderView({ fallback: { path: 'orbital/shot.png', title: 'Shot' } });
+    const img = await screen.findByAltText('Shot');
+    fireEvent.pointerDown(img, { button: 0 });
+    expect(nav.mock.calls).toEqual([['reopen']]);
+  });
+
+  it('opened again (Files and back), the picture is there on the first render', async () => {
+    getFileContentMock.mockResolvedValue(shot);
+    liveMock.mockReturnValue(live({ status: 'connecting' }));
+    renderView({ fallback: { path: 'orbital/shot.png', title: 'Shot' } });
+    await screen.findByAltText('Shot');
+    cleanup();
+    getFileContentMock.mockReturnValue(new Promise(() => {})); // the refetch never lands
+    renderView({ fallback: { path: 'orbital/shot.png', title: 'Shot' } });
+    expect(screen.getByAltText('Shot')).toHaveAttribute('src', 'data:image/png;base64,U0hPVA==');
+    expect(screen.queryByText('Connecting to the browser…')).toBeNull();
+  });
+
+  it('the screenshot is replaced by the live frame when it arrives', async () => {
+    getFileContentMock.mockResolvedValue(shot);
+    liveMock.mockReturnValue(live({ status: 'connecting' }));
+    const { rerender, container } = renderView({ fallback: { path: 'orbital/shot.png', title: 'Shot' } });
+    await screen.findByAltText('Shot');
+    liveMock.mockReturnValue(live({
+      status: 'open',
+      url: 'https://example.com/',
+      title: 'Example Domain',
+      frame: { jpegDataUrl: 'd', width: 690, height: 820 },
+    }));
+    rerender(
+      <LocaleProvider>
+        <BrowserView projectId="p1" active fallback={{ path: 'orbital/shot.png', title: 'Shot' }} annotating={false} annotations={[]} onAddAnnotation={vi.fn()} />
+      </LocaleProvider>,
+    );
+    expect(container.querySelector('canvas')).not.toBeNull();
+    expect(screen.queryByAltText('Shot')).toBeNull();
+    expect(screen.getByText('Live')).toBeInTheDocument();
   });
 });
 
@@ -507,7 +594,9 @@ describe('BrowserView — cursor, capture, click count, coalescing', () => {
     expect(c2.style.cursor).toBe('default');
     cleanup();
     const { canvas: c3 } = openCanvas({ status: 'closed', cursor: 'pointer' });
-    expect(c3.style.cursor).toBe('not-allowed');
+    // Not live: no page cursor, and not "forbidden" — a click asks for the
+    // page back.
+    expect(c3.style.cursor).toBe('default');
   });
 
   it('captures the pointer on press and releases it on release', () => {
@@ -587,17 +676,21 @@ describe('BrowserView — keyboard through the text host (IME)', () => {
   });
 });
 
-describe('BrowserView — a mirror of the agent\'s page', () => {
+describe('BrowserView — the page fills the view (2026-11-18)', () => {
   // jsdom lays nothing out: give the frame area a size, as a real panel has.
   const proto = HTMLElement.prototype;
   const original = {
     width: Object.getOwnPropertyDescriptor(proto, 'clientWidth'),
     height: Object.getOwnPropertyDescriptor(proto, 'clientHeight'),
   };
+  let boxW = 690;
+  let boxH = 820;
   beforeEach(() => {
     vi.useFakeTimers();
-    Object.defineProperty(proto, 'clientWidth', { configurable: true, get: () => 690 });
-    Object.defineProperty(proto, 'clientHeight', { configurable: true, get: () => 820 });
+    boxW = 690;
+    boxH = 820;
+    Object.defineProperty(proto, 'clientWidth', { configurable: true, get: () => boxW });
+    Object.defineProperty(proto, 'clientHeight', { configurable: true, get: () => boxH });
   });
   afterEach(() => {
     vi.useRealTimers();
@@ -605,28 +698,162 @@ describe('BrowserView — a mirror of the agent\'s page', () => {
     if (original.height) Object.defineProperty(proto, 'clientHeight', original.height);
   });
 
-  it('never asks the page to take the panel\'s size (2026-09-05: resizing it changed what the agent browsed)', () => {
-    const sendMock = vi.fn();
+  function resizeTo(w: number, h: number) {
+    boxW = w;
+    boxH = h;
+    act(() => {
+      window.dispatchEvent(new Event('resize'));
+    });
+  }
+
+  const downsOf = (send: ReturnType<typeof vi.fn>) =>
+    send.mock.calls
+      .map(([m]) => m as { type: string; action: string; x: number; y: number })
+      .filter((m) => m.type === 'mouse' && m.action === 'down');
+
+  it('asks for its own size at once, then once per settled change — never per step', () => {
+    const requestSize = vi.fn();
     liveMock.mockReturnValue(live({
       status: 'open',
       frame: { jpegDataUrl: 'd', width: 1280, height: 720 },
       title: 'T',
-      send: sendMock,
+      requestSize,
     }));
     renderView();
+    expect(requestSize.mock.calls).toEqual([[690, 820, 1]]);
+    // A drag: many steps inside the settle window.
+    for (const w of [680, 660, 640, 620, 600]) {
+      resizeTo(w, 820);
+      act(() => {
+        vi.advanceTimersByTime(40);
+      });
+    }
+    expect(requestSize).toHaveBeenCalledTimes(1);
+    act(() => {
+      vi.advanceTimersByTime(SIZE_SETTLE_MS);
+    });
+    expect(requestSize.mock.calls).toEqual([[690, 820, 1], [600, 820, 1]]);
+  });
+
+  it('asks for the frame area’s size, also when the view started on a blank page', () => {
+    // The frame area is smaller than the whole view (toolbar, status line, inset).
+    Object.defineProperty(proto, 'clientWidth', {
+      configurable: true,
+      get(this: HTMLElement) { return this.dataset?.browserLive ? 662 : 690; },
+    });
+    Object.defineProperty(proto, 'clientHeight', {
+      configurable: true,
+      get(this: HTMLElement) { return this.dataset?.browserLive ? 760 : 820; },
+    });
+    const requestSize = vi.fn();
+    const blank = live({
+      status: 'open',
+      url: 'about:blank',
+      frame: { jpegDataUrl: 'd', width: 1280, height: 720 },
+      title: '',
+      requestSize,
+    });
+    liveMock.mockReturnValue(blank);
+    const { rerender } = renderView();
+    expect(requestSize).not.toHaveBeenCalled();
+    liveMock.mockReturnValue({ ...blank, url: 'https://example.com/' });
+    rerender(
+      <LocaleProvider>
+        <BrowserView projectId="p1" active fallback={null} annotating={false} annotations={[]} onAddAnnotation={vi.fn()} />
+      </LocaleProvider>,
+    );
     act(() => {
       vi.advanceTimersByTime(1000);
     });
-    expect(sendMock.mock.calls.filter(([m]) => (m as { type: string }).type === 'viewport')).toHaveLength(0);
+    expect(requestSize.mock.calls).toEqual([[662, 760, 1]]);
   });
 
-  it('maps input through the letterbox: a 1280×720 page in a 690×820 panel', () => {
-    const sendMock = vi.fn();
+  it('reports its size from the last screenshot’s box, so a reopened page comes up at it', async () => {
+    vi.useRealTimers();
+    getFileContentMock.mockResolvedValue({ type: 'image', mime: 'image/png', content: 'U0hPVA==' });
+    const requestSize = vi.fn();
+    liveMock.mockReturnValue(live({ status: 'connecting', requestSize }));
+    renderView({ fallback: { path: 'orbital/shot.png', title: 'Shot' } });
+    await screen.findByAltText('Shot');
+    await waitFor(() => expect(requestSize.mock.calls).toEqual([[690, 820, 1]]));
+  });
+
+  it('a new frame alone never asks again', () => {
+    const requestSize = vi.fn();
+    const value = live({
+      status: 'open',
+      frame: { jpegDataUrl: 'd', width: 1280, height: 720 },
+      title: 'T',
+      requestSize,
+      owner: true,
+    });
+    liveMock.mockReturnValue(value);
+    const { rerender } = renderView();
+    for (const [w, h] of [[1280, 633], [690, 733], [690, 820]]) {
+      liveMock.mockReturnValue({ ...value, frame: { jpegDataUrl: `d${w}${h}`, width: w, height: h } });
+      rerender(
+        <LocaleProvider>
+          <BrowserView projectId="p1" active fallback={null} annotating={false} annotations={[]} onAddAnnotation={vi.fn()} />
+        </LocaleProvider>,
+      );
+      act(() => {
+        vi.advanceTimersByTime(500);
+      });
+    }
+    expect(requestSize).toHaveBeenCalledTimes(1);
+  });
+
+  it('owner: its page is drawn 1:1, so input maps 1:1', () => {
+    const send = vi.fn();
+    liveMock.mockReturnValue(live({
+      status: 'open',
+      frame: { jpegDataUrl: 'd', width: 690, height: 820 },
+      title: 'T',
+      send,
+      owner: true,
+    }));
+    const { container } = renderView();
+    const canvas = container.querySelector('canvas') as HTMLCanvasElement;
+    expect(canvas.style.width).toBe('690px');
+    expect(canvas.style.height).toBe('820px');
+    mockRect(canvas, 690, 820);
+    fireEvent.pointerDown(canvas, { clientX: 12, clientY: 800, button: 0, detail: 1 });
+    expect(downsOf(send)[0]).toMatchObject({ x: 12, y: 800 });
+  });
+
+  it('owner mid-drag: the last frame follows the panel edge, and input still lands on it', () => {
+    const send = vi.fn();
+    // The page is still 690 wide; the panel was just dragged to 600.
+    liveMock.mockReturnValue(live({
+      status: 'open',
+      frame: { jpegDataUrl: 'd', width: 690, height: 820 },
+      title: 'T',
+      send,
+      owner: true,
+    }));
+    const { container } = renderView();
+    const canvas = container.querySelector('canvas') as HTMLCanvasElement;
+    mockRect(canvas, 600, 820);
+    // Narrowed: the frame stays 1:1 from the top-left, its right edge
+    // cropped — no band anywhere — and a point maps to the same page point.
+    fireEvent.pointerDown(canvas, { clientX: 300, clientY: 100, button: 0, detail: 1 });
+    expect(downsOf(send)[0].x).toBeCloseTo(300, 5);
+    expect(downsOf(send)[0].y).toBeCloseTo(100, 5);
+    // Widened past the page (and taller): scaled up just enough to cover.
+    mockRect(canvas, 1380, 1000);
+    fireEvent.pointerDown(canvas, { clientX: 690, clientY: 410, button: 0, detail: 1 });
+    expect(downsOf(send)[1].x).toBeCloseTo(345, 5);
+    expect(downsOf(send)[1].y).toBeCloseTo(205, 5);
+  });
+
+  it('not the owner: another viewer sized the page, so it is letterboxed', () => {
+    const send = vi.fn();
     liveMock.mockReturnValue(live({
       status: 'open',
       frame: { jpegDataUrl: 'd', width: 1280, height: 720 },
       title: 'T',
-      send: sendMock,
+      send,
+      owner: false,
     }));
     const { container } = renderView();
     const canvas = container.querySelector('canvas') as HTMLCanvasElement;
@@ -635,9 +862,7 @@ describe('BrowserView — a mirror of the agent\'s page', () => {
     // centre is the page's centre, and the top band is off the page.
     fireEvent.pointerDown(canvas, { clientX: 345, clientY: 410, button: 0, detail: 1 });
     fireEvent.pointerDown(canvas, { clientX: 345, clientY: 10, button: 0, detail: 1 });
-    const downs = sendMock.mock.calls
-      .map(([m]) => m as { type: string; action: string; x: number; y: number })
-      .filter((m) => m.type === 'mouse' && m.action === 'down');
+    const downs = downsOf(send);
     expect(downs).toHaveLength(2);
     expect(downs[0].x).toBeCloseTo(640, 5);
     expect(downs[0].y).toBeCloseTo(360, 5);

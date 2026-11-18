@@ -47,6 +47,51 @@ WORKER_SCOPE_PREFIX = "worker:"
 # projects. A bare ``project_id`` scope is what callers without a session use.
 SESSION_SCOPE_SEP = "::session:"
 
+# The agent's (persistent-profile) browser renders at this device-pixel
+# ratio so the live view's frames are sharp on a Retina display (2026-11-18).
+# It is set once per browser process — ``window.devicePixelRatio`` never
+# changes under a page — and it needs both halves: the context's
+# ``device_scale_factor`` (Playwright's emulation) and Chrome's own
+# ``--force-device-scale-factor`` (headless Chrome's screen is otherwise 1x,
+# so the screencast stays 1x, and every Playwright screenshot rewrites the
+# emulation for a 2x-vs-1x mismatch — probed: transient frames at double
+# size). The agent's screenshots stay CSS-pixel sized: ``capture_screenshot``
+# takes them at device scale (no emulation rewrite) and downsamples. 1
+# restores the old behaviour entirely. Worker browsers are not affected.
+PAGE_DEVICE_SCALE = 2
+
+
+def _viewport_of(page) -> tuple[int, int] | None:
+    """Playwright's viewport for ``page`` (CSS px), or None."""
+    value = getattr(page, "viewport_size", None)
+    if not isinstance(value, dict):
+        return None
+    w, h = value.get("width"), value.get("height")
+    if isinstance(w, int) and isinstance(h, int) and w > 0 and h > 0:
+        return (w, h)
+    return None
+
+
+try:
+    from PIL import Image as _PILImage
+except ImportError:  # Pillow ships with the desktop extra; see capture_screenshot
+    _PILImage = None
+
+
+def _downsample_to(path, size: tuple[int, int]) -> None:
+    """Rewrite the PNG at ``path`` at ``size`` when it is larger (a 2x
+    capture). Leaves the file alone when it already fits or is unreadable."""
+    if _PILImage is None:
+        return
+    try:
+        with _PILImage.open(path) as im:
+            if im.size[0] <= size[0] and im.size[1] <= size[1]:
+                return
+            small = im.resize(size, _PILImage.LANCZOS)
+        small.save(path, format="PNG")
+    except Exception:
+        logger.debug("screenshot downsample failed for %s", path, exc_info=True)
+
 
 def page_scope(project_id: str, session_id: str | None = None) -> str:
     """The page-tracking key for one session of a project (the bare project
@@ -351,6 +396,13 @@ class BrowserManager:
         # view (monotonic). A viewer merely connected does not count.
         self._last_use = time.monotonic()
 
+        # Scope -> the URL its page was on when the idle close shut the
+        # browser (2026-11-18), so a viewer opening the live view can bring
+        # that page back (``idle_closed_page``). Dropped once the scope gets
+        # a page again, or when the scope is closed on purpose (Stop,
+        # project teardown). In memory only: a daemon restart reopens nothing.
+        self._idle_closed_urls: dict[str, str] = {}
+
     # ------------------------------------------------------------------
     # Browser launch (lazy + persistent context)
     # ------------------------------------------------------------------
@@ -571,14 +623,20 @@ class BrowserManager:
         # Detect system timezone (IANA format like "Asia/Shanghai")
         detected_timezone = _detect_timezone()
 
+        args = list(self.CHROME_FLAGS)
+        scale_kwargs = {}
+        if PAGE_DEVICE_SCALE != 1:
+            args.append(f"--force-device-scale-factor={PAGE_DEVICE_SCALE}")
+            scale_kwargs["device_scale_factor"] = PAGE_DEVICE_SCALE
         launch_kwargs = dict(
             user_data_dir=str(self._profile_dir),
             headless=headless,
-            args=self.CHROME_FLAGS,
+            args=args,
             ignore_default_args=["--enable-automation"],
             locale=detected_locale,
             timezone_id=detected_timezone,
             user_agent=ua_override,
+            **scale_kwargs,
         )
 
         # Try system Chrome → Edge → bundled Chromium. (There is no WebKit
@@ -835,6 +893,7 @@ class BrowserManager:
             pages = [p for p in pages if not p.is_closed()]
             self._project_pages[project_id] = pages
             if pages:
+                self._idle_closed_urls.pop(project_id, None)
                 return pages[-1]
 
         # Enforce page cap with LRU eviction
@@ -848,6 +907,9 @@ class BrowserManager:
         self._project_pages.setdefault(project_id, []).append(page)
         self._page_state[id(page)] = _PageState()
         self._setup_page_handlers(page, project_id)
+        # The scope has a page again: whatever the idle close remembered for
+        # it is history now (the agent or the user moved on).
+        self._idle_closed_urls.pop(project_id, None)
 
         return page
 
@@ -877,6 +939,7 @@ class BrowserManager:
         self._project_pages.setdefault(project_id, []).append(page)
         self._page_state[id(page)] = _PageState()
         self._setup_page_handlers(page, project_id)
+        self._idle_closed_urls.pop(project_id, None)
         return page
 
     async def get_view_pages(self, project_id: str, session_id: str | None = None) -> list:
@@ -899,6 +962,8 @@ class BrowserManager:
     async def _close_scope(self, scope: str) -> None:
         pages = self._project_pages.pop(scope, [])
         self._scope_used.pop(scope, None)
+        # Closed on purpose: nothing to bring back for this scope.
+        self._idle_closed_urls.pop(scope, None)
         for page in pages:
             self._page_state.pop(id(page), None)
             if not page.is_closed():
@@ -916,7 +981,11 @@ class BrowserManager:
         if project_id.startswith(WORKER_SCOPE_PREFIX):
             return
         prefix = project_id + SESSION_SCOPE_SEP
-        for scope in [k for k in self._project_pages if k.startswith(prefix)]:
+        # Sessions whose browser idle-closed have no pages but a remembered
+        # URL; those are part of the project too.
+        scopes = {k for k in self._project_pages if k.startswith(prefix)}
+        scopes.update(k for k in self._idle_closed_urls if k.startswith(prefix))
+        for scope in sorted(scopes):
             await self._close_scope(scope)
 
     async def _evict_lru_page(self):
@@ -980,7 +1049,20 @@ class BrowserManager:
             existing.pop(0)
 
         file_path = screenshot_dir / f"step_{step:04d}.png"
-        await page.screenshot(path=str(file_path), full_page=False)
+        # Device scale, not ``scale="css"``: on a 2x page a css-scale capture
+        # makes Chrome re-emulate the page at half size for the shot, which
+        # the live view sees as a flash. The file is brought down to the
+        # page's CSS size right after, so what the agent gets (and pays
+        # tokens for) is exactly the viewport's size, as before.
+        if _PILImage is None:
+            # No way to downsample here: let Chrome do it (correct size, at
+            # the cost of that flash in a watching live view).
+            await page.screenshot(path=str(file_path), full_page=False, scale="css")
+        else:
+            await page.screenshot(path=str(file_path), full_page=False)
+            css = _viewport_of(page)
+            if css is not None:
+                await asyncio.to_thread(_downsample_to, file_path, css)
 
         return str(file_path)
 
@@ -1077,8 +1159,48 @@ class BrowserManager:
                 return False
             logger.info("Closing the agent browser after %.0f idle minutes",
                         self.IDLE_CLOSE_AFTER / 60)
+            self._remember_idle_closed_pages()
             await self._cleanup_stale()
         return True
+
+    def _remember_idle_closed_pages(self) -> None:
+        """Record each main-browser scope's current page URL (the one the
+        live view shows: its last open page) before the idle close drops
+        them. Only web pages: a blank or internal page is nothing to bring
+        back. Scopes remembered by an earlier idle close and not reopened
+        since keep their URL."""
+        for scope, pages in self._project_pages.items():
+            if scope.startswith(WORKER_SCOPE_PREFIX):
+                continue
+            for page in reversed(list(pages)):
+                try:
+                    if page.is_closed() is not False:
+                        continue
+                    url = page.url
+                except Exception:
+                    continue
+                if isinstance(url, str) and url.lower().startswith(("http://", "https://")):
+                    self._idle_closed_urls[scope] = url
+                break
+
+    def idle_closed_page(self, project_id: str,
+                         session_id: str | None = None) -> tuple[str, str] | None:
+        """``(scope, url)`` of the page the idle close shut for this viewer's
+        scope, or None. With a session, that session's scope only; without
+        one, the project's most recently used remembered scope (the same
+        rule ``get_view_pages`` follows). None while the sign-in browser
+        holds the profile — a relaunch then would fail on its lock."""
+        if self._warmup_active:
+            return None
+        if session_id:
+            scope = page_scope(project_id, session_id)
+            url = self._idle_closed_urls.get(scope)
+            return (scope, url) if url else None
+        scopes = [k for k in self._idle_closed_urls if _scope_project(k) == project_id]
+        if not scopes:
+            return None
+        scope = max(scopes, key=lambda k: self._scope_used.get(k, 0))
+        return scope, self._idle_closed_urls[scope]
 
     # ------------------------------------------------------------------
     # Browser warmup (headed session for cookie warmup)

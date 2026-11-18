@@ -93,11 +93,17 @@ class FakeContext:
 
 
 class FakePage:
+    """``viewport_size`` / ``set_viewport_size`` behave like Playwright's:
+    the call records the size and Chrome's layout metrics follow it."""
+
     def __init__(self, cdp, title: str = "Example Domain"):
         self.context = FakeContext(cdp)
+        self._cdp = cdp
         self._title = title
         self.url = "https://example.com/"
         self._closed = False
+        self.viewport_size = {"width": 1280, "height": 720}
+        self.viewport_calls: list[dict] = []
 
     def is_closed(self):
         return self._closed
@@ -106,7 +112,11 @@ class FakePage:
         self._closed = True
 
     async def set_viewport_size(self, size):
-        self.viewport_calls = getattr(self, "viewport_calls", []) + [dict(size)]
+        if self._closed:
+            raise RuntimeError("Target page has been closed")
+        self.viewport_calls.append(dict(size))
+        self.viewport_size = dict(size)
+        self._cdp.set_layout_size(size["width"], size["height"])
 
     async def title(self):
         return self._title
@@ -198,8 +208,13 @@ POLL_TICKS = 0.05
 
 @pytest.fixture(autouse=True)
 def fast_poll(monkeypatch):
-    """The watcher polls every 2s in production; 5ms in tests."""
+    """The watcher polls every 2s in production; 5ms in tests. The repair's
+    waits for a fresh frame shrink the same way."""
     monkeypatch.setattr(browser_live, "POLL_INTERVAL_S", 0.005)
+    monkeypatch.setattr(browser_live, "REPAIR_PRIME_DELAYS_S", (0.005, 0.005))
+    browser_live._SIZERS.clear()
+    yield
+    browser_live._SIZERS.clear()
 
 
 async def _wait_for(predicate, timeout=2.0):
@@ -229,12 +244,14 @@ class Harness:
         await asyncio.wait_for(self.task, timeout=2.0)
 
 
-def start(ws, browser_manager, cdp=None, *, session_id=None, agent_manager=None):
+def start(ws, browser_manager, cdp=None, *, session_id=None, agent_manager=None,
+          dpr=None):
     task = asyncio.ensure_future(
         browser_live.serve(
             ws, "proj_1", session_id,
             browser_manager=browser_manager,
             agent_manager=agent_manager,
+            dpr=dpr,
         )
     )
     return Harness(ws, task, cdp, browser_manager)
@@ -576,7 +593,8 @@ async def test_text_message_uses_insert_text():
     {"type": "key", "action": "down"},
     {"type": "text", "text": 42},
     {"type": "viewport", "width": "wide", "height": 900},
-    {"type": "viewport", "width": 10, "height": 900},
+    {"type": "viewport", "width": 0, "height": 900},
+    {"type": "viewport"},
     {"type": "levitate"},
     ["not", "an", "object"],
     _MALFORMED,
@@ -746,32 +764,253 @@ def test_protocol_contract_matches_the_frontend_hook():
         assert token.strip('"') in text
 
 
+def fake_jpeg(width: int, height: int) -> str:
+    """A base64 "JPEG" that is only a frame header of the given pixel size —
+    enough for the route's size check."""
+    import base64
+    sof = (b"\xff\xc0" + (17).to_bytes(2, "big") + b"\x08"
+           + height.to_bytes(2, "big") + width.to_bytes(2, "big") + b"\x03" + b"\x00" * 9)
+    return base64.b64encode(b"\xff\xd8" + sof + b"\xff\xd9").decode()
+
+
+def test_the_frame_header_reader_reads_chromes_jpeg_size():
+    assert browser_live._jpeg_size(fake_jpeg(1380, 1640)) == (1380, 1640)
+    assert browser_live._jpeg_size("not a jpeg") is None
+    assert browser_live._same_aspect((1380, 1640), (690, 820))
+    assert not browser_live._same_aspect((690, 733), (690, 820))
+    assert browser_live._same_aspect(None, (690, 820))
+
+
+@pytest.mark.parametrize("asked,got", [
+    ((690.4, 820.6), (690, 821)),
+    ((100, 50), (280, 240)),
+    ((292, 828.5), (292, 828)),
+    ((9000, 4000), (2560, 2560)),
+])
+def test_a_viewers_size_is_clamped_to_whole_sane_pixels(asked, got):
+    assert browser_live._clamp_view_size(*asked) == got
+
+
 @pytest.mark.asyncio
-async def test_the_route_never_sizes_the_page_it_mirrors():
-    """2026-09-05 — the panel is a mirror of the agent's page. An earlier
-    amendment resized the page to the panel, which made the agent browse a
-    phone-width layout whenever someone was watching and was the root of a
-    size fight that strobed the panel between a clipped capture and the
-    page's real frames. Nothing the client sends may change the page's size;
-    a stale client's ``viewport`` message is refused like any unknown one."""
+async def test_the_page_takes_the_viewers_size_through_playwright_only():
+    """2026-11-18 — the page fills the panel: a viewer's size becomes the
+    page's viewport, through Playwright's ``set_viewport_size`` (the session
+    whose emulation Chrome restores after the tool's screenshots). This
+    route's own CDP session never touches device metrics and never captures
+    with a clip — that is how the 2026-09 size fight was armed."""
     page, cdp = make_page()
     ws = FakeWebSocket()
     h = start(ws, FakeBrowserManager([page]), cdp)
     try:
         await h.wait(lambda: ws.of_type("frame"))
-        ws.push({"type": "viewport", "width": 640, "height": 900, "dpr": 2})
-        await h.wait(lambda: ws.of_type("error"))
-        assert "viewport" in ws.of_type("error")[0]["message"]
-        assert not getattr(page, "viewport_calls", [])
+        ws.push({"type": "viewport", "width": 690, "height": 820, "dpr": 2})
+        await h.wait(lambda: page.viewport_calls)
+        assert page.viewport_calls == [{"width": 690, "height": 820}]
+        await h.wait(lambda: ws.of_type("viewport"))
+        assert ws.of_type("viewport")[-1] == {
+            "type": "viewport", "width": 690, "height": 820, "owner": True}
         assert not cdp.calls("Emulation.setDeviceMetricsOverride")
-        # One screencast at the fixed ceiling; every prime is a whole capture.
-        assert len(cdp.calls("Page.startScreencast")) == 1
-        assert cdp.calls("Page.startScreencast")[0]["maxWidth"] == 1280
         assert all(call == {"format": "jpeg", "quality": 60}
                    for call in cdp.calls("Page.captureScreenshot"))
+        # The same size again is not a second resize.
+        ws.push({"type": "viewport", "width": 690, "height": 820, "dpr": 2})
+        ws.push({"type": "text", "text": "x"})
+        await h.wait(lambda: cdp.calls("Input.insertText"))
+        assert page.viewport_calls == [{"width": 690, "height": 820}]
     finally:
         await h.finish()
-    assert not getattr(page, "viewport_calls", [])
+    # The last viewer left: the page goes back to the agent's own size.
+    assert page.viewport_calls[-1] == {"width": 1280, "height": 720}
+    assert page.viewport_size == {"width": 1280, "height": 720}
+    assert browser_live._SIZERS == {}
+
+
+@pytest.mark.asyncio
+async def test_a_client_that_never_sends_a_size_leaves_the_page_alone():
+    page, cdp = make_page()
+    ws = FakeWebSocket()
+    h = start(ws, FakeBrowserManager([page]), cdp)
+    try:
+        await h.wait(lambda: ws.of_type("frame"))
+        await asyncio.sleep(0.03)
+    finally:
+        await h.finish()
+    assert page.viewport_calls == []
+
+
+@pytest.mark.asyncio
+async def test_a_size_sent_before_the_page_exists_applies_when_it_attaches():
+    page, cdp = make_page()
+    bm = FakeBrowserManager([])
+    ws = FakeWebSocket([{"type": "viewport", "width": 500, "height": 600, "dpr": 1}])
+    h = start(ws, bm, cdp)
+    try:
+        await asyncio.sleep(0.02)
+        bm.pages.append(page)
+        await h.wait(lambda: page.viewport_calls)
+        assert page.viewport_calls == [{"width": 500, "height": 600}]
+    finally:
+        await h.finish()
+
+
+@pytest.mark.asyncio
+async def test_a_drag_never_restarts_the_screencast_and_lands_on_the_last_size():
+    """A burst of sizes (a client that sends every step of a drag) merges:
+    the newest wins, the screencast keeps running, and the page ends at the
+    final size."""
+    page, cdp = make_page()
+    ws = FakeWebSocket()
+    h = start(ws, FakeBrowserManager([page]), cdp, dpr=2)
+    try:
+        await h.wait(lambda: ws.of_type("frame"))
+        for w in range(400, 1000, 20):
+            ws.push({"type": "viewport", "width": w, "height": 700, "dpr": 2})
+        await h.wait(lambda: page.viewport_size == {"width": 980, "height": 700})
+        await asyncio.sleep(0.03)
+        assert page.viewport_size == {"width": 980, "height": 700}
+        assert len(cdp.calls("Page.startScreencast")) == 1
+        assert not cdp.calls("Page.stopScreencast")
+        assert len(page.viewport_calls) <= 30
+    finally:
+        await h.finish()
+
+
+@pytest.mark.asyncio
+async def test_a_retina_viewer_gets_2x_frames_and_only_a_density_change_restarts():
+    page, cdp = make_page()
+    ws = FakeWebSocket()
+    task = asyncio.ensure_future(browser_live.serve(
+        ws, "proj_1", None, browser_manager=FakeBrowserManager([page]), dpr=2))
+    h = Harness(ws, task, cdp, None)
+    try:
+        await h.wait(lambda: cdp.calls("Page.startScreencast"))
+        assert cdp.calls("Page.startScreencast")[0]["maxWidth"] == 2560
+        ws.push({"type": "viewport", "width": 700, "height": 800, "dpr": 2})
+        await h.wait(lambda: page.viewport_calls)
+        assert len(cdp.calls("Page.startScreencast")) == 1
+        # The window moved to a 1x display.
+        ws.push({"type": "viewport", "width": 700, "height": 800, "dpr": 1})
+        await h.wait(lambda: len(cdp.calls("Page.startScreencast")) == 2)
+        assert cdp.calls("Page.startScreencast")[1]["maxWidth"] == 1280
+        assert page.viewport_calls == [{"width": 700, "height": 800}]
+    finally:
+        await h.finish()
+
+
+@pytest.mark.asyncio
+async def test_the_newest_viewer_owns_the_size_and_others_letterbox():
+    """Desktop app plus a phone: whoever attached or resized last sizes the
+    page; the other is told it does not own the size (and letterboxes).
+    When the owner leaves the size goes to the next most recent viewer, and
+    home when the last one leaves."""
+    page, cdp = make_page()
+    bm = FakeBrowserManager([page])
+    desk = FakeWebSocket([{"type": "viewport", "width": 900, "height": 760, "dpr": 2}])
+    hd = start(desk, bm, cdp)
+    await hd.wait(lambda: page.viewport_size == {"width": 900, "height": 760})
+    phone = FakeWebSocket([{"type": "viewport", "width": 390, "height": 700, "dpr": 3}])
+    hp = start(phone, bm, cdp)
+    try:
+        await hp.wait(lambda: page.viewport_size == {"width": 390, "height": 700})
+        await hd.wait(lambda: desk.of_type("viewport")[-1]["owner"] is False)
+        assert phone.of_type("viewport")[-1] == {
+            "type": "viewport", "width": 390, "height": 700, "owner": True}
+        assert desk.of_type("viewport")[-1]["width"] == 390
+        # The desktop resizes: it is the most recent again.
+        desk.push({"type": "viewport", "width": 1000, "height": 760, "dpr": 2})
+        await hd.wait(lambda: page.viewport_size == {"width": 1000, "height": 760})
+        await hp.wait(lambda: phone.of_type("viewport")[-1]["owner"] is False)
+        await hp.finish()
+        assert page.viewport_size == {"width": 1000, "height": 760}
+        phone2 = FakeWebSocket([{"type": "viewport", "width": 400, "height": 650}])
+        hp2 = start(phone2, bm, cdp)
+        await hp2.wait(lambda: page.viewport_size == {"width": 400, "height": 650})
+        await hp2.finish()
+        # The owner left: back to the remaining viewer's size.
+        await hd.wait(lambda: page.viewport_size == {"width": 1000, "height": 760})
+        await hd.wait(lambda: desk.of_type("viewport")[-1]["owner"] is True)
+    finally:
+        await hd.finish()
+    assert page.viewport_size == {"width": 1280, "height": 720}
+
+
+@pytest.mark.asyncio
+async def test_a_size_waits_behind_a_click_sent_before_it():
+    """A click aimed at the old layout lands before the page changes size."""
+    page, cdp = make_page()
+    order = []
+    real_send = cdp.send
+
+    async def send(method, params=None):
+        if method == "Input.dispatchMouseEvent":
+            order.append("click")
+        return await real_send(method, params)
+    cdp.send = send
+    real_resize = page.set_viewport_size
+
+    async def resize(size):
+        order.append("resize")
+        await real_resize(size)
+    page.set_viewport_size = resize
+    ws = FakeWebSocket()
+    h = start(ws, FakeBrowserManager([page]), cdp)
+    try:
+        await h.wait(lambda: ws.of_type("frame"))
+        ws.push({"type": "mouse", "action": "down", "x": 5, "y": 5})
+        ws.push({"type": "viewport", "width": 600, "height": 600})
+        await h.wait(lambda: "resize" in order)
+        assert order[:2] == ["click", "resize"]
+    finally:
+        await h.finish()
+
+
+@pytest.mark.asyncio
+async def test_the_client_is_never_asked_to_resend_and_an_off_size_frame_is_not_shown():
+    """The September loop: a frame whose size disagreed made the client ask
+    again, forever. Now the route alone repairs: an off-size frame (the
+    capture area after a side tab) is withheld from the client, the capture
+    area is put back with ``setVisibleSize``, and the page is NOT resized
+    again — its size never depended on the frame."""
+    page, cdp = make_page()
+    ws = FakeWebSocket([{"type": "viewport", "width": 690, "height": 820, "dpr": 2}])
+    h = start(ws, FakeBrowserManager([page]), cdp)
+    try:
+        await h.wait(lambda: page.viewport_size == {"width": 690, "height": 820})
+        await asyncio.sleep(0.03)
+        calls = list(page.viewport_calls)
+        visible = len(cdp.calls("Emulation.setVisibleSize"))
+        shown = len(ws.of_type("frame"))
+        cdp.emit_frame(fake_jpeg(1380, 1640), width=690, height=820)
+        await h.wait(lambda: len(ws.of_type("frame")) == shown + 1)
+        cdp.emit_frame(fake_jpeg(1280, 633), width=1280, height=633)
+        await h.wait(lambda: len(cdp.calls("Emulation.setVisibleSize")) > visible)
+        assert cdp.calls("Emulation.setVisibleSize")[-1] == {"width": 690, "height": 820}
+        # Same metadata, cropped picture (Chrome mid-restore): also withheld.
+        cdp.emit_frame(fake_jpeg(690, 733), width=690, height=820)
+        await asyncio.sleep(0.03)
+        sizes = {(f["width"], f["height"]) for f in ws.of_type("frame")[shown:]}
+        assert sizes == {(690, 820)}
+        assert all(f["jpeg"] != fake_jpeg(1280, 633) and f["jpeg"] != fake_jpeg(690, 733)
+                   for f in ws.of_type("frame"))
+        assert page.viewport_calls == calls
+        assert not cdp.calls("Emulation.setDeviceMetricsOverride")
+    finally:
+        await h.finish()
+
+
+@pytest.mark.asyncio
+async def test_a_capture_area_that_will_not_repair_still_shows_frames():
+    page, cdp = make_page()
+    ws = FakeWebSocket()
+    h = start(ws, FakeBrowserManager([page]), cdp)
+    try:
+        await h.wait(lambda: ws.of_type("frame"))
+        shown = len(ws.of_type("frame"))
+        for _ in range(browser_live.MAX_DROPPED_FRAMES + 1):
+            cdp.emit_frame("Q1JPUA==", width=1280, height=633)
+        await h.wait(lambda: len(ws.of_type("frame")) > shown)
+    finally:
+        await h.finish()
 
 
 @pytest.mark.asyncio
@@ -796,7 +1035,9 @@ async def test_a_frame_shorter_than_the_page_repairs_the_capture_area_not_the_pa
         assert cdp.calls("Emulation.setVisibleSize") == [{"width": 1280, "height": 720}]
         await h.wait(lambda: len(cdp.calls("Page.captureScreenshot")) > primes)
         assert not cdp.calls("Emulation.setDeviceMetricsOverride")
-        assert not getattr(page, "viewport_calls", [])
+        assert not page.viewport_calls
+        # The cropped frame itself never reached the client.
+        assert all(f["jpeg"] != "Q1JPUA==" for f in ws.of_type("frame"))
         # Repaired once, not on every cropped frame in flight.
         cdp.emit_frame("Q1JPUA==", width=1280, height=633)
         await asyncio.sleep(0.03)
@@ -1095,3 +1336,244 @@ async def test_the_pages_cursor_under_a_resting_pointer_is_sent_when_it_changes(
         assert ws.of_type("cursor")[-1]["cursor"] == "text"
     finally:
         await h.finish()
+
+
+# ---------------------------------------------------------------------------
+# Reopen after the idle close (2026-11-18)
+# ---------------------------------------------------------------------------
+
+
+class LoadablePage(FakePage):
+    """A fresh page at about:blank that Playwright can load a URL into.
+    Records the order of its loads against the CDP traffic, so a test can
+    tell "loaded, then attached" from "attached, then navigated"."""
+
+    def __init__(self, cdp, title="Reopened"):
+        super().__init__(cdp, title=title)
+        self.url = "about:blank"
+        self.gotos: list[tuple[str, str, int]] = []  # url, wait_until, cdp calls so far
+        self.viewport_at_goto: dict | None = None
+
+    async def goto(self, url, wait_until=None, timeout=None):
+        self.gotos.append((url, wait_until, len(self._cdp.sent)))
+        self.viewport_at_goto = dict(self.viewport_size)
+        self.url = url
+
+    async def wait_for_load_state(self, state, timeout=None):
+        return None
+
+
+class IdleClosedManager(FakeBrowserManager):
+    """A manager whose browser the idle close shut: it remembers a URL per
+    scope until that scope gets a page again (as the real manager does)."""
+
+    def __init__(self, remembered=None, opens=None, fail_open=False):
+        super().__init__([], opens=opens)
+        self.remembered: dict[str, str] = dict(remembered or {})
+        self.scopes_opened: list[str] = []
+        self.lookups: list[tuple[str, str | None]] = []
+        self.uses = 0
+        self._fail_open = fail_open
+
+    def idle_closed_page(self, project_id, session_id=None):
+        self.lookups.append((project_id, session_id))
+        from agent_os.daemon_v2.browser_manager import page_scope
+        scope = page_scope(project_id, session_id)
+        url = self.remembered.get(scope)
+        return (scope, url) if url else None
+
+    def note_use(self):
+        self.uses += 1
+
+    async def get_page(self, project_id):
+        if self._fail_open:
+            self.get_page_calls += 1
+            raise RuntimeError("Chrome would not start")
+        await asyncio.sleep(0.02)  # Chrome takes a moment to start
+        page = await super().get_page(project_id)
+        self.scopes_opened.append(project_id)
+        self.remembered.pop(project_id, None)
+        return page
+
+    def idle_close(self, page, url):
+        """What the idle close does: the page goes, its URL is remembered."""
+        page.close_it()
+        self.remembered[SESSION_SCOPE] = url
+
+
+SESSION_SCOPE = "proj_1::session:sess_1"
+
+
+@pytest.mark.asyncio
+async def test_opening_the_view_after_the_idle_close_reopens_the_last_page():
+    cdp = FakeCDPSession()
+    page = LoadablePage(cdp)
+    bm = IdleClosedManager({SESSION_SCOPE: "https://example.com/docs"}, opens=page)
+    ws = FakeWebSocket([{"type": "viewport", "width": 690, "height": 820, "dpr": 2}])
+    h = start(ws, bm, cdp, session_id="sess_1")
+    try:
+        await h.wait(lambda: ws.of_type("frame"))
+        # Through the same get-or-create a typed address uses, on the
+        # viewer's own session scope.
+        assert bm.scopes_opened == [SESSION_SCOPE]
+        # Loaded BEFORE the stream attached (no CDP traffic yet), at the
+        # viewer's size — so the client never sees about:blank or a page at
+        # the default size.
+        assert page.gotos == [("https://example.com/docs", "domcontentloaded", 0)]
+        assert page.viewport_at_goto == {"width": 690, "height": 820}
+        assert cdp.calls("Page.navigate") == []
+        # The first thing the client hears is the live page, never a
+        # "no browser" in between.
+        states = ws.of_type("state")
+        assert [s["status"] for s in states][:1] == ["open"]
+        assert all(s["status"] == "open" for s in states)
+        assert states[0]["url"] == "https://example.com/docs"
+        assert ws.of_type("frame")[0]["width"] == 690
+        assert ws.of_type("error") == []
+        # A use: the reopened browser gets a fresh idle period.
+        assert bm.uses >= 1
+    finally:
+        await h.finish()
+
+
+@pytest.mark.asyncio
+async def test_without_a_remembered_url_nothing_is_opened():
+    bm = IdleClosedManager({}, opens=LoadablePage(FakeCDPSession()))
+    ws = FakeWebSocket()
+    h = start(ws, bm, session_id="sess_1")
+    try:
+        await h.wait(lambda: ws.of_type("state"))
+        await asyncio.sleep(POLL_TICKS)
+        assert [s["status"] for s in ws.of_type("state")] == ["no_browser"]
+        assert bm.get_page_calls == 0
+        assert bm.uses == 0
+    finally:
+        await h.finish()
+
+
+@pytest.mark.asyncio
+async def test_another_sessions_remembered_page_is_not_this_views():
+    bm = IdleClosedManager({"proj_1::session:other": "https://example.com/"},
+                           opens=LoadablePage(FakeCDPSession()))
+    ws = FakeWebSocket()
+    h = start(ws, bm, session_id="sess_1")
+    try:
+        await h.wait(lambda: ws.of_type("state"))
+        await asyncio.sleep(POLL_TICKS)
+        assert ws.of_type("state")[-1]["status"] == "no_browser"
+        assert bm.get_page_calls == 0
+    finally:
+        await h.finish()
+
+
+@pytest.mark.asyncio
+async def test_a_second_idle_close_under_the_same_view_does_not_reopen_again():
+    cdp = FakeCDPSession()
+    page = LoadablePage(cdp)
+    bm = IdleClosedManager({SESSION_SCOPE: "https://example.com/a"}, opens=page)
+    ws = FakeWebSocket()
+    h = start(ws, bm, cdp, session_id="sess_1")
+    try:
+        await h.wait(lambda: ws.of_type("frame"))
+        assert bm.get_page_calls == 1
+        # Idle again, with the same view open and untouched.
+        bm._opens = LoadablePage(FakeCDPSession())
+        bm.idle_close(page, "https://example.com/a")
+        await h.wait(lambda: ws.of_type("state")[-1]["status"] != "open")
+        await asyncio.sleep(POLL_TICKS * 4)
+        # It stays on the last frame: no relaunch loop. (The watcher turns
+        # "closed" into "no_browser" on its next tick, as it always has; the
+        # client treats both as "not live".)
+        assert bm.get_page_calls == 1
+        assert ws.of_type("state")[-1]["status"] in ("closed", "no_browser")
+    finally:
+        await h.finish()
+
+
+@pytest.mark.asyncio
+async def test_a_click_on_the_stale_picture_reopens_it():
+    cdp = FakeCDPSession()
+    page = LoadablePage(cdp)
+    bm = IdleClosedManager({SESSION_SCOPE: "https://example.com/a"}, opens=page)
+    ws = FakeWebSocket()
+    h = start(ws, bm, cdp, session_id="sess_1")
+    try:
+        await h.wait(lambda: ws.of_type("frame"))
+        cdp2 = FakeCDPSession(replies={"Page.captureScreenshot": {"data": "QUdBSU4="}})
+        page2 = LoadablePage(cdp2)
+        bm._opens = page2
+        bm.idle_close(page, "https://example.com/b")
+        await h.wait(lambda: ws.of_type("state")[-1]["status"] != "open")
+        uses_before = bm.uses
+        ws.push({"type": "nav", "action": "reopen"})
+        await h.wait(lambda: ws.of_type("frame")[-1]["jpeg"] == "QUdBSU4=")
+        assert page2.gotos[0][0] == "https://example.com/b"
+        assert ws.of_type("state")[-1]["status"] == "open"
+        assert bm.get_page_calls == 2
+        assert bm.uses > uses_before
+    finally:
+        await h.finish()
+
+
+@pytest.mark.asyncio
+async def test_a_reopen_click_with_nothing_remembered_does_nothing():
+    bm = IdleClosedManager({}, opens=LoadablePage(FakeCDPSession()))
+    ws = FakeWebSocket()
+    h = start(ws, bm, session_id="sess_1")
+    try:
+        await h.wait(lambda: ws.of_type("state"))
+        ws.push({"type": "nav", "action": "reopen"})
+        await asyncio.sleep(POLL_TICKS)
+        assert bm.get_page_calls == 0
+        assert ws.of_type("error") == []
+        assert ws.of_type("state")[-1]["status"] == "no_browser"
+    finally:
+        await h.finish()
+
+
+@pytest.mark.asyncio
+async def test_a_view_that_found_the_page_open_never_reopens_it_later():
+    page, cdp = make_page()
+    bm = IdleClosedManager({}, opens=LoadablePage(FakeCDPSession()))
+    bm.pages.append(page)
+    ws = FakeWebSocket()
+    h = start(ws, bm, cdp, session_id="sess_1")
+    try:
+        await h.wait(lambda: ws.of_type("frame"))
+        bm.idle_close(page, "https://example.com/")
+        await h.wait(lambda: ws.of_type("state")[-1]["status"] != "open")
+        await asyncio.sleep(POLL_TICKS * 4)
+        assert bm.get_page_calls == 0
+    finally:
+        await h.finish()
+
+
+@pytest.mark.asyncio
+async def test_a_reopen_that_cannot_start_chrome_falls_back_quietly():
+    bm = IdleClosedManager({SESSION_SCOPE: "https://example.com/"}, fail_open=True)
+    ws = FakeWebSocket()
+    h = start(ws, bm, session_id="sess_1")
+    try:
+        await h.wait(lambda: ws.of_type("state"))
+        await asyncio.sleep(POLL_TICKS)
+        assert ws.of_type("state")[-1]["status"] == "no_browser"
+        assert ws.of_type("error") == []  # nothing the user asked for failed
+        assert bm.get_page_calls == 1  # tried once, not on every tick
+    finally:
+        await h.finish()
+
+
+@pytest.mark.asyncio
+async def test_the_auto_reopen_is_not_logged_as_user_input():
+    cdp = FakeCDPSession()
+    page = LoadablePage(cdp)
+    bm = IdleClosedManager({SESSION_SCOPE: "https://example.com/"}, opens=page)
+    session = FakeSession()
+    ws = FakeWebSocket()
+    h = start(ws, bm, cdp, session_id="sess_1", agent_manager=FakeAgentManager(session))
+    try:
+        await h.wait(lambda: ws.of_type("frame"))
+        await asyncio.sleep(POLL_TICKS)
+    finally:
+        await h.finish()
+    assert session.meta == []
