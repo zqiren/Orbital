@@ -1,5 +1,8 @@
 # batch/1118 on Windows: results
 
+**Second push (`dc07364b`: Responses API, catalog fixes): VERIFYING, not ready yet.**
+Started 2026-11-19 02:25 +0800. This line is replaced when the run ends.
+
 **Status: READY** for the five features merged at `5e472a5b` (v0.24.0), with one
 fix commit on top (`8b49c824`, browser live view). CI run 44358870615 is green
 on `2c7a1851` (the fix plus this file; later commits to this file are docs
