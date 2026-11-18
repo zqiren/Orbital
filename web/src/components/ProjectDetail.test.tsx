@@ -1154,6 +1154,48 @@ describe('ProjectDetail — collapsing the session column', () => {
     expect(screen.getByTestId('session-rail')).toBeInTheDocument();
   });
 
+  // 2026-11-19 (Windows report): folded, the header's gear and panel button
+  // went with the column. They stay on the rail, untitled like the rest of it.
+  it('collapsed, the gear stays on the rail at every width and opens Settings', () => {
+    localStorage.setItem(KEY, '1');
+    for (const width of [1440, 1000]) {
+      setViewportWidth(width);
+      const setRoute = vi.fn((update) => (typeof update === 'function' ? update(baseRoute) : update));
+      const { unmount } = renderProjectDetail(undefined, setRoute);
+      const rail = screen.getByTestId('session-rail');
+      const gear = within(rail).getByRole('button', { name: /project settings/i });
+      expect(gear.closest('[data-tour="project-settings"]')).not.toBeNull();
+      act(() => fireEvent.click(gear));
+      expect(setRoute).toHaveBeenCalledWith(expect.objectContaining({ page: 'settings' }));
+      expect(rail.querySelectorAll('[title]')).toHaveLength(0);
+      unmount();
+    }
+  });
+
+  it('collapsed, the gear reads as chosen while Settings is open', () => {
+    setViewportWidth(1440);
+    localStorage.setItem(KEY, '1');
+    renderProjectDetail({ page: 'settings' });
+    expect(screen.getByTestId('session-rail-settings')).toHaveAttribute('aria-current', 'page');
+  });
+
+  it('collapsed, the panel button stays on the rail below the dock threshold only', () => {
+    localStorage.setItem(KEY, '1');
+    setViewportWidth(1440);
+    const wide = renderProjectDetail();
+    expect(screen.queryByTestId('panel-open-button')).toBeNull();
+    wide.unmount();
+
+    setViewportWidth(1000);
+    renderProjectDetail();
+    const button = within(screen.getByTestId('session-rail')).getByTestId('panel-open-button');
+    expect(button).toHaveAttribute('data-tour', 'panel-button');
+    const panel = renderHook(() => usePanelState('proj-42', 'sess-xyz'));
+    expect(panel.result.current.overlayOpen).toBe(false);
+    act(() => fireEvent.click(button));
+    expect(panel.result.current.overlayOpen).toBe(true);
+  });
+
   it('a phone has no session column, so there is nothing to collapse', () => {
     setViewportWidth(390);
     localStorage.setItem(KEY, '1');
