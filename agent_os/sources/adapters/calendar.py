@@ -30,13 +30,21 @@ Permission: the macOS Calendar prompt is only ever asked for from a user's
 own gesture — ``verify`` (pressing connect) or ``choices`` (opening the
 calendar list) — when the access is undecided or "Add Events Only". A poll
 only reads the current authorisation and, without full access, fails with
-``calendar_permission`` (the panel offers opening System Settings) — it
-never prompts.
+``calendar_permission`` (the panel offers opening System Settings). That
+one read is the poll's only gate: events are read only behind full access,
+through the reader's strict mode, which never asks macOS for access and
+raises when the read fails, so a check that could not read is a failed
+check, never an empty success (spec 190).
+
+Every authorisation read that is not full access is logged with its raw
+value and the path that read it (``poll``, ``verify``, ``choices``), once
+per change of value on that path, so a steady state does not flood the log.
 """
 
 from __future__ import annotations
 
 import asyncio
+import logging
 import math
 import sys
 from dataclasses import dataclass, field
@@ -50,6 +58,15 @@ DEFAULT_MINUTES = 30
 
 # EKAuthorizationStatus
 NOT_DETERMINED, RESTRICTED, DENIED, FULL_ACCESS, WRITE_ONLY = 0, 1, 2, 3, 4
+_STATUS_NAMES = {NOT_DETERMINED: "not_determined", RESTRICTED: "restricted", DENIED: "denied",
+                 FULL_ACCESS: "full_access", WRITE_ONLY: "write_only", None: "unavailable"}
+_UNSEEN = object()
+
+logger = logging.getLogger(__name__)
+
+
+def _status_name(status) -> str:
+    return _STATUS_NAMES.get(status, "unknown")
 
 
 @dataclass
@@ -137,14 +154,15 @@ class EventKitReader:
 
     def events(self, start: datetime, end: datetime,
                calendars: list[str] | None = None) -> list[CalEvent]:
-        """Blocking. Only called with full access (so the store's own access
-        check passes without a prompt). ``calendars``: None = every one."""
+        """Blocking. Only called after the poll's own status read returned
+        full access. The reader is strict: it never asks macOS for access
+        and raises when the read fails. ``calendars``: None = every one."""
         from agent_os.calendar_hub.sources.eventkit import EventKitSource
 
         class _Src(EventKitSource):
             def _map(self, ev):
                 return to_cal_event(super()._map(ev), ev)
-        src = _Src()
+        src = _Src(strict=True)
         rows = asyncio.run(src.list_events(_iso(start), _iso(end), calendars=calendars))
         return [r for r in rows if isinstance(r, CalEvent) and r.start is not None]
 
@@ -165,31 +183,46 @@ class CalendarAdapter(Adapter):
 
     def __init__(self, reader=None):
         self.reader = reader or EventKitReader()
+        # path -> the last status that path read (the registry keeps one
+        # adapter per process, so this is per process)
+        self._last_status: dict[str, object] = {}
+
+    async def _status(self, ctx, path: str):
+        """One authorisation read. A value other than full access is logged
+        raw, tagged with ``path``, when it differs from what ``path`` read
+        last (spec 190: the evidence for why it is sometimes not 3)."""
+        status = await ctx.to_thread(self.reader.status)
+        prev = self._last_status.get(path, _UNSEEN)
+        self._last_status[path] = status
+        if status != FULL_ACCESS and status != prev:
+            logger.info("sources: calendar access status %s (%s) read by %s",
+                        status, _status_name(status), path)
+        return status
 
     # -- verify -------------------------------------------------------------
 
-    async def _ask_once(self, ctx) -> None:
+    async def _ask_once(self, ctx, path: str) -> None:
         """A user's gesture (connect, opening the calendar list): the one
         place macOS may ask. "Add Events Only" (write-only) gets the same
         single ask for full access; if macOS shows nothing, the panel's line
         says where to switch Orbital to Full Access."""
-        status = await ctx.to_thread(self.reader.status)
+        status = await self._status(ctx, path)
         if status is None:
             raise VerifyError("error", None, "the calendar cannot be read on this computer")
         if status in (NOT_DETERMINED, WRITE_ONLY):
             granted = await ctx.to_thread(self.reader.request_access)
-            status = FULL_ACCESS if granted else await ctx.to_thread(self.reader.status)
+            status = FULL_ACCESS if granted else await self._status(ctx, path)
         if status != FULL_ACCESS:
             raise VerifyError("permission", None, "Orbital has no access to Calendar")
 
     async def verify(self, ctx) -> Verified:
-        await self._ask_once(ctx)
+        await self._ask_once(ctx, "verify")
         return Verified(label=None)
 
     async def choices(self, ctx, list_name: str, params: dict) -> list:
         if list_name != "calendars":
             return []
-        await self._ask_once(ctx)
+        await self._ask_once(ctx, "choices")
         rows = await ctx.to_thread(self.reader.calendars)
         return [Choice(value=r["id"], label=r.get("title") or r["id"], group=r.get("account") or "")
                 for r in rows or [] if isinstance(r, dict) and r.get("id")]
@@ -197,7 +230,7 @@ class CalendarAdapter(Adapter):
     # -- poll ---------------------------------------------------------------
 
     async def poll(self, ctx) -> list:
-        status = await ctx.to_thread(self.reader.status)
+        status = await self._status(ctx, "poll")
         if status != FULL_ACCESS:
             # never prompt from a timer
             raise SourceFailure("calendar_permission", {})

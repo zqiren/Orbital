@@ -19,6 +19,17 @@ graceful-unavailable path).
 Every failure mode — non-darwin, framework missing, access denied, fetch error
 — degrades to ``available=False`` / ``list_events == []``. This source never
 raises out.
+
+**Strict mode** (``EventKitSource(strict=True)``, spec 190) is the task
+sources' calendar poll reader. The poll has already read the authorisation
+itself and only reads events behind full access, so a strict instance:
+
+- creates the store and never asks macOS for access (no
+  ``requestFullAccess…`` from a timer, no 30-second wait on it);
+- raises from ``list_events`` when the store could not be made or the fetch
+  failed, so a read that failed is a failed check, never an empty success.
+
+The default mode (the workbench calendar hub) is unchanged.
 """
 
 import logging
@@ -37,13 +48,18 @@ _AUTH_GRANTED = 3
 _ACCESS_TIMEOUT = 30.0
 
 
+class EventKitUnavailable(RuntimeError):
+    """Strict mode: EventKit could not be used for this read."""
+
+
 class EventKitSource:
     id = "eventkit"
     kind = "eventkit"
 
-    def __init__(self):
+    def __init__(self, *, strict: bool = False):
         self._store = None
         self._checked = False  # have we attempted store creation + access yet
+        self._strict = strict  # see the module docstring
 
     @property
     def available(self) -> bool:
@@ -64,7 +80,7 @@ class EventKitSource:
             return None
         try:
             store = EventKit.EKEventStore.alloc().init()
-            if not self._request_access(EventKit, store):
+            if not self._strict and not self._request_access(EventKit, store):
                 logger.info("EventKit access not granted; calendar source disabled")
                 return None
             self._store = store
@@ -123,6 +139,8 @@ class EventKitSource:
         is read — EventKit is never handed an empty list)."""
         store = self._ensure_store()
         if store is None:
+            if self._strict:
+                raise EventKitUnavailable("the EventKit store could not be made")
             return []
         try:
             import EventKit  # noqa: PLC0415
@@ -131,6 +149,8 @@ class EventKitSource:
             start_dt = _parse_iso(start)
             end_dt = _parse_iso(end)
             if start_dt is None or end_dt is None:
+                if self._strict:
+                    raise ValueError(f"bad read window {start!r}..{end!r}")
                 return []
             picked = None
             if calendars is not None:
@@ -146,6 +166,8 @@ class EventKitSource:
             ek_events = store.eventsMatchingPredicate_(predicate) or []
             return [self._map(ev) for ev in ek_events]
         except Exception:
+            if self._strict:
+                raise  # the caller reports it as a failed check
             logger.warning("EventKit list_events failed", exc_info=True)
             return []
 

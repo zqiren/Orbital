@@ -318,6 +318,10 @@ class SourcesCore:
             logger.debug("sources: broadcast failed", exc_info=True)
 
     def _push_source(self, cfg: dict) -> None:
+        # A check still running when its source was removed must not put the
+        # row back in the panel (spec 189).
+        if self.store.get(cfg["id"]) is None:
+            return
         self._emit({"type": "sources.changed", "source": self.summary(cfg)})
 
     async def _push_entry(self, cfg: dict, entry: dict) -> None:
