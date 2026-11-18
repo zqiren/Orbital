@@ -4224,8 +4224,11 @@ def _card_test_inputs(card_id: str | None, *, provider: str, model: str,
 
     With a ``card_id`` every field but ``model`` comes from the card (an
     explicit model still wins, so the Add-card form can probe another model on
-    a card's credentials). Without one, the raw form is used exactly as
-    before, with an empty key falling back to the DEFAULT card's.
+    a card's credentials). On a Custom card an explicit ``base_url`` / ``sdk``
+    wins too: that form edits the endpoint itself, and testing the stored one
+    reported the old endpoint's verdict after a protocol switch. Without a
+    card, the raw form is used exactly as before, with an empty key falling
+    back to the DEFAULT card's.
     """
     from agent_os.daemon_v2.settings_store import resolve_card_endpoint
 
@@ -4238,6 +4241,9 @@ def _card_test_inputs(card_id: str | None, *, provider: str, model: str,
                         "message": "That credential card no longer exists."},
             )
         card_base, card_sdk = resolve_card_endpoint(card)
+        if card.provider == "custom":
+            card_base = base_url or card_base
+            card_sdk = sdk or card_sdk
         return (card.provider, model or card.model,
                 _settings_store.key_for(card.id), card_base, card_sdk)
     if not (api_key or "").strip() and _credential_store is not None:
@@ -4250,7 +4256,10 @@ async def test_connection(req: TestConnectionRequest):
     """Test connection by sending a minimal completion request."""
     provider, model, api_key, base_url, sdk = _card_test_inputs(
         req.card_id, provider=req.provider, model=req.model,
-        api_key=req.api_key, base_url=req.base_url, sdk=req.sdk,
+        api_key=req.api_key, base_url=req.base_url,
+        # The field's "openai" default is not a choice: on a card it must not
+        # override the card's own protocol.
+        sdk=req.sdk if not req.card_id or "sdk" in req.model_fields_set else "",
     )
     result = await run_connection_test(provider, model, api_key, base_url, sdk)
     _remember_test(_test_fingerprint(provider, model, api_key, base_url, sdk), result)

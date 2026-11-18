@@ -734,6 +734,7 @@ export const STRINGS = {
   "llm.saving": { en: "Saving...", zh: "保存中…" },
   "llm.sdk.anthropic": { en: "Anthropic", zh: "Anthropic" },
   "llm.sdk.openai": { en: "OpenAI-compatible", zh: "OpenAI 兼容" },
+  "llm.sdk.openaiResponses": { en: "OpenAI Responses", zh: "OpenAI Responses" },
   "llm.test": { en: "Test Connection", zh: "测试连接" },
   "llm.test.customProvider": { en: "custom provider", zh: "自定义模型" },
   "llm.test.failed": { en: "Connection failed.", zh: "连接失败。" },
