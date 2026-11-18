@@ -38,6 +38,14 @@
  *
  * A worker unchecked for the picked project (`disabled_sub_agents`) is not
  * in the agent picker; with no project picked (自动) every worker is.
+ *
+ * The `/` picker (batch 1118) is the chat composer's (SlashMenu.tsx): it
+ * lists what the message's recipient can run — the picked worker, or on 自动
+ * the project's pin (`effective_pinned_target`), else Orbital's own entries.
+ * The project is the picked one, or on 自动 Quick Tasks: a pick never goes
+ * through routing (sendTask), so the list is the one of the project it lands
+ * in. A worker command prefills its invocation; a skill or `/automate` is a
+ * chip, as in the chat.
  */
 
 import { useEffect, useRef, useState, type DragEvent, type KeyboardEvent } from 'react';
@@ -54,6 +62,9 @@ import { restoreComposer, useWorkbenchFeed } from '../../hooks/useWorkbenchFeed'
 import { projectAgents } from '../../hooks/useAgentAvailability';
 import { overUploadCap, useAttachments } from '../../hooks/useAttachments';
 import AttachmentChip from '../AttachmentChip';
+import SkillChip from '../SkillChip';
+import SlashMenu, { useSlashPicker } from '../SlashMenu';
+import type { SkillCatalogEntry } from '../../lib/skill-catalog';
 import type { SendChoice, SendDeps } from './sendTask';
 import ProjectPicker from './ProjectPicker';
 
@@ -110,6 +121,8 @@ export default function WorkbenchComposer({
   const [projectId, setProjectId] = useState<string | null>(null);
   const [lastProject, setLastProject] = useState<string | null>(readLastProject);
   const [agent, setAgent] = useState<string | null>(null);
+  // The skill or built-in picked in the `/` menu (one per task).
+  const [skill, setSkill] = useState<SkillCatalogEntry | null>(null);
   const [pop, setPop] = useState<Pop>('none');
   const [entries, setEntries] = useState<SubAgentModelEntry[] | null>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -196,6 +209,42 @@ export default function WorkbenchComposer({
     ? (agent === MAIN_AGENT_HANDLE ? 'Orbital' : agents.find((a) => a.slug === agent)?.name ?? agent)
     : t('workbench.composer.auto');
 
+  // The `/` list is the recipient's, in the project the message lands in: a
+  // pick skips routing, so on 自动 that is Quick Tasks (routing's own
+  // fallback). The recipient is the picked agent, else that project's pin,
+  // else Orbital (null).
+  const slashProject = picked ?? projects.find((p) => p.is_scratch) ?? null;
+  const recipient = agent === MAIN_AGENT_HANDLE
+    ? null
+    : agent ?? slashProject?.effective_pinned_target ?? null;
+  const slash = useSlashPicker({
+    projectId: slashProject?.project_id ?? null,
+    worker: recipient,
+    managerMissing: slashProject?.manager_ready === false,
+    text,
+  });
+
+  function changeText(value: string) {
+    setText(value);
+    slash.onTextChange(value);
+  }
+
+  /** A pick from the `/` menu: a worker command prefills its invocation (no
+   *  chip, any earlier chip goes); a built-in chips and prefills its example,
+   *  selected; a catalog skill chips and clears the `/query`. */
+  function pickSkill(entry: SkillCatalogEntry) {
+    slash.resetIndex();
+    const prefill = entry.invoke ?? entry.builtin?.prefill ?? '';
+    setSkill(entry.invoke ? null : entry);
+    setText(prefill);
+    requestAnimationFrame(() => {
+      const el = inputRef.current;
+      if (!el) return;
+      el.focus({ preventScroll: true });
+      el.setSelectionRange(entry.builtin ? 0 : prefill.length, prefill.length);
+    });
+  }
+
   function modelLine(slug: string): string | null {
     if (slug === MAIN_AGENT_HANDLE) return managerModel || null;
     const entry = entries?.find((e) => e.slug === slug);
@@ -208,13 +257,18 @@ export default function WorkbenchComposer({
   async function send() {
     const body = text.trim();
     const files = sendable.map((a) => ({ id: a.id, filename: a.filename }));
-    if (!body && files.length === 0) return;
-    const choice: SendChoice = { text: body, projectId: effectiveProjectId, agent, files };
+    if (!body && files.length === 0 && !skill) return;
+    const picked = skill;
+    const choice: SendChoice = {
+      text: body, projectId: effectiveProjectId, agent, files,
+      skill: picked, fallbackProjectId: slashProject?.project_id ?? null,
+    };
     if (effectiveProjectId) {
       rememberLastProject(effectiveProjectId);
       setLastProject(effectiveProjectId);
     }
     setText('');
+    setSkill(null);
     setProjectId(null);
     setAgent(null);
     setPop('none');
@@ -226,6 +280,8 @@ export default function WorkbenchComposer({
     try {
       const result = await onSend(choice, uploadAll);
       ok = result === true;
+      // The text came back: so does its chip, unless another was picked.
+      if (!ok && picked) setSkill((cur) => cur ?? picked);
       if (result === 'unrouted') {
         setRouteError(true);
         setPop('project');
@@ -249,6 +305,7 @@ export default function WorkbenchComposer({
     // While an IME (e.g. Pinyin) is composing, Enter commits the candidate —
     // it belongs to the input method, not to us. Don't submit mid-composition.
     if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+    if (slash.onKeyDown(e, pickSkill)) return;
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       void send();
@@ -281,13 +338,23 @@ export default function WorkbenchComposer({
           className="wb-input"
           rows={2}
           value={text}
-          onChange={(e) => setText(e.target.value)}
+          onChange={(e) => changeText(e.target.value)}
           onKeyDown={onKey}
           onPaste={(e) => { setAttError(null); handlePaste(e); }}
           placeholder={t('workbench.composer.placeholder')}
           aria-label={t('workbench.composer.placeholder')}
           data-testid="wb-composer-input"
         />
+        {skill && (
+          <div className="flex">
+            <SkillChip
+              name={skill.name}
+              title={skill.description || skill.name}
+              onRemove={() => setSkill(null)}
+              data-testid="wb-skill-chip"
+            />
+          </div>
+        )}
         {attachments.length > 0 && (
           <div className="flex flex-wrap gap-2 max-h-[100px] overflow-y-auto" data-testid="wb-chip-strip">
             {attachments.map((a) => {
@@ -375,13 +442,17 @@ export default function WorkbenchComposer({
             aria-label={t('workbench.composer.send')}
             title={t('workbench.composer.send')}
             data-testid="wb-composer-send"
-            disabled={!text.trim() && sendable.length === 0}
+            disabled={!text.trim() && sendable.length === 0 && !skill}
             onClick={() => void send()}
           >
             <ArrowUp size={15} strokeWidth={2.2} aria-hidden="true" />
           </button>
         </div>
       </div>
+
+      {pop === 'none' && (
+        <SlashMenu picker={slash} onPick={pickSkill} className="absolute top-full left-2 mt-1.5 max-w-[calc(100%-1rem)]" />
+      )}
 
       {pop === 'project' && (
         <ProjectPicker

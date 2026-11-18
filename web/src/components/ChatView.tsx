@@ -48,16 +48,8 @@ import { uploadFile } from '../lib/attachment-upload';
 import { BASE_URL, isRelayMode } from '../config';
 import { buildAttachmentsBlock, parseAttachmentsBlock } from '../lib/attachment-parsing';
 import { buildInlineSkillBlock, buildSkillBlock, parseSkillBlock, skillAwarePreview } from '../lib/skill-parsing';
-import {
-  builtinSkills,
-  skillSendParts,
-  withBuiltinSkills,
-  cachedSkillCatalog,
-  loadSkillCatalog,
-  matchSkills,
-  slashQuery,
-  type SkillCatalogEntry,
-} from '../lib/skill-catalog';
+import { skillSendParts, type SkillCatalogEntry } from '../lib/skill-catalog';
+import SlashMenu, { useSlashPicker } from './SlashMenu';
 import ComposerDisabledPrompt from './ComposerDisabledPrompt';
 import AskCard from './AskCard';
 import { useSessionAsks, type SessionAsk } from '../hooks/useSessionAsks';
@@ -1162,59 +1154,18 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   const viewedIsUnimportedImport =
     viewedEntry?.origin === 'imported' && viewedEntry.imported?.materialized === false;
   const [showThinking, setShowThinking] = useState(false);
-  // Spec 132: the `/` skill picker. Open/closed is derived from the composer
-  // text (`slashQuery`), the loaded catalog and the Esc flag, never stored, so
-  // it can't disagree with what is typed. `slashDismissed` is the sticky Esc:
-  // it holds until the composer stops starting with `/`.
-  // The catalog lives in the per-project module cache (skill-catalog.ts);
-  // this counter re-renders when a fetch lands.
-  const [, setSkillCatalogVersion] = useState(0);
-  // Spec 166: with a worker pinned the list also holds that worker's own
-  // commands, so the cache is read (and fetched) per pin; null = Orbital.
-  const catalogWorker = pinnedTarget ?? null;
-  const installedSkills = cachedSkillCatalog(projectId, catalogWorker);
-  // Spec 137: built-in entries (`/automate`) sit in the same flat list.
-  // Bound to `locale` (their description and prefill are translated), not
-  // to the unstable `t`.
-  // Keyless (2026-11-09): `/automate` needs the manager's trigger tools, and
-  // there is no manager to run it, so it is not offered. Typed text still
-  // goes to the pinned worker verbatim.
+  // Spec 132: the `/` skill picker (shared with the Workbench composer, see
+  // SlashMenu.tsx). Spec 166: with a worker pinned the list also holds that
+  // worker's own commands, so it is read per pin; null = Orbital. Spec 137:
+  // the built-in `/automate` sits in the same flat list, not offered keyless
+  // (no manager to run it); typed text still goes to the pin verbatim.
   const managerMissing = project?.manager_ready === false;
-  const builtins = useMemo(
-    () =>
-      managerMissing ? [] : builtinSkills(
-        {
-          description: translate(locale, 'chat.skill.automate.description'),
-          prefill: translate(locale, 'automations.example.schedule'),
-        },
-        (() => {
-          try {
-            return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
-          } catch {
-            return 'UTC';
-          }
-        })(),
-      ),
-    [locale, managerMissing],
-  );
-  const skillCatalog = withBuiltinSkills(installedSkills, builtins);
-  // Spec 166: warm the pinned worker's list as soon as the pin is known, so
-  // the first `/` doesn't wait on its cold probe and a pin switch re-renders
-  // the open menu with the new worker's list.
-  useEffect(() => {
-    if (!catalogWorker) return;
-    let live = true;
-    void loadSkillCatalog(projectId, catalogWorker).then(() => {
-      if (live) setSkillCatalogVersion((v) => v + 1);
-    });
-    return () => {
-      live = false;
-    };
-  }, [projectId, catalogWorker]);
+  const slash = useSlashPicker({
+    projectId, worker: pinnedTarget ?? null, managerMissing, text: inputText,
+  });
+  const builtins = slash.builtins;
   // The pin menu offers only the workers this project keeps on.
   const pinAgents = useMemo(() => projectAgents(agents, project), [agents, project]);
-  const [slashDismissed, setSlashDismissed] = useState(false);
-  const [selectedSkillIndex, setSelectedSkillIndex] = useState(0);
   // One skill per message, scoped to the session it was picked in (a chip
   // must not follow the user into another conversation). Seeded from
   // `initialSkill` (the Tasks page's "New automation" doorway).
@@ -1226,18 +1177,6 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   });
   const pickedSkill =
     pickedSkillState && pickedSkillState.sessionId === sessionId ? pickedSkillState.skill : null;
-  // Keep the highlighted row visible inside the menu. Only the menu's own
-  // scrollTop moves: scrollIntoView would also scroll the page (WebKit).
-  const skillMenuRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const menu = skillMenuRef.current;
-    const row = menu?.children[selectedSkillIndex] as HTMLElement | undefined;
-    if (!menu || !row) return;
-    if (row.offsetTop < menu.scrollTop) menu.scrollTop = row.offsetTop;
-    else if (row.offsetTop + row.offsetHeight > menu.scrollTop + menu.clientHeight) {
-      menu.scrollTop = row.offsetTop + row.offsetHeight - menu.clientHeight;
-    }
-  }, [selectedSkillIndex]);
 
   const [injectError, setInjectError] = useState<string | null>(null);
   // Pending-input queue (spec 006). A NONCE-KEYED OVERLAY — NOT a flag in
@@ -3505,46 +3444,17 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     setInputText(value);
     adjustTextareaHeight({ reset: mayShrink });
 
-    // Spec 132 `/` skill picker. The sticky Esc lasts until the composer no
-    // longer starts with `/`; the first `/` (and, at most every 30 s, a later
-    // one) loads the project's catalog.
-    if (!value.startsWith('/')) {
-      if (slashDismissed) setSlashDismissed(false);
-      return;
-    }
-    setSelectedSkillIndex(0);
-    if (slashQuery(value) !== null && !slashDismissed) {
-      // Answers from the cache while it is fresh; re-render only on new data.
-      const before = skillCatalog;
-      void loadSkillCatalog(projectId, catalogWorker).then((list) => {
-        if (list !== before) setSkillCatalogVersion((v) => v + 1);
-      });
-    }
+    // Spec 132 `/` skill picker: the sticky Esc and the catalog load.
+    slash.onTextChange(value);
   }
 
-  // The `/` menu: open only while the composer is in picker position, the
-  // catalog has loaded, and Esc has not dismissed it. No matches means fully
-  // closed — the keydown guard below does not run, so Enter sends and Tab
-  // behaves normally (`/Users/me/a.txt hi` used to be unsendable with Enter).
-  const currentSlashQuery = slashDismissed ? null : slashQuery(inputText);
-  const filteredSkills =
-    currentSlashQuery !== null && skillCatalog ? matchSkills(skillCatalog, currentSlashQuery) : [];
-  const skillMenuOpen = filteredSkills.length > 0;
   // Spec 137: the built-ins keep the list from ever being empty, so the old
   // "no skills installed" hint is gone — a bare `/` lists `/automate` (keyed;
   // keyless with no skills installed, `/` opens nothing).
 
-
-  /** Batch 1110 item 12: Claude Code's own `/schedule` creates a cloud routine
-   *  on the user's Claude account, which Orbital can neither see nor stop;
-   *  the picker says so beside it (hiding it would only hide the danger). */
-  function isCloudRoutineCommand(entry: SkillCatalogEntry): boolean {
-    return entry.source === 'worker' && entry.key === 'schedule';
-  }
-
   /** Pick a skill: the `/query` text goes, the chip replaces any earlier pick. */
   function pickSkill(entry: SkillCatalogEntry) {
-    setSelectedSkillIndex(0);
+    slash.resetIndex();
     if (entry.invoke) {
       // Spec 166: the pinned worker's own command. Its invocation goes in the
       // composer, caret after it for arguments, and travels as plain text:
@@ -4008,27 +3918,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     // While an IME (e.g. Pinyin) is composing, Enter/Arrow/Tab belong to the
     // candidate window — don't submit or hijack them for our dropdowns.
     if (e.nativeEvent.isComposing || e.keyCode === 229) return;
-    if (skillMenuOpen) {
-      if (e.key === 'ArrowDown') {
-        e.preventDefault();
-        setSelectedSkillIndex(i => Math.min(i + 1, filteredSkills.length - 1));
-        return;
-      }
-      if (e.key === 'ArrowUp') {
-        e.preventDefault();
-        setSelectedSkillIndex(i => Math.max(i - 1, 0));
-        return;
-      }
-      if (e.key === 'Enter' || e.key === 'Tab') {
-        e.preventDefault();
-        pickSkill(filteredSkills[Math.min(selectedSkillIndex, filteredSkills.length - 1)]);
-        return;
-      }
-    }
-    if (skillMenuOpen && e.key === 'Escape') {
-      setSlashDismissed(true);
-      return;
-    }
+    if (slash.onKeyDown(e, pickSkill)) return;
     // Pending-input queue (spec 006 v3 §11c + §12). ↑ in an EMPTY composer (no
     // command dropdown open — the guard above already handled ↑ and
     // returned) recalls the NEWEST queued message for the VIEWED session into
@@ -4918,52 +4808,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         <div className="relative flex flex-col gap-2 surface-float-static surface-float-focus px-3 py-2 transition-[box-shadow] duration-150 motion-reduce:transition-none">
           {/* Spec 132: the `/` skill menu. Skills only, one flat list (no
               origin badge); at most 8 rows visible, then it scrolls. */}
-          {skillMenuOpen && (
-            <div
-              role="listbox"
-              aria-label={t('chat.skill.menuAria')}
-              data-testid="skill-menu"
-              ref={skillMenuRef}
-              className="absolute bottom-full left-0 mb-1 w-[min(28rem,calc(100vw-2rem))] max-h-80 max-md:max-h-[352px] overflow-y-auto surface-float-pop z-50 py-1"
-            >
-              {filteredSkills.map((skill, i) => (
-                <button
-                  key={skill.path || `worker:${skill.key}`}
-                  type="button"
-                  role="option"
-                  aria-selected={i === selectedSkillIndex}
-                  data-testid="skill-option"
-                  data-skill-name={skill.name}
-                  title={skill.description || skill.name}
-                  className={`w-full flex items-center px-3 h-10 max-md:h-11 text-left text-[13px] min-w-0 hover:bg-card-hover/50 ${
-                    i === selectedSkillIndex ? 'bg-card-hover' : ''
-                  }`}
-                  onMouseDown={(e) => {
-                    e.preventDefault();
-                    pickSkill(skill);
-                  }}
-                >
-                  {/* Row centred vertically; name and description share a baseline. */}
-                  <span className="flex items-baseline gap-2 min-w-0 w-full">
-                    <span className="shrink-0 max-w-[45%] truncate font-medium text-primary">{skill.name}</span>
-                    {skill.hint && (
-                      <span data-testid="skill-option-hint" className="shrink-0 max-w-[25%] truncate text-xs text-muted">{skill.hint}</span>
-                    )}
-                    {skill.description && (
-                      <span className="min-w-0 flex-1 truncate text-xs text-muted">{skill.description}</span>
-                    )}
-                    {isCloudRoutineCommand(skill) && (
-                      // Batch 1110 item 12: a worker command that creates a
-                      // routine on the user's own account, outside Orbital.
-                      <span data-testid="skill-option-warning" className="shrink-0 truncate text-xs text-warning">
-                        {t('skills.worker.cloudRoutine')}
-                      </span>
-                    )}
-                  </span>
-                </button>
-              ))}
-            </div>
-          )}
+          <SlashMenu picker={slash} onPick={pickSkill} className="absolute bottom-full left-0 mb-1" />
           {attachments.length > 0 && (
             <div
               className="flex flex-wrap gap-2 max-h-[100px] overflow-y-auto"

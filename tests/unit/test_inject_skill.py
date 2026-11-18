@@ -188,6 +188,21 @@ def test_catalog_endpoint_with_worker_merges_its_commands(env, home):
     assert client.get(f"/api/v2/projects/{pid}/skill-catalog").json() == plain
 
 
+def test_catalog_endpoint_leaves_out_what_the_worker_cannot_run(env, home):
+    """Batch 1118: every command listed must run. Claude Code reports /fast
+    and /focus, and answers both "not available" in the SDK mode Orbital
+    drives it in (probed on 2.1.327), so they are not offered."""
+    from agent_os.daemon_v2 import worker_commands
+    client, pid, ws, *_ = env
+    worker_commands.get_store().publish("claude-code", ws, [
+        {"name": n, "description": "", "invoke": f"/{n} ", "hint": "", "enabled": True}
+        for n in ("fast", "focus", "compact", "context")])
+    names = {e["name"] for e in client.get(
+        f"/api/v2/projects/{pid}/skill-catalog?worker=claude-code").json()}
+    assert {"compact", "context"} <= names
+    assert not names & {"fast", "focus"}
+
+
 def test_catalog_endpoint_cold_worker_is_probed_once(env, home, monkeypatch):
     client, pid, ws, _stem, sub, _ = env
     calls = []

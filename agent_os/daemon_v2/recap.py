@@ -114,16 +114,88 @@ def _completion_of(row: dict) -> tuple[str, str] | None:
     return handle, reply.strip()
 
 
+# Batch 1118: a worker's own command (`/compact`, `/review x`) runs only when
+# it is the very start of the prompt, so a user-addressed message that starts
+# with one is dispatched ALONE and everything held for the worker (first-turn
+# note, skills note, this block) waits for the next ordinary message. The rule
+# is the composer picker's (`slashQuery` in web/src/lib/skill-catalog.ts): a
+# `/`, then a name with no whitespace and no second `/`, then whitespace or the
+# end — so `/Users/x/a.txt look` and `/tmp/x` are text, not commands.
+_COMMAND_RE = re.compile(r"/[^\s/]+(?:\s|$)")
+
+# The marker's display prose (stable: old UIs and the legacy migration read
+# it): ``[Sub-agent] Message sent to <handle>: "<first 100 chars>". …``.
+_MARKER_PREVIEW_RE = re.compile(r'\[Sub-agent\] Message sent to \S+: "([\s\S]*)')
+
+
+def is_worker_command(text: str | None) -> bool:
+    """Does ``text`` start with a worker command (the picker's rule)?"""
+    return isinstance(text, str) and _COMMAND_RE.match(text) is not None
+
+
+def _marker_held_context(row: dict) -> bool:
+    """Was this dispatch a command sent alone? A user-addressed dispatch
+    (the only kind that holds context) is wake-suppressed; its marker's
+    preview is the message's start, which decides it the same way the
+    dispatch did. Read from the row, so a respawned worker (idle stop,
+    daemon restart) still knows the gap before the command is unsent."""
+    meta = row.get("_meta")
+    if not isinstance(meta, dict) or meta.get("suppress_wake") is not True:
+        return False
+    display = meta.get("display_content") or row.get("content")
+    match = _MARKER_PREVIEW_RE.match(display) if isinstance(display, str) else None
+    return match is not None and is_worker_command(match.group(1))
+
+
 def recap_scope(messages: list[dict], handle: str, *, fresh: bool) -> list[dict]:
-    """Rows this worker has not been shown: after its last dispatch marker,
-    or the whole session for a fresh spawn / a worker never dispatched."""
+    """Rows this worker has not been shown: after its last dispatch marker
+    (a command sent alone does not count: nothing was shown with it), or the
+    whole session for a fresh spawn / a worker never dispatched."""
     if fresh:
         return list(messages)
     last = -1
     for i, row in enumerate(messages):
-        if _is_dispatch_marker(row, handle):
+        if _is_dispatch_marker(row, handle) and not _marker_held_context(row):
             last = i
     return list(messages[last + 1:])
+
+
+def _native_from(messages: list[dict], handle: str, *,
+                 message: str | None,
+                 held_dispatch_ids: frozenset[str]) -> int | None:
+    """For a FRESH thread: the index of the first row it holds natively, or
+    None. Rows from there on are filtered like a resumed thread's.
+
+    That is the user row of the first command this process was sent alone
+    (``held_dispatch_ids``: its thread has every message addressed to it
+    since), else the message being sent — persisted just before the
+    dispatch, so it is in the session and would otherwise be repeated inside
+    the block. The message is the first not-yet-dispatched user row addressed
+    to the worker whose text it starts with (the route may append a note)."""
+    if held_dispatch_ids:
+        for i, row in enumerate(messages):
+            meta = row.get("_meta")
+            if (_is_dispatch_marker(row, handle) and isinstance(meta, dict)
+                    and meta.get("dispatch_id") in held_dispatch_ids):
+                for j in range(i - 1, -1, -1):
+                    prior = messages[j]
+                    if prior.get("role") == "user" and prior.get("target") == handle:
+                        return j
+                return i
+    if not message:
+        return None
+    start = 0
+    for i, row in enumerate(messages):
+        if _is_dispatch_marker(row, handle):
+            start = i + 1
+    for i in range(start, len(messages)):
+        row = messages[i]
+        content = row.get("content")
+        if (row.get("role") == "user" and row.get("target") == handle
+                and isinstance(content, str) and content
+                and message.startswith(content)):
+            return i
+    return None
 
 
 def _visible_line(row: dict, handle: str, *, fresh: bool) -> str | None:
@@ -203,8 +275,15 @@ def _left_out_note(n: int, chat_log_path: str | None) -> str:
 
 def build_recap(messages: list[dict], handle: str, *, fresh: bool,
                 chat_log_path: str | None = None,
-                budget_bytes: int | None = None) -> str:
+                budget_bytes: int | None = None,
+                message: str | None = None,
+                held_dispatch_ids=None) -> str:
     """Render the block for ``handle``; "" when it missed nothing.
+
+    ``message`` is the text being dispatched with the block, and
+    ``held_dispatch_ids`` the commands this (fresh) process was already sent
+    alone; with them a fresh thread's block leaves out what that thread
+    holds natively (see ``_native_from``).
 
     The whole rendered block is at most ``budget_bytes`` UTF-8 bytes
     (default ``RECAP_CAP_BYTES``). When every visible line fits, the block is
@@ -213,9 +292,13 @@ def build_recap(messages: list[dict], handle: str, *, fresh: bool,
     lines left out and the chat log, then the newest lines that fit. When
     nothing fits, the block is header + note + footer — never ""."""
     budget = RECAP_CAP_BYTES if budget_bytes is None else max(0, budget_bytes)
+    native_from = (_native_from(messages, handle, message=message,
+                                held_dispatch_ids=frozenset(held_dispatch_ids or ()))
+                   if fresh else None)
     lines: list[tuple[str, bool]] = []  # (line, is the user's own)
-    for row in recap_scope(messages, handle, fresh=fresh):
-        line = _visible_line(row, handle, fresh=fresh)
+    for i, row in enumerate(recap_scope(messages, handle, fresh=fresh)):
+        row_fresh = fresh and (native_from is None or i < native_from)
+        line = _visible_line(row, handle, fresh=row_fresh)
         if line is not None:
             lines.append((line, row.get("role") == "user"))
     if not lines:
