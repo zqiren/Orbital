@@ -737,7 +737,7 @@
           "display_name": "Claude Haiku 4.5",
           "tier": "fast",
           "context_window": 200000,
-          "max_output": 8192,
+          "max_output": 32000,
           "capabilities": {
             "vision": true,
             "tool_use": true,
@@ -1346,7 +1346,7 @@
         "glm-4.6",
         "glm-4.5-air"
       ],
-      "notes": "GLM-5.1 is latest flagship (200K ctx). GLM-5/Turbo flagship tier. GLM-4.7 is the dedicated thinking model. All GLM 4.x/5.x are hybrid (thinking.type=enabled to turn on); echo-back is OPTIONAL — server respects thinking.clear_thinking flag (default true = strip history). Endpoint is OpenAI-compat at https://api.z.ai/api/paas/v4 (note: /paas/v4, NOT /v1). Vision served by separate models (glm-5v-turbo, glm-4.6v) not listed.",
+      "notes": "GLM-5.3 is latest flagship (1M ctx, reasoning always on); GLM-5.2 also 1M; GLM-5.1 200K. GLM-5/Turbo flagship tier. GLM-4.7 is the dedicated thinking model. All GLM 4.x/5.x are hybrid (thinking.type=enabled to turn on); echo-back is OPTIONAL — server respects thinking.clear_thinking flag (default true = strip history). Endpoint is OpenAI-compat at https://api.z.ai/api/paas/v4 (note: /paas/v4, NOT /v1). Vision served by separate models (glm-5v-turbo, glm-4.6v) not listed.",
       "pricing": {
         "glm-5": {
           "input_per_1m": 1.0,
@@ -1387,6 +1387,18 @@
         "glm-4.5-flash": {
           "input_per_1m": 0.0,
           "output_per_1m": 0.0
+        },
+        "glm-5.2": {
+          "input_per_1m": 1.4,
+          "output_per_1m": 4.4
+        },
+        "glm-5.3": {
+          "input_per_1m": 1.4,
+          "output_per_1m": 4.4
+        },
+        "glm-5.3-flash": {
+          "input_per_1m": 0.15,
+          "output_per_1m": 0.5
         }
       },
       "models": {
@@ -1563,6 +1575,60 @@
             "enable": "param:thinking.type=enabled",
             "notes": "Flash variant; same hybrid semantics.",
             "needs_verification": true
+          }
+        },
+        "glm-5.2": {
+          "display_name": "GLM-5.2",
+          "tier": "flagship",
+          "context_window": 1000000,
+          "max_output": 131072,
+          "capabilities": {
+            "vision": false,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "optional",
+            "enable": "param:thinking.type=enabled",
+            "notes": "Hybrid; thinking default enabled. Streaming delta carries reasoning_content. https://docs.z.ai/guides/llm/glm-5.2"
+          }
+        },
+        "glm-5.3": {
+          "display_name": "GLM-5.3",
+          "tier": "flagship",
+          "context_window": 1000000,
+          "max_output": 131072,
+          "capabilities": {
+            "vision": false,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "optional",
+            "enable": "param:thinking.type=enabled",
+            "notes": "Reasoning always on: thinking.type accepts only enabled (reasoning_effort low/high/max). Streaming delta carries reasoning_content. https://docs.z.ai/guides/llm/glm-5.3"
+          }
+        },
+        "glm-5.3-flash": {
+          "display_name": "GLM-5.3-Flash",
+          "tier": "fast",
+          "context_window": 1000000,
+          "max_output": 131072,
+          "capabilities": {
+            "vision": false,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "optional",
+            "enable": "param:thinking.type=enabled",
+            "notes": "Reasoning always on: thinking.type accepts only enabled. Streaming delta carries reasoning_content. https://docs.z.ai/guides/vlm/glm-5.3-flash"
           }
         }
       },
@@ -2282,8 +2348,8 @@
         "mistral-large-latest": {
           "display_name": "Mistral Large 3",
           "tier": "flagship",
-          "context_window": 128000,
-          "max_output": 8192,
+          "context_window": 1048576,
+          "max_output": 262144,
           "capabilities": {
             "vision": true,
             "tool_use": true,
@@ -2300,8 +2366,8 @@
         "mistral-medium-latest": {
           "display_name": "Mistral Medium 3.1",
           "tier": "balanced",
-          "context_window": 128000,
-          "max_output": 8192,
+          "context_window": 262144,
+          "max_output": 262144,
           "capabilities": {
             "vision": true,
             "tool_use": true,
@@ -2354,8 +2420,8 @@
         "mistral-small-latest": {
           "display_name": "Mistral Small 4",
           "tier": "fast",
-          "context_window": 128000,
-          "max_output": 4096,
+          "context_window": 262144,
+          "max_output": 256000,
           "capabilities": {
             "vision": false,
             "tool_use": true,
@@ -2908,7 +2974,7 @@
           "display_name": "Claude Opus 4.7",
           "tier": "flagship",
           "context_window": 1000000,
-          "max_output": 8192,
+          "max_output": 128000,
           "capabilities": {
             "vision": true,
             "tool_use": true,
@@ -2944,7 +3010,7 @@
           "display_name": "Gemini 3 Flash Preview",
           "tier": "fast",
           "context_window": 1048576,
-          "max_output": 8192,
+          "max_output": 65536,
           "capabilities": {
             "vision": true,
             "tool_use": true,
@@ -3128,7 +3194,7 @@
           "display_name": "MiniMax M2.7",
           "tier": "flagship",
           "context_window": 196608,
-          "max_output": 8192,
+          "max_output": 131072,
           "capabilities": {
             "vision": false,
             "tool_use": true,
@@ -3147,7 +3213,7 @@
           "display_name": "MiniMax M2.5",
           "tier": "balanced",
           "context_window": 196608,
-          "max_output": 8192,
+          "max_output": 131072,
           "capabilities": {
             "vision": false,
             "tool_use": true,
@@ -3589,6 +3655,16 @@
           "output_per_1m": 4.4,
           "cached_input_per_1m": 0.26
         },
+        "glm-5.3": {
+          "input_per_1m": 1.4,
+          "output_per_1m": 4.4,
+          "cached_input_per_1m": 0.26
+        },
+        "glm-5.3-flash": {
+          "input_per_1m": 0.15,
+          "output_per_1m": 0.5,
+          "cached_input_per_1m": 0.03
+        },
         "hy3-free": {
           "input_per_1m": 0.0,
           "output_per_1m": 0.0,
@@ -3687,8 +3763,8 @@
       "models": {
         "big-pickle": {
           "display_name": "Big Pickle",
-          "context_window": 128000,
-          "max_output": 8192,
+          "context_window": 160000,
+          "max_output": 32000,
           "capabilities": {
             "vision": false,
             "tool_use": true,
@@ -3718,7 +3794,7 @@
         "claude-haiku-4-5": {
           "tier": "fast",
           "context_window": 200000,
-          "max_output": 8192,
+          "max_output": 32000,
           "capabilities": {
             "vision": true,
             "tool_use": true,
@@ -3838,7 +3914,7 @@
         "claude-sonnet-4-5": {
           "tier": "balanced",
           "context_window": 200000,
-          "max_output": 16384,
+          "max_output": 32000,
           "capabilities": {
             "vision": true,
             "tool_use": true,
@@ -3916,8 +3992,8 @@
         },
         "deepseek-v4-flash-free": {
           "display_name": "DeepSeek V4 Flash Free",
-          "context_window": 128000,
-          "max_output": 8192,
+          "context_window": 200000,
+          "max_output": 128000,
           "capabilities": {
             "vision": false,
             "tool_use": true,
@@ -3988,8 +4064,8 @@
         },
         "glm-5.2": {
           "tier": "flagship",
-          "context_window": 200000,
-          "max_output": 128000,
+          "context_window": 1000000,
+          "max_output": 131072,
           "capabilities": {
             "vision": false,
             "tool_use": true,
@@ -4000,14 +4076,50 @@
             "field": "reasoning_content",
             "echo_back": "optional",
             "enable": "param:thinking.type=enabled",
-            "notes": "Hybrid; thinking default enabled. Streaming delta carries reasoning_content. https://docs.z.ai/guides/llm/glm-5.1"
+            "notes": "Hybrid; thinking default enabled. Streaming delta carries reasoning_content. https://docs.z.ai/guides/llm/glm-5.2"
           },
           "display_name": "GLM 5.2"
         },
+        "glm-5.3": {
+          "tier": "flagship",
+          "context_window": 1000000,
+          "max_output": 131072,
+          "capabilities": {
+            "vision": false,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "optional",
+            "enable": "param:thinking.type=enabled",
+            "notes": "Reasoning always on: thinking.type accepts only enabled (reasoning_effort low/high/max). Streaming delta carries reasoning_content. https://docs.z.ai/guides/llm/glm-5.3"
+          },
+          "display_name": "GLM 5.3"
+        },
+        "glm-5.3-flash": {
+          "tier": "fast",
+          "context_window": 1000000,
+          "max_output": 131072,
+          "capabilities": {
+            "vision": false,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "optional",
+            "enable": "param:thinking.type=enabled",
+            "notes": "Reasoning always on: thinking.type accepts only enabled. Streaming delta carries reasoning_content. https://docs.z.ai/guides/vlm/glm-5.3-flash"
+          },
+          "display_name": "GLM 5.3 Flash"
+        },
         "hy3-free": {
           "display_name": "Hy3 Free",
-          "context_window": 128000,
-          "max_output": 8192,
+          "context_window": 190000,
+          "max_output": 64000,
           "capabilities": {
             "vision": false,
             "tool_use": true,
@@ -4024,7 +4136,7 @@
         "kimi-k2.5": {
           "tier": "balanced",
           "context_window": 262144,
-          "max_output": null,
+          "max_output": 65536,
           "capabilities": {
             "vision": true,
             "tool_use": true,
@@ -4042,7 +4154,7 @@
         "kimi-k2.6": {
           "tier": "flagship",
           "context_window": 262144,
-          "max_output": null,
+          "max_output": 65536,
           "capabilities": {
             "vision": true,
             "tool_use": true,
@@ -4095,8 +4207,8 @@
         },
         "laguna-s-2.1-free": {
           "display_name": "Laguna S 2.1 Free",
-          "context_window": 128000,
-          "max_output": 8192,
+          "context_window": 256000,
+          "max_output": 32000,
           "capabilities": {
             "vision": false,
             "tool_use": true,
@@ -4109,8 +4221,8 @@
         },
         "mimo-v2.5-free": {
           "display_name": "MiMo-V2.5 Free",
-          "context_window": 128000,
-          "max_output": 8192,
+          "context_window": 200000,
+          "max_output": 32000,
           "capabilities": {
             "vision": false,
             "tool_use": true,
@@ -4120,7 +4232,7 @@
         "minimax-m2.5": {
           "tier": "balanced",
           "context_window": 196608,
-          "max_output": 8192,
+          "max_output": 131072,
           "capabilities": {
             "vision": false,
             "tool_use": true,
@@ -4139,7 +4251,7 @@
         "minimax-m2.7": {
           "tier": "flagship",
           "context_window": 196608,
-          "max_output": 8192,
+          "max_output": 131072,
           "capabilities": {
             "vision": false,
             "tool_use": true,
@@ -4157,8 +4269,8 @@
         },
         "minimax-m3": {
           "tier": "flagship",
-          "context_window": 1000000,
-          "max_output": null,
+          "context_window": 512000,
+          "max_output": 128000,
           "capabilities": {
             "vision": true,
             "tool_use": true,
@@ -4176,8 +4288,8 @@
         },
         "nemotron-3-ultra-free": {
           "display_name": "Nemotron 3 Ultra Free",
-          "context_window": 128000,
-          "max_output": 8192,
+          "context_window": 1000000,
+          "max_output": 128000,
           "capabilities": {
             "vision": false,
             "tool_use": true,
@@ -4190,8 +4302,8 @@
         },
         "nemotron-3.5-lightning-free": {
           "display_name": "Nemotron 3.5 Lightning Free",
-          "context_window": 128000,
-          "max_output": 8192,
+          "context_window": 262144,
+          "max_output": 262144,
           "capabilities": {
             "vision": false,
             "tool_use": true,
@@ -4204,8 +4316,8 @@
         },
         "qwen3.5-plus": {
           "tier": "balanced",
-          "context_window": 1000000,
-          "max_output": 65536,
+          "context_window": 262144,
+          "max_output": 32768,
           "capabilities": {
             "vision": true,
             "tool_use": true,
@@ -4224,8 +4336,8 @@
         },
         "qwen3.6-plus": {
           "tier": "balanced",
-          "context_window": 1000000,
-          "max_output": 65536,
+          "context_window": 262144,
+          "max_output": 32768,
           "capabilities": {
             "vision": true,
             "tool_use": true,
@@ -4541,8 +4653,8 @@
         },
         "glm-5.2": {
           "tier": "flagship",
-          "context_window": 200000,
-          "max_output": 128000,
+          "context_window": 1000000,
+          "max_output": 131072,
           "capabilities": {
             "vision": false,
             "tool_use": true,
@@ -4553,14 +4665,14 @@
             "field": "reasoning_content",
             "echo_back": "optional",
             "enable": "param:thinking.type=enabled",
-            "notes": "Hybrid; thinking default enabled. Streaming delta carries reasoning_content. https://docs.z.ai/guides/llm/glm-5.1"
+            "notes": "Hybrid; thinking default enabled. Streaming delta carries reasoning_content. https://docs.z.ai/guides/llm/glm-5.2"
           },
           "display_name": "GLM-5.2"
         },
         "glm-5.3": {
           "tier": "flagship",
-          "context_window": 200000,
-          "max_output": 128000,
+          "context_window": 1000000,
+          "max_output": 131072,
           "capabilities": {
             "vision": false,
             "tool_use": true,
@@ -4571,14 +4683,14 @@
             "field": "reasoning_content",
             "echo_back": "optional",
             "enable": "param:thinking.type=enabled",
-            "notes": "Hybrid; thinking default enabled. Streaming delta carries reasoning_content. https://docs.z.ai/guides/llm/glm-5.1"
+            "notes": "Reasoning always on: thinking.type accepts only enabled (reasoning_effort low/high/max). Streaming delta carries reasoning_content. https://docs.z.ai/guides/llm/glm-5.3"
           },
           "display_name": "GLM-5.3"
         },
         "hy3": {
           "display_name": "Hy3",
-          "context_window": 128000,
-          "max_output": 8192,
+          "context_window": 192000,
+          "max_output": 128000,
           "capabilities": {
             "vision": false,
             "tool_use": true,
@@ -4648,8 +4760,8 @@
         },
         "mimo-v2.5": {
           "display_name": "MiMo-V2.5",
-          "context_window": 128000,
-          "max_output": 8192,
+          "context_window": 1000000,
+          "max_output": 128000,
           "capabilities": {
             "vision": false,
             "tool_use": true,
@@ -4658,8 +4770,8 @@
         },
         "mimo-v2.5-pro": {
           "display_name": "MiMo-V2.5-Pro",
-          "context_window": 128000,
-          "max_output": 8192,
+          "context_window": 1048576,
+          "max_output": 128000,
           "capabilities": {
             "vision": false,
             "tool_use": true,
@@ -4669,7 +4781,7 @@
         "minimax-m2.5": {
           "tier": "balanced",
           "context_window": 196608,
-          "max_output": 8192,
+          "max_output": 32768,
           "capabilities": {
             "vision": false,
             "tool_use": true,
@@ -4690,7 +4802,7 @@
         "minimax-m2.7": {
           "tier": "flagship",
           "context_window": 196608,
-          "max_output": 8192,
+          "max_output": 32768,
           "capabilities": {
             "vision": false,
             "tool_use": true,
@@ -4711,7 +4823,7 @@
         "minimax-m3": {
           "tier": "flagship",
           "context_window": 1000000,
-          "max_output": null,
+          "max_output": 131072,
           "capabilities": {
             "vision": true,
             "tool_use": true,
@@ -4792,8 +4904,8 @@
         },
         "qwen3.8-max": {
           "tier": "flagship",
-          "context_window": 262144,
-          "max_output": 32768,
+          "context_window": 1000000,
+          "max_output": 131072,
           "capabilities": {
             "vision": true,
             "tool_use": true,
@@ -4833,8 +4945,8 @@
         },
         "glm-5.3-flash": {
           "tier": "fast",
-          "context_window": 200000,
-          "max_output": 128000,
+          "context_window": 1000000,
+          "max_output": 131072,
           "capabilities": {
             "vision": false,
             "tool_use": true,
@@ -4845,14 +4957,14 @@
             "field": "reasoning_content",
             "echo_back": "optional",
             "enable": "param:thinking.type=enabled",
-            "notes": "Hybrid; thinking default enabled. Streaming delta carries reasoning_content. https://docs.z.ai/guides/llm/glm-5.1"
+            "notes": "Reasoning always on: thinking.type accepts only enabled. Streaming delta carries reasoning_content. https://docs.z.ai/guides/vlm/glm-5.3-flash"
           },
           "display_name": "GLM-5.3-Flash"
         },
         "mimo-v2.6-flash": {
           "display_name": "MiMo-V2.6-Flash",
-          "context_window": 128000,
-          "max_output": 8192,
+          "context_window": 1048576,
+          "max_output": 131072,
           "capabilities": {
             "vision": false,
             "tool_use": true,
@@ -4861,8 +4973,8 @@
         },
         "mimo-v2.6-pro": {
           "display_name": "MiMo-V2.6-Pro",
-          "context_window": 128000,
-          "max_output": 8192,
+          "context_window": 1048576,
+          "max_output": 131072,
           "capabilities": {
             "vision": false,
             "tool_use": true,
@@ -4871,8 +4983,8 @@
         },
         "qwen3.8-flash": {
           "tier": "fast",
-          "context_window": 262144,
-          "max_output": 32768,
+          "context_window": 1000000,
+          "max_output": 131072,
           "capabilities": {
             "vision": true,
             "tool_use": true,

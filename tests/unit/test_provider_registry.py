@@ -167,7 +167,9 @@ class TestRealProviders:
 
     def test_anthropic_haiku(self, registry):
         info = registry.get_model_info("anthropic", "claude-haiku-4-5")
-        assert info.max_output == 8192
+        # Real cap is 64K; held at 32K because the Anthropic path sends this
+        # as max_tokens and prompt + max_tokens must fit the 200K window.
+        assert info.max_output == 32000
         assert info.capabilities.vision is True
 
     def test_anthropic_prefix_match_dated(self, registry):
@@ -490,3 +492,77 @@ class TestHunyuan:
         # conservative unknown-model defaults.
         info = registry.get_model_info("hunyuan", "hy5-preview")
         assert info.context_window == 1_000_000
+
+
+# --- Catalog windows refreshed against models.dev + vendor docs (2026-11-18) ---
+
+class TestCatalogWindows1118:
+    """The OpenCode GLM 5.2/5.3 entries were cloned from GLM-5.1 and kept its
+    200K window, so a 1M model compacted at 160K. Direct Zhipu had no 5.2/5.3
+    entries at all and prefix-matched ``glm-5`` (200K). Every id below must
+    resolve to its real 1M window, by exact match, never via the prefix."""
+
+    @pytest.mark.parametrize("provider,model", [
+        ("opencode-go", "glm-5.2"),
+        ("opencode-go", "glm-5.3"),
+        ("opencode-go", "glm-5.3-flash"),
+        ("opencode-zen", "glm-5.2"),
+        ("opencode-zen", "glm-5.3"),
+        ("opencode-zen", "glm-5.3-flash"),
+        ("zhipu", "glm-5.2"),
+        ("zhipu", "glm-5.3"),
+        ("zhipu", "glm-5.3-flash"),
+    ])
+    def test_glm_5_2_and_5_3_have_the_1m_window(self, registry, provider, model):
+        assert model in registry.get_provider_data(provider)["models"]
+        assert registry.get_context_window(provider, model) >= 1_000_000
+        assert registry.get_max_output(provider, model) == 131_072
+
+    def test_glm_5_1_keeps_its_200k_window(self, registry):
+        # GLM-5.1 really is 200K (docs.z.ai/guides/llm/glm-5.1); only the
+        # newer ids were wrong.
+        for provider in ("opencode-go", "opencode-zen", "zhipu"):
+            assert registry.get_context_window(provider, "glm-5.1") == 200_000
+
+    def test_zhipu_glm_5_3_flash_is_priced_as_flash(self):
+        # Without its own pricing key it would prefix-match glm-5 ($1.0/$3.2).
+        from agent_os.agent.pricing import get_cost_rates
+        # get_cost_rates returns per-1K rates.
+        assert get_cost_rates("glm-5.3-flash", "zhipu") == pytest.approx((0.15e-3, 0.5e-3))
+
+    def test_zen_windows_confirmed_by_opencode_model_list(self, registry):
+        # opencode.ai/zen/v1/models (and models.dev) cap these below the
+        # upstream vendor's window.
+        assert registry.get_context_window("opencode-zen", "minimax-m3") == 512_000
+        assert registry.get_context_window("opencode-zen", "qwen3.5-plus") == 262_144
+        assert registry.get_context_window("opencode-zen", "qwen3.6-plus") == 262_144
+
+    def test_input_capped_models_declare_the_input_limit(self, registry):
+        # OpenCode lists an input cap below the total context for these; the
+        # window drives compaction at 80%, so it must be the input cap or the
+        # prompt overflows before compaction triggers.
+        assert registry.get_context_window("opencode-go", "hy3") == 192_000
+        assert registry.get_context_window("opencode-zen", "big-pickle") == 160_000
+
+    def test_anthropic_path_max_tokens_fit_the_window(self, registry):
+        # On sdk=anthropic, max_output goes out as max_tokens. At the 80%
+        # compaction point the prompt plus max_tokens must still fit.
+        # Pre-existing dated snapshots that already break this (64K at 200K);
+        # left for a separate decision rather than changed silently.
+        known = {
+            ("anthropic", "claude-haiku-4-5-20251001"),
+            ("anthropic", "claude-sonnet-4-5-20250929"),
+            ("anthropic", "claude-opus-4-5-20251101"),
+            ("anthropic", "claude-sonnet-4-20250514"),
+        }
+        data = registry.all_providers()
+        for provider, pdata in data.items():
+            for model, entry in pdata.get("models", {}).items():
+                if model.startswith("_") or (provider, model) in known:
+                    continue
+                if (entry.get("sdk") or pdata.get("sdk")) != "anthropic":
+                    continue
+                info = registry.get_model_info(provider, model)
+                assert info.max_output is not None, (provider, model)
+                assert 0.8 * info.context_window + info.max_output <= info.context_window, (
+                    provider, model, info.context_window, info.max_output)
