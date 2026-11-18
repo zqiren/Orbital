@@ -2,6 +2,10 @@
 ; Inno Setup script for Orbital
 
 [Setup]
+; Explicit, and byte-identical to the implicit value every earlier installer
+; used (AppId defaults to AppName). Changing it would register a second
+; "Orbital" in Apps & features and orphan every existing install. Never edit.
+AppId=Orbital
 AppName=Orbital
 AppVersion=0.23.1
 AppPublisher=Orbital
@@ -99,7 +103,9 @@ Filename: "{tmp}\MicrosoftEdgeWebView2Setup.exe"; Parameters: "/silent /install"
 Filename: "{app}\bin\Orbital.exe"; Parameters: "--setup-sandbox"; \
     StatusMsg: "Creating the AgentOS-Worker sandbox account..."; \
     Flags: runhidden waituntilterminated
-; Launch after install
+; Launch after install. A silent run skips this; the in-app upgrade's own
+; silent run relaunches from DeinitializeSetup below instead (on success AND
+; on abort, so the user always gets an Orbital back).
 Filename: "{app}\bin\Orbital.exe"; Description: "Launch Orbital"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
@@ -121,4 +127,58 @@ begin
     RegKeyExists(HKCU, 'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}') or
     RegKeyExists(HKLM, 'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}') or
     RegKeyExists(HKLM, 'SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'));
+end;
+
+// ---------------------------------------------------------------------------
+// In-app upgrade handshake (agent_os/update_windows.py). Active only when the
+// app starts Setup with /ORBITALUPDATE=1; a normal install is unaffected.
+// The names below are checked against the Python side by
+// tests/unit/test_update_windows.py — keep them in sync.
+// ---------------------------------------------------------------------------
+function IsOrbitalUpdate(): Boolean;
+begin
+  Result := ExpandConstant('{param:ORBITALUPDATE|0}') = '1';
+end;
+
+// Runs elevated (past UAC) and BEFORE Setup's AppMutex check. Tell the app
+// "UAC passed, quit now" by creating a mutex it polls for, then give it up to
+// 60 s to exit. If it is still running, the AppMutex check that follows
+// aborts Setup (/SUPPRESSMSGBOXES answers its prompt with Cancel) before any
+// file is touched.
+function InitializeSetup(): Boolean;
+var
+  Waited: Integer;
+begin
+  Result := True;
+  if IsOrbitalUpdate() then begin
+    CreateMutex('OrbitalUpdateSetupReady');
+    Waited := 0;
+    while CheckForMutexes('OrbitalDesktopShell') and (Waited < 120) do begin
+      Sleep(500);
+      Waited := Waited + 1;
+    end;
+  end;
+end;
+
+// Bring Orbital back: the new version after a good install, the old one after
+// an abort (Setup rolls its file changes back). Runs as the user who started
+// Setup, never elevated. The path comes from the app and must be its own
+// bin\Orbital.exe.
+procedure DeinitializeSetup();
+var
+  Exe: String;
+  Code: Integer;
+begin
+  if not IsOrbitalUpdate() then
+    Exit;
+  Exe := ExpandConstant('{param:ORBITALRELAUNCH|}');
+  if (Exe = '') or (CompareText(ExtractFileName(Exe), 'Orbital.exe') <> 0) or
+     (CompareText(ExtractFileName(ExtractFileDir(Exe)), 'bin') <> 0) or
+     not FileExists(Exe) then
+    Exit;
+  try
+    ExecAsOriginalUser(Exe, '', ExtractFileDir(Exe), SW_SHOWNORMAL, ewNoWait, Code);
+  except
+    Log('Orbital relaunch failed: ' + GetExceptionMessage);
+  end;
 end;

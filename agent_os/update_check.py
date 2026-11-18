@@ -12,11 +12,11 @@ event — the frontend renders a dismissible pill. Clicking it downloads this
 platform's installer directly in the system browser (``installer``: the
 GitHub release asset and its China mirror; the UI language picks one on the
 frontend); Linux, which has no installer, keeps the website link (``url``).
-Opening the installer stays manual.
 
-Deliberately NOT auto-update: silently replacing unsigned binaries would hit
-SmartScreen/Gatekeeper on every update, and a running app can't replace
-itself without an updater helper. Revisit once signing lands.
+This module only decides THAT a newer version exists. Where the packaged app
+can update itself, the pill's click hands the offered version to
+``agent_os/updater.py`` (download, verify, install, relaunch, on the user's
+click only); the installer links stay the manual fallback.
 
 The check is an anonymous GET — nothing identifying is sent — and is
 independent of the telemetry toggle by design.

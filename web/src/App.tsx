@@ -765,7 +765,7 @@ export default function App() {
 
   return (
     <div className="flex h-dvh overflow-hidden">
-      <UpdatePill />
+      <UpdatePill connectionState={sidebarProps.connectionState} />
       {/* Desktop, a project open (any tab): the 260px Sidebar hides behind a
           20px EdgeStrip that floats it over the session column on hover and
           docks it on click (spec 078 D1-D3 + the pin amendment). Every other

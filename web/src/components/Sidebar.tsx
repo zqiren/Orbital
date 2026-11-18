@@ -24,6 +24,7 @@ import {
 import type { Project, AgentRunStatus } from '../types';
 import type { Route } from '../route';
 import { useT } from '../i18n/useT';
+import { useUpdatePillShown } from './UpdatePill';
 import { projectDisplayName } from '../utils/projectDisplayName';
 import { getProjectDotColor } from '../utils/projectStatus';
 
@@ -169,6 +170,7 @@ export default function Sidebar({
   narrow = false,
 }: SidebarProps) {
   const t = useT();
+  const updatePillShown = useUpdatePillShown();
   const selectedProjectId = route.name === 'project' ? route.projectId : null;
 
   // The New Project split button's menu: closes on Escape and on a press
@@ -551,10 +553,17 @@ export default function Sidebar({
           {t('sidebar.settings')}
         </button>
 
-        {/* Connection indicator */}
-        <div className={`flex items-center gap-1.5 px-3 py-1 max-md:py-2 shrink-0${
-          connectionState === 'disconnected' || connectionState === 'daemon_offline' ? ' bg-error/5 rounded-lg' : ''
-        }`}>
+        {/* Connection indicator. The update pill (UpdatePill.tsx) is fixed
+            over this corner and takes this line's place while it shows:
+            the line goes invisible but keeps its box, so the footer height
+            never moves when the pill appears, changes width, or is
+            dismissed. The pill yields to a line that isn't "connected". */}
+        <div
+          data-testid="sidebar-connection"
+          className={`flex items-center gap-1.5 px-3 py-1 max-md:py-2 shrink-0${
+            connectionState === 'disconnected' || connectionState === 'daemon_offline' ? ' bg-error/5 rounded-lg' : ''
+          }${updatePillShown ? ' invisible' : ''}`}
+        >
           <span
             className={`w-1.5 h-1.5 rounded-full shrink-0 ${
               connectionState === 'connected'
