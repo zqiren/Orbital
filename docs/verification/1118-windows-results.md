@@ -1,6 +1,6 @@
 # batch/1118 on Windows: results
 
-**Second push (`dc07364b`): see the STATUS line in the Mac session's request section below.**
+**Second push: READY `3d29457a`, with one caveat (W-1 not run). See the STATUS line in the Mac session's request section below.**
 
 **Status: READY** for the five features merged at `5e472a5b` (v0.24.0), with one
 fix commit on top (`8b49c824`, browser live view). CI run 44358870615 is green
@@ -147,7 +147,9 @@ Real Chrome, `opencode-go` / `deepseek-v4.1-flash` as the manager.
 
 ## Request from the Mac session: verify `dc07364b` (pushed 2026-11-19 02:25 +0800)
 
-**STATUS: PENDING, test fix pushed (`407b67ce`). Do not tag `dc07364b`: CI run 44369069408 is red on it.**
+**STATUS: READY 3d29457a** (CI run 44373343220, all nine jobs green). One caveat, your call: W-1 was not run. The new installer was not installed on this machine (it needs a UAC click and the owner is asleep), so W-3 to W-7 ran on a source daemon with the same openai SDK the installer bundles, not on the installed app. Details in "Windows results for `dc07364b`" at the end of this file.
+
+`3d29457a` is `dc07364b` plus the test-fixture fix `407b67ce` plus docs. Commits after it touch only this file. Windows installer artifact of run 44373343220: 407,349,777 bytes, artifact digest `sha256:0d736d91a4a141578c10c8d1cc4a6570fe60f4f45543f90184e9d188ba40fea5` (the artifact zip as GitHub reports it; I did not download or hash the .exe inside).
 
 Windows, 03:25 +0800: both backend unit jobs of run 44369069408 fail 19 tests in
 `test_responses_api_transport.py`. CI installs openai 3.55.1, whose `Response`
@@ -237,3 +239,71 @@ build. Wait for that run to finish green first.
 | W-8 | `pytest tests/unit/test_responses_api_transport.py tests/unit/test_responses_api_routing.py tests/unit/test_responses_state_persistence.py tests/unit/test_model_key_matching_1118.py tests/unit/test_catalog_followups_1118.py tests/unit/test_chat_route_strips_responses_state.py tests/unit/test_provider_registry.py -q` | All pass on Windows. |
 
 Record results in a new section below this one.
+
+---
+
+## Windows results for `dc07364b` (+ `407b67ce`), 2026-11-19 02:25 to 04:10 +0800
+
+| Id | Result |
+| --- | --- |
+| W-1 | **NOT RUN.** Installing needs UAC; the owner gave one click earlier tonight (used for the `5e472a5b` build) and is asleep. What stands in for it: CI's own "Fresh install (Windows, fresh)" and "(Windows, upgrade)" jobs are green on run 44373343220; the three merges touch no installer or frontend file; `responses_adapter` is imported statically from `openai_compat.py` and `loop.py`, so PyInstaller bundles it; the build log of run 44373343220 shows `openai-3.55.1`, the version W-3 to W-7 ran on here. `C:\Orbital` still holds the `5e472a5b` build. |
+| W-2 | NOT RUN (no OpenAI key in this machine's environment). `gpt-6.2-sol` on Zen answers 402 here too. |
+| W-3 | PASS, on openai 2.17.0 and again on 3.55.1. `opencode-go` + `gpt-6-luna`: Save and Test Connection pass, a file-read turn answers, two more messages in the session answer. Every call is `POST …/zen/go/v1/responses` 200; the dumped request bodies replay 1 to 8 stored reasoning items. |
+| W-4 | PASS on both SDK versions. Same session: `glm-5.3-flash` (`/chat/completions`, no `responses_output` in the body), back to `gpt-6-luna`, then also `minimax-m3` (`/messages`), `grok-4.7`, `deepseek-v4.1-flash`. Every leg 200. |
+| W-5 | PASS. After a `glm-5.3-flash` turn the session context endpoint reports `window: 1000000, threshold: 800000`. |
+| W-6 | PASS. Zhipu suggested models start `glm-5.3, glm-5.3-flash, glm-5.2`. |
+| W-7 | PASS. `deepseek-v4.1-flash` tool turn: 10,684 input, 27,520 cached, 589 output tokens, $0.002039, equal to the catalog rates. |
+| W-8 | PASS after `407b67ce`: the seven files plus the other provider tests, 216 passed on openai 3.55.1 (285 passed on 2.17.0 before the fix, with one more file in the set). |
+
+Rig: `scripts/dev_daemon_isolated.py` on a scratch data dir, cards created
+through `POST /api/v2/settings/cards`, real OpenCode Go traffic, request bodies
+dumped. Nothing was faked.
+
+More than the checklist asked:
+
+- Responses models reached live on Go: `gpt-6-luna`, `grok-4.7`, `gpt-5.6-luna`.
+  `grok-4.6` is catalogued for Go but the provider says it is not included.
+- The chat route returned 0 rows with `responses_output` in every session; the
+  session JSONL keeps it.
+- Streaming: stored text is never doubled (10 of 10 assistant rows), usage is
+  non-zero with cached tokens read, a cancel 6 s into a turn leaves the session
+  usable.
+- Catalog: 1M window for GLM-5.2 / 5.3 / 5.3-Flash on Go and Zen through
+  `GET /api/v2/providers`; `glm-5.9` matches no key; snapshot and variant
+  suffixes still match; `gpt-6*` matches `gpt-6.3-sol` and rejects `gpt-60`.
+- `scripts/check-model-specs.py` runs on Windows (exit 0): no context window
+  where ours is higher; two max-output rows where ours is higher
+  (`codestral-latest` 8,192 vs 4,096, `magistral-medium-latest` 40,000 vs 16,384).
+- No request carried `max_tokens: null`.
+- Full local suite on `dc07364b`: 8321 passed; the same local-only reds as the
+  first run (symlink privilege, long paths, stale `_version.py`), plus the
+  known mtime-tick `test_ledger_incremental_101`.
+- No error or deprecation warning from the openai package on 3.55.1 in the
+  daemon log.
+
+### What went wrong on the way
+
+CI run 44369069408 on `dc07364b` was red: 19 tests in
+`test_responses_api_transport.py` failed on both runners. CI installs openai
+3.55.1, whose `Response` model requires
+`usage.input_tokens_details.cache_write_tokens`; the fixture left it out. Both
+our machines had an older SDK (2.17.0 here), so the tests passed locally and
+the first live runs were not on the shipped SDK. `407b67ce` fixes the fixture
+only; production code reads usage through tolerant getters.
+
+### Not blockers, for after the release
+
+- `pyproject.toml` still says `openai>=1.0`. The code now calls
+  `client.responses.create`, and CI floats to the newest SDK on every build.
+  A lower bound that has the Responses API, and an upper bound or a lockfile
+  for release builds, would have caught tonight's red run earlier.
+- `minimax-m3` over `/messages` on Go records 0 input tokens on every usage row
+  (output only), on both SDK versions, so its spend is under-recorded. Possibly
+  `anthropic_adapter.py:460-466` ignoring `input_tokens` on `message_delta`;
+  not confirmed against raw events. Not from this change set.
+- Catalog drift against the live provider: Go `grok-4.6` (not included), Go
+  `kimi-k2.6` (410, deprecated in favour of `kimi-k2.7-code`), the note that Go
+  `gpt-5.6-luna` is region-blocked (it works from here), and Zen without
+  credits now answering 402 `insufficient_credits` rather than 401.
+- The Responses request sends no output cap, so the catalog's `max_output` is
+  not applied on that protocol.
