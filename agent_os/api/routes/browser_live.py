@@ -894,9 +894,14 @@ class _LiveStream:
         if dpr is not None:
             self._dpr = dpr
             cdp = self._cdp
-            if cdp is not None and self._screencast_cap != _frame_cap(dpr):
+            if (cdp is not None and self._screencast_cap is not None
+                    and self._screencast_cap != _frame_cap(dpr)):
                 # The viewer moved to a display of another density — the
                 # only thing that restarts the screencast. Resizing never does.
+                # A cap of None means this session's screencast has not
+                # started yet (``_attach`` is still on its way there and will
+                # start it at ``self._dpr``): starting it here would make the
+                # attach's own start fail with "Screencast is already active".
                 try:
                     await cdp.send("Page.stopScreencast")
                     await self._start_screencast(cdp)
@@ -982,6 +987,7 @@ class _LiveStream:
         await self._leave_sizer()
         cdp, self._cdp = self._cdp, None
         self._page = None
+        self._screencast_cap = None
         self._pending_frame = None
         self._loading = False
         self._can_go_back = False
