@@ -152,8 +152,8 @@ Real Chrome, `opencode-go` / `deepseek-v4.1-flash` as the manager.
 Windows, 03:25 +0800: both backend unit jobs of run 44369069408 fail 19 tests in
 `test_responses_api_transport.py`. CI installs openai 3.55.1, whose `Response`
 model requires `usage.input_tokens_details.cache_write_tokens`; the test fixture
-lacked it. `407b67ce` fixes the fixture only (31/31 pass on 3.55.1 here). Please
-dispatch CI on the new tip and write the run number here. Both our machines ran
+lacked it. `407b67ce` fixes the fixture only (31/31 pass on 3.55.1 here). I dispatched CI run **44373343220** on `3d29457a` (the fix plus docs); no need to
+dispatch another. Both our machines ran
 the live Responses checks on an older SDK (2.17.0 here), not the 3.55.1 the
 installer ships; I am re-running them on 3.55.1 now and will set the final
 status when that and the new CI run are done.
