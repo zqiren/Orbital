@@ -140,3 +140,82 @@ Real Chrome, `opencode-go` / `deepseek-v4.1-flash` as the manager.
   launched against the owner's real profile.
 - Scratch data under `C:\orbital-scratch\1118-*`. Evidence (logs, screenshots,
   rig scripts) is in each folder's `evidence\`.
+
+---
+
+## Request from the Mac session: verify `dc07364b` (pushed 2026-11-19 02:25 +0800)
+
+**STATUS: PENDING**
+
+Windows session: when you have run the checks below on the CI installer from
+run **44369069408**, replace the line above with one of these and push:
+
+- `**STATUS: READY dc07364b**` plus the CI run and installer sha256 you tested.
+  The Mac session polls this branch every 30 minutes until 09:00 +0800 and
+  tags `v0.24.0` at exactly the commit you name, then publishes.
+- `**STATUS: BLOCKED**` plus what failed. Nothing is published.
+
+If you push a code fix, say so next to the status. The Mac session will
+dispatch a new CI build, write its run number here, and wait for you to
+verify that build before anything is tagged. Docs-only commits to this file
+do not need a new build.
+
+### What changed since `2c7a1851` (your READY)
+
+Three merges, all backend, no frontend or installer changes. 19 files.
+
+1. **OpenAI Responses API** (`ccb69481`). GPT-5.4 and later refuse function
+   tools with reasoning on Chat Completions, and GPT-6.2 Sol/Astra also refuse
+   `reasoning_effort: none`, so every agent turn on `gpt-6.2-sol` answered
+   `400 Function tools with reasoning_effort are not supported … in
+   /v1/chat/completions`. There is now a third wire protocol
+   (`sdk: "openai-responses"`, `agent_os/agent/providers/responses_adapter.py`),
+   chosen per model in `providers.json`. GPT-5.4+ and the GPT-6 family on
+   `openai`, and `gpt-6-luna`, `gpt-5.6-luna`, `grok-4.6`, `grok-4.7`
+   (plus `gpt-6.2-sol` on Zen) on OpenCode, use it. Reasoning items are stored
+   on the assistant row (`responses_output`) and replayed; the chat API strips
+   that field before rows go to the UI.
+2. **Model catalog** (`8d797bc9`, `962e5eac`). GLM-5.2, 5.3 and 5.3-Flash are
+   1M-token models (they were 200K) on OpenCode Go, Zen and Zhipu; many other
+   stale windows corrected; OpenAI windows now declare the prompt cap (272K /
+   922K); Zhipu's suggested models lead with GLM-5.3 then GLM-5.3-Flash.
+3. **Model id matching** (`962e5eac`). A catalog key no longer matches a
+   different version of its family (`glm-5` no longer matches `glm-5.4`).
+   Variant and snapshot suffixes still match. A key ending in `*` is an
+   explicit family (`gpt-6*`). Pricing uses the same matcher
+   (`match_model_key` in `agent_os/config/provider_registry.py`).
+
+### Already verified on macOS
+
+- `pytest tests/unit/` on the merge before your commits: 8372 passed, 33
+  skipped (`test_settings_key_telemetry.py` excluded: headless keyring).
+- Live through OpenCode Go with the real provider class: `gpt-6-luna` and
+  `grok-4.7` over Responses (plain, tool call → result → answer, reasoning
+  replay accepted), `minimax-m3` over Anthropic messages with the corrected
+  `max_tokens`, `glm-5.3-flash` and `qwen3.8-flash` over Chat Completions.
+- Isolated dev daemon, `opencode-go` + `gpt-6-luna`: card save (Test
+  Connection) 201, a file-read turn end to end, no 400/500 in the log, chat
+  API rows carry no `responses_output` while the session JSONL keeps it.
+- **Not verified anywhere:** `gpt-6.2-sol` itself. Zen answered 402 (the Go
+  subscription does not fund Zen) and there is no OpenAI key on the Mac. If
+  the Windows machine has an OpenAI key, W-2 below is the one check that
+  closes this.
+
+### Checks to run on Windows
+
+Use the CI-built `Orbital-Setup-0.24.0.exe` from run 44369069408
+(`gh run download 44369069408 -n Orbital-Windows-installer`), never a local
+build. Wait for that run to finish green first.
+
+| Id | Check | Pass when |
+| --- | --- | --- |
+| W-1 | Install the new CI build over the current `C:\Orbital`, launch, open an existing project. | App starts, About shows 0.24.0, existing sessions load. |
+| W-2 | **If an OpenAI key is available:** card for `openai` + `gpt-6.2-sol`, Save (runs Test Connection), then ask it to read a small file in a temp project. | Save passes; the turn makes a tool call and returns an answer; no `400 … /v1/chat/completions` in the daemon log. If there is no OpenAI key, write `W-2 NOT RUN (no key)`; that does not block READY. |
+| W-3 | Card for `opencode-go` + `gpt-6-luna` (Responses). Save, then a turn that must read a file, then a second message in the same session. | Both turns complete; the second turn (which replays stored reasoning) has no 400. Note: this small model sometimes ends a turn with `mark_task_complete` and no text; that is model behaviour, seen on macOS too, not a failure. |
+| W-4 | Same session as W-3: switch the card's model to `glm-5.3-flash` (Chat Completions) and send another message, then switch back to `gpt-6-luna` and send one more. | Both messages get answers; no 400 in either direction. |
+| W-5 | Project on `opencode-go` + `glm-5.3-flash`: check the context-usage indicator after one turn. | The window is 1M (usage reads well under 1% for a short session), not 200K. |
+| W-6 | Settings → add a Zhipu card (no key needed to look). | Suggested models list starts GLM-5.3, GLM-5.3-Flash. |
+| W-7 | One turn on a non-OpenAI model you already used tonight (`deepseek-v4.1-flash` on Go is fine), with a tool call. | Works as before; spend/cost row shows a non-zero, sane price. |
+| W-8 | `pytest tests/unit/test_responses_api_transport.py tests/unit/test_responses_api_routing.py tests/unit/test_responses_state_persistence.py tests/unit/test_model_key_matching_1118.py tests/unit/test_catalog_followups_1118.py tests/unit/test_chat_route_strips_responses_state.py tests/unit/test_provider_registry.py -q` | All pass on Windows. |
+
+Record results in a new section below this one.
