@@ -283,6 +283,11 @@ Cutting an Orbital release means producing platform-specific installers (`.exe` 
    (`tests/unit/test_wake_on_deferred_terminal.py`), but it must be exercised
    under a live LLM at least once per release.
 
+5. **Model spec drift (advisory):** `python3 scripts/check-model-specs.py`
+   diffs `providers.json` windows/outputs against models.dev. Review every
+   "ours HIGHER" context row against the provider's own docs or model list
+   (an over-declared window overflows before compaction); fix or note it.
+
 ---
 
 ### Windows build
