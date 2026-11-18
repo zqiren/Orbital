@@ -3556,6 +3556,16 @@ def _find_session_uuid_on_disk(sessions_dir: str, session_id: str) -> str | None
     return resolve_session_uuid(sessions_dir, session_id)
 
 
+def _for_client(messages: list[dict]) -> list[dict]:
+    """Rows as the UI/relay sees them: without the OpenAI Responses reasoning
+    state (``responses_output``: encrypted reasoning items, a few KB per
+    tool-call turn). Only the provider reads it, from the stored JSONL, on
+    later turns; nothing client-side renders it, and over the relay it is
+    pure payload. The stored row is untouched."""
+    from agent_os.agent.providers.responses_adapter import strip_responses_state
+    return [strip_responses_state(m) if isinstance(m, dict) else m for m in messages]
+
+
 @router.get("/agents/{project_id}/chat")
 async def chat_history(
     project_id: str,
@@ -3621,7 +3631,7 @@ async def chat_history(
         # response) read from its own transcript, so the management chat shows
         # what the sub-agent actually did. Offloaded — does blocking disk I/O.
         messages = await asyncio.to_thread(_interleave_sub_agent_summaries, messages)
-        resp = JSONResponse(content=messages)
+        resp = JSONResponse(content=_for_client(messages))
         resp.headers["X-Total-Count"] = str(total)
         return resp
 
@@ -3664,7 +3674,7 @@ async def chat_history(
         else:
             messages = all_messages
 
-    resp = JSONResponse(content=messages)
+    resp = JSONResponse(content=_for_client(messages))
     resp.headers["X-Total-Count"] = str(total)
     return resp
 

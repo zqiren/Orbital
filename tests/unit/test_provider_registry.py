@@ -180,7 +180,9 @@ class TestRealProviders:
 
     def test_openai_gpt5(self, registry):
         info = registry.get_model_info("openai", "gpt-5.2")
-        assert info.context_window == 400000
+        # 400K total, 272K prompt cap; the window is the prompt cap because
+        # compaction triggers at 80% of it.
+        assert info.context_window == 272000
         assert info.max_output == 128000
 
     def test_deepseek_no_vision(self, registry):
@@ -305,7 +307,8 @@ class TestJuly2026Models:
         # Official specs: developers.openai.com/api/docs/models/gpt-5.6-{sol,terra,luna}
         for mid in ("gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6"):
             info = registry.get_model_info("openai", mid)
-            assert info.context_window == 1050000, mid
+            # 1.05M total, 922K prompt cap (declared as the window).
+            assert info.context_window == 922000, mid
             assert info.max_output == 128000, mid
             assert info.capabilities.vision is True, mid
 
@@ -342,7 +345,7 @@ class TestJuly2026Models:
         # inherit the provider's current flagship spec, not the generic
         # 128000/8192 defaults.
         info = registry.get_model_info("openai", "gpt-7-hypothetical")
-        assert info.context_window == 1050000
+        assert info.context_window == 922000  # gpt-6.2-sol's prompt cap
         assert info.max_output == 128000
 
     def test_custom_provider_unknown_model_keeps_conservative_defaults(self, registry):
@@ -483,7 +486,7 @@ class TestHunyuan:
         assert hy4.reasoning.supported is True
         assert hy4.reasoning.field == "reasoning_content"
         hy3 = registry.get_model_info("hunyuan", "hy3")
-        assert hy3.context_window == 262_144
+        assert hy3.context_window == 192_000  # 256K total, 192K prompt cap
         assert hy3.max_output == 128_000
 
     def test_unknown_hy_model_inherits_the_flagship_spec(self, registry):

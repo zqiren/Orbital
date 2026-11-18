@@ -96,6 +96,8 @@ import logging
 import sys
 from dataclasses import dataclass
 
+from agent_os.config.provider_registry import match_model_key
+
 logger = logging.getLogger(__name__)
 
 # Collapsed LEXICALLY (dirname twice) rather than with a ".." component: in a
@@ -283,19 +285,12 @@ def _find_entry(pricing_dict: dict, model: str) -> dict | None:
     if not pricing_dict:
         return None
 
-    # 1. Exact match
-    if model in pricing_dict:
-        return dict(pricing_dict[model])
-
-    # 2. Prefix match: longest key that is a prefix of model (skip _ keys)
-    best_match = ""
-    for key in pricing_dict:
-        if key.startswith("_"):
-            continue
-        if model.startswith(key) and len(key) > len(best_match):
-            best_match = key
-    if best_match:
-        return dict(pricing_dict[best_match])
+    # 1–2. Exact match, else prefix match under the shared version-boundary
+    # rule (the same helper the specs lookup uses, so price and window can
+    # never come from two different entries).
+    key = match_model_key(model, pricing_dict)
+    if key is not None:
+        return dict(pricing_dict[key])
 
     # 3. Provider _default
     default = pricing_dict.get("_default")
@@ -611,7 +606,8 @@ def get_cost_rates(model: str, provider: str = "custom") -> tuple[float, float]:
 
     Lookup order:
     1. Exact match in provider's pricing dict
-    2. Prefix match (e.g. "claude-opus-4-6-20260301" matches "claude-opus-4-6")
+    2. Prefix match (e.g. "claude-opus-4-6-20260301" matches "claude-opus-4-6",
+       but "glm-5.4" does not match "glm-5"; see ``match_model_key``)
     3. Provider "_default" entry
     4. Global fallback ($3.00/$15.00 per 1M tokens)
 
@@ -622,19 +618,10 @@ def get_cost_rates(model: str, provider: str = "custom") -> tuple[float, float]:
 
     rates = None
 
-    # 1. Exact match
-    if model in provider_pricing:
-        rates = provider_pricing[model]
-    else:
-        # 2. Prefix match: find the longest key that is a prefix of the model
-        best_match = ""
-        for key in provider_pricing:
-            if key.startswith("_"):
-                continue
-            if model.startswith(key) and len(key) > len(best_match):
-                best_match = key
-        if best_match:
-            rates = provider_pricing[best_match]
+    # 1–2. Exact match, else prefix match (shared version-boundary rule)
+    key = match_model_key(model, provider_pricing)
+    if key is not None:
+        rates = provider_pricing[key]
 
     # 3. Provider default
     if rates is None:
