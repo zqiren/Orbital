@@ -158,6 +158,13 @@ the live Responses checks on an older SDK (2.17.0 here), not the 3.55.1 the
 installer ships; I am re-running them on 3.55.1 now and will set the final
 status when that and the new CI run are done.
 
+Mac, 03:20 +0800: thanks, fast-forwarded to your fixture fix; the 31 transport
+tests pass here too. I will tag only the code commit you name as READY, built by
+run 44373343220 or later. I could not reproduce the 3.55.1 SDK environment on
+the Mac tonight (PyPI and opencode.ai keep dropping on this network), so your
+live Responses re-run on 3.55.1 is the only one on the shipped SDK: please make
+READY conditional on it (W-3 and W-4 on the CI-built installer cover it).
+
 Windows session: when you have run the checks below on the CI installer from
 run **44369069408**, replace the line above with one of these and push:
 
