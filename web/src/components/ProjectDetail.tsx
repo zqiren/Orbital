@@ -4,7 +4,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Dispatch, ReactNode, SetStateAction } from 'react';
-import { PanelRight, Plus } from 'lucide-react';
+import { ChevronLeft, PanelRight, Plus } from 'lucide-react';
 import type { AgentRunStatus, FileContent, Project, Trigger } from '../types';
 import type { ProjectPage, ProjectRoute, Route } from '../route';
 import { pageTrail, routeUp } from '../route';
@@ -26,7 +26,8 @@ import {
   usePanelState,
 } from '../hooks/usePanelState';
 import { useSessionNav } from '../hooks/useSessionNav';
-import { SessionSidebar } from './SessionSidebar';
+import { SessionRail, SessionSidebar } from './SessionSidebar';
+import { readSessionColumnCollapsed, writeSessionColumnCollapsed } from '../utils/sessionColumn';
 import type { SessionListEntry } from '../types';
 import { fetchPathWithFallback } from '../utils/openPathWithFallback';
 import { useT } from '../i18n/useT';
@@ -153,6 +154,15 @@ export default function ProjectDetail({
   const panel = usePanelState(project.project_id, route.sessionId);
   const phone = usePanelMobile();
   const sessionNav = useSessionNav(project.project_id, setRoute);
+
+  // 2026-11-18: the column folds to a 20px rail (SessionRail), like the
+  // project list into its edge strip. Remembered per device for every
+  // project. The phone has no column, so it never reads this.
+  const [columnCollapsed, setColumnCollapsed] = useState(readSessionColumnCollapsed);
+  function setCollapsed(next: boolean) {
+    setColumnCollapsed(next);
+    writeSessionColumnCollapsed(next);
+  }
 
   const handleOpenPath = useCallback(
     async (path: string) => {
@@ -472,66 +482,105 @@ export default function ProjectDetail({
   const settingsOpen = trail[0] === 'settings';
   return (
     <div className="flex flex-1 min-h-0 bg-card" data-testid="project-shell">
-      <aside
-        data-testid="project-column"
-        aria-label={projectName}
-        // 260 beside a docked panel, 220 on a narrow window (the column the
-        // session list had, now holding the whole project).
-        style={{ width: dockable ? 260 : 220 }}
-        className="project-column float-panel-column flex flex-col shrink-0 min-h-0 bg-sidebar"
-      >
-        <div className="flex flex-col gap-1.5 px-4 pt-[18px] pb-1.5 shrink-0">
-          <div className="flex items-center gap-2 min-w-0">
-            {/* No state dot by the name: inside the project the agents' own
-                rows show what is running. The dot stays in the project list,
-                where it tells the active project apart. */}
-            {/* The tour's "your project" stop spotlights the name itself (not
-                the whole row: the gear is a stop of its own). */}
-            <h1
-              data-tour="project-header"
-              className="text-[17px] font-semibold tracking-[-0.01em] text-primary truncate min-w-0"
-            >
-              {projectName}
-            </h1>
-            <div className="ml-auto flex items-center gap-0.5 shrink-0">
-              {panelButton}
-              <span data-tour="project-settings" className="inline-flex">
-                <SettingsIcon size="column" selected={settingsOpen} onClick={handleSettingsClick} />
-              </span>
+      {columnCollapsed ? (
+        // The folded column: same tint and edge as the open one, 20px wide.
+        // `project-rail`, not `project-column`: the mac titlebar band's tint
+        // follows the column's width (index.css).
+        <aside
+          data-testid="session-rail"
+          aria-label={projectName}
+          className="project-rail float-panel-column w-5 shrink-0 min-h-0 bg-sidebar"
+        >
+          <SessionRail
+            projectId={project.project_id}
+            selectedSessionId={route.sessionId}
+            onExpand={() => setCollapsed(false)}
+            onNewSession={handleNewSession}
+          />
+        </aside>
+      ) : (
+        <aside
+          data-testid="project-column"
+          aria-label={projectName}
+          // 260 beside a docked panel, 220 on a narrow window (the column the
+          // session list had, now holding the whole project).
+          style={{ width: dockable ? 260 : 220 }}
+          className="project-column float-panel-column group/column flex flex-col shrink-0 min-h-0 bg-sidebar"
+        >
+          <div className="flex flex-col gap-1.5 px-4 pt-[18px] pb-1.5 shrink-0">
+            <div className="flex items-center gap-2 min-w-0">
+              {/* No state dot by the name: inside the project the agents' own
+                  rows show what is running. The dot stays in the project list,
+                  where it tells the active project apart. */}
+              {/* The tour's "your project" stop spotlights the name itself (not
+                  the whole row: the gear is a stop of its own). */}
+              <h1
+                data-tour="project-header"
+                className="text-[17px] font-semibold tracking-[-0.01em] text-primary truncate min-w-0"
+              >
+                {projectName}
+              </h1>
+              <div className="ml-auto flex items-center gap-0.5 shrink-0">
+                {panelButton}
+                <span data-tour="project-settings" className="inline-flex">
+                  <SettingsIcon size="column" selected={settingsOpen} onClick={handleSettingsClick} />
+                </span>
+              </div>
             </div>
+            {/* Item 157: the "model · spend" line is gone — spend lives in
+                project settings (Budget), the model in the composer's pin menu.
+                Only a budget that paused the queue still shows here: that one
+                stops work, so it must not hide in Settings. */}
+            {budgetPaused && (
+              <div className="flex items-center min-w-0 text-[11px] whitespace-nowrap" data-testid="project-spend">
+                {budget(true)}
+              </div>
+            )}
+            {statusSummaryLine}
           </div>
-          {/* Item 157: the "model · spend" line is gone — spend lives in
-              project settings (Budget), the model in the composer's pin menu.
-              Only a budget that paused the queue still shows here: that one
-              stops work, so it must not hide in Settings. */}
-          {budgetPaused && (
-            <div className="flex items-center min-w-0 text-[11px] whitespace-nowrap" data-testid="project-spend">
-              {budget(true)}
-            </div>
-          )}
-          {statusSummaryLine}
-        </div>
-        {/* The status line — the only way into Tasks (spec 137). Always
-            rendered: a teaching line when nothing is scheduled or queued. */}
-        <TasksStatusLine
-          running={runningCount}
-          queued={queuedCount}
-          triggers={triggers}
-          onOpen={handleOpenTasks}
-          selected={page === 'tasks'}
-          teach={project.manager_ready !== false}
-        />
-        <SessionSidebar
-          projectId={project.project_id}
-          selectedSessionId={route.sessionId}
-          pageOpen={page !== undefined}
-          onSessionSelect={handleSelectSession}
-          onNewSession={handleNewSession}
-          onSessionDeleted={handleSessionDeleted}
-          projects={projects}
-          onSessionMoved={sessionNav.sessionMoved}
-        />
-      </aside>
+          {/* The status line — the only way into Tasks (spec 137). Always
+              rendered: a teaching line when nothing is scheduled or queued. */}
+          <TasksStatusLine
+            running={runningCount}
+            queued={queuedCount}
+            triggers={triggers}
+            onOpen={handleOpenTasks}
+            selected={page === 'tasks'}
+            teach={project.manager_ready !== false}
+          />
+          <SessionSidebar
+            projectId={project.project_id}
+            selectedSessionId={route.sessionId}
+            pageOpen={page !== undefined}
+            onSessionSelect={handleSelectSession}
+            onNewSession={handleNewSession}
+            onSessionDeleted={handleSessionDeleted}
+            projects={projects}
+            onSessionMoved={sessionNav.sessionMoved}
+          />
+          {/* The collapse handle (2026-11-18, round 3): a small chevron on the
+              column's right edge, at the column's vertical centre, where the
+              rail's expand chevron sits too, so folding and unfolding happen
+              under the same pointer. A child of the column, not of the
+              scrolling list: never clipped, never scrolls. It straddles the
+              edge (6px in, 12px out) so it stays clear of the rows' ⋯ and
+              times, which end ~16px inside. Hidden until the pointer is over
+              the column (its own few outside pixels count: they are the
+              column's DOM) or it has keyboard focus; faint at rest where
+              nothing hovers (touch tablets). Hidden, it takes no clicks. No
+              hover tip; the aria-label names it. */}
+          <button
+            type="button"
+            data-testid="session-column-handle"
+            aria-label={t('sessionSidebar.collapse')}
+            aria-expanded={true}
+            onClick={() => setCollapsed(true)}
+            className="absolute top-1/2 -right-3 z-10 flex h-9 w-[18px] -translate-y-1/2 items-center justify-center rounded-full border border-border bg-card text-muted opacity-0 pointer-events-none transition-[opacity,color,background-color] duration-150 hover:bg-card-hover hover:text-primary group-hover/column:opacity-100 group-hover/column:pointer-events-auto focus:outline-none focus-visible:opacity-100 focus-visible:pointer-events-auto focus-visible:ring-2 focus-visible:ring-accent/50 [@media(hover:none)]:opacity-60 [@media(hover:none)]:pointer-events-auto"
+          >
+            <ChevronLeft size={12} strokeWidth={2.25} aria-hidden="true" />
+          </button>
+        </aside>
+      )}
       {/* The right area: the chat, or the page opened from the column. One
           `vt-project-body`, so a move between them swaps it as a whole while
           the column stays put. */}

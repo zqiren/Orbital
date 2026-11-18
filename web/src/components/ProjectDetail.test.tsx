@@ -1024,3 +1024,142 @@ describe('ProjectDetail — the overlay container cannot scroll', () => {
     expect(body).not.toHaveClass('overflow-hidden');
   });
 });
+
+// 2026-11-18: the session column collapses to a 20px rail, like the project
+// list's edge strip. The handle on the column's right edge collapses it (the
+// header chevron of round 2 is gone); the rail brings it back. Remembered for
+// every project.
+describe('ProjectDetail — collapsing the session column', () => {
+  const KEY = 'orbital:sessionSidebar.collapsed';
+  beforeEach(() => localStorage.removeItem(KEY));
+  afterEach(() => localStorage.removeItem(KEY));
+
+  it('the name row ends at the gear: no collapse control in the header', () => {
+    setViewportWidth(1440);
+    renderProjectDetail();
+    const column = screen.getByTestId('project-column');
+    const name = within(column).getByRole('heading', { level: 1 });
+    const row = name.parentElement as HTMLElement;
+    expect(within(row).queryByRole('button', { name: 'Collapse sessions' })).toBeNull();
+    expect(row.querySelector('svg.lucide-chevron-left')).toBeNull();
+    const gear = within(row).getByRole('button', { name: /project settings/i });
+    const cluster = name.nextElementSibling as HTMLElement;
+    expect(cluster.lastElementChild?.contains(gear)).toBe(true);
+  });
+
+  // Round 3 (2026-11-18): the collapse control is a small handle on the
+  // column's right edge, at its vertical centre, shown on column hover or
+  // keyboard focus.
+  it('the edge handle: a real button on the column, centred, hidden until hover or focus', () => {
+    setViewportWidth(1440);
+    renderProjectDetail();
+    const column = screen.getByTestId('project-column');
+    const handle = within(column).getByRole('button', { name: 'Collapse sessions' });
+    expect(handle).toBe(screen.getByTestId('session-column-handle'));
+    expect(handle.tagName).toBe('BUTTON');
+    expect(handle).toHaveAttribute('aria-expanded', 'true');
+    expect(handle).not.toHaveAttribute('title');
+    // A direct child of the column, not of the scrolling list: never clipped,
+    // never scrolls.
+    expect(handle.parentElement).toBe(column);
+    expect(within(screen.getByTestId('session-list')).queryByTestId('session-column-handle')).toBeNull();
+    expect(column).toHaveClass('group/column');
+    // Vertically centred, straddling the right edge.
+    expect(handle).toHaveClass('absolute', 'top-1/2', '-translate-y-1/2', '-right-3');
+    // Hidden (and click-through) at rest; shown on column hover, on keyboard
+    // focus, and faint at rest where nothing hovers.
+    expect(handle).toHaveClass('opacity-0', 'pointer-events-none');
+    expect(handle).toHaveClass('group-hover/column:opacity-100', 'group-hover/column:pointer-events-auto');
+    expect(handle).toHaveClass('focus-visible:opacity-100', 'focus-visible:pointer-events-auto');
+    expect(handle).toHaveClass('[@media(hover:none)]:opacity-60', '[@media(hover:none)]:pointer-events-auto');
+    const svg = handle.querySelector('svg.lucide-chevron-left');
+    expect(svg).not.toBeNull();
+    expect(svg).toHaveAttribute('width', '12');
+    // Reachable by Tab.
+    expect(handle.tabIndex).toBe(0);
+    handle.focus();
+    expect(document.activeElement).toBe(handle);
+  });
+
+  // In every state the column is open in, the handle is there.
+  it.each([
+    ['a session being viewed, wide', 1440, { sessionId: 'sess-xyz' }],
+    ['the new-session page (no session), wide', 1440, { sessionId: undefined }],
+    ['a page open from the column (Settings)', 1440, { page: 'settings' as const }],
+    ['a narrow window, beside the panel button', 1100, { sessionId: 'sess-xyz' }],
+    ['a narrow window, new-session page', 1024, { sessionId: undefined }],
+  ])('the handle is present: %s', (_label, width, route) => {
+    setViewportWidth(width);
+    render(
+      <ProjectDetail
+        project={{ ...mockProject, name: 'Quarterly infrastructure migration and observability overhaul' }}
+        agentStatus="idle"
+        route={{ ...baseRoute, ...route }}
+        setRoute={vi.fn()}
+      />,
+    );
+    const column = screen.getByTestId('project-column');
+    const handle = within(column).getByTestId('session-column-handle');
+    expect(handle).toHaveAccessibleName('Collapse sessions');
+    expect(handle.parentElement).toBe(column);
+    // The name truncates; nothing else is in its row to squeeze.
+    const name = within(column).getByRole('heading', { level: 1 });
+    expect(name).toHaveClass('truncate', 'min-w-0');
+  });
+
+  it('collapses to the rail and back, and remembers it', () => {
+    setViewportWidth(1440);
+    const first = renderProjectDetail();
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse sessions' }));
+    expect(screen.queryByTestId('project-column')).toBeNull();
+    const rail = screen.getByTestId('session-rail');
+    expect(rail.className).toContain('w-5');
+    expect(rail.className).toContain('bg-sidebar');
+    expect(localStorage.getItem(KEY)).toBe('1');
+    // The right area stays.
+    expect(screen.getByTestId('project-main')).toBeInTheDocument();
+    first.unmount();
+
+    // Another project (or a reload) opens collapsed too: the state is global.
+    render(
+      <ProjectDetail
+        project={{ ...mockProject, project_id: 'proj-other', name: 'Other' }}
+        agentStatus="idle"
+        route={{ name: 'project', projectId: 'proj-other' }}
+        setRoute={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId('session-rail')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Expand sessions' }));
+    expect(screen.queryByTestId('session-rail')).toBeNull();
+    expect(screen.getByTestId('project-column')).toBeInTheDocument();
+    expect(localStorage.getItem(KEY)).toBe('0');
+  });
+
+  it('collapsed, New session on the rail mints a session', async () => {
+    setViewportWidth(1440);
+    localStorage.setItem(KEY, '1');
+    mintMock.newSession.mockClear();
+    renderProjectDetail();
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('session-rail-new'));
+    });
+    expect(mintMock.newSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('applies on a narrow window too', () => {
+    setViewportWidth(1000);
+    localStorage.setItem(KEY, '1');
+    renderProjectDetail();
+    expect(screen.getByTestId('session-rail')).toBeInTheDocument();
+  });
+
+  it('a phone has no session column, so there is nothing to collapse', () => {
+    setViewportWidth(390);
+    localStorage.setItem(KEY, '1');
+    renderProjectDetail();
+    expect(screen.queryByTestId('session-rail')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Collapse sessions' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Expand sessions' })).toBeNull();
+  });
+});

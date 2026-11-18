@@ -787,7 +787,13 @@ export default function App() {
           pinned={effectivePinned(projectListPinned, windowCovered)}
           onTogglePin={toggleProjectListPinned}
         >
-          <Sidebar {...sidebarProps} narrow />
+          {/* Docked, the list's header carries the collapse chevron; it
+              flips the same pin the rail does (2026-11-18). */}
+          <Sidebar
+            {...sidebarProps}
+            narrow
+            onCollapse={effectivePinned(projectListPinned, windowCovered) ? toggleProjectListPinned : undefined}
+          />
         </EdgeStrip>
       ) : (
         <div className={sidebarHidden ? 'hidden' : 'contents'}>

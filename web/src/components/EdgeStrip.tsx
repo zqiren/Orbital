@@ -39,15 +39,18 @@
  *
  * Spec 154 §5.9: the one thing at the top of the strip is the Workbench
  * glyph — a 14px four-square grid with a small blue dot while anything waits
- * on the user, tooltip `工作台 ⌘0`. Clicking it goes home and never toggles
- * the list. A button cannot hold a button, so it is a sibling stacked above
+ * on the user. Clicking it goes home and never toggles the list. It shows
+ * only while the list is out of sight (2026-11-18): the list's own 工作台 row
+ * takes over once it is visible. The rail and its controls carry no hover
+ * tips (2026-11-18; the glyph's `工作台 ⌘0` tip went with them).
+ * A button cannot hold a button, so it is a sibling stacked above
  * the rail; the rail keeps its toggle, hover-intent and aggregate dot. The
  * strip also frames home (no current project), so `currentProjectId` is
  * optional.
  */
 
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
-import { ChevronLeft, ChevronRight, LayoutGrid } from 'lucide-react';
+import { ChevronRight, LayoutGrid } from 'lucide-react';
 import type { Project, AgentRunStatus } from '../types';
 import { useT } from '../i18n/useT';
 import { getProjectDotColor } from '../utils/projectStatus';
@@ -265,7 +268,6 @@ export default function EdgeStrip({
   const dotTitle = dotCount === 1
     ? t('strip.needsYou.one')
     : t('strip.needsYou.other', { n: dotCount });
-  const Chevron = pinned ? ChevronLeft : ChevronRight;
 
   return (
     // The wrapper is the only thing that changes size: 20px floated, 260px
@@ -288,12 +290,13 @@ export default function EdgeStrip({
         aria-label={t('strip.projects')}
         aria-expanded={visible}
         aria-pressed={pinned}
-        title={pinned ? t('strip.tooltipPinned') : t('strip.tooltip')}
+        // No `title`: the rail carries no hover tip (2026-11-18). The
+        // chevron says what it does; the aria-label names it.
         onClick={handleToggle}
         onKeyDown={handleStripKeyDown}
         onMouseEnter={() => handleZoneEnter('strip')}
         onMouseLeave={() => handleZoneLeave('strip')}
-        className={`absolute inset-y-0 left-0 z-[21] flex w-5 flex-col items-center bg-nav pt-titlebar focus:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-accent ${
+        className={`group absolute inset-y-0 left-0 z-[21] flex w-5 flex-col items-center bg-nav pt-titlebar focus:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-accent ${
           // The hairline is the collapsed rail's edge. Once the list is
           // visible (floated or docked) the rail is the list's left gutter —
           // same colour, above the list's padding — and a hairline there
@@ -303,15 +306,30 @@ export default function EdgeStrip({
       >
         {/* pt-titlebar (above) clears the mac band on its own; this inner
             span carries the strip's own visual padding so the two pt-*
-            declarations never compete on one element. pt-5 centres the 12px
-            chevron on the wordmark row's 20px logo (pt-4 + 10) so the two
-            read as one header line when the list is visible. */}
-        <span className="flex flex-col items-center gap-2 pb-3 pt-5">
-          <Chevron size={12} aria-hidden="true" className="shrink-0 text-secondary" />
+            declarations never compete on one element. pt-4 puts the 28px
+            chevron box on the wordmark row's centre line, where the docked
+            list's own collapse chevron sits (2026-11-18), so the two read as
+            one header line.
+
+            The chevron is the column's expand sign, in the look the session
+            column's chevrons share: muted, 14px, a rounded box that lights
+            while the rail is hovered. Docked, the list's header carries the
+            collapse chevron (Sidebar `onCollapse`), so the rail shows none;
+            it is still the toggle. */}
+        <span className="flex flex-col items-center gap-2 pb-3 pt-4">
+          {!pinned && (
+            <span
+              data-testid="strip-chevron"
+              className="flex h-7 w-5 shrink-0 items-center justify-center rounded-md text-secondary transition-colors group-hover:bg-nav-hover group-hover:text-primary"
+            >
+              <ChevronRight size={16} strokeWidth={2.5} aria-hidden="true" />
+            </span>
+          )}
           {dotColor && !pinned && (
             <span
               data-testid="strip-dot"
-              title={dotTitle}
+              role="img"
+              aria-label={dotTitle}
               className={`h-1.5 w-1.5 shrink-0 rounded-full ${dotColor}`}
             />
           )}
@@ -323,11 +341,14 @@ export default function EdgeStrip({
           row icon (2026-11-04), so collapsing or expanding the list keeps the
           icon in place: brand row 56px + 工作区 header 26px + half the 32px
           row = 98px below the titlebar band, minus half its own 22px = 87.
-          Docked, the list's row is on screen at that height, so the glyph
-          steps aside; floated by hover it stays, since the pointer may be on
-          its way to it. The band itself passes clicks to the rail; only the
-          glyph takes them. */}
-      {onHome && !pinned && (
+          Whenever the list is on screen — docked, or floated by hover — the
+          list's own 工作台 row (with its own blue dot) is right beside it, so
+          the glyph steps aside (2026-11-18: it read as a duplicate). It is
+          absolutely placed, so its going moves nothing else on the rail, and
+          it is not part of the hover zones, so its going cannot close the
+          list. The band itself passes clicks to the rail; only the glyph
+          takes them. No hover tip (2026-11-18); the aria-label names it. */}
+      {onHome && !visible && (
         <div className="pointer-events-none absolute inset-x-0 top-0 z-[22] w-5 pt-titlebar">
           <button
             type="button"
@@ -336,7 +357,7 @@ export default function EdgeStrip({
             aria-current={homeActive ? 'page' : undefined}
             aria-keyshortcuts={homeShortcutLabel() === '⌘0' ? 'Meta+0' : 'Control+0'}
             onClick={onHome}
-            className={`group pointer-events-auto relative mt-[87px] flex h-[22px] w-5 items-center justify-center rounded-[5px] focus:outline-none focus-visible:ring-1 focus-visible:ring-accent ${
+            className={`pointer-events-auto relative mt-[87px] flex h-[22px] w-5 items-center justify-center rounded-[5px] focus:outline-none focus-visible:ring-1 focus-visible:ring-accent ${
               homeActive ? 'text-accent' : 'text-secondary hover:text-primary'
             }`}
           >
@@ -347,13 +368,6 @@ export default function EdgeStrip({
                 className="absolute right-px top-0.5 h-1.5 w-1.5 rounded-full bg-accent shadow-[0_0_0_1.5px_var(--color-nav)]"
               />
             )}
-            <span
-              role="tooltip"
-              className="pointer-events-none absolute left-[26px] top-1/2 z-30 flex -translate-y-1/2 items-center gap-2 whitespace-nowrap rounded-[7px] bg-[#18181B] px-[9px] py-[5px] text-xs font-medium text-white opacity-0 shadow-[0_6px_18px_rgb(0_0_0/0.18)] transition-opacity duration-100 group-hover:opacity-100 group-focus-visible:opacity-100 dark:bg-[#F4F6F9] dark:text-[#18181B]"
-            >
-              {t('workbench.title')}
-              <kbd className="font-sans text-[11px] opacity-60">{homeShortcutLabel()}</kbd>
-            </span>
           </button>
         </div>
       )}
