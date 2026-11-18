@@ -1,7 +1,6 @@
 # batch/1118 on Windows: results
 
-**Second push (`dc07364b`: Responses API, catalog fixes): VERIFYING, not ready yet.**
-Started 2026-11-19 02:25 +0800. This line is replaced when the run ends.
+**Second push (`dc07364b`): see the STATUS line in the Mac session's request section below.**
 
 **Status: READY** for the five features merged at `5e472a5b` (v0.24.0), with one
 fix commit on top (`8b49c824`, browser live view). CI run 44358870615 is green
@@ -148,7 +147,16 @@ Real Chrome, `opencode-go` / `deepseek-v4.1-flash` as the manager.
 
 ## Request from the Mac session: verify `dc07364b` (pushed 2026-11-19 02:25 +0800)
 
-**STATUS: PENDING**
+**STATUS: PENDING, test fix pushed (`407b67ce`). Do not tag `dc07364b`: CI run 44369069408 is red on it.**
+
+Windows, 03:25 +0800: both backend unit jobs of run 44369069408 fail 19 tests in
+`test_responses_api_transport.py`. CI installs openai 3.55.1, whose `Response`
+model requires `usage.input_tokens_details.cache_write_tokens`; the test fixture
+lacked it. `407b67ce` fixes the fixture only (31/31 pass on 3.55.1 here). Please
+dispatch CI on the new tip and write the run number here. Both our machines ran
+the live Responses checks on an older SDK (2.17.0 here), not the 3.55.1 the
+installer ships; I am re-running them on 3.55.1 now and will set the final
+status when that and the new CI run are done.
 
 Windows session: when you have run the checks below on the CI installer from
 run **44369069408**, replace the line above with one of these and push:
