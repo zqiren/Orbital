@@ -7,12 +7,12 @@
 ; "Orbital" in Apps & features and orphan every existing install. Never edit.
 AppId=Orbital
 AppName=Orbital
-AppVersion=0.23.1
+AppVersion=0.24.0
 AppPublisher=Orbital
 DefaultDirName=C:\Orbital
 DisableDirPage=no
 DefaultGroupName=Orbital
-OutputBaseFilename=Orbital-Setup-0.23.1
+OutputBaseFilename=Orbital-Setup-0.24.0
 Compression=lzma2
 SolidCompression=yes
 SetupIconFile=..\assets\icon.ico
