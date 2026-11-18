@@ -76,7 +76,9 @@ def _response(output: list, *, status="completed", usage=None, incomplete=None,
         "incomplete_details": incomplete,
         "usage": usage or {
             "input_tokens": 120, "output_tokens": 30, "total_tokens": 150,
-            "input_tokens_details": {"cached_tokens": 100},
+            # cache_write_tokens is required by the SDK's Response model
+            # from openai 3.x; older SDKs accept it as an extra field.
+            "input_tokens_details": {"cached_tokens": 100, "cache_write_tokens": 0},
             "output_tokens_details": {"reasoning_tokens": 12},
         },
     })
