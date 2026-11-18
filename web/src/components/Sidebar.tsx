@@ -4,7 +4,7 @@
 
 import type { ReactNode } from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronUp, FolderInput, GripVertical, LayoutGrid, X } from 'lucide-react';
+import { ChevronLeft, ChevronUp, FolderInput, GripVertical, LayoutGrid, X } from 'lucide-react';
 import {
   DndContext,
   MouseSensor,
@@ -60,6 +60,11 @@ interface SidebarProps {
    *  never moves, and the list's content sits at the same x in both (spec
    *  078 pin amendment). */
   narrow?: boolean;
+  /** Docked beside the edge strip (a project route, desktop): the list can
+   *  collapse back into the strip, and the wordmark row carries the chevron
+   *  that does it (2026-11-18). Absent everywhere collapsing does nothing
+   *  (Workbench, Settings, the phone), so no chevron is drawn there. */
+  onCollapse?: () => void;
 }
 
 /** One draggable project row. The whole row is the drag target. */
@@ -167,6 +172,7 @@ export default function Sidebar({
   onSettings,
   onReorderProjects,
   narrow = false,
+  onCollapse,
 }: SidebarProps) {
   const t = useT();
   const selectedProjectId = route.name === 'project' ? route.projectId : null;
@@ -355,6 +361,22 @@ export default function Sidebar({
         <span className="text-lg font-semibold text-primary tracking-tight">
           {t('sidebar.wordmark')}
         </span>
+        {/* The column's collapse chevron: the same control as the session
+            column's (16px at a 2.5 stroke, as heavy as the gear), at the right of the column's top
+            row. In the header, never in a project row (rows are drag
+            targets). No hover tip (2026-11-18); the aria-label names it. */}
+        {onCollapse && (
+          <button
+            type="button"
+            data-testid="sidebar-collapse"
+            aria-label={t('sidebar.collapse')}
+            aria-expanded={true}
+            onClick={onCollapse}
+            className="ml-auto -mr-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-secondary transition-colors hover:bg-nav-hover hover:text-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 max-md:min-h-[44px]"
+          >
+            <ChevronLeft size={16} strokeWidth={2.5} aria-hidden="true" />
+          </button>
+        )}
       </div>
 
       {/* The global "Blocked" row used to sit here. It was removed because it

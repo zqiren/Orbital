@@ -364,6 +364,10 @@ body {
     background-image: linear-gradient(to right, var(--color-sidebar) 220px, transparent 220px);
   }
 }
+/* The column folded to its 20px rail (2026-11-18): the band tints only that. */
+:root[data-chrome="mac-inline"] .titlebar-band-card:has(.project-rail) {
+  background-image: linear-gradient(to right, var(--color-sidebar) 20px, transparent 20px);
+}
 
 /* ------------------------------------------------- native control suppression
    `appearance: none` hands us the BOX of an input but not the widgets WebKit

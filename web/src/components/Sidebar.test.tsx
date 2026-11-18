@@ -419,3 +419,35 @@ describe('Sidebar — import entry on the New Project split button (batch 1026)'
     expect(screen.queryByTestId('new-project-menu')).toBeNull();
   });
 });
+
+// 2026-11-18: docked beside the edge strip, the list's header carries the
+// column's collapse chevron (same look as the session column's). It exists
+// only where collapsing does something: App passes onCollapse only then.
+describe('Sidebar — the collapse chevron', () => {
+  it('is absent without onCollapse (Workbench, Settings, phone)', () => {
+    render(<Sidebar {...defaultProps} />);
+    expect(screen.queryByTestId('sidebar-collapse')).toBeNull();
+  });
+
+  it('sits in the wordmark row, outside every project row, and collapses the list', () => {
+    const onCollapse = vi.fn();
+    const onSelectProject = vi.fn();
+    render(<Sidebar {...defaultProps} onSelectProject={onSelectProject} narrow onCollapse={onCollapse} />);
+    const button = screen.getByRole('button', { name: 'Collapse projects' });
+    expect(button).toHaveAttribute('data-testid', 'sidebar-collapse');
+    // No hover tip (2026-11-18); the aria-label names it.
+    expect(button).not.toHaveAttribute('title');
+    expect(button).toHaveAttribute('aria-expanded', 'true');
+    const svg = button.querySelector('svg.lucide-chevron-left');
+    expect(svg).not.toBeNull();
+    // 16px, the gear's size, so it reads as clearly as the session column's.
+    expect(svg).toHaveAttribute('width', '16');
+    expect(svg).toHaveAttribute('stroke-width', '2.5');
+    expect(button).toHaveClass('text-secondary');
+    expect(button.closest('nav')).toBeNull();
+    expect(button.parentElement?.textContent).toContain('Orbital');
+    fireEvent.click(button);
+    expect(onCollapse).toHaveBeenCalledTimes(1);
+    expect(onSelectProject).not.toHaveBeenCalled();
+  });
+});

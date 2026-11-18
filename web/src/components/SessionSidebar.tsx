@@ -12,11 +12,12 @@
  * square corner).
  *
  * Header (item 157, 2026-11-04 — reverses the 2026-10-28 "always shown"
- *   call): "会话 · N" with a bare chevron at its right (tooltip 筛选). The
- *   chevron expands the All | Chats | Automations control inline under the
+ *   call): "会话 · N" with a filter icon at its right (tooltip 筛选; a
+ *   chevron until 2026-11-18, when chevrons came to mean "collapse this
+ *   column"). It expands the All | Chats | Automations control inline under the
  *   header; open/closed and the choice are remembered per device. A filter
  *   other than All while the control is closed reads in the header itself
- *   ("会话 · 自动任务 · 4") with the chevron in accent — no pill, no row.
+ *   ("会话 · 自动任务 · 4") with the icon in accent — no pill, no row.
  * Body: pinned rows first (spec 067), then everything else most recent first.
  *   Sessions a schedule, a file watch or the queue fired are folded into ONE
  *   row per automation, sitting where its latest run was (see
@@ -68,7 +69,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ChevronDown, ChevronRight, Clock, FolderSearch, ListOrdered, Plus } from 'lucide-react';
+import { ChevronDown, ChevronRight, Clock, FolderSearch, ListFilter, ListOrdered, Plus } from 'lucide-react';
 import { useSessions } from '../hooks/useSessions';
 import { useSeenReplies } from '../hooks/useSeenReplies';
 import { hasUnseenReply, seenKey } from '../utils/sessionUnread';
@@ -453,9 +454,9 @@ export function SessionSidebar({
       aria-label={t('sessionSidebar.header')}
       className="flex flex-col flex-1 min-h-0"
     >
-      {/* Header (item 157): "会话 · 16" and a bare chevron that expands the
+      {/* Header (item 157): "会话 · 16" and a filter icon that expands the
           filter inline. A filter left on while closed reads in the header:
-          "会话 · 自动任务 · 4", chevron in accent. */}
+          "会话 · 自动任务 · 4", icon in accent. */}
       <div
         className="flex items-center gap-1.5 px-4 pt-2.5 pb-0.5 min-h-[32px] shrink-0 text-xs text-secondary"
         data-testid="session-sidebar-header"
@@ -480,16 +481,14 @@ export function SessionSidebar({
             filterOpen ? 'bg-card-hover text-primary' : filter !== 'all' ? 'text-accent' : 'text-muted'
           }`}
         >
-          <ChevronDown
-            size={14}
-            aria-hidden="true"
-            className={`transition-transform duration-150 ${filterOpen ? 'rotate-180' : ''}`}
-          />
+          {/* A filter icon, not a chevron: in the column headers a chevron
+              means only "collapse this column" (2026-11-18). */}
+          <ListFilter size={14} aria-hidden="true" />
         </button>
       </div>
 
       {/* All | Chats | Automations — the segmented control, shown only while
-          the header chevron has it open. */}
+          the header's filter icon has it open. */}
       {filterOpen && (
         <div className="px-4 pt-0.5 pb-1.5 shrink-0">
           <div
@@ -584,5 +583,80 @@ export function SessionSidebar({
       </div>
 
     </section>
+  );
+}
+
+export interface SessionRailProps {
+  projectId: string | null;
+  selectedSessionId?: string | null;
+  onExpand: () => void;
+  onNewSession?: () => void;
+}
+
+/**
+ * SessionRail — the session column folded to 20px (2026-11-18), modelled on
+ * the project list's edge strip: the whole rail is the expand toggle, with
+ * its chevron at the vertical centre, where the open column's edge handle
+ * is (round 3). New session stays one click away
+ * (a sibling stacked above the rail: a button cannot hold a button), and a
+ * single dot says that some other session waits on the user, by the same
+ * `isWaiting` predicate the automation groups count with — no count, no
+ * second definition. The session being viewed never lights it, as its row
+ * never shows unread. The rail carries no hover tips (2026-11-18): its
+ * controls are named by aria-label only.
+ */
+export function SessionRail({ projectId, selectedSessionId, onExpand, onNewSession }: SessionRailProps) {
+  const t = useT();
+  const { sessions } = useSessions(projectId);
+  const { seenAt } = useSeenReplies(projectId, sessions);
+  const waiting = sessions.some(
+    (s) =>
+      s.session_id !== selectedSessionId &&
+      isWaiting({ ...s, checked_reply_at: seenAt(seenKey(s)) ?? null }),
+  );
+  return (
+    <div className="relative h-full w-full">
+      {/* The whole rail expands. Its chevron sits at the rail's vertical
+          centre, where the open column's collapse handle is (round 3,
+          2026-11-18), so folding and unfolding happen under one pointer
+          position. Faint at rest (a 20px rail has nothing to hover first and
+          the folded column needs a signal), stronger on rail hover. The dot
+          keeps its place at the top, under where the chevron used to be: the
+          edge strip keeps its own dot on that line. */}
+      <button
+        type="button"
+        data-testid="session-rail-expand"
+        aria-label={t('sessionSidebar.expand')}
+        aria-expanded={false}
+        onClick={onExpand}
+        className="group absolute inset-0 focus:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-accent"
+      >
+        <span
+          data-testid="session-rail-chevron"
+          className="absolute left-0 top-1/2 flex h-9 w-5 -translate-y-1/2 items-center justify-center rounded-md text-muted opacity-70 transition-[opacity,color,background-color] duration-150 group-hover:bg-card-hover group-hover:text-primary group-hover:opacity-100 group-focus-visible:opacity-100"
+        >
+          <ChevronRight size={12} strokeWidth={2.25} aria-hidden="true" />
+        </span>
+        {waiting && (
+          <span
+            data-testid="session-rail-dot"
+            role="img"
+            aria-label={t('sessionSidebar.railWaiting')}
+            className="absolute left-1/2 top-[52px] h-1.5 w-1.5 -translate-x-1/2 rounded-full bg-accent"
+          />
+        )}
+      </button>
+      {/* New session, stacked above the rail at a fixed height so the dot
+          coming and going never moves it. */}
+      <button
+        type="button"
+        data-testid="session-rail-new"
+        aria-label={t('sessionSidebar.newSessionRow')}
+        onClick={onNewSession}
+        className="absolute left-0 top-16 flex h-7 w-5 items-center justify-center rounded-md text-secondary transition-colors hover:bg-card-hover hover:text-primary focus:outline-none focus-visible:ring-1 focus-visible:ring-accent max-md:min-h-[44px]"
+      >
+        <Plus size={14} strokeWidth={2} aria-hidden="true" />
+      </button>
+    </div>
   );
 }

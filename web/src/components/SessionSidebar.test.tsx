@@ -55,7 +55,8 @@ vi.mock('../config', () => ({
   isRelayMode: false,
 }));
 
-import { SessionSidebar } from './SessionSidebar';
+import { SessionRail, SessionSidebar } from './SessionSidebar';
+import { readSessionColumnCollapsed, writeSessionColumnCollapsed } from '../utils/sessionColumn';
 import { __resetCheckedMarks } from '../hooks/useSeenReplies';
 
 // ---------------------------------------------------------------------------
@@ -1221,5 +1222,151 @@ describe('SessionSidebar — move to project (spec 180)', () => {
     render(<SessionSidebar projectId="proj-1" />);
     fireEvent.click(screen.getByTestId('session-three-dot-trigger'));
     expect(screen.queryByTestId('session-action-move')).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 2026-11-18: a chevron in the column headers means only "collapse this
+// column", so the filter toggle wears a filter icon. The collapsed session
+// column is a 20px rail (SessionRail): expand, New session, and one dot when
+// any other session waits on the user.
+// ---------------------------------------------------------------------------
+
+describe('SessionSidebar — the filter toggle is a filter icon, not a chevron', () => {
+  it('draws the list-filter icon and no chevron, keeping its label and aria-expanded', async () => {
+    const user = userEvent.setup();
+    resetMocks();
+    mockSessions = [makeSession({ session_id: 'a', session_uuid: 'ua', name: 'Chat' })];
+    render(<SessionSidebar projectId="p1" />);
+    const toggle = screen.getByTestId('session-filter-toggle');
+    expect(toggle.querySelector('svg.lucide-list-filter')).not.toBeNull();
+    expect(screen.getByTestId('session-sidebar-header').querySelector('svg[class*="lucide-chevron"]')).toBeNull();
+    expect(toggle).toHaveAttribute('aria-label', 'Filter');
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('tablist', { name: 'Filter sessions' })).toBeInTheDocument();
+  });
+});
+
+describe('SessionRail — the collapsed session column', () => {
+  const BASE = Date.now() - 60 * 60 * 1000;
+  const at = (secs: number) => new Date(BASE + secs * 1000).toISOString();
+  function replied(id: string, checked: string | null = null) {
+    return makeSession({
+      session_id: id,
+      session_uuid: id,
+      name: id,
+      last_activity_at: at(10),
+      last_user_at: at(0),
+      last_reply_at: at(10),
+      checked_reply_at: checked,
+    });
+  }
+
+  it('is an expand chevron (pointing right) that reports it is collapsed', async () => {
+    const user = userEvent.setup();
+    resetMocks();
+    const onExpand = vi.fn();
+    render(<SessionRail projectId="p1" onExpand={onExpand} />);
+    const expand = screen.getByRole('button', { name: 'Expand sessions' });
+    expect(expand).toHaveAttribute('aria-expanded', 'false');
+    // No hover tip on the rail (2026-11-18); the aria-label names it.
+    expect(expand).not.toHaveAttribute('title');
+    const chevron = screen.getByTestId('session-rail-chevron');
+    const svg = chevron.querySelector('svg.lucide-chevron-right');
+    expect(svg).not.toBeNull();
+    expect(svg).toHaveAttribute('width', '12');
+    // Round 3: at the rail's vertical centre (where the open column's handle
+    // is), faint at rest, stronger on rail hover.
+    expect(chevron).toHaveClass('absolute', 'top-1/2', '-translate-y-1/2');
+    expect(chevron).toHaveClass('opacity-70', 'group-hover:opacity-100', 'group-hover:text-primary');
+    await user.click(expand);
+    expect(onExpand).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps New session one click away: an icon button with a label and no hover tip', async () => {
+    const user = userEvent.setup();
+    resetMocks();
+    const onNewSession = vi.fn();
+    const onExpand = vi.fn();
+    render(<SessionRail projectId="p1" onExpand={onExpand} onNewSession={onNewSession} />);
+    const add = screen.getByTestId('session-rail-new');
+    expect(add).toHaveAttribute('aria-label', 'New session');
+    expect(add).not.toHaveAttribute('title');
+    expect(add.textContent).toBe('');
+    await user.click(add);
+    expect(onNewSession).toHaveBeenCalledTimes(1);
+    // A press on New session is not a press on the rail behind it.
+    expect(onExpand).not.toHaveBeenCalled();
+  });
+
+  it('nothing on the rail has a hover tip, dot included', () => {
+    resetMocks();
+    mockSessions = [replied('a'), replied('b')];
+    const { container } = render(
+      <SessionRail projectId="p1" selectedSessionId="a" onExpand={vi.fn()} onNewSession={vi.fn()} />,
+    );
+    expect(screen.getByTestId('session-rail-dot')).toBeInTheDocument();
+    expect(container.querySelectorAll('[title]')).toHaveLength(0);
+    expect(screen.queryByRole('tooltip')).toBeNull();
+  });
+
+  it('shows one dot when another session has a reply the user has not checked', () => {
+    resetMocks();
+    mockSessions = [replied('a'), replied('b')];
+    render(<SessionRail projectId="p1" selectedSessionId="a" onExpand={vi.fn()} />);
+    const dots = screen.getAllByTestId('session-rail-dot');
+    expect(dots).toHaveLength(1);
+    expect(dots[0]).toHaveAttribute('aria-label', 'A session needs you');
+    expect(dots[0]).not.toHaveAttribute('title');
+    expect(dots[0].textContent).toBe('');
+  });
+
+  it('shows one dot for a session waiting on an approval', () => {
+    resetMocks();
+    mockSessions = [makeSession({ session_id: 'x', session_uuid: 'x', status: 'pending_approval' })];
+    render(<SessionRail projectId="p1" onExpand={vi.fn()} />);
+    expect(screen.getByTestId('session-rail-dot')).toBeInTheDocument();
+  });
+
+  it('shows no dot when only the session on screen has a new reply, or nothing waits', () => {
+    resetMocks();
+    mockSessions = [replied('a'), replied('b', at(10))];
+    const { unmount } = render(<SessionRail projectId="p1" selectedSessionId="a" onExpand={vi.fn()} />);
+    expect(screen.queryByTestId('session-rail-dot')).toBeNull();
+    unmount();
+    mockSessions = [];
+    render(<SessionRail projectId="p1" onExpand={vi.fn()} />);
+    expect(screen.queryByTestId('session-rail-dot')).toBeNull();
+  });
+});
+
+describe('session column collapsed state — storage', () => {
+  it('reads and writes orbital:sessionSidebar.collapsed', () => {
+    localStorage.removeItem('orbital:sessionSidebar.collapsed');
+    expect(readSessionColumnCollapsed()).toBe(false);
+    writeSessionColumnCollapsed(true);
+    expect(localStorage.getItem('orbital:sessionSidebar.collapsed')).toBe('1');
+    expect(readSessionColumnCollapsed()).toBe(true);
+    writeSessionColumnCollapsed(false);
+    expect(localStorage.getItem('orbital:sessionSidebar.collapsed')).toBe('0');
+    expect(readSessionColumnCollapsed()).toBe(false);
+  });
+
+  it('never throws when storage is unavailable', () => {
+    const get = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('blocked');
+    });
+    const set = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('blocked');
+    });
+    try {
+      expect(readSessionColumnCollapsed()).toBe(false);
+      expect(() => writeSessionColumnCollapsed(true)).not.toThrow();
+    } finally {
+      get.mockRestore();
+      set.mockRestore();
+    }
   });
 });

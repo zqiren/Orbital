@@ -317,11 +317,11 @@ describe('EdgeStrip — pinned (docked list)', () => {
     expect(getFlyout()).toHaveClass('left-3');
   });
 
-  it('the strip chevron tooltip flips when pinned', () => {
+  it('the rail carries no hover tip, collapsed or docked (2026-11-18)', () => {
     const { setPinned } = renderStrip();
-    expect(getStrip()).toHaveAttribute('title', 'Hover to peek at projects · Click to keep them open');
+    expect(getStrip()).not.toHaveAttribute('title');
     setPinned(true);
-    expect(getStrip()).toHaveAttribute('title', 'Click to hide projects');
+    expect(getStrip()).not.toHaveAttribute('title');
   });
 });
 
@@ -387,14 +387,29 @@ describe('EdgeStrip — aggregate dot', () => {
 });
 
 describe('EdgeStrip — accessibility', () => {
-  it('exposes aria-label, aria-expanded, and a tooltip on the strip button', () => {
+  it('exposes aria-label and aria-expanded on the strip button, and no title', () => {
     renderStrip();
     const strip = getStrip();
+    expect(strip).toHaveAttribute('aria-label', 'Projects');
     expect(strip).toHaveAttribute('aria-expanded', 'false');
-    expect(strip).toHaveAttribute(
-      'title',
-      'Hover to peek at projects · Click to keep them open',
-    );
+    expect(strip).not.toHaveAttribute('title');
+  });
+
+  it('the aggregate dot is named by aria-label, not a hover title', () => {
+    renderStrip({ agentStatuses: {}, pendingApprovals: { 'proj-2': 1 } });
+    const dot = screen.getByTestId('strip-dot');
+    expect(dot).not.toHaveAttribute('title');
+    expect(dot).toHaveAttribute('role', 'img');
+    expect(dot).toHaveAttribute('aria-label', '1 project needs you');
+  });
+
+  it('nothing on the rail has a title or a tooltip', () => {
+    renderStrip({ onHome: vi.fn(), waiting: true, pendingApprovals: { 'proj-2': 1 } });
+    const wrapper = getWrapper();
+    const flyout = getFlyout();
+    const titled = Array.from(wrapper.querySelectorAll('[title]')).filter((el) => !flyout.contains(el));
+    expect(titled).toEqual([]);
+    expect(screen.queryByRole('tooltip')).toBeNull();
   });
 });
 
@@ -451,21 +466,93 @@ describe('EdgeStrip — Workbench glyph (spec 154)', () => {
     expect(screen.queryByTestId('strip-workbench')).toBeNull();
   });
 
-  it('floated by hover, the glyph stays (the pointer may be on its way to it)', () => {
+  it('floated by hover, the glyph and its dot step aside (the list shows its own Workbench row)', () => {
     vi.useFakeTimers();
     try {
-      renderStrip({ onHome: vi.fn(), pinned: false });
+      renderStrip({ onHome: vi.fn(), pinned: false, waiting: true });
+      expect(screen.getByTestId('strip-workbench')).toBeInTheDocument();
+      expect(screen.getByTestId('strip-workbench-dot')).toBeInTheDocument();
       fireEvent.mouseEnter(getStrip());
       act(() => { vi.advanceTimersByTime(200); });
-      expect(screen.getByTestId('strip-workbench')).toBeInTheDocument();
+      expect(getStrip()).toHaveAttribute('aria-expanded', 'true');
+      expect(screen.queryByTestId('strip-workbench')).toBeNull();
+      expect(screen.queryByTestId('strip-workbench-dot')).toBeNull();
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it('its tooltip names the Workbench and the shortcut', () => {
+  it('hiding the glyph never closes the floated list as the pointer crosses onto it', () => {
+    vi.useFakeTimers();
+    try {
+      renderStrip({ onHome: vi.fn(), pinned: false, waiting: true });
+      const strip = getStrip();
+      fireEvent.mouseEnter(strip);
+      act(() => { vi.advanceTimersByTime(200); });
+      // Rail → list: leave the rail, enter the flyout before the close delay.
+      fireEvent.mouseLeave(strip);
+      fireEvent.mouseEnter(getFlyout());
+      act(() => { vi.advanceTimersByTime(500); });
+      expect(strip).toHaveAttribute('aria-expanded', 'true');
+      expect(screen.queryByTestId('strip-workbench')).toBeNull();
+      // And back onto the rail, where the glyph used to be: still open.
+      fireEvent.mouseLeave(getFlyout());
+      fireEvent.mouseEnter(strip);
+      act(() => { vi.advanceTimersByTime(500); });
+      expect(strip).toHaveAttribute('aria-expanded', 'true');
+      // Pointer leaves both: the list closes and the glyph (with its dot) returns.
+      fireEvent.mouseLeave(strip);
+      act(() => { vi.advanceTimersByTime(500); });
+      expect(strip).toHaveAttribute('aria-expanded', 'false');
+      expect(screen.getByTestId('strip-workbench')).toBeInTheDocument();
+      expect(screen.getByTestId('strip-workbench-dot')).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('unpinning from the docked list keeps it floated, so the glyph stays hidden until the list closes', () => {
+    const { setPinned } = renderStrip({ onHome: vi.fn(), pinned: true });
+    expect(screen.queryByTestId('strip-workbench')).toBeNull();
+    fireEvent.click(getStrip());
+    setPinned(false);
+    expect(getStrip()).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.queryByTestId('strip-workbench')).toBeNull();
+  });
+
+  it('has no hover tooltip; the aria-label names it and the shortcut stays declared', () => {
     renderStrip({ onHome: vi.fn() });
-    const tip = screen.getByRole('tooltip');
-    expect(tip.textContent).toMatch(/^Workbench(⌘0|Ctrl\+0)$/);
+    expect(screen.queryByRole('tooltip')).toBeNull();
+    const glyph = screen.getByTestId('strip-workbench');
+    expect(glyph).not.toHaveAttribute('title');
+    expect(glyph).toHaveAttribute('aria-label', 'Workbench');
+    expect(glyph.getAttribute('aria-keyshortcuts')).toMatch(/^(Meta|Control)\+0$/);
+  });
+});
+
+// 2026-11-18: the chevron is the column's collapse/expand sign — the same
+// muted 16px control the session column uses, lit when the rail is hovered.
+// Docked, the list's own header carries the collapse chevron, so the rail
+// (still the toggle) shows none.
+describe('EdgeStrip — the column chevron', () => {
+  it('collapsed: a right chevron (expand) in the shared muted control', () => {
+    renderStrip();
+    const chevron = screen.getByTestId('strip-chevron');
+    const svg = chevron.querySelector('svg.lucide-chevron-right');
+    expect(svg).not.toBeNull();
+    // 16px, the gear's size: at 14 it read fainter than the gear beside it.
+    expect(svg).toHaveAttribute('width', '16');
+    expect(svg).toHaveAttribute('stroke-width', '2.5');
+    expect(chevron).toHaveClass('text-secondary', 'rounded-md', 'group-hover:bg-nav-hover');
+    expect(getStrip()).toHaveClass('group');
+  });
+
+  it('pinned: the rail carries no chevron, and still toggles', () => {
+    const { onTogglePin, setPinned } = renderStrip({ pinned: true });
+    expect(screen.queryByTestId('strip-chevron')).toBeNull();
+    fireEvent.click(getStrip());
+    expect(onTogglePin).toHaveBeenCalledTimes(1);
+    setPinned(false);
+    expect(screen.getByTestId('strip-chevron')).toBeInTheDocument();
   });
 });
