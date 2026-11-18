@@ -88,6 +88,6 @@ cat <<MSG
   UI translation editor : http://127.0.0.1:$VITE_PORT/?i18n=edit
   README proposal editor: http://127.0.0.1:$VITE_PORT/__i18n/readme
 
-  Edits land in docs/i18n/pending/ (ui-overrides.json, README.md, README.en.md).
+  Edits land in docs/i18n/pending/ (ui-overrides.json, README.md, README.zh-CN.md).
   Logs: $STATE/daemon.log, $STATE/vite.log.   Stop: bash scripts/i18n-editor.sh --stop
 MSG

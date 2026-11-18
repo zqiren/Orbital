@@ -1,95 +1,70 @@
-# AGENTS.md — read this first
+# AGENTS.md
 
-Onboarding for any agentic tool landing in this project — Claude Code, Codex
-App, Cursor, Copilot, or otherwise. Read this before touching anything.
+A guide for coding agents (Codex, Cursor, Claude Code and others) working in
+this repository.
 
-## What this project is
+## What this repository is
 
-Orbital is an AI agent orchestration platform: a management agent that
-delegates work to sub-agents (Claude Code, Codex, Gemini CLI, ...) and keeps
-a persistent memory of state, decisions, and lessons across sessions instead
-of starting cold every time. This repo is **dual-purpose** — it is both
-Orbital's own product source (`agent_os/` Python daemon, `web/` React
-frontend) *and* a live dogfooding workspace: an Orbital instance manages
-this project's own feature backlog using the same memory system described
-below. When you land here, you may be touching product code, or you may be
-extending the memory that runs the dogfooding loop itself.
+Orbital is a desktop app that runs a management agent and delegates work to
+coding-agent CLIs (Claude Code, Codex, Cursor, Pi and others) in one
+conversation per project.
 
-## The memory system (read this section fully — it's the core of this file)
+- `agent_os/` holds the Python daemon (FastAPI, Python 3.11+). The app factory
+  is `agent_os/api/app.py`, the agent loop and worker transports are under
+  `agent_os/agent/`, and the desktop shell is `agent_os/desktop/`.
+- `web/` holds the React + TypeScript + Vite frontend.
+- `tests/unit/` and `tests/platform/` hold the pytest suites (pytest-asyncio).
+- `scripts/` and `installer/` hold the build and release tooling.
 
-Orbital's memory lives under `orbital/`. Each file has a distinct job:
+**`CLAUDE.md` is the full development guide.** It covers the test gates, how to
+run the daemon, i18n, and the release process. Read it before changing
+`agent_os/` or `web/`. This file is the short version.
 
-- **`orbital/PROJECT_STATE.md`** — what's true *right now*: current focus,
-  in-progress work, blockers, next steps. Read first, every session. It's
-  overwritten in place, never appended to — if you change the focus, replace
-  the stale lines rather than adding a new dated entry.
-- **`orbital/DECISIONS.md`** — durable, settled decisions with their
-  reasoning. Read before re-litigating anything that sounds already decided.
-  When a new decision lands, append an entry (or supersede/replace an old
-  one if it contradicts — never leave two conflicting entries standing).
-- **`orbital/LESSONS.md`** — numbered, hard-won gotchas and playbooks from
-  past failures. Append a new entry whenever you recover from a non-obvious
-  mistake or find a workaround worth remembering next time.
-- **`orbital/INDEX.md`** — a navigation map of everything else in the repo
-  (one-line-per-path, no dates or decisions). Update it when files move or
-  a new area is added; it's the thing that keeps the rest of this list
-  honest.
-- **`orbital/instructions/`** — standing goals (mission, scope, rules,
-  preferences) for whichever agent is operating this workspace. Read to
-  understand *why* the rules below exist; edit when the mission changes.
-- **`orbital/skills/`** — reusable multi-step procedures captured once a
-  workflow repeats (e.g. `learning-capture`, `process-capture`,
-  `task-planning`, `efficient-execution`). Check here before inventing an
-  approach from scratch; add a new skill dir when a workflow proves durable.
-- **`orbital/sub_agents/*/MEMORY.md`** — private, per-agent memory (e.g.
-  `orbital/sub_agents/claude-code/MEMORY.md`). If you *are* that agent,
-  this is yours to read and append to across dispatches.
-- **`BACKLOG.md` + `BACKLOG/specs/`** — the roadmap. Both are **gitignored**
-  and local-only, so a fresh clone has neither. `BACKLOG.md` is the curated
-  Kanban + spec index; `BACKLOG/specs/` holds the rough implementation specs
-  (one per non-trivial backlog item — often carrying the resolved decisions
-  for that feature) that `BACKLOG.md` links to.
+## Contributions
 
-## Write posture
+Orbital does not merge outside pull requests (see `CONTRIBUTING.md`). If you are
+helping someone who found a bug, help them open an **issue**, with the file, the
+line, and what is wrong. A precise diagnosis gets the fix shipped fastest.
 
-Agents here are collaborators, not intruders on probation — full read/write
-on every file listed above, no append-only games, no policing. Update what
-needs updating; the guidance above on *how* each file wants to be edited
-(overwrite vs. append vs. supersede) is a courtesy to the next reader, not a
-permission gate.
+## Setup and checks
 
-The one hands-off zone: **machine-managed runtime state** —
-`orbital/sessions/`, `orbital/ledger/`, `orbital/tool-results/`, and
-sub-agent transcript `.jsonl` files. These are process-owned, not a trust
-boundary; nobody hand-edits them, agent or human.
+```bash
+pip install -e ".[desktop]"
+cd web && npm install && cd ..
 
-Production code (`agent_os/`, `web/`, `scripts/`, `installer/`) is different:
-propose a diff for human review, don't push directly — see `BACKLOG.md`'s
-ground rules.
+# Backend tests. The null keyring stops the macOS Keychain from hanging headless runs.
+PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring python -m pytest tests/unit/ -q
 
-## How to recover context (read in order)
+# Frontend: types, unit tests, translation catalog
+cd web && npx tsc -b && npm test && node scripts/check-i18n.mjs
+```
 
-1. `README.md` — what Orbital is and why.
-2. This file's memory map (above).
-3. `orbital/PROJECT_STATE.md` — current focus.
-4. `orbital/LESSONS.md` — recent entries especially.
-5. `BACKLOG.md` — what's queued next.
+Run the daemon with `bash scripts/restart-daemon.sh` (port 8000), and the
+frontend with `cd web && npx vite --host 127.0.0.1 --port 5173`. Restart the
+daemon after every backend change, because a running daemon keeps the old code.
 
-**Modifying `agent_os/` or `web/`?** Read `CLAUDE.md` next — it carries the
-testing gates, daemon-restart rules, and release process for this codebase.
+## Things that bite
 
-## Land-mines (distilled from `orbital/LESSONS.md`)
+- **One daemon per machine.** The daemon holds `~/orbital/daemon.pid`, so a
+  dev daemon and an installed Orbital.app can't both run. Port 8000 is often
+  the installed app, not your code: check which process is listening before
+  you trust a result.
+- **Some platform tests use the real sandbox.** `tests/platform/test_e2e_agent_isolation.py`
+  and `test_macos_provider_integration.py` run `sandbox-exec` against
+  `~/Desktop` and can lock the checkout out of its own files. Leave them out
+  unless you need them.
+- **User-facing strings go through `t('key')`** (`web/src/i18n/`). Never put a
+  bare string literal in JSX. Add the English entry; Chinese can follow later.
+  Never edit `docs/i18n/ui-terms.zh-Hans.csv` in Excel.
+- **Path checks need `realpath` on both sides**, with a trailing separator, or
+  symlinks and prefix matches get through.
+- **Don't trust a local build for release behaviour.** Release installers are
+  Developer-ID signed with hardened runtime and notarized in CI. A local
+  `scripts/build-*.sh` build is ad-hoc signed and can behave differently.
 
-- **Read what already exists before designing a template.** Don't impose a
-  schema on `BACKLOG.md` or the memory files without reading their current,
-  hand-built shape first — they usually already have one.
-- **The cloud relay is control, not storage.** It proxies approvals and
-  events; it is not a file/project storage backend. Don't conflate the two
-  when scoping "cloud hosting" work.
-- **Check a sub-agent's framing matches the actual question before you
-  summarize its report.** A thorough answer to the wrong question still
-  reads as a good answer unless you explicitly flag the mismatch.
-- **Always `tools/list` an external MCP server before estimating connector
-  integration effort.** Some servers expose only meta-tools (search/guide/
-  execute), not direct action passthrough — this changes the effort
-  estimate by an order of magnitude.
+## If there is an `orbital/` folder
+
+That means this checkout is open as a project in Orbital itself: Orbital is
+developed with Orbital. `orbital/` holds that project's memory and is
+gitignored. When Orbital hands you a task, the instructions in your prompt say
+which of its files to read and update. Don't commit anything under `orbital/`.
