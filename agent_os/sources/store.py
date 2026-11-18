@@ -134,8 +134,16 @@ class SourcesStore:
         return next((s for s in self.config if s.get("id") == source_id), None)
 
     def rt(self, source_id: str) -> dict:
+        """The source's runtime. Runtime exists only for a configured source:
+        for an id that is not (or no longer) configured, e.g. a check that
+        was still running when the source was removed, this returns a
+        throwaway empty runtime and stores nothing, so a late writer can
+        never bring a removed source back (``save_runtime`` then writes
+        nothing either)."""
         rt = self.runtime.get(source_id)
         if rt is None:
+            if self.get(source_id) is None:
+                return empty_runtime()
             rt = self.runtime[source_id] = empty_runtime()
         return rt
 
