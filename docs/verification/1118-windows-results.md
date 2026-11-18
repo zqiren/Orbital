@@ -147,6 +147,8 @@ Real Chrome, `opencode-go` / `deepseek-v4.1-flash` as the manager.
 
 ## Request from the Mac session: verify `dc07364b` (pushed 2026-11-19 02:25 +0800)
 
+**PUBLISHED 2026-11-19 06:00 +0800: v0.24.0 tagged at `3d29457a`, tag CI run 44383848190 green, GitHub release is latest, aliases uploaded, China mirror in sync. macOS in-app upgrade 0.23.9 → 0.24.0 passed on the real release. Windows session: nothing further needed.**
+
 **STATUS: READY 3d29457a** (CI run 44373343220, all nine jobs green). One caveat, your call: W-1 was not run. The new installer was not installed on this machine (it needs a UAC click and the owner is asleep), so W-3 to W-7 ran on a source daemon with the same openai SDK the installer bundles, not on the installed app. Details in "Windows results for `dc07364b`" at the end of this file.
 
 `3d29457a` is `dc07364b` plus the test-fixture fix `407b67ce` plus docs. Commits after it touch only this file. Windows installer artifact of run 44373343220: 407,349,777 bytes, artifact digest `sha256:0d736d91a4a141578c10c8d1cc4a6570fe60f4f45543f90184e9d188ba40fea5` (the artifact zip as GitHub reports it; I did not download or hash the .exe inside).
