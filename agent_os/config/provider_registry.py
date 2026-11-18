@@ -13,12 +13,87 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass, replace
 
 _PROVIDERS_JSON = os.path.join(os.path.dirname(__file__), "providers.json")
 
 _FALLBACK_CONTEXT_WINDOW = 128_000
 _FALLBACK_MAX_OUTPUT = 8192
+
+
+# --- Model-id → catalog-key matching (shared with agent.pricing) -----------
+#
+# A key matches an id that is the key itself, or the key followed by a VARIANT
+# or SNAPSHOT suffix — never the key followed by a VERSION STEP. Plain
+# ``startswith`` let ``glm-5`` swallow ``glm-5.3-flash`` (another model, with
+# a 1M window and a different price). An id no key accepts falls through to
+# the caller's next rung, exactly like an unknown id.
+#
+# A key ending in ``*`` is an explicit FAMILY PATTERN that does span versions
+# (``gpt-6*`` catches a future ``gpt-6.3-sol``). Exact keys and longer normal
+# prefixes beat it. Keys starting with ``_`` (``_default``) never match.
+
+FAMILY_SUFFIX = "*"
+_SEPARATORS = "-_:@/"
+# A number token directly after "-"/"_": a version step unless it is a
+# snapshot (4+ digits like 0731 / 20250929 / 2026-…, or zero-padded like 001).
+# A number glued to letters ("8b", "a22b") is a word, not a version.
+_NUMBER_TOKEN = re.compile(r"(\d+)(?=$|[-_.:@/])")
+
+
+def _suffix_is_variant(rest: str) -> bool:
+    """True when *rest* (the id past a normal key) is a variant/snapshot."""
+    if not rest:
+        return True
+    sep = rest[0]
+    if sep not in _SEPARATORS:
+        return False              # "." + digit, or mid-token ("gpt-4" → "gpt-4o")
+    if sep in ":@/":
+        return True               # tags and qualifiers: ":beta", "@20250929"
+    m = _NUMBER_TOKEN.match(rest, 1)
+    if m is None:
+        return True               # a word: "-flash", "-free", "-8b"
+    digits = m.group(1)
+    return len(digits) >= 4 or (len(digits) > 1 and digits[0] == "0")
+
+
+def _family_accepts(stem: str, model: str) -> bool:
+    if not model.startswith(stem):
+        return False
+    rest = model[len(stem):]
+    if not rest or rest[0] in _SEPARATORS or rest[0] == ".":
+        return True
+    # "kimi-k*" takes "kimi-k3"; "gpt-6*" must not take "gpt-60" or "gpt-6o".
+    return rest[0].isdigit() and not stem[-1:].isdigit()
+
+
+def match_model_key(model: str, keys) -> str | None:
+    """Return the catalog key *model* resolves to, or None.
+
+    Order: exact key → longest normal key followed by a variant/snapshot
+    suffix → longest family pattern (``stem*``). See the block comment above.
+    Used by the specs lookup here and by every pricing lookup, so the two
+    cannot disagree about which entry an id belongs to.
+    """
+    if model in keys:
+        return model
+    normal, family = "", ""
+    for key in keys:
+        if not key or key.startswith("_"):
+            continue
+        if key.endswith(FAMILY_SUFFIX):
+            stem = key[:-1]
+            if (stem and len(stem) > len(family) - 1
+                    and _family_accepts(stem, model)):
+                family = key
+        elif (len(key) > len(normal) and model.startswith(key)
+              and _suffix_is_variant(model[len(key):])):
+            normal = key
+    # The longer stem wins; on a tie the normal key does.
+    if family and len(family) - 1 > len(normal):
+        return family
+    return normal or None
 
 
 @dataclass(frozen=True)
@@ -114,9 +189,12 @@ def _parse_model_entry(entry: dict) -> ModelInfo:
         tool_use=caps_dict.get("tool_use", True),
         streaming=caps_dict.get("streaming", True),
     )
+    # ``or`` rather than a .get default: providers.json writes "unknown" as an
+    # explicit null, which must fall back too (``max_tokens: null`` reached a
+    # provider). A 0 limit is equally meaningless, so it falls back as well.
     return ModelInfo(
-        context_window=entry.get("context_window", _FALLBACK_CONTEXT_WINDOW),
-        max_output=entry.get("max_output", _FALLBACK_MAX_OUTPUT),
+        context_window=entry.get("context_window") or _FALLBACK_CONTEXT_WINDOW,
+        max_output=entry.get("max_output") or _FALLBACK_MAX_OUTPUT,
         capabilities=caps,
         tier=entry.get("tier", ""),
         display_name=entry.get("display_name", ""),
@@ -135,7 +213,9 @@ class ProviderRegistry:
 
     Loads providers.json once (lazy). All lookups use a fallback chain:
     1. Exact model match in provider's ``models`` dict
-    2. Prefix match (longest matching key wins)
+    2. Prefix match: the longest key the id is a variant/snapshot of, else a
+       ``stem*`` family pattern — never a different version (``match_model_key``)
+    2.5. The provider's ``suggested_models[0]`` specs (not its endpoint)
     3. Provider ``_default`` entry in ``models``
     4. Top-level ``defaults.unknown_model``
     5. Hardcoded safe fallback
@@ -174,21 +254,14 @@ class ProviderRegistry:
         # the endpoint does not.
         matched_exactly = False
 
-        # 1. Exact match
-        if model in models:
-            entry = models[model]
+        # 1–2. Exact match, else the longest key the id is a variant/snapshot
+        # of, else a family pattern (see match_model_key). A different
+        # version of a catalogued family ("glm-5.4" vs "glm-5") is NOT a
+        # match and drops to 2.5 like any unknown id.
+        key = match_model_key(model, models)
+        if key is not None:
+            entry = models[key]
             matched_exactly = True
-        else:
-            # 2. Prefix match (longest key that is a prefix of model)
-            best = ""
-            for key in models:
-                if key.startswith("_"):
-                    continue
-                if model.startswith(key) and len(key) > len(best):
-                    best = key
-            if best:
-                entry = models[best]
-                matched_exactly = True
 
         # 2.5. Inherit from the provider's newest flagship. An unknown model
         # on a known provider is almost always NEWER than the bundled catalog

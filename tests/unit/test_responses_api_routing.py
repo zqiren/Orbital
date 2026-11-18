@@ -8,9 +8,10 @@ OpenAI: "Starting with GPT-5.4, Chat Completions does not support tool calling
 with reasoning_effort values other than none" (migrate-to-responses guide), and
 GPT-6 Astra / GPT-6.1 Sol / GPT-6.2 Sol refuse effort ``none`` outright. So
 every OpenAI model from 5.4 on is routed to Responses, and so is an uncatalogued
-``gpt-6.x`` id via a prefix entry: the registry honors endpoint overrides only
-on exact or prefix matches, and flagship inheritance alone would send a new
-model to Chat Completions and the same 400.
+``gpt-6.x`` id via the ``gpt-6*`` family-pattern entry: the registry honors
+endpoint overrides only on exact, prefix or family-pattern matches (a plain
+prefix no longer spans versions), and flagship inheritance alone would send a
+new model to Chat Completions and the same 400.
 
 OpenCode Go/Zen serve their GPT and Grok models ONLY over Responses (verified
 on the wire 2026-10-10: 400 ModelProtocolUnsupported elsewhere).
@@ -36,7 +37,8 @@ def test_gpt_6_family_is_catalogued_on_responses(real, mid):
     info = real.get_model_info("openai", mid)
     assert info.sdk == RESPONSES_SDK, mid
     assert info.base_url is None, "the OpenAI client appends /responses to /v1"
-    assert info.context_window == 1_050_000
+    # The 922K prompt cap, not the 1.05M total: compaction runs at 80% of it.
+    assert info.context_window == 922_000
     assert info.max_output == 128_000
     assert info.capabilities.vision and info.capabilities.tool_use
     assert info.reasoning.supported is True
@@ -66,11 +68,12 @@ def test_effort_lists_drive_the_off_switch(real):
 
 def test_uncatalogued_gpt_6_model_still_routes_to_responses(real):
     """A future gpt-6.3-sol must not fall back to Chat Completions and hit
-    the same 400; the ``gpt-6`` prefix entry carries the endpoint, and its
-    effort list omits 'none' so the off switch is never sent blind."""
+    the same 400; the ``gpt-6*`` family-pattern entry carries the endpoint,
+    and its effort list omits 'none' so the off switch is never sent blind.
+    Its window is the 922K prompt cap, like every catalogued GPT-6 model."""
     info = real.get_model_info("openai", "gpt-6.3-sol")
     assert info.sdk == RESPONSES_SDK
-    assert info.context_window == 1_050_000
+    assert info.context_window == 922_000
     assert "none" not in info.reasoning.efforts
 
 
