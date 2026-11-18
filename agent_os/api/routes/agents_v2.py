@@ -4040,6 +4040,7 @@ async def fetch_models(req: FetchModelsRequest):
 
 _WIRE_PROTOCOL_NAMES = {
     "openai": "OpenAI chat/completions",
+    "openai-responses": "OpenAI Responses",
     "anthropic": "Anthropic messages",
 }
 
@@ -4050,19 +4051,17 @@ def _describe_protocol_mismatch(model: str, sdk: str | None) -> str:
     OpenCode Zen/Go serve each model over exactly one wire protocol and answer
     this when a request arrives on another. The raw envelope ("Model does not
     support this protocol.") names neither the protocol tried nor the fix, and
-    reads like a dead key. Two causes, both worth naming: the model lives on
-    OpenAI's Responses API, which Orbital has no client for (Grok, GPT on
-    OpenCode); or the catalog lacks the per-model endpoint entry that would
-    have routed it to the other protocol Orbital does speak (how
-    claude-haiku-5-5 on Go was reported).
+    reads like a dead key. Orbital speaks all three protocols these gateways
+    use, so the cause is the catalog: it has no per-model endpoint entry for
+    this model (how claude-haiku-5-5 on Go was reported, and what every model
+    released after this build will hit until the catalog catches up).
     """
     wire = _WIRE_PROTOCOL_NAMES.get(sdk or "", sdk or "default")
     return (
         f"'{model}' is not served over the {wire} protocol on this provider. "
-        "Orbital speaks OpenAI chat/completions and Anthropic messages, so a "
-        "model on OpenAI's Responses API (Grok and GPT on OpenCode) cannot be "
-        "used yet; a Claude model here means the catalog lacks an endpoint "
-        "entry for it."
+        "Orbital speaks OpenAI chat/completions, the OpenAI Responses API and "
+        "Anthropic messages, but its model catalog has no endpoint entry for "
+        "this model yet; a newer Orbital, or another model, will work."
     )
 
 

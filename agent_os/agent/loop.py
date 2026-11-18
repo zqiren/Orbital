@@ -35,6 +35,7 @@ from agent_os.agent.providers.types import (
     is_rejected_credential,
     unwrap_provider_message,
 )
+from agent_os.agent.providers.responses_adapter import RESPONSES_STATE_FIELD
 from agent_os.agent.tools.base import ToolResult
 from agent_os.utils.text_io import read_text_lenient
 from agent_os.agent.tool_result_filters import dispatch_prefilter
@@ -1647,6 +1648,13 @@ class AgentLoop:
                     reasoning = (response.raw_message or {}).get("reasoning_content")
                     if reasoning:
                         assistant_msg["reasoning_content"] = reasoning
+                    # OpenAI Responses: the encrypted reasoning items (and
+                    # message phase) of this reply. Models that render earlier
+                    # turns' reasoning (GPT-5.6+ default to all_turns) can only
+                    # get it back from here, since requests are store:false.
+                    responses_state = (response.raw_message or {}).get(RESPONSES_STATE_FIELD)
+                    if responses_state:
+                        assistant_msg[RESPONSES_STATE_FIELD] = responses_state
 
                     if not (response.text or "").strip():
                         # Whitespace-only, no tool calls: the generation was

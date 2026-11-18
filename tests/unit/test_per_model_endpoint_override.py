@@ -510,9 +510,10 @@ PROTOCOL_400 = (
 def test_a_protocol_mismatch_names_the_protocol_and_the_fix(
     route_client, monkeypatch
 ):
-    """Grok / GPT on OpenCode live on the Responses API, which Orbital does
-    not speak. The gateway's "Model does not support this protocol." names
-    neither what was tried nor what to do; the card line must."""
+    """A model the catalog does not route reaches the gateway on the wrong
+    protocol. The gateway's "Model does not support this protocol." names
+    neither what was tried nor what to do; the card line must (and must not
+    claim Orbital lacks a protocol it now speaks)."""
     _provider_error(monkeypatch, PROTOCOL_400, 400)
     resp = route_client.post(
         "/api/v2/providers/test",
@@ -524,6 +525,7 @@ def test_a_protocol_mismatch_names_the_protocol_and_the_fix(
     assert "'grok-4.7'" in detail, detail
     assert "OpenAI chat/completions" in detail, detail
     assert "Responses API" in detail, detail
+    assert "cannot be used yet" not in detail, detail
 
 
 def test_a_provider_400_reads_as_the_providers_sentence(route_client, monkeypatch):

@@ -40,6 +40,11 @@ class StreamChunk:
     # where the adapter knows the mapping ("stop"/"length"/"tool_calls"/...).
     # None on delta chunks and for providers that never report one.
     finish_reason: str | None = None
+    # Provider-native fields to persist on the assembled assistant message
+    # (merged into ``raw_message`` by StreamAccumulator.finalize). The OpenAI
+    # Responses path carries its encrypted reasoning items here, on the final
+    # chunk only. None everywhere else.
+    raw_extra: dict | None = None
 
 
 @dataclass
@@ -67,6 +72,7 @@ class StreamAccumulator:
         self.usage: TokenUsage | None = None
         self.reasoning_parts: list[str] = []
         self.finish_reason: str | None = None
+        self.raw_extra: dict = {}
 
     @staticmethod
     def _get_attr(obj, key, default=""):
@@ -126,6 +132,8 @@ class StreamAccumulator:
             self.usage = chunk.usage
         if chunk.finish_reason:
             self.finish_reason = chunk.finish_reason
+        if chunk.raw_extra:
+            self.raw_extra.update(chunk.raw_extra)
 
     def _assemble_tool_calls(self) -> list[dict]:
         if not self.tool_calls_parts:
@@ -147,6 +155,8 @@ class StreamAccumulator:
             raw_message["tool_calls"] = tool_calls
         if self.reasoning_parts:
             raw_message["reasoning_content"] = "".join(self.reasoning_parts)
+        for key, value in self.raw_extra.items():
+            raw_message.setdefault(key, value)
         status_text = self._extract_status(text)
         # Prefer the provider's real finish_reason (it distinguishes a
         # truncated response, "length", from a completed one). Synthesize
