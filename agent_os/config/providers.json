@@ -9,12 +9,13 @@
       "supports_model_list": true,
       "sdk": "openai",
       "suggested_models": [
-        "gpt-5.6-sol",
-        "gpt-5.6-terra",
-        "gpt-5.6-luna",
-        "gpt-5.5"
+        "gpt-6.2-sol",
+        "gpt-6.2-astra",
+        "gpt-6.1-terra",
+        "gpt-6-luna",
+        "gpt-5.6-sol"
       ],
-      "notes": "Flagship: gpt-5.5 (1.05M ctx). Balanced: gpt-5.4. Fast/cheap: gpt-5.4-mini, gpt-5.4-nano, gpt-5-nano. Reasoning-tier: o1, o3, o3-mini, o4-mini. NOTE: on /chat/completions the reasoning trace is hidden server-side for both o-series and gpt-5.x; reasoning_effort is accepted as a request param. To observe or round-trip the trace you must use the Responses API (reasoning.encrypted_content). No separate China endpoint.",
+      "notes": "Flagship: gpt-6.2-sol (1.05M ctx); most capable: gpt-6.2-astra; balanced: gpt-6.1-terra; fast/cheap: gpt-6-luna. GPT-5.4 and later (all GPT-6) are served over the Responses API: Chat Completions refuses function tools with reasoning on from GPT-5.4, and GPT-6 Astra / 6.1 Sol / 6.2 Sol also refuse reasoning effort 'none'. On Responses Orbital keeps reasoning on (store:false, encrypted reasoning items replayed with their tool calls, summaries shown as thinking). Older models (gpt-5.2 and earlier, gpt-4.x, o-series) stay on Chat Completions, where the reasoning trace is hidden. An uncatalogued gpt-6.x id resolves to the gpt-6 prefix entry and so also uses Responses. No separate China endpoint. https://developers.openai.com/api/docs/guides/migrate-to-responses",
       "pricing": {
         "gpt-5.2": {
           "input_per_1m": 1.75,
@@ -111,6 +112,46 @@
         "gpt-5.6": {
           "input_per_1m": 5.0,
           "output_per_1m": 30.0
+        },
+        "gpt-6.2-sol": {
+          "input_per_1m": 2.0,
+          "output_per_1m": 10.0,
+          "cached_input_per_1m": 0.1
+        },
+        "gpt-6.2-astra": {
+          "input_per_1m": 8.0,
+          "output_per_1m": 40.0,
+          "cached_input_per_1m": 0.4
+        },
+        "gpt-6.1-sol": {
+          "input_per_1m": 2.0,
+          "output_per_1m": 10.0,
+          "cached_input_per_1m": 0.1
+        },
+        "gpt-6.1-terra": {
+          "input_per_1m": 1.0,
+          "output_per_1m": 5.0,
+          "cached_input_per_1m": 0.05
+        },
+        "gpt-6-astra": {
+          "input_per_1m": 10.0,
+          "output_per_1m": 50.0,
+          "cached_input_per_1m": 1.0
+        },
+        "gpt-6-sol": {
+          "input_per_1m": 2.0,
+          "output_per_1m": 10.0,
+          "cached_input_per_1m": 0.2
+        },
+        "gpt-6-luna": {
+          "input_per_1m": 0.1,
+          "output_per_1m": 0.5,
+          "cached_input_per_1m": 0.01
+        },
+        "gpt-6": {
+          "input_per_1m": 2.0,
+          "output_per_1m": 10.0,
+          "cached_input_per_1m": 0.1
         }
       },
       "models": {
@@ -350,12 +391,20 @@
             "streaming": true
           },
           "reasoning": {
-            "supported": false,
-            "field": null,
+            "supported": true,
+            "field": "reasoning_content",
             "echo_back": "none",
             "enable": "param:reasoning_effort=medium",
-            "notes": "Reasoning hidden on Chat Completions; available via Responses API. https://developers.openai.com/api/docs/guides/reasoning"
-          }
+            "efforts": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ],
+            "notes": "Served over the Responses API: from GPT-5.4 on, Chat Completions refuses function tools with reasoning on. Reasoning stays on; encrypted reasoning items are replayed (store:false) and summaries surface as thinking. https://developers.openai.com/api/docs/guides/migrate-to-responses"
+          },
+          "sdk": "openai-responses"
         },
         "gpt-5.5-pro": {
           "display_name": "GPT-5.5 Pro",
@@ -368,12 +417,18 @@
             "streaming": false
           },
           "reasoning": {
-            "supported": false,
-            "field": null,
+            "supported": true,
+            "field": "reasoning_content",
             "echo_back": "none",
             "enable": "param:reasoning_effort=medium",
-            "notes": "Reasoning hidden on Chat Completions. https://developers.openai.com/api/docs/guides/reasoning"
-          }
+            "efforts": [
+              "medium",
+              "high",
+              "xhigh"
+            ],
+            "notes": "Served over the Responses API: from GPT-5.4 on, Chat Completions refuses function tools with reasoning on. Reasoning stays on; encrypted reasoning items are replayed (store:false) and summaries surface as thinking. https://developers.openai.com/api/docs/guides/migrate-to-responses"
+          },
+          "sdk": "openai-responses"
         },
         "gpt-5.4": {
           "display_name": "GPT-5.4",
@@ -386,12 +441,20 @@
             "streaming": true
           },
           "reasoning": {
-            "supported": false,
-            "field": null,
+            "supported": true,
+            "field": "reasoning_content",
             "echo_back": "none",
             "enable": "param:reasoning_effort=medium",
-            "notes": "Reasoning hidden on Chat Completions. https://developers.openai.com/api/docs/guides/reasoning"
-          }
+            "efforts": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ],
+            "notes": "Served over the Responses API: from GPT-5.4 on, Chat Completions refuses function tools with reasoning on. Reasoning stays on; encrypted reasoning items are replayed (store:false) and summaries surface as thinking. https://developers.openai.com/api/docs/guides/migrate-to-responses"
+          },
+          "sdk": "openai-responses"
         },
         "gpt-5.4-pro": {
           "display_name": "GPT-5.4 Pro",
@@ -404,12 +467,18 @@
             "streaming": true
           },
           "reasoning": {
-            "supported": false,
-            "field": null,
+            "supported": true,
+            "field": "reasoning_content",
             "echo_back": "none",
             "enable": "param:reasoning_effort=medium",
-            "notes": "Reasoning hidden on Chat Completions. https://developers.openai.com/api/docs/guides/reasoning"
-          }
+            "efforts": [
+              "medium",
+              "high",
+              "xhigh"
+            ],
+            "notes": "Served over the Responses API: from GPT-5.4 on, Chat Completions refuses function tools with reasoning on. Reasoning stays on; encrypted reasoning items are replayed (store:false) and summaries surface as thinking. https://developers.openai.com/api/docs/guides/migrate-to-responses"
+          },
+          "sdk": "openai-responses"
         },
         "gpt-5.4-mini": {
           "display_name": "GPT-5.4 Mini",
@@ -422,12 +491,20 @@
             "streaming": true
           },
           "reasoning": {
-            "supported": false,
-            "field": null,
+            "supported": true,
+            "field": "reasoning_content",
             "echo_back": "none",
             "enable": "param:reasoning_effort=medium",
-            "notes": "Reasoning hidden on Chat Completions. https://developers.openai.com/api/docs/guides/reasoning"
-          }
+            "efforts": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ],
+            "notes": "Served over the Responses API: from GPT-5.4 on, Chat Completions refuses function tools with reasoning on. Reasoning stays on; encrypted reasoning items are replayed (store:false) and summaries surface as thinking. https://developers.openai.com/api/docs/guides/migrate-to-responses"
+          },
+          "sdk": "openai-responses"
         },
         "gpt-5.4-nano": {
           "display_name": "GPT-5.4 Nano",
@@ -440,12 +517,20 @@
             "streaming": true
           },
           "reasoning": {
-            "supported": false,
-            "field": null,
+            "supported": true,
+            "field": "reasoning_content",
             "echo_back": "none",
             "enable": "param:reasoning_effort=medium",
-            "notes": "Reasoning hidden on Chat Completions. https://developers.openai.com/api/docs/guides/reasoning"
-          }
+            "efforts": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ],
+            "notes": "Served over the Responses API: from GPT-5.4 on, Chat Completions refuses function tools with reasoning on. Reasoning stays on; encrypted reasoning items are replayed (store:false) and summaries surface as thinking. https://developers.openai.com/api/docs/guides/migrate-to-responses"
+          },
+          "sdk": "openai-responses"
         },
         "gpt-5.3-codex": {
           "display_name": "GPT-5.3 Codex",
@@ -476,12 +561,21 @@
             "vision": true
           },
           "reasoning": {
-            "supported": false,
-            "enable": "param:reasoning_effort=medium",
-            "field": null,
+            "supported": true,
+            "field": "reasoning_content",
             "echo_back": "none",
-            "notes": "Reasoning hidden on Chat Completions; available via Responses API. https://developers.openai.com/api/docs/guides/reasoning"
-          }
+            "enable": "param:reasoning_effort=medium",
+            "efforts": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "notes": "Served over the Responses API: from GPT-5.4 on, Chat Completions refuses function tools with reasoning on. Reasoning stays on; encrypted reasoning items are replayed (store:false) and summaries surface as thinking. https://developers.openai.com/api/docs/guides/migrate-to-responses"
+          },
+          "sdk": "openai-responses"
         },
         "gpt-5.6-terra": {
           "display_name": "GPT-5.6 Terra",
@@ -494,12 +588,21 @@
             "vision": true
           },
           "reasoning": {
-            "supported": false,
-            "enable": "param:reasoning_effort=medium",
-            "field": null,
+            "supported": true,
+            "field": "reasoning_content",
             "echo_back": "none",
-            "notes": "Reasoning hidden on Chat Completions; available via Responses API. https://developers.openai.com/api/docs/guides/reasoning"
-          }
+            "enable": "param:reasoning_effort=medium",
+            "efforts": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "notes": "Served over the Responses API: from GPT-5.4 on, Chat Completions refuses function tools with reasoning on. Reasoning stays on; encrypted reasoning items are replayed (store:false) and summaries surface as thinking. https://developers.openai.com/api/docs/guides/migrate-to-responses"
+          },
+          "sdk": "openai-responses"
         },
         "gpt-5.6-luna": {
           "display_name": "GPT-5.6 Luna",
@@ -512,12 +615,21 @@
             "vision": true
           },
           "reasoning": {
-            "supported": false,
-            "enable": "param:reasoning_effort=medium",
-            "field": null,
+            "supported": true,
+            "field": "reasoning_content",
             "echo_back": "none",
-            "notes": "Reasoning hidden on Chat Completions; available via Responses API. https://developers.openai.com/api/docs/guides/reasoning"
-          }
+            "enable": "param:reasoning_effort=medium",
+            "efforts": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "notes": "Served over the Responses API: from GPT-5.4 on, Chat Completions refuses function tools with reasoning on. Reasoning stays on; encrypted reasoning items are replayed (store:false) and summaries surface as thinking. https://developers.openai.com/api/docs/guides/migrate-to-responses"
+          },
+          "sdk": "openai-responses"
         },
         "gpt-5.6": {
           "display_name": "GPT-5.6 (alias of Sol)",
@@ -530,12 +642,232 @@
             "vision": true
           },
           "reasoning": {
-            "supported": false,
-            "enable": "param:reasoning_effort=medium",
-            "field": null,
+            "supported": true,
+            "field": "reasoning_content",
             "echo_back": "none",
-            "notes": "Reasoning hidden on Chat Completions; available via Responses API. https://developers.openai.com/api/docs/guides/reasoning Alias id gpt-5.6 routes to gpt-5.6-sol."
-          }
+            "enable": "param:reasoning_effort=medium",
+            "efforts": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "notes": "Served over the Responses API: from GPT-5.4 on, Chat Completions refuses function tools with reasoning on. Reasoning stays on; encrypted reasoning items are replayed (store:false) and summaries surface as thinking. https://developers.openai.com/api/docs/guides/migrate-to-responses Alias id gpt-5.6 routes to gpt-5.6-sol."
+          },
+          "sdk": "openai-responses"
+        },
+        "gpt-6.2-sol": {
+          "display_name": "GPT-6.2 Sol",
+          "tier": "flagship",
+          "context_window": 1050000,
+          "max_output": 128000,
+          "capabilities": {
+            "vision": true,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "none",
+            "enable": "param:reasoning_effort=medium",
+            "efforts": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "notes": "Served over the Responses API: from GPT-5.4 on, Chat Completions refuses function tools with reasoning on. Reasoning stays on; encrypted reasoning items are replayed (store:false) and summaries surface as thinking. https://developers.openai.com/api/docs/guides/migrate-to-responses Rejects reasoning effort 'none', so reasoning cannot be turned off. https://developers.openai.com/api/docs/models/gpt-6.2-sol"
+          },
+          "sdk": "openai-responses"
+        },
+        "gpt-6.2-astra": {
+          "display_name": "GPT-6.2 Astra",
+          "tier": "flagship",
+          "context_window": 1050000,
+          "max_output": 128000,
+          "capabilities": {
+            "vision": true,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "none",
+            "enable": "param:reasoning_effort=medium",
+            "efforts": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "notes": "Served over the Responses API: from GPT-5.4 on, Chat Completions refuses function tools with reasoning on. Reasoning stays on; encrypted reasoning items are replayed (store:false) and summaries surface as thinking. https://developers.openai.com/api/docs/guides/migrate-to-responses Rejects reasoning effort 'none', so reasoning cannot be turned off."
+          },
+          "sdk": "openai-responses"
+        },
+        "gpt-6.1-sol": {
+          "display_name": "GPT-6.1 Sol",
+          "tier": "flagship",
+          "context_window": 1050000,
+          "max_output": 128000,
+          "capabilities": {
+            "vision": true,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "none",
+            "enable": "param:reasoning_effort=medium",
+            "efforts": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "notes": "Served over the Responses API: from GPT-5.4 on, Chat Completions refuses function tools with reasoning on. Reasoning stays on; encrypted reasoning items are replayed (store:false) and summaries surface as thinking. https://developers.openai.com/api/docs/guides/migrate-to-responses Rejects reasoning effort 'none', so reasoning cannot be turned off."
+          },
+          "sdk": "openai-responses"
+        },
+        "gpt-6.1-terra": {
+          "display_name": "GPT-6.1 Terra",
+          "tier": "balanced",
+          "context_window": 1050000,
+          "max_output": 128000,
+          "capabilities": {
+            "vision": true,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "none",
+            "enable": "param:reasoning_effort=medium",
+            "efforts": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "notes": "Served over the Responses API: from GPT-5.4 on, Chat Completions refuses function tools with reasoning on. Reasoning stays on; encrypted reasoning items are replayed (store:false) and summaries surface as thinking. https://developers.openai.com/api/docs/guides/migrate-to-responses"
+          },
+          "sdk": "openai-responses"
+        },
+        "gpt-6-astra": {
+          "display_name": "GPT-6 Astra",
+          "tier": "flagship",
+          "context_window": 1050000,
+          "max_output": 128000,
+          "capabilities": {
+            "vision": true,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "none",
+            "enable": "param:reasoning_effort=medium",
+            "efforts": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "notes": "Served over the Responses API: from GPT-5.4 on, Chat Completions refuses function tools with reasoning on. Reasoning stays on; encrypted reasoning items are replayed (store:false) and summaries surface as thinking. https://developers.openai.com/api/docs/guides/migrate-to-responses Rejects reasoning effort 'none', so reasoning cannot be turned off."
+          },
+          "sdk": "openai-responses"
+        },
+        "gpt-6-sol": {
+          "display_name": "GPT-6 Sol",
+          "tier": "flagship",
+          "context_window": 1050000,
+          "max_output": 128000,
+          "capabilities": {
+            "vision": true,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "none",
+            "enable": "param:reasoning_effort=medium",
+            "efforts": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "notes": "Served over the Responses API: from GPT-5.4 on, Chat Completions refuses function tools with reasoning on. Reasoning stays on; encrypted reasoning items are replayed (store:false) and summaries surface as thinking. https://developers.openai.com/api/docs/guides/migrate-to-responses"
+          },
+          "sdk": "openai-responses"
+        },
+        "gpt-6-luna": {
+          "display_name": "GPT-6 Luna",
+          "tier": "fast",
+          "context_window": 1050000,
+          "max_output": 128000,
+          "capabilities": {
+            "vision": true,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "none",
+            "enable": "param:reasoning_effort=medium",
+            "efforts": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "notes": "Served over the Responses API: from GPT-5.4 on, Chat Completions refuses function tools with reasoning on. Reasoning stays on; encrypted reasoning items are replayed (store:false) and summaries surface as thinking. https://developers.openai.com/api/docs/guides/migrate-to-responses"
+          },
+          "sdk": "openai-responses"
+        },
+        "gpt-6": {
+          "display_name": "GPT-6 (uncatalogued)",
+          "tier": "flagship",
+          "context_window": 1050000,
+          "max_output": 128000,
+          "capabilities": {
+            "vision": true,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "none",
+            "enable": "param:reasoning_effort=medium",
+            "efforts": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "notes": "Served over the Responses API: from GPT-5.4 on, Chat Completions refuses function tools with reasoning on. Reasoning stays on; encrypted reasoning items are replayed (store:false) and summaries surface as thinking. https://developers.openai.com/api/docs/guides/migrate-to-responses Rejects reasoning effort 'none', so reasoning cannot be turned off. Prefix entry: an uncatalogued gpt-6.x id resolves here, so it keeps the Responses endpoint instead of falling back to Chat Completions (flagship inheritance carries specs, never the endpoint). Effort list omits 'none' so the off switch is never sent to a model that may refuse it."
+          },
+          "sdk": "openai-responses"
         }
       },
       "cache": {
@@ -3492,7 +3824,7 @@
         "deepseek-v4-flash-free",
         "big-pickle"
       ],
-      "notes": "Pay-as-you-go credits (auto-reload configurable), sold at cost. Orbital reaches the /chat/completions family (open models + the free tier) and the /messages family (all Claude models and Qwen) — 33 of Zen's 63 models. The GPT-5.x/Grok models are served over OpenAI's Responses API and Gemini over Google's; Orbital speaks neither, so use the OpenAI/Google providers directly for those. The free models (ids ending -free, plus big-pickle) work with NO payment method on file — verified on the wire. Note that a paid model with no balance returns HTTP 401 carrying a CreditsError body: the key is valid, the workspace just needs a payment method. Same API key as OpenCode Go. https://opencode.ai/docs/zen/ A Go subscription does NOT fund Zen: with Go active but no Zen credits, Zen's paid models still answer CreditsError while the free models keep working (verified 2026-08-19). The balance flows the other way — Go can fall back to Zen credits past a cap.",
+      "notes": "Pay-as-you-go credits (auto-reload configurable), sold at cost. Orbital reaches the /chat/completions family (open models + the free tier), the /messages family (all Claude models and Qwen) and the Responses family (GPT and Grok; catalogued: gpt-6.2-sol, gpt-6-luna, gpt-5.6-luna, grok-4.7, grok-4.6). Gemini is served over Google's protocol, which Orbital does not speak, so use the Google provider directly for it. The free models (ids ending -free, plus big-pickle) work with NO payment method on file — verified on the wire. Note that a paid model with no balance returns HTTP 401 carrying a CreditsError body: the key is valid, the workspace just needs a payment method. Same API key as OpenCode Go. https://opencode.ai/docs/zen/ A Go subscription does NOT fund Zen: with Go active but no Zen credits, Zen's paid models still answer CreditsError while the free models keep working (verified 2026-08-19). The balance flows the other way — Go can fall back to Zen credits past a cap.",
       "pricing": {
         "big-pickle": {
           "input_per_1m": 0.0,
@@ -3682,6 +4014,31 @@
           "output_per_1m": 0.5,
           "cached_input_per_1m": 0.01,
           "cache_write_per_1m": 0.125
+        },
+        "gpt-6-luna": {
+          "input_per_1m": 0.1,
+          "output_per_1m": 0.5,
+          "cached_input_per_1m": 0.01
+        },
+        "gpt-5.6-luna": {
+          "input_per_1m": 0.2,
+          "output_per_1m": 1.2,
+          "cached_input_per_1m": 0.02
+        },
+        "grok-4.7": {
+          "input_per_1m": 2.0,
+          "output_per_1m": 6.0,
+          "cached_input_per_1m": 0.5
+        },
+        "grok-4.6": {
+          "input_per_1m": 2.0,
+          "output_per_1m": 6.0,
+          "cached_input_per_1m": 0.5
+        },
+        "gpt-6.2-sol": {
+          "input_per_1m": 2.0,
+          "output_per_1m": 10.0,
+          "cached_input_per_1m": 0.1
         }
       },
       "models": {
@@ -4302,6 +4659,136 @@
           "display_name": "Claude Haiku 5.5",
           "sdk": "anthropic",
           "base_url": "https://opencode.ai/zen"
+        },
+        "gpt-6-luna": {
+          "display_name": "GPT-6 Luna",
+          "tier": "fast",
+          "context_window": 1050000,
+          "max_output": 128000,
+          "capabilities": {
+            "vision": true,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "none",
+            "enable": "param:reasoning_effort=medium",
+            "efforts": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "notes": "Served ONLY over OpenAI's Responses API on OpenCode (400 ModelProtocolUnsupported on /chat/completions, verified 2026-10-10); Orbital routes it to /responses."
+          },
+          "sdk": "openai-responses"
+        },
+        "gpt-5.6-luna": {
+          "display_name": "GPT-5.6 Luna",
+          "tier": "fast",
+          "context_window": 1050000,
+          "max_output": 128000,
+          "capabilities": {
+            "vision": true,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "none",
+            "enable": "param:reasoning_effort=medium",
+            "efforts": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "notes": "Served ONLY over OpenAI's Responses API on OpenCode (400 ModelProtocolUnsupported on /chat/completions, verified 2026-10-10); Orbital routes it to /responses. Answered 403 unsupported_country_region_territory from this region (2026-10-10)."
+          },
+          "sdk": "openai-responses"
+        },
+        "grok-4.7": {
+          "display_name": "Grok 4.7",
+          "tier": "flagship",
+          "context_window": 500000,
+          "max_output": 500000,
+          "capabilities": {
+            "vision": true,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "none",
+            "enable": "param:reasoning_effort=medium",
+            "efforts": [
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ],
+            "notes": "Served ONLY over OpenAI's Responses API on OpenCode (400 ModelProtocolUnsupported on /chat/completions, verified 2026-10-10); Orbital routes it to /responses."
+          },
+          "sdk": "openai-responses"
+        },
+        "grok-4.6": {
+          "display_name": "Grok 4.6",
+          "tier": "flagship",
+          "context_window": 500000,
+          "max_output": 500000,
+          "capabilities": {
+            "vision": true,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "none",
+            "enable": "param:reasoning_effort=medium",
+            "efforts": [
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ],
+            "notes": "Served ONLY over OpenAI's Responses API on OpenCode (400 ModelProtocolUnsupported on /chat/completions, verified 2026-10-10); Orbital routes it to /responses."
+          },
+          "sdk": "openai-responses"
+        },
+        "gpt-6.2-sol": {
+          "display_name": "GPT-6.2 Sol",
+          "tier": "flagship",
+          "context_window": 1050000,
+          "max_output": 128000,
+          "capabilities": {
+            "vision": true,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "none",
+            "enable": "param:reasoning_effort=medium",
+            "efforts": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "notes": "Served ONLY over OpenAI's Responses API on OpenCode (400 ModelProtocolUnsupported on /chat/completions, verified 2026-10-10); Orbital routes it to /responses. Rejects reasoning effort 'none'."
+          },
+          "sdk": "openai-responses"
         }
       },
       "cache": {
@@ -4342,7 +4829,7 @@
         "mimo-v2.5",
         "deepseek-v4-pro"
       ],
-      "notes": "$10/month subscription ($5 first month) with dollar-capped usage: $12 per 5 hours, $30/week, $60/month. The per-token rates below are what meters against those caps — they are not incremental charges, so spend readings show cap burn, not a bill. Enable 'Use balance' in the console to fall back to your Zen credits past a cap. Same API key as Zen. minimax-* and qwen* are served over the Anthropic /messages protocol on this tier, while the same minimax ids are /chat/completions on Zen — Orbital resolves that per model. claude-haiku-5-5 is /messages as well. grok-4.6, grok-4.7, gpt-5.6-luna and gpt-6-luna are served ONLY over OpenAI's Responses API, which Orbital does not speak — Test Connection reports the protocol mismatch (verified on the wire 2026-10-10; gpt-5.6-luna additionally answers 403 unsupported_country_region_territory from this region). Live /models also lists longcat-2.0, longcat-2.5-preview-free, step-5-preview-free, space-bunny and omen-alpha (all /chat/completions, reached via the provider default; no vendor specs published, so uncatalogued) and muse-spark-* (403 region-gated). Since 2026-09 the Go gateway rejects any request without a stable per-conversation x-opencode-session header (400 MissingSessionID, both wire protocols) and asks clients to identify with their own User-Agent — hence session_header + extra_headers on this entry. The header is a routing key (same value = same upstream = warm prompt cache), so session_scope \"project\" makes trigger-started sessions send one stable project:<id> value instead of a fresh session id (chat sessions and workers keep their session id). https://opencode.ai/docs/go/ NOTE: deepseek-v4-flash and deepseek-v4-pro answer 403 RegionError on this tier until the workspace explicitly opts into China hosting in the OpenCode console — verified 2026-08-19; every other Go model works without it.",
+      "notes": "$10/month subscription ($5 first month) with dollar-capped usage: $12 per 5 hours, $30/week, $60/month. The per-token rates below are what meters against those caps — they are not incremental charges, so spend readings show cap burn, not a bill. Enable 'Use balance' in the console to fall back to your Zen credits past a cap. Same API key as Zen. minimax-* and qwen* are served over the Anthropic /messages protocol on this tier, while the same minimax ids are /chat/completions on Zen — Orbital resolves that per model. claude-haiku-5-5 is /messages as well. grok-4.6, grok-4.7, gpt-5.6-luna and gpt-6-luna are served ONLY over OpenAI's Responses API (verified on the wire 2026-10-10); Orbital routes them to /responses per model (gpt-5.6-luna additionally answered 403 unsupported_country_region_territory from this region). Live /models also lists longcat-2.0, longcat-2.5-preview-free, step-5-preview-free, space-bunny and omen-alpha (all /chat/completions, reached via the provider default; no vendor specs published, so uncatalogued) and muse-spark-* (403 region-gated). Since 2026-09 the Go gateway rejects any request without a stable per-conversation x-opencode-session header (400 MissingSessionID, both wire protocols) and asks clients to identify with their own User-Agent — hence session_header + extra_headers on this entry. The header is a routing key (same value = same upstream = warm prompt cache), so session_scope \"project\" makes trigger-started sessions send one stable project:<id> value instead of a fresh session id (chat sessions and workers keep their session id). https://opencode.ai/docs/go/ NOTE: deepseek-v4-flash and deepseek-v4-pro answer 403 RegionError on this tier until the workspace explicitly opts into China hosting in the OpenCode console — verified 2026-08-19; every other Go model works without it.",
       "pricing": {
         "deepseek-v4-flash": {
           "input_per_1m": 0.22,
@@ -4480,6 +4967,26 @@
           "input_per_1m": 0.834,
           "output_per_1m": 2.501,
           "cached_input_per_1m": 0.042
+        },
+        "gpt-6-luna": {
+          "input_per_1m": 0.1,
+          "output_per_1m": 0.5,
+          "cached_input_per_1m": 0.01
+        },
+        "gpt-5.6-luna": {
+          "input_per_1m": 0.2,
+          "output_per_1m": 1.2,
+          "cached_input_per_1m": 0.02
+        },
+        "grok-4.7": {
+          "input_per_1m": 2.0,
+          "output_per_1m": 6.0,
+          "cached_input_per_1m": 0.5
+        },
+        "grok-4.6": {
+          "input_per_1m": 2.0,
+          "output_per_1m": 6.0,
+          "cached_input_per_1m": 0.5
         }
       },
       "models": {
@@ -4925,6 +5432,110 @@
             "needs_verification": true,
             "notes": "Thinking on by default (high effort); thinking={type:enabled|disabled} and reasoning_effort=high|low per Tencent Cloud docs; reasoning_content in the stream. Echo-back tolerance not yet probed live."
           }
+        },
+        "gpt-6-luna": {
+          "display_name": "GPT-6 Luna",
+          "tier": "fast",
+          "context_window": 1050000,
+          "max_output": 128000,
+          "capabilities": {
+            "vision": true,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "none",
+            "enable": "param:reasoning_effort=medium",
+            "efforts": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "notes": "Served ONLY over OpenAI's Responses API on OpenCode (400 ModelProtocolUnsupported on /chat/completions, verified 2026-10-10); Orbital routes it to /responses."
+          },
+          "sdk": "openai-responses"
+        },
+        "gpt-5.6-luna": {
+          "display_name": "GPT-5.6 Luna",
+          "tier": "fast",
+          "context_window": 1050000,
+          "max_output": 128000,
+          "capabilities": {
+            "vision": true,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "none",
+            "enable": "param:reasoning_effort=medium",
+            "efforts": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "notes": "Served ONLY over OpenAI's Responses API on OpenCode (400 ModelProtocolUnsupported on /chat/completions, verified 2026-10-10); Orbital routes it to /responses. Answered 403 unsupported_country_region_territory from this region (2026-10-10)."
+          },
+          "sdk": "openai-responses"
+        },
+        "grok-4.7": {
+          "display_name": "Grok 4.7",
+          "tier": "flagship",
+          "context_window": 500000,
+          "max_output": 500000,
+          "capabilities": {
+            "vision": true,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "none",
+            "enable": "param:reasoning_effort=medium",
+            "efforts": [
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ],
+            "notes": "Served ONLY over OpenAI's Responses API on OpenCode (400 ModelProtocolUnsupported on /chat/completions, verified 2026-10-10); Orbital routes it to /responses."
+          },
+          "sdk": "openai-responses"
+        },
+        "grok-4.6": {
+          "display_name": "Grok 4.6",
+          "tier": "flagship",
+          "context_window": 500000,
+          "max_output": 500000,
+          "capabilities": {
+            "vision": true,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "none",
+            "enable": "param:reasoning_effort=medium",
+            "efforts": [
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ],
+            "notes": "Served ONLY over OpenAI's Responses API on OpenCode (400 ModelProtocolUnsupported on /chat/completions, verified 2026-10-10); Orbital routes it to /responses."
+          },
+          "sdk": "openai-responses"
         }
       },
       "cache": {

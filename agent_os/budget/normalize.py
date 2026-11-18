@@ -67,8 +67,12 @@ class ProviderSemantics(str, Enum):
         "openai-compatible" is accepted as an alias for "openai": it appeared
         as a one-off sdk value in providers.json (mistral) and any config still
         carrying it must ledger with subset semantics, not be silently skipped.
+
+        "openai-responses" (the OpenAI Responses API) reports
+        ``input_tokens`` INCLUDING ``input_tokens_details.cached_tokens`` —
+        subset semantics too.
         """
-        if sdk in ("openai", "openai-compatible"):
+        if sdk in ("openai", "openai-compatible", "openai-responses"):
             return cls.OPENAI_COMPAT
         if sdk == "anthropic":
             return cls.ANTHROPIC

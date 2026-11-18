@@ -44,6 +44,11 @@ class ReasoningInfo:
         none      – nothing to echo (hidden server-side or unsupported)
     `enable`: how to turn on reasoning at request time
         auto / model_only / param:<key>=<value>
+    `efforts`: the ``reasoning.effort`` values the model accepts on the OpenAI
+        Responses API (sdk ``openai-responses``). Empty means unknown. Only
+        that path reads it: its reasoning-off switch is ``effort: "none"``,
+        sent only when ``"none"`` is listed (GPT-6.2 Sol and the Astra models
+        400 on it, so for them reasoning stays on).
     """
     supported: bool = False
     field: str | None = None
@@ -52,6 +57,7 @@ class ReasoningInfo:
     enable: str = "model_only"
     needs_verification: bool = False
     notes: str = ""
+    efforts: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -70,6 +76,10 @@ class ModelInfo:
     The paired ``base_url`` is needed because the two SDKs disagree on where
     ``/v1`` lives: the OpenAI client appends ``/chat/completions`` to what it
     is given, while the Anthropic client appends ``/v1/messages``.
+
+    ``sdk == "openai-responses"`` is the OpenAI Responses API. It uses the
+    OpenAI client, which appends ``/responses`` to the same ``/v1`` base, so
+    it needs no ``base_url`` of its own on OpenAI or OpenCode.
     """
     context_window: int = _FALLBACK_CONTEXT_WINDOW
     max_output: int = _FALLBACK_MAX_OUTPUT
@@ -92,6 +102,7 @@ def _parse_reasoning_entry(entry: dict | None) -> ReasoningInfo:
         enable=entry.get("enable", "model_only"),
         needs_verification=bool(entry.get("needs_verification", False)),
         notes=entry.get("notes", ""),
+        efforts=tuple(str(e) for e in (entry.get("efforts") or ())),
     )
 
 

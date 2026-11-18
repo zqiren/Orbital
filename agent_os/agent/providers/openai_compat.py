@@ -2,11 +2,13 @@
 # Copyright (C) 2026 Orbital Contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Dual-SDK LLM client: OpenAI SDK or Anthropic SDK.
+"""LLM client over three wire protocols, via the OpenAI or Anthropic SDK.
 
 Routing logic:
-  - sdk == "openai"    -> openai.AsyncOpenAI(base_url, api_key)
-  - sdk == "anthropic" -> anthropic.AsyncAnthropic(api_key)
+  - sdk == "openai"           -> openai.AsyncOpenAI, /chat/completions
+  - sdk == "openai-responses" -> openai.AsyncOpenAI, /responses
+                                 (translation in ``responses_adapter``)
+  - sdk == "anthropic"        -> anthropic.AsyncAnthropic, /v1/messages
 """
 
 from __future__ import annotations
@@ -31,6 +33,15 @@ from agent_os.agent.providers.types import (
     LLMError,
 )
 from agent_os.agent.providers.think_splitter import InlineThinkSplitter
+from agent_os.agent.providers.responses_adapter import (
+    RESPONSES_SDK,
+    ResponsesStreamState,
+    input_has_images,
+    messages_to_responses_input,
+    response_to_message,
+    strip_responses_state,
+    tools_to_responses,
+)
 
 _cache_logger = logging.getLogger("orbital.cache_audit")
 
@@ -300,6 +311,31 @@ def _rejects_reasoning_off(exc) -> bool:
         return False
     return any(w in text for w in ("not supported", "unsupported", "only",
                                    "cannot", "can't", "not allowed", "invalid"))
+
+
+#: ``(provider, base_url, model)`` that refused ``reasoning.summary`` this
+#: process (Responses path). OpenAI gates summaries on organization
+#: verification; such an org gets a 400 for every request that asks.
+_SUMMARY_REJECTED: set[tuple] = set()
+
+
+def _rejects_summary(exc) -> bool:
+    """True when *exc* is a 400 refusing the reasoning-summary request."""
+    if getattr(exc, "status_code", None) != 400:
+        return False
+    text = str(exc).lower()
+    return "summar" in text and any(
+        w in text for w in ("verif", "not supported", "unsupported", "not allowed",
+                            "invalid", "unknown"))
+
+
+def _rejects_encrypted_reasoning(exc) -> bool:
+    """True when *exc* is a 400 about replayed encrypted reasoning (e.g. the
+    key now belongs to an org that cannot decrypt it)."""
+    if getattr(exc, "status_code", None) != 400:
+        return False
+    text = str(exc).lower()
+    return "encrypted" in text or ("reasoning" in text and "item" in text)
 
 
 def _content_is_blank(content) -> bool:
@@ -705,6 +741,10 @@ class LLMProvider:
         r = self.reasoning
         if r is None or not getattr(r, "supported", False):
             return False
+        if self.sdk == RESPONSES_SDK:
+            # The Responses off switch is ``reasoning.effort = "none"``, which
+            # only some models accept (GPT-6.2 Sol / Astra 400 on it).
+            return not self._responses_can_disable_reasoning()
         enable = getattr(r, "enable", "") or ""
         if not enable.startswith("param:"):
             return True
@@ -712,6 +752,10 @@ class LLMProvider:
 
     def _off_key(self) -> tuple:
         return (self.provider, self.base_url, self.model)
+
+    def _responses_can_disable_reasoning(self) -> bool:
+        efforts = getattr(self.reasoning, "efforts", ()) or ()
+        return "none" in efforts
 
     def _inline_think_mode(self) -> bool:
         """True when this model emits reasoning inline as ``<think>…</think>``
@@ -762,15 +806,30 @@ class LLMProvider:
     def _prepare_messages_openai(self, messages: list) -> list:
         """Prepare messages for OpenAI SDK: strip internal fields, handle multimodal
         content, then enforce the model's reasoning echo-back contract."""
+        return self._prepare_rows(messages, responses=False)
+
+    def _prepare_rows(self, messages: list, *, responses: bool,
+                      flatten_images: bool = False) -> list:
+        """Shared wire-boundary preparation for both OpenAI protocols.
+
+        Chat Completions (``responses=False``) drops the Responses-only state
+        field and applies the reasoning echo-back contract. The Responses path
+        keeps the state (``messages_to_responses_input`` replays it) and skips
+        the echo contract: Chat-only reasoning fields are not Responses items.
+        """
         result = []
         has_vision = self.capabilities and self.capabilities.vision
         for msg in messages:
             content = msg.get("content")
-            if isinstance(content, list) and not has_vision:
+            if isinstance(content, list) and (flatten_images or not has_vision):
                 msg = dict(msg)
                 msg["content"] = _flatten_multimodal_content(content)
             stripped = _strip_to_spec(msg)
-            result.append(_apply_reasoning_policy(stripped, getattr(self, "reasoning", None)))
+            if responses:
+                result.append(stripped)
+            else:
+                result.append(_apply_reasoning_policy(
+                    strip_responses_state(stripped), getattr(self, "reasoning", None)))
         # Final pass: strict OpenAI-compatible providers (MiniMax) reject any
         # message with empty content and reject system-only requests. Repair
         # both here, at the wire boundary, so the persisted session is untouched.
@@ -789,6 +848,9 @@ class LLMProvider:
         """
         if self.sdk == "anthropic":
             async for chunk in self._stream_anthropic(messages, tools):
+                yield chunk
+        elif self.sdk == RESPONSES_SDK:
+            async for chunk in self._stream_responses(messages, tools):
                 yield chunk
         else:
             async for chunk in self._stream_openai(messages, tools):
@@ -944,7 +1006,7 @@ class LLMProvider:
 
     async def _stream_anthropic(self, messages, tools=None) -> AsyncIterator[StreamChunk]:
         """Anthropic SDK streaming path with adapter translation."""
-        messages = [_strip_to_spec(m) for m in messages]
+        messages = [strip_responses_state(_strip_to_spec(m)) for m in messages]
         from agent_os.agent.providers.anthropic_adapter import (
             translate_messages_to_anthropic,
             translate_stream_event,
@@ -989,7 +1051,9 @@ class LLMProvider:
 
         ``disable_reasoning``: when True AND ``self.reasoning.enable`` starts
         with ``"param:"``, send the matching off-switch via ``extra_body=``
-        on the OpenAI SDK call. No-op for the Anthropic SDK path.
+        on the OpenAI SDK call. On the Responses path the switch is
+        ``reasoning: {effort: "none"}``, sent only when the model's effort list
+        has ``none``. No-op for the Anthropic SDK path.
 
         NOTE for long single-shot utility calls: both SDKs default to a 600s
         per-request timeout WITH automatic retries. That is fine for the
@@ -1003,6 +1067,9 @@ class LLMProvider:
         """
         if self.sdk == "anthropic":
             return await self._complete_anthropic(messages, tools)
+        if self.sdk == RESPONSES_SDK:
+            return await self._complete_responses(
+                messages, tools, disable_reasoning=disable_reasoning)
         return await self._complete_openai(messages, tools, disable_reasoning=disable_reasoning)
 
     async def _complete_openai(self, messages, tools=None, *, disable_reasoning: bool = False) -> LLMResponse:
@@ -1090,9 +1157,146 @@ class LLMProvider:
             usage=usage,
         )
 
+    # ------------------------------------------------------------------
+    # OpenAI Responses API (sdk == "openai-responses")
+    # ------------------------------------------------------------------
+
+    def _summary_wanted(self) -> bool:
+        return (bool(getattr(self.reasoning, "supported", False))
+                and self._off_key() not in _SUMMARY_REJECTED)
+
+    def _responses_body(self, messages, tools, *, stream: bool, replay: bool,
+                        flatten: bool, summary: bool, off: bool) -> dict:
+        rows = self._prepare_rows(messages, responses=True, flatten_images=flatten)
+        rows = _ensure_chat_content(rows)
+        rows = _ensure_tool_call_arguments_json(rows)
+        rows = _ensure_tool_result_contiguity(rows)
+        body: dict = {
+            "model": self.model,
+            "input": messages_to_responses_input(
+                rows, provider=self.provider, model=self.model,
+                replay_reasoning=replay),
+        }
+        if tools:
+            body["tools"] = tools_to_responses(tools)
+        reasoning: dict = {}
+        if off:
+            reasoning["effort"] = "none"
+        elif summary:
+            reasoning["summary"] = "auto"
+        if reasoning:
+            body["reasoning"] = reasoning
+        # Stateless: nothing is kept server-side, so the encrypted reasoning
+        # comes back with the response and rides the next request instead.
+        body["store"] = False
+        if getattr(self.reasoning, "supported", False):
+            body["include"] = ["reasoning.encrypted_content"]
+        body["stream"] = stream
+        return body
+
+    async def _create_responses(self, messages, tools, *, stream: bool, path: str,
+                                disable_reasoning: bool = False):
+        """``client.responses.create`` with this protocol's one-shot repairs.
+
+        Each applies at most once per call, in this order of preference:
+          summary  — the org may not generate reasoning summaries: drop the
+                     request and stop asking for this model (process-wide);
+          off      — the model refused ``effort: none``: retry with reasoning
+                     on and stop sending it (shared ``_REASONING_OFF_REJECTED``);
+          replay   — old encrypted reasoning could not be used (key moved
+                     org): send history without reasoning items or ids;
+          flatten  — any 400 with images: retry with images as text, like the
+                     Chat Completions path.
+        Everything else is classified exactly like the other two paths.
+        """
+        off = False
+        if disable_reasoning and self._off_key() not in _REASONING_OFF_REJECTED:
+            if self._responses_can_disable_reasoning():
+                off = True
+            else:
+                logging.getLogger(__name__).warning(
+                    "disable_reasoning requested but model %s does not accept "
+                    "reasoning effort 'none'; request will be sent with "
+                    "reasoning still active", self.model)
+        opts = {"replay": True, "flatten": False, "summary": self._summary_wanted(),
+                "off": off}
+        applied: set[str] = set()
+        headers = self._request_headers()
+        while True:
+            body = self._responses_body(messages, tools, stream=stream, **opts)
+            _dump_llm_request(self, body, path=path if not applied else f"{path}_retry",
+                              headers=headers)
+            try:
+                return await self._openai_client.responses.create(
+                    **body, **_extra_headers_kw(headers))
+            except (ContextOverflowError, LLMError):
+                raise
+            except Exception as exc:
+                fix = None
+                if opts["summary"] and "summary" not in applied and _rejects_summary(exc):
+                    fix = "summary"
+                    _SUMMARY_REJECTED.add(self._off_key())
+                    opts["summary"] = False
+                elif opts["off"] and "off" not in applied and _rejects_reasoning_off(exc):
+                    fix = "off"
+                    _REASONING_OFF_REJECTED.add(self._off_key())
+                    opts["off"] = False
+                elif (opts["replay"] and "replay" not in applied
+                      and _rejects_encrypted_reasoning(exc)
+                      and any(i.get("type") == "reasoning" for i in body["input"])):
+                    fix = "replay"
+                    opts["replay"] = False
+                elif (not opts["flatten"] and "flatten" not in applied
+                      and getattr(exc, "status_code", None) == 400
+                      and input_has_images(body["input"])):
+                    fix = "flatten"
+                    opts["flatten"] = True
+                if fix is None:
+                    _classify_error(exc)
+                logging.getLogger(__name__).warning(
+                    "Responses request for %s refused (%s); retrying: %s",
+                    self.model, fix, str(exc)[:200])
+                applied.add(fix)
+
+    async def _stream_responses(self, messages, tools=None) -> AsyncIterator[StreamChunk]:
+        """Responses streaming path: events -> StreamChunks (one final chunk
+        with usage and the reasoning state)."""
+        stream = await self._create_responses(messages, tools, stream=True, path="stream")
+        state = ResponsesStreamState(provider=self.provider, model=self.model)
+        try:
+            async for event in stream:
+                for chunk in state.handle(event):
+                    if chunk.is_final and chunk.usage is not None:
+                        _log_cache_audit(self.model, chunk.usage,
+                                         caller=self.cache_audit_caller)
+                    yield chunk
+        except (ContextOverflowError, LLMError):
+            raise
+        except Exception as exc:
+            _classify_error(exc)
+
+    async def _complete_responses(self, messages, tools=None, *,
+                                  disable_reasoning: bool = False) -> LLMResponse:
+        """Responses non-streaming path."""
+        response = await self._create_responses(
+            messages, tools, stream=False, path="complete",
+            disable_reasoning=disable_reasoning)
+        result = response_to_message(response, provider=self.provider, model=self.model)
+        usage = result["usage"]
+        _log_cache_audit(self.model, usage, caller=self.cache_audit_caller)
+        return LLMResponse(
+            raw_message=result["raw_message"],
+            text=result["text"],
+            tool_calls=result["tool_calls"],
+            has_tool_calls=bool(result["tool_calls"]),
+            finish_reason=result["finish_reason"],
+            status_text=_extract_status(result["text"]),
+            usage=usage,
+        )
+
     async def _complete_anthropic(self, messages, tools=None) -> LLMResponse:
         """Anthropic SDK non-streaming path with adapter translation."""
-        messages = [_strip_to_spec(m) for m in messages]
+        messages = [strip_responses_state(_strip_to_spec(m)) for m in messages]
         from agent_os.agent.providers.anthropic_adapter import (
             translate_messages_to_anthropic,
             translate_response_to_openai,
