@@ -2409,24 +2409,44 @@ class SubAgentManager:
                        session_id=session_id)
         self._process_manager.set_active_dispatch(
             project_id, handle, prompt.dispatch_id, session_id=session_id)
-        # The chat is one conversation: prepend what this worker has not
-        # been shown (see recap.py). Built HERE, at the moment the prompt
-        # actually goes out (drain time for a queued one), so the block and
-        # the marker written below agree on the watermark, and every entry
-        # path — pinned, @mention, manager dispatch — gets the same block.
-        preamble = await self._build_recap(
-            adapter, project_id, session_id, handle, message=prompt.message)
-        skills_note = await self._worker_skills_note(
-            adapter, project_id, session_id, handle)
-        if skills_note:
-            preamble = f"{skills_note}\n\n{preamble}"
-        first_turn = getattr(adapter, "_orbital_first_turn_note", None)
-        if isinstance(first_turn, str) and first_turn:
-            preamble = f"{first_turn}\n\n{preamble}"
-            adapter._orbital_first_turn_note = None
+        if self._sends_alone(prompt):
+            # Batch 1118: the user's own worker command (`/compact`, `/review
+            # x`) runs only at the very start of the prompt, so it goes out
+            # alone. Nothing held is spent: the first-turn note stays, the
+            # skills note is not marked sent, and the recap's watermark does
+            # not move (recap.py reads this marker as "context held"), so the
+            # next ordinary message carries all of it. A fresh process
+            # remembers the command, so that message's block leaves out what
+            # its thread now holds natively.
+            payload = prompt.message
+            try:
+                held = getattr(adapter, "_orbital_held_dispatches", None)
+                if not isinstance(held, list):
+                    held = adapter._orbital_held_dispatches = []
+                held.append(prompt.dispatch_id)
+            except Exception:
+                pass
+        else:
+            # The chat is one conversation: prepend what this worker has not
+            # been shown (see recap.py). Built HERE, at the moment the prompt
+            # actually goes out (drain time for a queued one), so the block
+            # and the marker written below agree on the watermark, and every
+            # entry path — pinned, @mention, manager dispatch — gets the same
+            # block.
+            preamble = await self._build_recap(
+                adapter, project_id, session_id, handle, message=prompt.message)
+            skills_note = await self._worker_skills_note(
+                adapter, project_id, session_id, handle)
+            if skills_note:
+                preamble = f"{skills_note}\n\n{preamble}"
+            first_turn = getattr(adapter, "_orbital_first_turn_note", None)
+            if isinstance(first_turn, str) and first_turn:
+                preamble = f"{first_turn}\n\n{preamble}"
+                adapter._orbital_first_turn_note = None
+            payload = preamble + prompt.message
         try:
             await self._dispatch_async(
-                adapter, project_id, handle, preamble + prompt.message,
+                adapter, project_id, handle, payload,
                 session_id=session_id, dispatch_id=prompt.dispatch_id)
         except Exception:
             self._process_manager.clear_dispatch(
@@ -2442,6 +2462,16 @@ class SubAgentManager:
                 session_id=session_id,
                 dispatch_id=prompt.dispatch_id,
             )
+
+    @staticmethod
+    def _sends_alone(prompt: _QueuedPrompt) -> bool:
+        """A message the user (or their automation) addressed to the worker
+        — ``TOP_INITIATORS``, not a daemon turn, as ``_takeover_due`` reads
+        it — that starts with a command (the picker's rule). The manager's
+        own dispatches keep their context whatever they start with."""
+        from agent_os.daemon_v2.recap import is_worker_command
+        return (prompt.initiator in TOP_INITIATORS and not prompt.daemon_turn
+                and is_worker_command(prompt.message))
 
     async def _worker_skills_note(self, adapter, project_id: str, session_id: str,
                                   handle: str) -> str:
@@ -2517,9 +2547,12 @@ class SubAgentManager:
             budget = handoff_budget_bytes(
                 message_bytes=len((message or "").encode("utf-8")),
                 reported=getattr(transport, "reported_context", None))
+            held = getattr(adapter, "_orbital_held_dispatches", None)
             block = build_recap(messages, handle, fresh=bool(fresh),
                                 chat_log_path=chat_log_path,
-                                budget_bytes=budget)
+                                budget_bytes=budget, message=message,
+                                held_dispatch_ids=(
+                                    tuple(held) if isinstance(held, list) else None))
         except Exception:
             logger.warning(
                 "recap build failed for %s/%s — dispatching without",
@@ -2528,6 +2561,7 @@ class SubAgentManager:
             return ""
         try:
             adapter._recap_primed = True
+            adapter._orbital_held_dispatches = None
         except Exception:
             pass
         # Spec 128: after the recap, the paths of the earlier agents'

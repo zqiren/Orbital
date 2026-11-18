@@ -4478,7 +4478,21 @@ async def get_skill_catalog(project_id: str, worker: str | None = None):
     probe_fn = getattr(_sub_agent_manager, "probe_worker_commands", None)
     probe = (lambda: probe_fn(worker, workspace)) if probe_fn else None
     commands = await store.commands_for(worker, workspace, probe)
+    # Batch 1118: a listed command must run when picked. These the worker
+    # reports but refuses in the headless mode Orbital drives it in.
+    unrunnable = _HEADLESS_UNRUNNABLE.get(worker)
+    if unrunnable:
+        commands = [c for c in commands if c.get("name") not in unrunnable]
     return worker_commands.merge_catalog(entries, commands)
+
+
+#: Commands a worker lists but answers "not available" to over the protocol
+#: Orbital speaks (each one sent as the first message of a fresh session).
+#: Claude Code 2.1.327 through the Agent SDK: "/fast … is not available in
+#: the Agent SDK", "/focus isn't available here yet".
+_HEADLESS_UNRUNNABLE: dict[str, frozenset[str]] = {
+    "claude-code": frozenset({"fast", "focus"}),
+}
 
 
 @router.delete("/projects/{project_id}/skills/{skill_name}")

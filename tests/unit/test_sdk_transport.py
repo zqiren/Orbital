@@ -294,6 +294,37 @@ class TestMessageToEvents:
         assert events[0].data["tool_name"] == "Read"
         assert events[0].data["tool_id"] == "tu-1"
 
+    def test_local_command_output_is_the_reply(self):
+        """Batch 1118: a built-in such as /compact reports only through a
+        user frame wrapped in <local-command-stdout> (wire-observed, CLI
+        2.1.327). Without it the chat showed "(no output)" for a command
+        that ran."""
+        from claude_agent_sdk.types import UserMessage
+        transport = SDKTransport()
+        events = transport._message_to_events(
+            UserMessage(content="<local-command-stdout>Compacted </local-command-stdout>"))
+        assert [(e.event_type, e.raw_text) for e in events] == [("message", "Compacted")]
+        events = transport._message_to_events(
+            UserMessage(content="<local-command-stderr>No messages to compact</local-command-stderr>"))
+        assert [(e.event_type, e.raw_text) for e in events] == [("message", "No messages to compact")]
+
+    def test_other_user_strings_stay_silent(self):
+        """The compact summary the CLI feeds itself, an empty stdout, and
+        plain replayed prompts are not replies."""
+        from claude_agent_sdk.types import UserMessage
+        transport = SDKTransport()
+        for text in ("This session is being continued from a previous conversation…",
+                     "<local-command-stdout></local-command-stdout>",
+                     "/compact"):
+            assert transport._message_to_events(UserMessage(content=text)) == []
+
+    def test_local_command_output_after_assistant_text_is_not_repeated(self):
+        from claude_agent_sdk.types import UserMessage
+        transport = SDKTransport()
+        transport._dispatch_text = ["## Context Usage"]
+        assert transport._message_to_events(
+            UserMessage(content="<local-command-stdout>## Context Usage</local-command-stdout>")) == []
+
     def test_result_message_captures_session_id(self):
         from claude_agent_sdk.types import ResultMessage
         transport = SDKTransport()

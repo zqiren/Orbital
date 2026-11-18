@@ -37,6 +37,11 @@
  * The cutoff is the route answer: after it the pending card's project only
  * shows (the card that carries the session is the one that moves it).
  *
+ * Batch 1118 — a pick from the `/` menu (a worker command such as
+ * `/compact`, a skill chip, `/automate`) skips step 2: it goes to the picked
+ * project, or on 自动 to `fallbackProjectId` (Quick Tasks, whose list the menu
+ * showed). The routing model never reads a command as a task.
+ *
  * Routing that finds no project (2026-11-07: the call failed after its one
  * retry, `by: "failed"`) is not a send: nothing is minted or uploaded, the
  * text comes back and the outcome says `unrouted`, so the composer shows its
@@ -64,6 +69,17 @@ import type { UploadedAttachment } from '../../hooks/useAttachments';
 import {
   addPending, refreshFeed, removePending, restoreComposer, updatePending,
 } from '../../hooks/useWorkbenchFeed';
+import { skillSendParts, type SkillCatalogEntry } from '../../lib/skill-catalog';
+import { buildInlineSkillBlock, buildSkillBlock } from '../../lib/skill-parsing';
+
+/**
+ * Batch 1118: does the text start with a command (`/compact`, `/review 12`)?
+ * The picker's rule (`slashQuery`, then whitespace or the end), the same one
+ * the daemon uses to send a command alone: `/Users/me/a.txt look` is text.
+ */
+export function startsWithCommand(text: string): boolean {
+  return /^\/[^\s/]+(\s|$)/.test(text);
+}
 
 export const DRAFT_KEY = 'orbital:workbench.draft';
 
@@ -132,7 +148,7 @@ export interface SendDeps {
   injectMessage: (
     projectId: string, content: string, target?: string, nonce?: string,
     attachments?: UploadedAttachment[], sessionId?: string, pinned?: boolean,
-    skill?: undefined, answering?: undefined,
+    skill?: { key: string; path: string }, answering?: undefined,
     /** Spec 180: the route chose the project; stamped when the send creates the session. */
     routedBy?: RoutedBy,
   ) => Promise<unknown>;
@@ -162,6 +178,11 @@ export interface SendChoice {
   agent: string | null;
   /** Staged attachments (uploaded once the project is known). */
   files?: StagedFile[];
+  /** The skill or built-in picked in the `/` menu (a chip). */
+  skill?: SkillCatalogEntry | null;
+  /** Where a pick from the `/` menu goes when the project is 自动: the
+   *  project whose list the menu showed (Quick Tasks). */
+  fallbackProjectId?: string | null;
 }
 
 export type SendOutcome =
@@ -238,22 +259,33 @@ function decide(nonce: string, route: Promise<Decision>): Promise<Decision> {
 export async function sendWorkbenchTask(choice: SendChoice, deps: SendDeps): Promise<SendOutcome> {
   const text = choice.text.trim();
   const files = choice.files ?? [];
+  const skill = choice.skill ?? null;
   const nonce = newNonce();
-  const draft: Draft = { text, nonce, project_id: choice.projectId, session_id: null };
+  // Batch 1118: a pick from the `/` menu (a command typed or prefilled, a
+  // skill chip, `/automate`) is never routing input: the routing model would
+  // read `/compact` as a task. It goes to the project whose list was shown —
+  // the picked one, or on 自动 the fallback (Quick Tasks, the route's own
+  // fallback); with none it is unrouted like a route that found nothing.
+  const direct = startsWithCommand(text) || skill !== null;
+  let projectId = choice.projectId ?? (direct ? choice.fallbackProjectId ?? null : null);
+  const draft: Draft = { text, nonce, project_id: projectId, session_id: null };
   saveDraft(draft);
   addPending({
     // An attachment-only task is named by its files on the pending card.
-    nonce, text: text || files.map((f) => f.filename).join(', '),
-    project_id: choice.projectId, session_id: null,
+    nonce, text: text || (skill ? skill.name : files.map((f) => f.filename).join(', ')),
+    project_id: projectId, session_id: null,
     agent: choice.agent, created_at: Date.now(),
-    routing: !choice.projectId,
+    routing: !projectId && !direct,
   });
 
-  let projectId = choice.projectId;
   let sessionId: string | null = null;
   let unrouted = false;
   let routedBy: RoutedBy | undefined;
   try {
+    if (!projectId && direct) {
+      unrouted = true;
+      throw new Error('no project for a command');
+    }
     if (!projectId) {
       const route = api<{ project_id?: string | null; by?: unknown }>('/api/v2/workbench/route', {
         method: 'POST',
@@ -295,13 +327,18 @@ export async function sendWorkbenchTask(choice: SendChoice, deps: SendDeps): Pro
     draft.session_id = sessionId;
     saveDraft(draft);
     updatePending(nonce, { session_id: sessionId });
-    const target = choice.agent === 'orbital'
+    // Spec 137: `/automate` goes to the manager whatever the pick — only it
+    // has the trigger tools (the composer offers it only when there is one).
+    const target = choice.agent === 'orbital' || skill?.builtin?.managerOnly
       ? undefined
       : (choice.agent ?? minted.pinned_target ?? undefined);
+    // The chat composer's skill parts: a catalog skill is a payload the
+    // daemon re-resolves, a built-in an inline block in the text.
+    const parts = skillSendParts(skill, buildSkillBlock, buildInlineSkillBlock);
     await deps.injectMessage(
-      projectId, text, target, nonce,
+      projectId, parts.contentPrefix + text, target, nonce,
       attachments && attachments.length > 0 ? attachments : undefined,
-      sessionId, !!target, undefined, undefined, routedBy,
+      sessionId, !!target, parts.payload, undefined, routedBy,
     );
     clearDraft();
     void refreshFeed();

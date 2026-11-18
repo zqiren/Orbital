@@ -7,6 +7,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import shutil
 import sys
 import uuid
@@ -128,6 +129,11 @@ async def _one_prompt(message: str, prompt_uuid: str):
         "parent_tool_use_id": None,
         "uuid": prompt_uuid,
     }
+
+
+#: A built-in command's own output frame (``/compact`` → "Compacted").
+_LOCAL_COMMAND_OUTPUT_RE = re.compile(
+    r"<local-command-(stdout|stderr)>([\s\S]*)</local-command-\1>")
 
 
 def _is_batch_file(path: str) -> bool:
@@ -1088,6 +1094,16 @@ class SDKTransport(AgentTransport):
                         ))
 
         elif isinstance(msg, UserMessage):
+            # Batch 1118: a built-in the user ran (/compact) answers only in
+            # a user frame wrapped in <local-command-stdout|stderr>; that is
+            # the command's reply. Skipped when the turn already has text
+            # (commands like /context also answer as assistant text).
+            if isinstance(msg.content, str):
+                match = _LOCAL_COMMAND_OUTPUT_RE.fullmatch(msg.content.strip())
+                text = match.group(2).strip() if match else ""
+                if text and not self._dispatch_text:
+                    events.append(TransportEvent(
+                        event_type="message", data={"text": text}, raw_text=text))
             # Spec 100: tool results come back as a user turn. Paired with
             # their tool_use by id; display-only (never the turn's summary).
             if isinstance(msg.content, list):

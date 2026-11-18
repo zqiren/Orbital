@@ -362,17 +362,23 @@ class TestDispatchBuildsTheBlock:
 
     @pytest.mark.asyncio
     async def test_fresh_spawn_first_dispatch_whole_session_then_gaps(self):
+        # Reality: the route persists the message being sent BEFORE the
+        # dispatch, so it is the session's last row when the block is built.
         rows = [
             _user("U1", target="codex"), _marker("codex", "d1"),
             _completed("codex", "X1 from the lost thread"),
+            _user("U2", target="codex"),
         ]
         mgr, session, _ = _manager(rows)
         adapter = _adapter("fresh")
         await mgr._dispatch_prompt_locked(
-            adapter, _prompt("U2"), "proj", SID, "codex")
+            adapter, _prompt("U2", "user_pinned"), "proj", SID, "codex")
         first = mgr._dispatch_async.await_args.args[3]
         assert "user: U1" in first
         assert "assistant: X1 from the lost thread" in first
+        # The message itself goes once, after the block, never inside it.
+        assert "user: U2" not in first
+        assert first.endswith("U2") and first.count("U2") == 1
         # Second dispatch on the same (now primed) adapter: gap only.
         session.rows.append(_marker("codex", "d2"))
         session.rows.append(_completed("codex", "X2"))
@@ -409,6 +415,223 @@ class TestDispatchBuildsTheBlock:
         await mgr._dispatch_prompt_locked(
             _adapter(), _prompt("still goes"), "proj", SID, "codex")
         assert mgr._dispatch_async.await_args.args[3] == "still goes"
+
+
+# ---------------------------------------------------------------------------
+# C2. A worker command arrives as a command (batch 1118)
+# ---------------------------------------------------------------------------
+
+
+def _pinned_marker(handle, dispatch_id, message):
+    """The marker ``on_message_routed`` writes for a user-addressed dispatch:
+    the message's first 100 chars in the stable prose, ``suppress_wake``."""
+    return {
+        "role": "system", "source": "daemon",
+        "content": (f'[Sub-agent] Message sent to {handle}: "{message[:100]}". '
+                    "Transcript: /tmp/t.jsonl"),
+        "_meta": {"dispatch_id": dispatch_id, "handle": handle,
+                  "transcript_path": "/tmp/t.jsonl", "suppress_wake": True},
+    }
+
+
+@pytest.fixture
+def skills_note(monkeypatch):
+    """A skills listing to send (the real one reads the user's folders)."""
+    from agent_os.agent import skills as _skills
+    monkeypatch.setattr(_skills, "worker_skills", lambda ws, agent: [{"name": "x"}])
+    monkeypatch.setattr(_skills, "worker_skills_note", lambda s: "SKILLS NOTE")
+
+
+def _noted_adapter(status="fresh"):
+    adapter = _adapter(status)
+    adapter._orbital_first_turn_note = "SEAT NOTE"
+    return adapter
+
+
+class TestCommandsArriveAsCommands:
+
+    @pytest.mark.parametrize("text,command", [
+        ("/compact", True),
+        ("/compact keep the API notes", True),
+        ("/review\nplease", True),
+        ("/Users/x/a.txt look", False),
+        ("/tmp/x", False),
+        ("/ 这个", False),
+        ("/", False),
+        (" /compact", False),
+        ("compact", False),
+        ("$skill do it", False),
+    ])
+    def test_the_rule_is_the_pickers(self, text, command):
+        from agent_os.daemon_v2.recap import is_worker_command
+        assert is_worker_command(text) is command
+
+    @pytest.mark.asyncio
+    async def test_fresh_worker_first_message_command_goes_alone(self, skills_note):
+        rows = [_user("earlier question"), _assistant("earlier answer"),
+                _user("/compact", target="claude-code")]
+        mgr, session, _ = _manager(rows)
+        adapter = _noted_adapter("fresh")
+        await mgr._dispatch_prompt_locked(
+            adapter, _prompt("/compact", "user_pinned", "d1"), "proj", SID,
+            "claude-code")
+        assert mgr._dispatch_async.await_args.args[3] == "/compact"
+        # Nothing held back was spent.
+        assert adapter._orbital_first_turn_note == "SEAT NOTE"
+
+        # The next ordinary message carries all of it, once.
+        session.rows += [_pinned_marker("claude-code", "d1", "/compact"),
+                         _completed("claude-code", "Compacted. Context: 3k"),
+                         _user("explain the bug", target="claude-code")]
+        await mgr._dispatch_prompt_locked(
+            adapter, _prompt("explain the bug", "user_pinned", "d2"), "proj",
+            SID, "claude-code")
+        second = mgr._dispatch_async.await_args.args[3]
+        assert second.startswith("SEAT NOTE")
+        assert "SKILLS NOTE" in second
+        assert "user: earlier question" in second
+        assert "assistant: earlier answer" in second
+        # The worker ran the command and saw its own output natively.
+        assert "/compact" not in second
+        assert "Compacted" not in second
+        assert second.endswith("explain the bug")
+        assert second.count("explain the bug") == 1
+
+        # And only once.
+        session.rows += [_pinned_marker("claude-code", "d2", "explain the bug"),
+                         _completed("claude-code", "it is X"),
+                         _user("thanks", target="claude-code")]
+        await mgr._dispatch_prompt_locked(
+            adapter, _prompt("thanks", "user_pinned", "d3"), "proj", SID,
+            "claude-code")
+        assert mgr._dispatch_async.await_args.args[3] == "thanks"
+
+    @pytest.mark.asyncio
+    async def test_several_commands_in_a_row_then_one_preamble(self, skills_note):
+        rows = [_user("earlier"), _user("/context", target="claude-code")]
+        mgr, session, _ = _manager(rows)
+        adapter = _noted_adapter("fresh")
+        await mgr._dispatch_prompt_locked(
+            adapter, _prompt("/context", "user_pinned", "d1"), "proj", SID,
+            "claude-code")
+        session.rows += [_pinned_marker("claude-code", "d1", "/context"),
+                         _completed("claude-code", "ctx usage"),
+                         _user("/cost", target="claude-code")]
+        await mgr._dispatch_prompt_locked(
+            adapter, _prompt("/cost", "user_pinned", "d2"), "proj", SID,
+            "claude-code")
+        assert mgr._dispatch_async.await_args.args[3] == "/cost"
+        session.rows += [_pinned_marker("claude-code", "d2", "/cost"),
+                         _completed("claude-code", "cost usage"),
+                         _user("go", target="claude-code")]
+        await mgr._dispatch_prompt_locked(
+            adapter, _prompt("go", "user_pinned", "d3"), "proj", SID,
+            "claude-code")
+        third = mgr._dispatch_async.await_args.args[3]
+        assert third.count("SEAT NOTE") == 1 and third.count("SKILLS NOTE") == 1
+        assert "user: earlier" in third
+        assert "/context" not in third and "/cost" not in third
+        assert "ctx usage" not in third and "cost usage" not in third
+
+    @pytest.mark.asyncio
+    async def test_a_path_is_not_a_command(self, skills_note):
+        rows = [_user("/Users/x/a.txt look", target="claude-code")]
+        mgr, _, _ = _manager(rows)
+        adapter = _noted_adapter("fresh")
+        await mgr._dispatch_prompt_locked(
+            adapter, _prompt("/Users/x/a.txt look", "user_pinned"), "proj",
+            SID, "claude-code")
+        sent = mgr._dispatch_async.await_args.args[3]
+        assert sent.startswith("SEAT NOTE")
+        assert "SKILLS NOTE" in sent
+        assert sent.endswith("/Users/x/a.txt look")
+        assert adapter._orbital_first_turn_note is None
+
+    @pytest.mark.asyncio
+    async def test_a_managers_dispatch_keeps_its_preamble(self, skills_note):
+        """Only what the user (or their automation) addressed to the worker
+        is held: the manager's own dispatch needs its context."""
+        mgr, _, _ = _manager([_user("earlier")])
+        adapter = _noted_adapter("fresh")
+        await mgr._dispatch_prompt_locked(
+            adapter, _prompt("/compact", "management_agent"), "proj", SID,
+            "claude-code")
+        assert mgr._dispatch_async.await_args.args[3].startswith("SEAT NOTE")
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("respawn", [False, True])
+    async def test_resumed_worker_keeps_the_gap_across_a_command(
+            self, skills_note, respawn):
+        """A resumed thread (idle stop, daemon restart): the gap the command
+        skipped reaches the next message, even from a new process."""
+        rows = [_user("U1", target="codex"), _pinned_marker("codex", "d1", "U1"),
+                _completed("codex", "X1"),
+                _user("U-gap for orbit"), _assistant("A-gap from orbit"),
+                _user("/compact", target="codex")]
+        mgr, session, _ = _manager(rows)
+        adapter = _noted_adapter("resumed")
+        await mgr._dispatch_prompt_locked(
+            adapter, _prompt("/compact", "user_pinned", "d2"), "proj", SID,
+            "codex")
+        assert mgr._dispatch_async.await_args.args[3] == "/compact"
+        session.rows += [_pinned_marker("codex", "d2", "/compact"),
+                         _completed("codex", "compacted"),
+                         _user("next", target="codex")]
+        if respawn:
+            adapter = _noted_adapter("resumed")
+        await mgr._dispatch_prompt_locked(
+            adapter, _prompt("next", "user_pinned", "d3"), "proj", SID, "codex")
+        sent = mgr._dispatch_async.await_args.args[3]
+        assert "user: U-gap for orbit" in sent
+        assert "assistant: A-gap from orbit" in sent
+        assert "/compact" not in sent and "compacted" not in sent
+        assert "X1" not in sent and "user: U1" not in sent
+        assert sent.endswith("next")
+
+    @pytest.mark.asyncio
+    async def test_queue_item_command_goes_alone(self, skills_note):
+        """An automation the user assigned to the worker is the user's text."""
+        mgr, _, _ = _manager([_user("earlier"), _user("/compact", target="codex")])
+        await mgr._dispatch_prompt_locked(
+            _noted_adapter("fresh"), _prompt("/compact", "queue_item"), "proj",
+            SID, "codex")
+        assert mgr._dispatch_async.await_args.args[3] == "/compact"
+
+
+class TestRecapCurrentMessageAndHeldMarkers:
+
+    def test_fresh_recap_leaves_out_the_message_being_sent(self):
+        rows = [_user("U1"), _assistant("A1"), _user("now this", target="codex")]
+        recap = build_recap(rows, "codex", fresh=True, message="now this")
+        assert "user: U1" in recap and "assistant: A1" in recap
+        assert "now this" not in recap
+
+    def test_fresh_recap_with_only_the_message_is_empty(self):
+        rows = [_user("hello", target="codex")]
+        assert build_recap(rows, "codex", fresh=True, message="hello") == ""
+
+    def test_fresh_recap_without_message_is_unchanged(self):
+        rows = [_user("U1", target="codex")]
+        assert "user: U1" in build_recap(rows, "codex", fresh=True)
+
+    def test_a_held_command_marker_is_not_a_watermark(self):
+        rows = [_pinned_marker("codex", "d1", "U1"),
+                _user("gap"),
+                _user("/compact", target="codex"),
+                _pinned_marker("codex", "d2", "/compact"),
+                _completed("codex", "done"),
+                _user("next", target="codex")]
+        recap = build_recap(rows, "codex", fresh=False)
+        assert "user: gap" in recap
+        assert "/compact" not in recap and "done" not in recap
+
+    def test_a_managers_marker_for_a_slash_message_is_a_watermark(self):
+        # No suppress_wake: the manager's dispatch carried its preamble.
+        rows = [_user("gap"), _marker("codex", "d1"), _user("after")]
+        rows[1]["content"] = ('[Sub-agent] Message sent to codex: "/compact". '
+                              "Transcript: /tmp/t.jsonl")
+        recap = build_recap(rows, "codex", fresh=False)
+        assert "gap" not in recap and "user: after" in recap
 
 
 # ---------------------------------------------------------------------------
