@@ -1,8 +1,9 @@
 # batch/1118 on Windows: results
 
 **Status: READY** for the five features merged at `5e472a5b` (v0.24.0), with one
-fix commit on top (`8b49c824`, browser live view). Re-run CI on the tip before
-tagging; the installers tested here were built from `5e472a5b`.
+fix commit on top (`8b49c824`, browser live view). CI run 44358870615 is green
+on `2c7a1851` (the fix plus this file; later commits to this file are docs
+only). The installers tested here were built from `5e472a5b`.
 
 Not verified on Windows, by design or for lack of a second UAC click: the
 elevated half of the in-app upgrade (see UPG-8 below). It cannot fail for
