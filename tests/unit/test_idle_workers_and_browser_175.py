@@ -351,3 +351,119 @@ def test_profile_cache_is_capped_at_256_mb_for_both_browsers():
     # The sign-in browser takes the same list minus --start-minimized.
     assert "--disk-cache-size=268435456" in [
         f for f in BrowserManager.CHROME_FLAGS if f != "--start-minimized"]
+
+
+# ---------------------------------------------------------------------------
+# BrowserManager: the idle close remembers each scope's page (2026-11-18), so
+# a viewer opening the live view can bring it back.
+# ---------------------------------------------------------------------------
+
+S1 = "p::session:s1"
+S2 = "p::session:s2"
+
+
+def _open_page(url: str, closed: bool = False):
+    page = MagicMock()
+    page.is_closed.return_value = closed
+    page.url = url
+    page.close = AsyncMock()
+    return page
+
+
+@pytest.mark.asyncio
+async def test_idle_close_remembers_each_scopes_current_web_page(tmp_path):
+    bm = _browser(tmp_path, idle_for=BrowserManager.IDLE_CLOSE_AFTER + 1)
+    bm._project_pages[S1] = [_open_page("https://a.example/1"),
+                             _open_page("https://a.example/2")]
+    bm._project_pages[S2] = [_open_page("about:blank")]
+    bm._project_pages["worker:x"] = [_open_page("https://w.example/")]
+    bm._project_pages["q::session:s9"] = [_open_page("https://q.example/"),
+                                          _open_page("https://gone.example/", closed=True)]
+
+    assert await bm.close_if_idle() is True
+    # The page the live view shows (the last open one), web pages only,
+    # never a worker's.
+    assert bm._idle_closed_urls == {S1: "https://a.example/2",
+                                    "q::session:s9": "https://q.example/"}
+    assert bm.idle_closed_page("p", "s1") == (S1, "https://a.example/2")
+    assert bm.idle_closed_page("p", "s2") is None
+
+
+@pytest.mark.asyncio
+async def test_without_a_session_the_projects_most_recent_scope_is_reopened(tmp_path):
+    bm = _browser(tmp_path, idle_for=BrowserManager.IDLE_CLOSE_AFTER + 1)
+    bm._project_pages[S1] = [_open_page("https://a.example/")]
+    bm._project_pages[S2] = [_open_page("https://b.example/")]
+    bm._touch_scope(S2)
+    bm._touch_scope(S1)
+    await bm.close_if_idle()
+    assert bm.idle_closed_page("p") == (S1, "https://a.example/")
+    assert bm.idle_closed_page("other") is None
+
+
+@pytest.mark.asyncio
+async def test_nothing_is_reopened_while_the_sign_in_browser_holds_the_profile(tmp_path):
+    bm = _browser(tmp_path, idle_for=BrowserManager.IDLE_CLOSE_AFTER + 1)
+    bm._project_pages[S1] = [_open_page("https://a.example/")]
+    await bm.close_if_idle()
+    bm._warmup_active = True
+    assert bm.idle_closed_page("p", "s1") is None
+
+
+@pytest.mark.asyncio
+async def test_reopening_counts_as_use_and_consumes_the_memory(tmp_path):
+    bm = _browser(tmp_path, idle_for=BrowserManager.IDLE_CLOSE_AFTER + 1)
+    bm._project_pages[S1] = [_open_page("https://a.example/")]
+    await bm.close_if_idle()
+    assert bm.idle_closed_page("p", "s1") is not None
+
+    # The relaunch goes through get_page (same persistent-profile launch).
+    ctx = MagicMock()
+    ctx.new_page = AsyncMock(return_value=_open_page("about:blank"))
+    bm.ensure_browser = AsyncMock(return_value=ctx)
+    bm._apply_stealth = AsyncMock()
+    bm._last_use = time.monotonic() - BrowserManager.IDLE_CLOSE_AFTER - 1
+    await bm.get_page(S1)
+    assert bm.idle_closed_page("p", "s1") is None
+    # A fresh idle period: the next sweep does not close it.
+    bm._context, bm._playwright = MagicMock(), MagicMock()
+    assert await bm.close_if_idle() is False
+
+
+@pytest.mark.asyncio
+async def test_a_later_idle_close_keeps_an_earlier_unreopened_memory(tmp_path):
+    bm = _browser(tmp_path, idle_for=BrowserManager.IDLE_CLOSE_AFTER + 1)
+    bm._project_pages[S1] = [_open_page("https://a.example/")]
+    await bm.close_if_idle()
+    # Another session relaunched the browser and it idled out again.
+    bm._context, bm._playwright = MagicMock(), MagicMock()
+    bm._context.close = AsyncMock()
+    bm._playwright.stop = AsyncMock()
+    bm._project_pages[S2] = [_open_page("https://b.example/")]
+    bm._last_use = time.monotonic() - BrowserManager.IDLE_CLOSE_AFTER - 1
+    assert await bm.close_if_idle() is True
+    assert bm.idle_closed_page("p", "s1") == (S1, "https://a.example/")
+    assert bm.idle_closed_page("p", "s2") == (S2, "https://b.example/")
+
+
+@pytest.mark.asyncio
+async def test_a_stopped_session_or_removed_project_reopens_nothing(tmp_path):
+    bm = _browser(tmp_path, idle_for=BrowserManager.IDLE_CLOSE_AFTER + 1)
+    bm._project_pages[S1] = [_open_page("https://a.example/")]
+    bm._project_pages[S2] = [_open_page("https://b.example/")]
+    await bm.close_if_idle()
+    await bm.close_session_pages("p", "s1")
+    assert bm.idle_closed_page("p", "s1") is None
+    assert bm.idle_closed_page("p", "s2") is not None
+    await bm.close_project_pages("p")
+    assert bm.idle_closed_page("p", "s2") is None
+    assert bm._idle_closed_urls == {}
+
+
+@pytest.mark.asyncio
+async def test_a_crash_or_sign_in_handoff_remembers_nothing(tmp_path):
+    """Only the idle close is a "come back to this later" close."""
+    bm = _browser(tmp_path, idle_for=0)
+    bm._project_pages[S1] = [_open_page("https://a.example/")]
+    await bm.close_for_handoff()
+    assert bm._idle_closed_urls == {}

@@ -92,6 +92,17 @@ describe('useBrowserLive connection lifecycle', () => {
     expect(FakeWebSocket.instances).toHaveLength(0);
   });
 
+  it('mounted active, says connecting from its first render (never a stray idle)', () => {
+    const seen: string[] = [];
+    renderHook(() => {
+      const live = useBrowserLive('p1', true);
+      seen.push(live.status);
+      return live;
+    });
+    expect(seen[0]).toBe('connecting');
+    expect(seen).not.toContain('idle');
+  });
+
   it('connects only once active becomes true, to the live route', () => {
     const { rerender, result } = renderHook(({ active }) => useBrowserLive('p1', active), {
       initialProps: { active: false },
@@ -104,7 +115,7 @@ describe('useBrowserLive connection lifecycle', () => {
 
     expect(FakeWebSocket.instances).toHaveLength(1);
     expect(FakeWebSocket.instances[0].url).toBe(
-      'ws://localhost:8000/api/v2/agents/p1/browser/live',
+      'ws://localhost:8000/api/v2/agents/p1/browser/live?dpr=1',
     );
     expect(result.current.status).toBe('connecting');
   });
@@ -114,13 +125,13 @@ describe('useBrowserLive connection lifecycle', () => {
       initialProps: { sid: 'sess-a' },
     });
     expect(FakeWebSocket.instances[0].url).toBe(
-      'ws://localhost:8000/api/v2/agents/p1/browser/live?session_id=sess-a',
+      'ws://localhost:8000/api/v2/agents/p1/browser/live?session_id=sess-a&dpr=1',
     );
     act(() => {
       rerender({ sid: 'sess-b' });
     });
     expect(FakeWebSocket.instances[FakeWebSocket.instances.length - 1].url).toBe(
-      'ws://localhost:8000/api/v2/agents/p1/browser/live?session_id=sess-b',
+      'ws://localhost:8000/api/v2/agents/p1/browser/live?session_id=sess-b&dpr=1',
     );
   });
 
@@ -304,7 +315,7 @@ describe('useBrowserLive relay token', () => {
     renderHook(() => useBrowserLiveRelay('p1', true));
 
     expect(FakeWebSocket.instances[0].url).toBe(
-      'ws://localhost:8000/api/v2/agents/p1/browser/live?token=tok-123',
+      'ws://localhost:8000/api/v2/agents/p1/browser/live?dpr=1&token=tok-123',
     );
     vi.doUnmock('../config');
   });
@@ -352,5 +363,69 @@ describe('useBrowserLive — navigation state, cursor, nav()', () => {
       { type: 'nav', action: 'back' },
       { type: 'nav', action: 'goto', url: 'https://b.example/' },
     ]);
+  });
+});
+
+describe('useBrowserLive — the view size (2026-11-18: the page fills the panel)', () => {
+  const viewportSends = (ws: FakeWebSocket) =>
+    ws.sent.map((m) => JSON.parse(m)).filter((m) => m.type === 'viewport');
+
+  it('sends the size on connect, then only when it changes', () => {
+    const { result } = renderHook(() => useBrowserLive('p1', true));
+    const ws = FakeWebSocket.instances[0];
+    act(() => result.current.requestSize?.(690, 820, 2));
+    expect(viewportSends(ws)).toEqual([]); // not open yet: kept for onopen
+    act(() => ws.simulateOpen());
+    expect(viewportSends(ws)).toEqual([{ type: 'viewport', width: 690, height: 820, dpr: 2 }]);
+    act(() => result.current.requestSize?.(690, 820, 2));
+    expect(viewportSends(ws)).toHaveLength(1);
+    act(() => result.current.requestSize?.(700.4, 820, 2));
+    expect(viewportSends(ws)).toEqual([
+      { type: 'viewport', width: 690, height: 820, dpr: 2 },
+      { type: 'viewport', width: 700, height: 820, dpr: 2 },
+    ]);
+  });
+
+  it('never re-asks because a frame disagrees with the size (the 2026-09 loop)', () => {
+    const { result } = renderHook(() => useBrowserLive('p1', true));
+    const ws = FakeWebSocket.instances[0];
+    act(() => ws.simulateOpen());
+    act(() => result.current.requestSize?.(690, 820, 2));
+    for (const [w, h] of [[1280, 633], [690, 733], [1280, 720], [690, 820]]) {
+      act(() => ws.simulateMessage({ type: 'frame', jpeg: 'x', width: w, height: h }));
+    }
+    expect(viewportSends(ws)).toHaveLength(1);
+  });
+
+  it('re-sends the size on a reconnect (attaching makes this view the owner again)', () => {
+    vi.useFakeTimers();
+    try {
+      const { result } = renderHook(() => useBrowserLive('p1', true));
+      const first = FakeWebSocket.instances[0];
+      act(() => first.simulateOpen());
+      act(() => result.current.requestSize?.(500, 600, 1));
+      act(() => first.simulateDrop());
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+      const second = FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
+      expect(second).not.toBe(first);
+      expect(second.url).toContain('dpr=1');
+      act(() => second.simulateOpen());
+      expect(viewportSends(second)).toEqual([{ type: 'viewport', width: 500, height: 600, dpr: 1 }]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reports whether this view owns the page size', () => {
+    const { result } = renderHook(() => useBrowserLive('p1', true));
+    const ws = FakeWebSocket.instances[0];
+    act(() => ws.simulateOpen());
+    expect(result.current.owner).toBeUndefined();
+    act(() => ws.simulateMessage({ type: 'viewport', width: 690, height: 820, owner: true }));
+    expect(result.current.owner).toBe(true);
+    act(() => ws.simulateMessage({ type: 'viewport', width: 390, height: 700, owner: false }));
+    expect(result.current.owner).toBe(false);
   });
 });

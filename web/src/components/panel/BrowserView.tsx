@@ -7,9 +7,21 @@
  * interactive (canvas painted from screencast frames, input forwarded), with
  * a plain browser toolbar (back / forward / reload / address) and the
  * session's last screenshot as fallback when no browser is open.
+ *
+ * The page fills the view (2026-11-18): the view sends its size when it
+ * settles, the route resizes the agent's page to it, and frames arrive at
+ * that size and the display's pixel density — drawn 1:1, no bands. While a
+ * drag is in progress the last frame is scaled with the panel's edge. A view
+ * watching a page another viewer sized letterboxes it.
+ *
+ * After the agent's browser closed itself when idle (2026-11-18), opening
+ * the view brings the last page back live: the route reopens it on its own,
+ * and this view keeps the last screenshot up meanwhile (and reports its size
+ * from that box, so the page comes back at it). A click on a stale picture
+ * asks for the same reopen.
  * CONTRACT FILE: props are final; workstream D implements.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, ArrowRight, RotateCw, X } from 'lucide-react';
 import { useT } from '../../i18n/useT';
 import { useFiles } from '../../hooks/useFiles';
@@ -18,15 +30,31 @@ import { createInputCoalescer } from '../../utils/inputCoalescer';
 import { resolveAddress, displayAddress } from '../../utils/browserAddress';
 import AnnotateOverlay from './AnnotateOverlay';
 import type { Annotation, AnnotationBox, AnnotationDraft } from '../../utils/annotations';
+import { frameRect } from './browserFrameRect';
 
-/** Largest rect with the source aspect that fits in the box, centred. */
-function fitRect(srcW: number, srcH: number, boxW: number, boxH: number) {
-  if (srcW <= 0 || srcH <= 0 || boxW <= 0 || boxH <= 0) return { x: 0, y: 0, w: boxW || 1, h: boxH || 1 };
-  const scale = Math.min(boxW / srcW, boxH / srcH);
-  const w = srcW * scale;
-  const h = srcH * scale;
-  return { x: (boxW - w) / 2, y: (boxH - h) / 2, w, h };
+/** A size change is sent once the view has held it this long — when a drag
+ *  or a window resize settles, not on every step of it. */
+export const SIZE_SETTLE_MS = 150;
+
+/** Decoded last screenshots, so a view mounted again (Files and back to
+ *  Browser) shows the picture on its first render instead of flashing text
+ *  while the file is fetched again. Small: a few recent sessions. */
+const fallbackCache = new Map<string, string>();
+const FALLBACK_CACHE_MAX = 8;
+/** Tests: start every case without pictures from earlier ones. */
+export function clearFallbackCache() {
+  fallbackCache.clear();
 }
+function rememberFallback(key: string, dataUrl: string) {
+  fallbackCache.delete(key);
+  fallbackCache.set(key, dataUrl);
+  while (fallbackCache.size > FALLBACK_CACHE_MAX) {
+    const oldest = fallbackCache.keys().next().value;
+    if (oldest === undefined) break;
+    fallbackCache.delete(oldest);
+  }
+}
+
 function clamp(v: number, lo: number, hi: number) {
   return Math.min(Math.max(v, lo), hi);
 }
@@ -121,12 +149,46 @@ export default function BrowserView({
 }: BrowserViewProps) {
   const t = useT();
   const {
-    status, frame, title, url, loading, canGoBack, canGoForward, cursor, send, nav,
+    status, frame, title, url, loading, canGoBack, canGoForward, cursor, owner, requestSize, send, nav,
   } = useBrowserLive(projectId, active, sessionId);
+  // Frames are this view's own page (drawn filling it) unless the route
+  // says another viewer sized the page.
+  const owns = owner === true;
   // A page exists but nothing has been opened in it (about:blank): say so
   // rather than streaming a white rectangle labelled Live.
   const blankPage = status === 'open' && url === 'about:blank';
   const hasFrame = frame !== null;
+
+  // ---- Fallback: session's last screenshot, via the files content route ----
+  const { getFileContent } = useFiles();
+  const fallbackKey = fallback ? `${projectId}\n${fallback.path}` : null;
+  const [fallbackDataUrl, setFallbackDataUrl] = useState<string | null>(
+    () => (fallbackKey && !hasFrame ? fallbackCache.get(fallbackKey) ?? null : null),
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    if (hasFrame || !fallback || !fallbackKey) {
+      setFallbackDataUrl(null);
+      return;
+    }
+    const cached = fallbackCache.get(fallbackKey);
+    if (cached) setFallbackDataUrl(cached);
+    (async () => {
+      const content = await getFileContent(projectId, fallback.path);
+      if (cancelled || !content || content.type !== 'image') return;
+      const dataUrl = `data:${content.mime ?? 'image/png'};base64,${content.content}`;
+      rememberFallback(fallbackKey, dataUrl);
+      setFallbackDataUrl(dataUrl);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, fallback, fallbackKey, hasFrame, getFileContent]);
+  // The picture stands in for the page (no frame yet, no blank page open):
+  // also while connecting, which is when the route may be reopening the
+  // page the idle close shut — the picture stays until the live frame.
+  const showFallback = !hasFrame && !blankPage && fallbackDataUrl !== null;
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const wrapperRef = useRef<HTMLDivElement | null>(null);
@@ -134,20 +196,29 @@ export default function BrowserView({
   const [canvasWidth, setCanvasWidth] = useState(0);
   const [canvasHeight, setCanvasHeight] = useState(0);
   const frameAreaRef = useRef<HTMLDivElement | null>(null);
-  // Paint the pixel buffer at device resolution: a 1280px page scaled into a
-  // ~600px column is unreadable at 1× on a Retina display.
-  const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
+  // Paint the pixel buffer at device resolution: frames arrive at the
+  // display's density, so a 1:1 draw is pin-sharp on a Retina display.
+  const dpr = typeof window !== 'undefined' && window.devicePixelRatio > 0 ? window.devicePixelRatio : 1;
 
   // Size the canvas to the container's width. ResizeObserver isn't available
   // in every test environment, so fall back to a window resize listener —
   // real layout changes (drawer resize) go through ResizeObserver when it
   // exists.
   useEffect(() => {
-    const el = frameAreaRef.current ?? wrapperRef.current;
-    if (!el) return;
+    // Only the live frame area is measured: its size is the size the page
+    // is given, and any other box (the whole view while connecting or on a
+    // blank page) would size the page wrong.
+    const el = frameAreaRef.current;
+    if (!el) {
+      setCanvasWidth(0);
+      setCanvasHeight(0);
+      return;
+    }
     const measure = () => {
-      setCanvasWidth(el.clientWidth);
-      setCanvasHeight(el.clientHeight);
+      // Whole CSS px: the page is sized to exactly this, so frame pixels
+      // and canvas pixels line up 1:1.
+      setCanvasWidth(Math.floor(el.clientWidth));
+      setCanvasHeight(Math.floor(el.clientHeight));
     };
     measure();
     if (typeof ResizeObserver !== 'undefined') {
@@ -158,8 +229,28 @@ export default function BrowserView({
     window.addEventListener('resize', measure);
     return () => window.removeEventListener('resize', measure);
     // Re-run when the rendered branch changes: the live canvas area only
-    // exists once a frame has arrived, and it is that element we must watch.
-  }, [hasFrame, status]);
+    // exists once a real page's frame has arrived (not on about:blank), or
+    // as the box the last screenshot stands in, and it is that element we
+    // must watch.
+  }, [hasFrame, status, blankPage, showFallback]);
+
+  // Tell the route this view's size: at once the first time (and the hook
+  // re-sends it on every reconnect), then only once a change has settled.
+  // Never because a frame disagrees — the route owns the page's size.
+  const sizedOnceRef = useRef(false);
+  // The picture's box is the same box the live page will fill, so its size
+  // is the page's size too: a page the route reopens comes up at it.
+  const liveArea = (hasFrame && !blankPage) || showFallback;
+  useEffect(() => {
+    if (!requestSize || !active || !liveArea || canvasWidth <= 0 || canvasHeight <= 0) return;
+    if (!sizedOnceRef.current) {
+      sizedOnceRef.current = true;
+      requestSize(canvasWidth, canvasHeight, dpr);
+      return;
+    }
+    const timer = setTimeout(() => requestSize(canvasWidth, canvasHeight, dpr), SIZE_SETTLE_MS);
+    return () => clearTimeout(timer);
+  }, [requestSize, active, liveArea, canvasWidth, canvasHeight, dpr]);
 
   // Paint each incoming frame onto the canvas, coalesced with rAF so a burst
   // of screencast frames doesn't queue up multiple paints.
@@ -172,13 +263,13 @@ export default function BrowserView({
     const ctx = canvas?.getContext('2d');
     if (!img || !frame || !canvas || !ctx) return;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    // Contain-fit: the panel mirrors the agent's page at the page's own
-    // size, so the frame is letterboxed, never stretched — and the page is
-    // never resized to the panel (that made the agent browse a phone-width
-    // layout whenever someone watched; 2026-09-05).
-    const fit = fitRect(frame.width, frame.height, canvas.width, canvas.height);
-    ctx.drawImage(img, fit.x, fit.y, fit.w, fit.h);
-  }, [frame]);
+    // Filling the canvas when this view sized the page (1:1 once the size
+    // has landed, scaled with the panel's edge mid-drag); letterboxed when
+    // another viewer did. Never stretched.
+    const rect = frameRect(frame.width, frame.height, canvas.width, canvas.height, owns);
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(img, rect.x, rect.y, rect.w, rect.h);
+  }, [frame, owns]);
   useEffect(() => {
     if (!frame) return;
     const img = new Image();
@@ -192,12 +283,21 @@ export default function BrowserView({
       if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
     };
   }, [frame, paint]);
-  // React re-applies width/height on resize, which wipes the bitmap: repaint.
-  useEffect(() => {
+  // React re-applies width/height on resize, which wipes the bitmap: repaint
+  // in the same commit, before the browser paints. A rAF repaint here let
+  // WebKit composite the wiped canvas first — measured: 4 blank frames in a
+  // 24-step panel drag (WKWebView's stale-layer family of quirks).
+  // Keyed on the size only (the latest paint via a ref): a new frame paints
+  // itself once decoded, below — repainting the previous image on every
+  // frame's commit would double the draws.
+  const paintRef = useRef(paint);
+  paintRef.current = paint;
+  useLayoutEffect(() => {
     if (!imageRef.current) return;
     if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
-    rafRef.current = requestAnimationFrame(paint);
-  }, [canvasWidth, canvasHeight, dpr, paint]);
+    rafRef.current = null;
+    paintRef.current();
+  }, [canvasWidth, canvasHeight, dpr, owns]);
 
   // Canvas CSS-pixel size used for input scaling and annotation mapping.
   // getBoundingClientRect (mockable even where CSS layout isn't computed)
@@ -221,13 +321,13 @@ export default function BrowserView({
       if (!canvas || !frame) return null;
       const rect = canvas.getBoundingClientRect();
       const { width, height } = getCanvasSize();
-      const fit = fitRect(frame.width, frame.height, width, height);
+      const fit = frameRect(frame.width, frame.height, width, height, owns);
       return {
         x: clamp(((clientX - rect.left - fit.x) * frame.width) / fit.w, 0, frame.width),
         y: clamp(((clientY - rect.top - fit.y) * frame.height) / fit.h, 0, frame.height),
       };
     },
-    [frame, getCanvasSize],
+    [frame, getCanvasSize, owns],
   );
 
   // Pointer traffic is merged per animation frame (utils/inputCoalescer):
@@ -283,9 +383,23 @@ export default function BrowserView({
     [annotating, pagePointFromClient, coalescer, live],
   );
 
+  // A click on a stale picture (the last frame or screenshot, after the
+  // agent's browser closed) asks the route to bring that page back; it does
+  // nothing when there is no page to bring back.
+  const reopenFromPicture = useCallback(
+    (e: React.PointerEvent<HTMLElement>) => {
+      if (live || annotating || e.button !== 0) return;
+      nav('reopen');
+    },
+    [live, annotating, nav],
+  );
+
   const handlePointerDown = useCallback(
     (e: React.PointerEvent<HTMLCanvasElement>) => {
-      if (!live) return;
+      if (!live) {
+        reopenFromPicture(e);
+        return;
+      }
       if (annotating) return;
       focusTextHost();
       // Keep receiving this pointer even when it leaves the canvas, so the
@@ -309,7 +423,7 @@ export default function BrowserView({
         modifiers: modifiersFor(e),
       });
     },
-    [annotating, pagePointFromClient, send, live, coalescer, focusTextHost, clickCountFor],
+    [annotating, pagePointFromClient, send, live, coalescer, focusTextHost, clickCountFor, reopenFromPicture],
   );
 
   const handlePointerUp = useCallback(
@@ -514,20 +628,20 @@ export default function BrowserView({
   const overlayBoxes = useMemo(() => {
     if (!frame) return [];
     const { width, height } = getCanvasSize();
-    const fit = fitRect(frame.width, frame.height, width, height);
+    const fit = frameRect(frame.width, frame.height, width, height, owns);
     const sx = fit.w / frame.width;
     const sy = fit.h / frame.height;
     return annotations.filter(isBrowserAnnotation).map((a) => ({
       n: a.n,
       box: { x: a.box.x * sx + fit.x, y: a.box.y * sy + fit.y, w: a.box.w * sx, h: a.box.h * sy },
     }));
-  }, [annotations, frame, getCanvasSize]);
+  }, [annotations, frame, getCanvasSize, owns]);
 
   const handleOverlayAdd = useCallback(
     (box: AnnotationBox, note: string) => {
       if (!frame) return;
       const { width, height } = getCanvasSize();
-      const fit = fitRect(frame.width, frame.height, width, height);
+      const fit = frameRect(frame.width, frame.height, width, height, owns);
       const sx = frame.width / fit.w;
       const sy = frame.height / fit.h;
       const pageBox: AnnotationBox = {
@@ -537,28 +651,8 @@ export default function BrowserView({
       const imageDataUrl = canvas ? canvas.toDataURL('image/png') : frame.jpegDataUrl;
       onAddAnnotation({ kind: 'browser', pageTitle: title, box: pageBox, note, imageDataUrl });
     },
-    [frame, getCanvasSize, title, onAddAnnotation],
+    [frame, getCanvasSize, owns, title, onAddAnnotation],
   );
-
-  // ---- Fallback: session's last screenshot, via the files content route ----
-  const { getFileContent } = useFiles();
-  const [fallbackDataUrl, setFallbackDataUrl] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    if (hasFrame || !fallback) {
-      setFallbackDataUrl(null);
-      return;
-    }
-    (async () => {
-      const content = await getFileContent(projectId, fallback.path);
-      if (cancelled || !content || content.type !== 'image') return;
-      setFallbackDataUrl(`data:${content.mime ?? 'image/png'};base64,${content.content}`);
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [projectId, fallback, hasFrame, getFileContent]);
 
   if (hasFrame && !blankPage) {
     return (
@@ -570,8 +664,7 @@ export default function BrowserView({
           data-browser-live="true"
           // The viewport is a Page card inset in the panel (index.css
           // .browser-sheet). The canvas is measured from this box's own
-          // client size, so the inset only shrinks the mirror; the agent's
-          // page keeps its size (see paint()).
+          // client size, and that is the size the page is given.
           className="browser-sheet relative flex-1 min-h-0 overflow-hidden"
           onKeyDown={handleKeyDown}
           onKeyUp={handleKeyUp}
@@ -585,10 +678,11 @@ export default function BrowserView({
             width={canvasWidth ? Math.round(canvasWidth * dpr) : undefined}
             height={canvasHeight ? Math.round(canvasHeight * dpr) : undefined}
             style={{
-              width: '100%',
-              height: '100%',
+              width: canvasWidth ? `${canvasWidth}px` : '100%',
+              height: canvasHeight ? `${canvasHeight}px` : '100%',
               display: 'block',
-              cursor: live ? safeCursor(cursor) : 'not-allowed',
+              // Not live: a click asks for the page back (see above).
+              cursor: live ? safeCursor(cursor) : 'default',
             }}
             className="outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
             onPointerMove={handlePointerMove}
@@ -638,22 +732,17 @@ export default function BrowserView({
     );
   }
 
-  if (status === 'connecting') {
+  if (showFallback) {
     return (
       <div ref={wrapperRef} className="flex h-full w-full flex-col">
         {toolbar}
-        <div className="p-3 text-xs text-secondary">{t('panel.browser.connecting')}</div>
-      </div>
-    );
-  }
-
-  if (fallbackDataUrl) {
-    return (
-      <div ref={wrapperRef} className="flex h-full w-full flex-col">
-        {toolbar}
-        <div className="browser-sheet flex flex-1 items-center justify-center overflow-auto bg-sidebar p-2">
+        <div
+          ref={frameAreaRef}
+          className="browser-sheet flex flex-1 items-center justify-center overflow-auto bg-sidebar p-2"
+          onPointerDown={reopenFromPicture}
+        >
           <img
-            src={fallbackDataUrl}
+            src={fallbackDataUrl ?? undefined}
             alt={fallback?.title ?? ''}
             style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
           />
@@ -662,6 +751,15 @@ export default function BrowserView({
           {t('panel.browser.lastScreenshot')}
           {fallback?.title ? ` · ${fallback.title}` : ''}
         </div>
+      </div>
+    );
+  }
+
+  if (status === 'connecting') {
+    return (
+      <div ref={wrapperRef} className="flex h-full w-full flex-col">
+        {toolbar}
+        <div className="p-3 text-xs text-secondary">{t('panel.browser.connecting')}</div>
       </div>
     );
   }
