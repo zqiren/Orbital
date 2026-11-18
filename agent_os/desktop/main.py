@@ -1095,11 +1095,18 @@ _AE_SESSION_ENDING = {
 }
 
 
-def _quit_jobs_prompt(n: int) -> tuple[str, str, str, str]:
-    """(title, message, quit label, cancel label) in the OS language."""
+def _quit_jobs_prompt(n: int, agents: int = 0) -> tuple[str, str, str, str]:
+    """(title, message, quit label, cancel label) in the OS language.
+    ``n`` running background jobs, ``agents`` projects with an agent mid-turn
+    or a worker running (the in-app upgrade quits through here too)."""
     if _os_localization() is not None:
+        if agents > 0:
+            return ("退出 Orbital？", "智能体还在工作。退出会结束它们。", "退出", "取消")
         return ("退出 Orbital？", f"还有 {n} 个后台任务正在运行。退出会结束它们。",
                 "退出", "取消")
+    if agents > 0:
+        return ("Quit Orbital?", "Agents are still working. Quitting stops them.",
+                "Quit", "Cancel")
     return ("Quit Orbital?",
             f"{n} background job(s) are still running. Quitting stops them.",
             "Quit", "Cancel")
@@ -1123,10 +1130,10 @@ def _system_is_ending_session() -> bool:
         return False
 
 
-def _ask_quit_with_jobs(n: int) -> bool:
+def _ask_quit_with_jobs(n: int, agents: int = 0) -> bool:
     """Native Quit / Cancel. True = quit. Any failure to ask quits (a broken
     dialog must never trap the user in the app)."""
-    title, message, quit_label, cancel_label = _quit_jobs_prompt(n)
+    title, message, quit_label, cancel_label = _quit_jobs_prompt(n, agents)
     try:
         if sys.platform == "win32":
             import ctypes
@@ -1165,14 +1172,17 @@ def _ask_quit_with_jobs(n: int) -> bool:
 
 
 def confirm_quit() -> bool:
-    """True when Orbital may quit now: no background job is running, the OS
-    is ending the session, or the user chose Quit."""
+    """True when Orbital may quit now: nothing is running (no background job,
+    no agent mid-turn, no worker turn), the OS is ending the session, or the
+    user chose Quit. The in-app upgrade asks through here as well."""
+    from agent_os import updater
     from agent_os.daemon_v2 import jobs
 
     n = jobs.running_job_count()
-    if n <= 0 or _system_is_ending_session():
+    agents = updater.busy_agent_count()
+    if (n <= 0 and agents <= 0) or _system_is_ending_session():
         return True
-    return _ask_quit_with_jobs(n)
+    return _ask_quit_with_jobs(n, agents)
 
 
 def _exit_app(port: int) -> None:
@@ -1189,6 +1199,31 @@ def _exit_app(port: int) -> None:
     flush_telemetry_before_exit(port)
     pid_file.release_pid_file()  # os._exit skips atexit (spec 134 W7)
     os._exit(0)
+
+
+def _register_update_hooks(port: int) -> None:
+    """Hand the in-app updater (``agent_os.updater``) the quit question and
+    the one way out. Never blocks boot."""
+    try:
+        from agent_os import updater
+
+        updater.register_shell(confirm_quit=confirm_quit,
+                               exit_app=lambda: _exit_for_update(port))
+    except Exception:
+        _boot_logger().exception("Could not register the update hooks")
+
+
+def _exit_for_update(port: int) -> None:
+    """``_exit_app`` from a daemon thread. Windows also takes the tray icon
+    down first (``os._exit`` would leave a ghost icon until hovered)."""
+    if sys.platform != "darwin":
+        try:
+            from agent_os.desktop.tray import hide_tray
+
+            hide_tray()
+        except Exception:
+            pass
+    _exit_app(port)
 
 
 def _handle_window_close(window) -> bool:
@@ -2049,6 +2084,11 @@ def main():
         port = _boot_or_report(PORT)
         if port is None:
             return
+        # In-app upgrade: the daemon in THIS process may quit the app to
+        # install, through the same question and exit as every other quit. A
+        # window opened on someone else's daemon (the branch above) registers
+        # nothing, so that daemon never quits a shell it does not own.
+        _register_update_hooks(port)
 
     # Daemon is up — provision Chromium (extract bundled archive, or a
     # backed-off background download) without blocking the UI.

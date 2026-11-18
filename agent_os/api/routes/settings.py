@@ -747,15 +747,19 @@ async def get_update_status():
     frontend pill renders from the WS announce; this endpoint covers page
     loads that happen after the announce and the manual re-check button."""
     from agent_os import update_check
+    from agent_os.api.routes.update import install_snapshot
 
     checker = update_check.get_checker()
     if checker is None:
         from agent_os.version import get_version
 
         return {"current": get_version(), "update_available": False,
-                "latest": None, "url": None, "installer": None}
+                "latest": None, "url": None, "installer": None,
+                "install": install_snapshot()}
     await checker.run_check()
-    return checker.status
+    # ``install``: the in-app upgrade's state (agent_os/updater.py). Additive;
+    # older frontends ignore it.
+    return {**checker.status, "install": install_snapshot()}
 
 
 @router.get("/settings/telemetry-payload")

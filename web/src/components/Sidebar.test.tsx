@@ -21,6 +21,10 @@ afterEach(() => cleanup());
 const apiMock = vi.hoisted(() => vi.fn());
 vi.mock('../config', () => ({ api: apiMock }));
 
+// The update pill's presence (UpdatePill.tsx) — false unless a test sets it.
+const pillShownMock = vi.hoisted(() => ({ value: false }));
+vi.mock('./UpdatePill', () => ({ useUpdatePillShown: () => pillShownMock.value }));
+
 import Sidebar from './Sidebar';
 
 const mockProject: Project = {
@@ -83,6 +87,27 @@ describe('Sidebar — base render', () => {
   it('still shows connection indicator', () => {
     render(<Sidebar {...defaultProps} />);
     expect(screen.getByText('Connected')).toBeInTheDocument();
+  });
+
+  // The update pill is fixed over this corner and takes the line's place:
+  // nothing of the line may paint beside a narrow pill ("Verifying…"), and the
+  // line keeps its box so the footer never changes height.
+  describe('under the update pill', () => {
+    afterEach(() => { pillShownMock.value = false; });
+
+    it('the connection line is visible when no pill shows', () => {
+      render(<Sidebar {...defaultProps} />);
+      expect(screen.getByTestId('sidebar-connection')).not.toHaveClass('invisible');
+    });
+
+    it('the line goes invisible but stays in the layout while the pill shows', () => {
+      pillShownMock.value = true;
+      render(<Sidebar {...defaultProps} />);
+      const line = screen.getByTestId('sidebar-connection');
+      expect(line).toHaveClass('invisible');
+      expect(line).not.toHaveClass('hidden');
+      expect(line).toHaveTextContent('Connected');
+    });
   });
 });
 

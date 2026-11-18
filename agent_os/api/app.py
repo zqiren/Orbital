@@ -628,9 +628,16 @@ def _assemble_app(app: FastAPI, data_dir: str | None) -> FastAPI:
     # independent of the telemetry toggle. See agent_os/update_check.py.
     @app.on_event("startup")
     async def _start_update_checker():
-        from agent_os import update_check
+        from agent_os import update_check, updater
 
-        update_check.configure(ws_manager).start()
+        checker = update_check.configure(ws_manager)
+        checker.start()
+        # In-app upgrade (agent_os/updater.py): installs only in the packaged
+        # app, with the desktop shell's quit hooks; inert everywhere else.
+        updater.configure(ws_manager, offered=lambda: checker.status)
+        updater.register_work_probe(lambda: updater.count_busy_projects(
+            project_store, agent_manager, sub_agent_manager))
+        await asyncio.to_thread(updater.get_updater().on_startup)
 
     @app.on_event("shutdown")
     async def _stop_update_checker():
@@ -713,6 +720,10 @@ def _assemble_app(app: FastAPI, data_dir: str | None) -> FastAPI:
         sub_agent_manager=sub_agent_manager,
     )
     app.include_router(settings_routes.router)
+
+    # 7a-update. In-app upgrade (agent_os/updater.py)
+    from agent_os.api.routes import update as update_routes
+    app.include_router(update_routes.router)
 
     @app.on_event("startup")
     async def _warm_sub_agent_status():

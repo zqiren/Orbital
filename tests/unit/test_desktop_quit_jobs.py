@@ -19,6 +19,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from agent_os import updater
 from agent_os.daemon_v2 import jobs
 from agent_os.desktop import main
 from agent_os.desktop import tray as tray_mod
@@ -36,16 +37,17 @@ def asked(monkeypatch):
     calls = []
     answer = {"quit": False}
 
-    def ask(n):
-        calls.append(n)
+    def ask(n, agents=0):
+        calls.append(n if not agents else (n, agents))
         return answer["quit"]
     monkeypatch.setattr(main, "_ask_quit_with_jobs", ask)
     monkeypatch.setattr(main, "_system_is_ending_session", lambda: False)
     return types.SimpleNamespace(calls=calls, answer=answer)
 
 
-def _jobs(monkeypatch, n):
+def _jobs(monkeypatch, n, agents=0):
     monkeypatch.setattr(jobs, "running_job_count", lambda: n)
+    monkeypatch.setattr(updater, "busy_agent_count", lambda timeout=2.0: agents)
 
 
 def test_no_jobs_quits_without_asking(asked, monkeypatch):
@@ -77,6 +79,49 @@ def test_the_prompt_text(monkeypatch):
     monkeypatch.setattr(main, "_os_localization", lambda: {"x": "y"})
     _t, zh_message, zh_quit, zh_cancel = main._quit_jobs_prompt(2)
     assert "2" in zh_message and zh_quit == "退出" and zh_cancel == "取消"
+
+
+# --- agents mid-turn count too (the in-app upgrade quits through here) -----
+
+
+def test_an_agent_mid_turn_asks_even_with_no_jobs(asked, monkeypatch):
+    _jobs(monkeypatch, 0, agents=1)
+    assert main.confirm_quit() is False
+    assert asked.calls == [(0, 1)]
+    asked.answer["quit"] = True
+    assert main.confirm_quit() is True
+
+
+def test_nothing_running_never_asks_even_through_the_real_probe(asked, monkeypatch):
+    monkeypatch.setattr(jobs, "running_job_count", lambda: 0)
+    updater.clear_work_probe()  # no daemon probe: counts as nothing running
+    assert main.confirm_quit() is True
+    assert asked.calls == []
+
+
+def test_the_agents_prompt_text(monkeypatch):
+    monkeypatch.setattr(main, "_os_localization", lambda: None)
+    _t, message, quit_label, _c = main._quit_jobs_prompt(0, 2)
+    assert message == "Agents are still working. Quitting stops them."
+    assert quit_label == "Quit"
+    monkeypatch.setattr(main, "_os_localization", lambda: {"x": "y"})
+    _t, zh_message, zh_quit, _c = main._quit_jobs_prompt(3, 1)
+    assert zh_message == "智能体还在工作。退出会结束它们。" and zh_quit == "退出"
+
+
+def test_update_hooks_hand_over_the_normal_quit(monkeypatch):
+    updater.clear_shell()
+    exits = []
+    monkeypatch.setattr(main, "_exit_app", lambda port: exits.append(port))
+    monkeypatch.setattr(main.sys, "platform", "darwin")
+    main._register_update_hooks(8123)
+    try:
+        assert updater.shell_registered()
+        assert updater._shell["confirm_quit"] is main.confirm_quit
+        updater._shell["exit_app"]()
+        assert exits == [8123]
+    finally:
+        updater.clear_shell()
 
 
 @pytest.fixture

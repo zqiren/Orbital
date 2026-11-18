@@ -411,6 +411,59 @@ Within 24 hours of publishing:
 - Download both installers from the public Releases page (not local artifacts) on a fresh machine each
 - Run through the smoke test in each platform section
 - If a regression is found: do **not** delete or modify the release; cut a v{X.Y.Z+1} patch instead
+- **In-app upgrade from the previous release**, on the CI-built installers (gate below)
+
+---
+
+### In-app upgrade: what it reads from a release
+
+The pill's one-click upgrade (`agent_os/updater.py`, `update_macos.py`,
+`update_windows.py`) adds **no new release artifact and no new step**. It reads
+what the steps above already publish, so each of those steps now matters to
+installed apps too:
+
+- **GitHub release `vX.Y.Z`**: it must be published (a draft or prerelease is
+  refused), and carry `Orbital-macOS.dmg` / `Orbital-Setup.exe` (or the
+  versioned names) with GitHub's sha256 `digest`. GitHub sets the digest itself.
+  The app asks for exactly the offered tag, never `latest`.
+- **OSS `releases/latest.json`** (`sync-release-to-oss.sh`): a zh UI tries the
+  mirror first and uses it only when `version` equals the offered version, with
+  `files.{mac,win}.sha256` as the hash. **Forget the sync** and Chinese users
+  fall back to GitHub, which is often slow or blocked in China, so their
+  upgrade may fail and leave them on the manual download. That download also
+  serves the old version until the sync runs. Run the sync right after
+  publishing.
+- **Never replace an asset under an existing tag.** A replaced file no longer
+  matches the digest, so in-flight downloads fail the hash and start over.
+  This is safe but wasteful. Cut a new version instead.
+- **macOS**: the `.app` inside the DMG must be Developer-ID signed with Team
+  `UG8R3KRXSU`, bundle id `com.orbital.desktop`, and **notarized** (the app
+  runs `spctl -a -t exec` before swapping). Main-branch and dispatch DMGs that
+  are not notarized are refused, which is correct. Only tag builds update
+  users.
+- **Windows**: keep `AppId=Orbital`, `AppMutex=OrbitalDesktopShell` and the
+  `[Code]` handshake (`/ORBITALUPDATE`, `OrbitalUpdateSetupReady`,
+  `/ORBITALRELAUNCH`) in `installer/agentos-setup.iss`.
+  `tests/unit/test_update_windows.py` pins them against the Python side.
+- **First version that ships it**: users on older versions still upgrade by
+  hand once. From then on, each release is installable in place from the
+  previous one.
+
+**Release gate: run once per release, on CI installers, never local builds:**
+
+1. macOS: install the previous release's DMG to `/Applications`. Launch it,
+   grant Desktop folder access (open a project there) and Calendar access
+   (Sources → Mac Calendar). Wait for the pill **Update to vX.Y.Z**, click
+   once, and watch: percentage, then Verifying…, then Restarting…, then the
+   app reopens. Pass: Settings → About shows X.Y.Z. No Gatekeeper dialog
+   appears. The project and its Desktop files still open without a new TCC
+   prompt, and the Calendar source still reads events. `/Applications` holds
+   no `.Orbital-update-*` folder. `~/Library/Caches/Orbital/updates/` is empty
+   apart from logs.
+2. macOS busy case: start a long agent turn, click the pill. The quit dialog
+   says "Agents are still working". Cancel leaves the pill on
+   **Restart to update**.
+3. Windows: `docs/verification/in-app-upgrade-windows.md` steps 1 to 12.
 
 ---
 
@@ -433,8 +486,9 @@ If a bug is reported on a tagged version while main has moved ahead:
   windows-latest; `.dmg`/`.exe` build jobs uploading installer artifacts). It
   does NOT replace this manual runbook for *tagged releases* (signing,
   DMG/Inno naming, GitHub Release authoring are still manual).
-- Code signing (Windows or macOS)
-- Auto-update mechanisms
+- Code signing (Windows)
+- Background or automatic updates (the in-app upgrade above runs only on the
+  user's click: no download before it, no delta updates, no update service)
 - Homebrew cask, winget, or other package-manager distribution
 - Notarization (macOS) — gated on signing first
 
