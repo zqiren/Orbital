@@ -4,6 +4,9 @@
 
 export type Autonomy = 'hands_off' | 'check_in' | 'supervised';
 
+/** Wire protocol: Chat Completions, the OpenAI Responses API, or Anthropic Messages. */
+export type LLMSdk = 'openai' | 'openai-responses' | 'anthropic';
+
 export interface ProviderInfo {
   display_name: string;
   base_url: string | null;
@@ -19,7 +22,7 @@ export interface ProviderInfo {
   /** Model auto-selected after one-click key provisioning (Spec 47) — a
    * provider opt-in; absent means signin leaves the model choice alone. */
   default_model?: string | null;
-  sdk: 'openai' | 'anthropic';
+  sdk: LLMSdk;
   suggested_models: string[];
   /** Per-model catalog metadata; only display_name is consumed by the UI. */
   models?: Record<string, { display_name?: string }>;
@@ -55,7 +58,7 @@ export interface CredentialCard {
   region: 'global' | 'china';
   /** Set for provider === 'custom' (or a preserved migrated endpoint). */
   base_url: string | null;
-  sdk: 'openai' | 'anthropic' | null;
+  sdk: LLMSdk | null;
   /** '' only on a migrated incomplete card ("needs a model"). */
   model: string;
   created_at: string;

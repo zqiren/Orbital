@@ -335,6 +335,37 @@ describe('LLMProviderSettings — fresh install: the daemon\'s "custom" with no 
     expect(test().disabled).toBe(false);
   });
 
+  it('Custom can speak the OpenAI Responses API, and Test Connection sends it', async () => {
+    mockApi({ settings: FRESH, cards: [] });
+    render(<LLMProviderSettings mode="global" />);
+    await waitFor(() => expect(providerSelect().value).toBe('deepseek'));
+    fireEvent.change(providerSelect(), { target: { value: CUSTOM_PROVIDER_KEY } });
+    const sdkSelect = screen.getByDisplayValue('OpenAI-compatible') as HTMLSelectElement;
+    expect(Array.from(sdkSelect.options).map((o) => o.value))
+      .toEqual(['openai', 'openai-responses', 'anthropic']);
+    fireEvent.change(sdkSelect, { target: { value: 'openai-responses' } });
+    expect(sdkSelect.value).toBe('openai-responses');
+    fireEvent.change(screen.getByPlaceholderText(/sk-/), { target: { value: 'sk-good' } });
+    fireEvent.change(screen.getByPlaceholderText(/model name/i), { target: { value: 'my-model' } });
+    fireEvent.change(screen.getByPlaceholderText(/https?:\/\//i), { target: { value: 'https://gw.example/v1' } });
+    fireEvent.click(screen.getByTestId('card-test'));
+    await waitFor(() => expect(apiMock.mock.calls.some(([p]) => p === '/api/v2/providers/test')).toBe(true));
+    const body = JSON.parse(String((apiMock.mock.calls.find(([p]) => p === '/api/v2/providers/test')![1] as RequestInit).body));
+    expect(body.sdk).toBe('openai-responses');
+    expect(body.base_url).toBe('https://gw.example/v1');
+  });
+
+  it('a saved Responses custom card opens with that protocol selected', async () => {
+    // GET /settings derives llm.sdk from the default card (resolve_card_endpoint).
+    mockApi({
+      settings: { provider: 'custom', model: 'my-model', base_url: 'https://my-llm.example/v1', sdk: 'openai-responses' },
+      cards: [{ ...SAVED_CUSTOM_CARD, sdk: 'openai-responses' }],
+    });
+    render(<LLMProviderSettings mode="global" />);
+    await waitFor(() => expect(providerSelect().value).toBe(CUSTOM_PROVIDER_KEY));
+    expect(await screen.findByDisplayValue('OpenAI Responses')).toBeTruthy();
+  });
+
   it('picking a provider whose registry entry names a default model fills it in', async () => {
     mockApi({ settings: FRESH, cards: [] });
     render(<LLMProviderSettings mode="global" />);

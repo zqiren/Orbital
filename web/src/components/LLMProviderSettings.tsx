@@ -8,6 +8,7 @@ import type {
   CardMutationResponse,
   CardTestResult,
   CredentialCard,
+  LLMSdk,
   ProviderRegistry,
   ProviderInfo,
   TokendanceSigninResponse,
@@ -152,7 +153,7 @@ export default function LLMProviderSettings({
 
   // Field state
   const [provider, setProvider] = useState('');
-  const [sdk, setSdk] = useState<'openai' | 'anthropic'>('openai');
+  const [sdk, setSdk] = useState<LLMSdk>('openai');
   const [model, setModel] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
@@ -340,7 +341,7 @@ export default function LLMProviderSettings({
         setModel(globalSettings.model || '');
         setModelInputValue(globalSettings.model || '');
         setBaseUrl(globalSettings.base_url || defaultBaseUrlSeed);
-        if (globalSettings.sdk) setSdk(globalSettings.sdk as 'openai' | 'anthropic');
+        if (globalSettings.sdk) setSdk(globalSettings.sdk as LLMSdk);
       } else if (defaultProviderKey) {
         setProvider(defaultProviderKey);
         resolvedProvider = defaultProviderKey;
@@ -1232,10 +1233,11 @@ export default function LLMProviderSettings({
                 <label className="block text-sm font-medium text-primary mb-1.5">{t('llm.field.sdk')}</label>
                 <Select
                   value={sdk}
-                  onChange={(e) => setSdk(e.target.value as 'openai' | 'anthropic')}
+                  onChange={(e) => setSdk(e.target.value as LLMSdk)}
                   className="w-full text-sm bg-sidebar border border-border rounded-lg px-3 py-2 text-primary focus:outline-none focus:border-accent transition-all duration-150"
                 >
                   <option value="openai">{t('llm.sdk.openai')}</option>
+                  <option value="openai-responses">{t('llm.sdk.openaiResponses')}</option>
                   <option value="anthropic">{t('llm.sdk.anthropic')}</option>
                 </Select>
               </div>

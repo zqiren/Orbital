@@ -217,6 +217,7 @@ llm.field.baseUrl,Base URL,label,LLMProviderSettings.tsx,Field label for the API
 llm.baseUrl.placeholder,https://api.openai.com/v1,placeholder,LLMProviderSettings.tsx,Example base URL,https://api.openai.com/v1,Keep literal URL.
 llm.field.sdk,SDK,label,LLMProviderSettings.tsx,Field label for SDK selection (custom provider),SDK,Keep SDK.
 llm.sdk.openai,OpenAI-compatible,menu,LLMProviderSettings.tsx,SDK option: OpenAI-compatible,OpenAI 兼容,Keep OpenAI.
+llm.sdk.openaiResponses,OpenAI Responses,menu,LLMProviderSettings.tsx,SDK option: OpenAI Responses API,OpenAI Responses,DO NOT TRANSLATE — protocol name.
 llm.sdk.anthropic,Anthropic,menu,LLMProviderSettings.tsx,SDK option: Anthropic,Anthropic,DO NOT TRANSLATE — brand.
 llm.test,Test Connection,button,LLMProviderSettings.tsx,Tests the provider connection,测试连接,
 llm.testing,Testing...,status,LLMProviderSettings.tsx,Button label while testing,测试中…,
