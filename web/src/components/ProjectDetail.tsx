@@ -496,6 +496,10 @@ export default function ProjectDetail({
             selectedSessionId={route.sessionId}
             onExpand={() => setCollapsed(false)}
             onNewSession={handleNewSession}
+            // The header's gear and panel button stay reachable folded.
+            onOpenSettings={handleSettingsClick}
+            settingsSelected={settingsOpen}
+            onOpenPanel={dockable ? undefined : panel.openOverlay}
           />
         </aside>
       ) : (

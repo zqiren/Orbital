@@ -69,7 +69,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ChevronDown, ChevronRight, Clock, FolderSearch, ListFilter, ListOrdered, Plus } from 'lucide-react';
+import { ChevronDown, ChevronRight, Clock, FolderSearch, ListFilter, ListOrdered, PanelRight, Plus, Settings } from 'lucide-react';
 import { useSessions } from '../hooks/useSessions';
 import { useSeenReplies } from '../hooks/useSeenReplies';
 import { hasUnseenReply, seenKey } from '../utils/sessionUnread';
@@ -591,6 +591,12 @@ export interface SessionRailProps {
   selectedSessionId?: string | null;
   onExpand: () => void;
   onNewSession?: () => void;
+  /** The open column's header gear, kept on the rail (2026-11-19). */
+  onOpenSettings?: () => void;
+  /** Settings (or a page under it) fills the right area: the gear is lit. */
+  settingsSelected?: boolean;
+  /** The header's panel button, only below the dock threshold (2026-11-19). */
+  onOpenPanel?: () => void;
 }
 
 /**
@@ -604,8 +610,22 @@ export interface SessionRailProps {
  * second definition. The session being viewed never lights it, as its row
  * never shows unread. The rail carries no hover tips (2026-11-18): its
  * controls are named by aria-label only.
+ *
+ * The open column's header controls stay on the rail (2026-11-19: folded,
+ * the gear and, below the dock threshold, the panel button were out of
+ * reach). The gear sits on the header's own line, where it is when the
+ * column is open; the panel button, which exists only on a narrow window,
+ * goes under New session so its coming and going moves nothing else.
  */
-export function SessionRail({ projectId, selectedSessionId, onExpand, onNewSession }: SessionRailProps) {
+export function SessionRail({
+  projectId,
+  selectedSessionId,
+  onExpand,
+  onNewSession,
+  onOpenSettings,
+  settingsSelected = false,
+  onOpenPanel,
+}: SessionRailProps) {
   const t = useT();
   const { sessions } = useSessions(projectId);
   const { seenAt } = useSeenReplies(projectId, sessions);
@@ -657,6 +677,40 @@ export function SessionRail({ projectId, selectedSessionId, onExpand, onNewSessi
       >
         <Plus size={14} strokeWidth={2} aria-hidden="true" />
       </button>
+      {onOpenSettings && (
+        <span data-tour="project-settings" className="absolute left-0 top-[18px] inline-flex">
+          <button
+            type="button"
+            data-testid="session-rail-settings"
+            aria-label={t('settingsIcon.aria')}
+            aria-current={settingsSelected ? 'page' : undefined}
+            onClick={onOpenSettings}
+            className={`${RAIL_BUTTON} ${
+              settingsSelected
+                ? 'bg-card text-primary shadow-[0_1px_2px_rgb(0_0_0/0.06)]'
+                : 'text-secondary hover:bg-card-hover hover:text-primary'
+            }`}
+          >
+            <Settings size={14} aria-hidden="true" />
+          </button>
+        </span>
+      )}
+      {onOpenPanel && (
+        <button
+          type="button"
+          data-testid="panel-open-button"
+          data-tour="panel-button"
+          aria-label={t('projectDetail.openPanel')}
+          onClick={onOpenPanel}
+          className={`absolute left-0 top-[94px] ${RAIL_BUTTON} text-secondary hover:bg-card-hover hover:text-primary`}
+        >
+          <PanelRight size={14} aria-hidden="true" />
+        </button>
+      )}
     </div>
   );
 }
+
+/** A rail control's box: New session's, 20 × 28. */
+const RAIL_BUTTON =
+  'flex h-7 w-5 items-center justify-center rounded-md transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-accent';
