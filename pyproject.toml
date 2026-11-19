@@ -7,7 +7,7 @@ name = "agent-os"
 version = "0.24.0"
 requires-python = ">=3.11"
 dependencies = [
-    "openai>=1.0",
+    "openai>=2.31",
     "anthropic>=0.39",
     "fastapi>=0.100",
     "uvicorn>=0.20",

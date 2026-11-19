@@ -398,8 +398,8 @@ def translate_stream_event(event, state: StreamState) -> StreamChunk | None:
         if message:
             usage = getattr(message, "usage", None)
             if usage:
-                state.input_tokens = getattr(usage, "input_tokens", 0)
-                state.output_tokens = getattr(usage, "output_tokens", 0)
+                state.input_tokens = getattr(usage, "input_tokens", 0) or 0
+                state.output_tokens = getattr(usage, "output_tokens", 0) or 0
                 state.cache_read_tokens = (
                     getattr(usage, "cache_read_input_tokens", 0) or 0
                 )
@@ -463,7 +463,20 @@ def translate_stream_event(event, state: StreamState) -> StreamChunk | None:
             state.stop_reason = getattr(delta, "stop_reason", None)
         usage = getattr(event, "usage", None)
         if usage:
-            state.output_tokens += getattr(usage, "output_tokens", 0)
+            state.output_tokens += getattr(usage, "output_tokens", 0) or 0
+            # message_delta usage is cumulative. Real Anthropic puts the input
+            # and cache counts in message_start (and may repeat them here);
+            # some gateways (OpenCode Go's /messages, e.g. minimax-m3) send 0
+            # or null in message_start and report them ONLY here. Take the
+            # larger value so neither shape is lost or double counted.
+            for attr, field_name in (
+                ("input_tokens", "input_tokens"),
+                ("cache_read_input_tokens", "cache_read_tokens"),
+                ("cache_creation_input_tokens", "cache_write_tokens"),
+            ):
+                value = getattr(usage, attr, None)
+                if isinstance(value, int) and value > (getattr(state, field_name) or 0):
+                    setattr(state, field_name, value)
         return None
 
     # message_stop: emit final chunk with accumulated usage
