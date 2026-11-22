@@ -2913,8 +2913,9 @@ class AgentManager:
         """Spec 129 §5D: nothing live under the worker and nothing about to
         run on it — no registered background shell still alive, no user
         prompt queued behind the turn that just ended, no dispatch pending
-        on its transport. Decidable from daemon state at the terminal; no
-        timers, no "went quiet" inference. Unknown shapes (mocks, transports
+        on its transport, none of its own background agents running.
+        Decidable from daemon state at the terminal; no timers, no "went
+        quiet" inference. Unknown shapes (mocks, transports
         without the flag) read as quiescent, i.e. today's behaviour."""
         from agent_os.daemon_v2.background_work import BackgroundWorkRegistry
         registry = getattr(self._process_manager, "background_work", None)
@@ -2929,6 +2930,11 @@ class AgentManager:
             adapter = adapters.get(make_session_key(project_id, session_id), {}).get(handle)
             transport = getattr(adapter, "_transport", None) if adapter is not None else None
             if getattr(transport, "dispatch_pending", False) is True:
+                return False
+            # Claude Code's own background agents still running: the turn
+            # the CLI runs when one ends is still part of this run.
+            agents = getattr(transport, "background_agents", None)
+            if isinstance(agents, list) and agents:
                 return False
         # Spec 161 §5.4: a worker it dispatched is still running, so the
         # run is not over — its result comes back as this worker's next turn.

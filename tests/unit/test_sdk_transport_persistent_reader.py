@@ -257,10 +257,11 @@ async def test_blocking_send_returns_the_dispatch_turns_text(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# §6.3 — awaited agent tasks keep the dispatch pending; shells never do
+# §6.3 — background tasks never hold the dispatch (batch 1122: agent tasks
+# no longer do either; their end comes back as a self turn)
 # ---------------------------------------------------------------------------
 
-async def test_awaited_agent_task_keeps_the_dispatch_pending_across_the_first_result(tmp_path):
+async def test_agent_task_does_not_hold_the_dispatch_and_its_continuation_is_a_self_turn(tmp_path):
     transport, client = await _transport(str(tmp_path))
     try:
         await transport.dispatch("go")
@@ -268,8 +269,10 @@ async def test_awaited_agent_task_keeps_the_dispatch_pending_across_the_first_re
                     _task_started(task_id="wf123", task_type="workflow"),
                     _result())
         await _settle()
-        assert _turn_completes(_drain(transport)) == []
-        assert transport.dispatch_pending is True
+        tcs = _turn_completes(_drain(transport))
+        assert [(t.data["origin"], t.data["cause"]) for t in tcs] == [("dispatch", "success")]
+        assert transport.dispatch_pending is False
+        assert transport.background_agents == ["d"]
 
         client.feed(_task_notification(task_id="wf123"),
                     _assistant("Wrote results to agent_output/report.md"),
@@ -278,8 +281,8 @@ async def test_awaited_agent_task_keeps_the_dispatch_pending_across_the_first_re
         events = _drain(transport)
         assert any("agent_output/report.md" in t for t in _texts(events))
         tcs = _turn_completes(events)
-        assert [(t.data["origin"], t.data["cause"]) for t in tcs] == [("dispatch", "success")]
-        assert transport.dispatch_pending is False
+        assert [(t.data["origin"], t.data["cause"]) for t in tcs] == [("self", "success")]
+        assert transport.background_agents == []
     finally:
         await _stop(transport)
 
@@ -309,18 +312,22 @@ async def test_local_bash_is_not_awaited_and_its_continuation_is_a_self_turn(tmp
         await _stop(transport)
 
 
-async def test_continuation_budget_still_closes_a_stuck_awaited_task(tmp_path):
+async def test_a_never_finishing_agent_task_never_pins_the_dispatch(tmp_path):
+    """Was the 1800 s continuation budget: a stuck task held the dispatch
+    (and the user's next prompt) until it expired. Now the result closes the
+    dispatch at once and the task is only reported as background work."""
     transport, client = await _transport(str(tmp_path))
-    transport.CONTINUATION_BUDGET_S = 0.05
     try:
         await transport.dispatch("go")
         client.feed(_task_started(task_id="wf9", task_type="workflow"), _result())
         await _settle()
-        assert transport.dispatch_pending is True
-        await asyncio.sleep(0.15)
         tcs = _turn_completes(_drain(transport))
         assert [(t.data["origin"], t.data["cause"]) for t in tcs] == [("dispatch", "success")]
         assert transport.dispatch_pending is False
+        assert transport.background_agents == ["d"]
+        await transport.dispatch("next")
+        assert client.queries == ["go", "next"]
+        assert _turn_completes(_drain(transport)) == []  # nothing superseded
     finally:
         await _stop(transport)
 

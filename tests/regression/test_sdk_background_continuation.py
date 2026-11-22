@@ -16,11 +16,13 @@ only the preamble; the actual result never surfaced.
 
 Spec 129 rewrote the contract: ONE reader lives for the client's life and
 reads the SDK's unbounded iterator (``receive_messages()``) whether or not a
-dispatch is pending. The awaited-task rule is unchanged and now asserted
-against that reader: while an awaited (non ``local_bash``) task is
-outstanding the dispatch stays pending across results and emits ONE terminal
-``turn_complete`` (preserving the one-boundary-per-dispatch marker↔
-transcript-slice pairing), bounded by ``CONTINUATION_BUDGET_S``.
+dispatch is pending. Spec 129 kept an awaited-task rule (the dispatch stayed
+pending across results while a non ``local_bash`` task was outstanding, up to
+``CONTINUATION_BUDGET_S`` = 1800 s). Batch 1122 retired it: a pinned user's
+next message was held for 30 minutes behind Claude Code's own background
+agent. Now the main agent's result closes the dispatch, the task is reported
+as background work (``background_agents``), and the continuation — still
+read, never dropped — ends as a self-initiated turn (``origin="self"``).
 
 Fire-and-forget ``run_in_background`` shells (``task_type='local_bash'``) are
 the BackgroundWorkRegistry's domain and are intentionally NOT awaited — the
@@ -136,9 +138,11 @@ def _turn_completes(events):
 # ---------------------------------------------------------------------------
 
 async def test_awaited_workflow_continuation_is_surfaced(tmp_path):
-    """An awaited (non-local_bash) background task's continuation turn — the one
-    carrying the real result — must be consumed and surfaced, with exactly ONE
-    terminal turn_complete (preserving marker↔slice pairing)."""
+    """A background agent/workflow task's continuation turn — the one
+    carrying the real result — must be consumed and surfaced. The dispatch
+    closes at the foreground result (one boundary per dispatch); the
+    continuation is the worker continuing (a self turn), not a second
+    dispatch boundary."""
     messages = [
         _assistant("Workflow started (wf123). Will write results when done."),
         _task_started(task_id="wf123", task_type="workflow"),
@@ -156,11 +160,9 @@ async def test_awaited_workflow_continuation_is_surfaced(tmp_path):
         f"continuation result was dropped; saw messages={texts!r}")
     # The preamble is also there (foreground turn).
     assert any("Workflow started" in t for t in texts)
-    # Exactly one terminal turn_complete (one boundary per dispatch).
     tcs = _turn_completes(events)
-    assert len(tcs) == 1, f"expected one turn_complete, got {len(tcs)}"
-    assert tcs[0].data.get("cause") == "success"
-    assert tcs[0].data.get("origin") == "dispatch"
+    assert [(t.data.get("origin"), t.data.get("cause")) for t in tcs] == [
+        ("dispatch", "success"), ("self", "success")]
 
 
 async def test_fire_and_forget_local_bash_is_not_awaited(tmp_path):
