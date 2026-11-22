@@ -28,8 +28,9 @@ runtime:
   adapter: cli
   command: "codex"
   # App-server JSON-RPC transport (CodexTransport). NOT pty: the screen
-  # scrape had no genuine turn boundary. Pinned to codex-cli 0.125.0
-  # protocol — see docs/superpowers/plans/2026-06-06-codex-appserver-transport.md.
+  # scrape had no genuine turn boundary. The protocol was last checked
+  # against SUPPORTED_CODEX_VERSION in codex_transport.py (another version
+  # only logs a warning) — see docs/superpowers/plans/2026-06-06-codex-appserver-transport.md.
   transport: codex-appserver
   mode: interactive
   args: []
@@ -90,11 +91,18 @@ setup:
       required: false
       env_var: "OPENAI_API_KEY"
   # The ChatGPT desktop app (bundle id com.openai.codex) ships a codex CLI
-  # that speaks the same `app-server` protocol. After the standalone CLI:
-  # the desktop copy runs ahead of the version the transport is pinned to
-  # (0.163-alpha vs 0.157.1 on 2026-10-26), so it is the fallback, not the
-  # default. OpenAI has moved this path before — found by bundle id, and
-  # re-resolved if it moves again.
+  # that speaks the same `app-server` protocol, and it runs ahead of the
+  # standalone CLI: on 2026-11-22 Homebrew had 0.157.1 and ChatGPT.app
+  # 0.171.0-alpha.13, and only the app's copy listed the account's gpt-6.2
+  # models (Orbital keeps no model list; the picker shows `model/list`).
+  # So when both are installed, the higher `--version` wins
+  # (`binary_choice: newest`); on an equal release the stable standalone
+  # build beats an alpha, and `after_cli` is the tie-break order. Verified
+  # end to end on 0.171.0-alpha.13 the same day (turns, model switch,
+  # approvals, resume across the switch, skills, quota). A location the user
+  # set on the locate card always wins. OpenAI has moved this path before —
+  # found by bundle id, and re-resolved if it moves again.
+  binary_choice: newest
   desktop_apps:
     - label: "ChatGPT"
       order: after_cli
@@ -107,6 +115,7 @@ setup:
       - "%APPDATA%\\npm\\codex.cmd"
       - "%PROGRAMFILES%\\nodejs\\codex.cmd"
       # The Codex desktop app's CLI. <hash> changes with every app update.
+      # It competes with the npm copy on version (binary_choice above).
       - "%LOCALAPPDATA%\\OpenAI\\Codex\\bin\\*\\codex.exe"
     macos:
       - "/usr/local/bin/codex"

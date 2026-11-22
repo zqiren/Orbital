@@ -132,6 +132,12 @@ class ManifestSetup:
     # Vendor desktop apps that bundle this agent's CLI, found by identity
     # (bundle id / uninstall registry) — see agents/desktop_apps.py.
     desktop_apps: list = field(default_factory=list)
+    # Which copy to drive when detection finds more than one (PATH,
+    # ``auto_detect`` entries, ``after_cli`` desktop apps): "first" takes the
+    # first in that order; "newest" the one whose version check reports the
+    # highest version, ties going to the earlier one. A ``before_cli``
+    # desktop app and the user's chosen location still win outright.
+    binary_choice: str = "first"
 
 
 @dataclass
@@ -191,6 +197,14 @@ _SLUG_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 # ---------------------------------------------------------------------------
 # Loader / Validator
 # ---------------------------------------------------------------------------
+
+BINARY_CHOICES = ("first", "newest")
+
+
+def parse_binary_choice(raw) -> str:
+    """``setup.binary_choice``; anything unknown reads as "first"."""
+    return raw if isinstance(raw, str) and raw in BINARY_CHOICES else "first"
+
 
 class ManifestLoader:
     """Load and validate YAML agent manifest files."""
@@ -323,6 +337,7 @@ class ManifestLoader:
             update_label=setup_data.get("update_label"),
             npm_package=setup_data.get("npm_package"),
             desktop_apps=parse_desktop_apps(setup_data.get("desktop_apps")),
+            binary_choice=parse_binary_choice(setup_data.get("binary_choice")),
         )
 
         # Capabilities

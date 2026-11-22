@@ -1078,8 +1078,14 @@ _late_model_tasks: set[asyncio.Task] = set()
 # The last live schemas each augmenter produced, per agent slug. A read that
 # misses the budget serves these instead of the static list, so a menu opened
 # after the probe cache expired shows "Opus 5.5", not `opus`, while the probe
-# runs again (Windows smoke 2026-11-03, decision 4).
-_last_live_schemas: dict[str, dict[str, dict]] = {}
+# runs again (Windows smoke 2026-11-03, decision 4). Keyed by the binary the
+# list came from as well: after the copy Orbital drives changes (a newer
+# desktop app, the locate card), the old copy's list is never served.
+_last_live_schemas: dict[str, dict[tuple[str, str], dict]] = {}
+
+
+def _live_key(entry: dict) -> tuple[str, str]:
+    return (entry.get("slug", ""), entry.get("binary_path") or "")
 
 
 def _model_schemas(entries: list[dict]) -> str:
@@ -1132,7 +1138,7 @@ def _merge_live(name: str, entries: list[dict], original: list[dict],
     for entry, untouched, augmented in zip(entries, original, mine):
         if augmented.get("param_schema") != untouched.get("param_schema"):
             entry["param_schema"] = augmented.get("param_schema")
-            _last_live_schemas.setdefault(name, {})[entry.get("slug", "")] = (
+            _last_live_schemas.setdefault(name, {})[_live_key(entry)] = (
                 copy.deepcopy(augmented.get("param_schema")))
 
 
@@ -1140,7 +1146,7 @@ def _serve_last_live(name: str, entries: list[dict]) -> None:
     """While augmenter ``name`` is still probing, serve the schemas it
     produced last time. A model saved since then stays listed."""
     for entry in entries:
-        remembered = _last_live_schemas.get(name, {}).get(entry.get("slug", ""))
+        remembered = _last_live_schemas.get(name, {}).get(_live_key(entry))
         if remembered is None:
             continue
         schema = copy.deepcopy(remembered)
@@ -1170,7 +1176,7 @@ def _finish_late(name: str, mine: list[dict], original: list[dict], before: str,
         # Remember only the agents this augmenter changed.
         for untouched, augmented in zip(original, mine):
             if augmented.get("param_schema") != untouched.get("param_schema"):
-                _last_live_schemas.setdefault(name, {})[augmented.get("slug", "")] = (
+                _last_live_schemas.setdefault(name, {})[_live_key(augmented)] = (
                     copy.deepcopy(augmented.get("param_schema")))
         if _late_model_digests.get(name) == after:
             return
