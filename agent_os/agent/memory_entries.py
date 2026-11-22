@@ -142,7 +142,8 @@ ARCHIVE_KEYS = tuple(ARCHIVE_FILENAME)
 
 _ONE_SHAPE = (
     "One entry = one `- ` bullet line that stands on its own; optional detail "
-    "goes on indented lines under it (the exception, not the norm). `## ` "
+    "goes on indented lines under it, below its mem-comment line when it has "
+    "one (the exception, not the norm). `## ` "
     "headings group entries by topic and are not entries. Machine attributes "
     "(id, created, touched) live in a daemon-managed mem-comment on the line "
     "under the bullet — never write or edit these comments; leave them "
@@ -778,6 +779,42 @@ def _collapse_blank_runs(lines: list[str]) -> list[str]:
             continue
         out.append(ln)
     return out
+
+
+def reattach_hidden_lines(text: str | None) -> str | None:
+    """Spec 192: put a stray hidden line back under its bullet. Pure.
+
+    An agent that adds a detail line right under a DECISIONS / LESSONS
+    bullet, above its ``<!--mem …-->`` line, leaves a shape rule N4 does not
+    read as the same entry: ``normalise`` drops the hidden line, ``stamp``
+    gives the bullet a fresh id, and ``conserve_ids`` puts the old block
+    back, so every later write adds another copy. Run before ``normalise``
+    on both the new and the previous text.
+
+    In each block (as ``state_blocks.parse`` sees it) holding exactly one
+    mem-comment, alone on a line that is not the one directly under the
+    bullet, that line moves up to sit directly under the bullet. Every other
+    byte stays as it was; a block with no hidden line, several, or one that
+    spans lines or shares its line with text is left alone. Idempotent.
+    Not for PROJECT_STATE (its lines reconcile by their words).
+    """
+    if not text or "<!--" not in text:
+        return text
+    lines, blocks = state_blocks.parse(text)
+    changed = False
+    for b in blocks:
+        block = b.lines
+        if len(_COMMENT_RE.findall("\n".join(block))) != 1:
+            continue
+        alone = [k for k, ln in enumerate(block)
+                 if ln.strip() and _COMMENT_RE.fullmatch(ln.strip())]
+        if len(alone) != 1 or alone[0] <= 1:
+            continue
+        k = alone[0]
+        # Same number of lines: the other blocks' places do not move.
+        lines[b.start:b.end + 1] = [block[0], block[k], *block[1:k], *block[k + 1:]]
+        changed = True
+    return "\n".join(lines) if changed else text
 
 
 def normalise(text: str | None, key: str) -> NormaliseResult:
@@ -1909,6 +1946,13 @@ def process_on_write(workspace: str, resolved_path: str, content: str, *, today:
 
     orbital_dir = os.path.join(workspace, "orbital")
     prev = _read(resolved_path)
+    if key in DURABLE_KEYS:
+        # Spec 192: a hidden line left below a detail line goes back under
+        # its bullet, in the new text and in the previous one (the disk may
+        # hold the shape from a write no rule saw: an external worker's own
+        # tools, a hand edit), so the entry keeps its id instead of a copy.
+        content = reattach_hidden_lines(content)
+        prev = reattach_hidden_lines(prev)
     archive_text = _read(os.path.join(orbital_dir, ARCHIVE_FILENAME[ARCHIVE_OF[key]]))
     ids_in_archive = archive_ids(archive_text)
     warnings: list[str] = []
