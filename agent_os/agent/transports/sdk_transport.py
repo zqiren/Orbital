@@ -268,12 +268,12 @@ class SDKTransport(AgentTransport):
         # Dispatch bookkeeping. A ResultMessage closes the pending dispatch
         # when one is pending; otherwise it ends a self-initiated turn.
         self._pending_dispatch: bool = False
-        # AWAITED background tasks (local_agent / local_workflow) started by
-        # the pending dispatch's turn: while non-empty the dispatch stays
-        # pending across results, bounded by CONTINUATION_BUDGET_S.
-        self._outstanding: set = set()
-        self._last_result_is_error: bool = False
-        self._budget_handle: "asyncio.TimerHandle | None" = None
+        # Claude Code's own background agents (the Agent tool, local_agent /
+        # local_workflow tasks, and shells those agents start): task id →
+        # description, from task_started until task_notification. Background
+        # jobs of the worker: they never hold a dispatch open, and the
+        # worker's status reads them (``background_agents``).
+        self._background_agents: dict[str, str] = {}
         # The blocking send() variant rides the same reader: it awaits this
         # future (resolved by the dispatch-origin boundary) and returns the
         # message text collected while the dispatch was pending.
@@ -560,8 +560,6 @@ class SDKTransport(AgentTransport):
             await self._client.query(message)
 
         self._pending_dispatch = True
-        self._outstanding = set()
-        self._last_result_is_error = False
         self._dispatch_text = []
         self._dispatch_done = asyncio.get_running_loop().create_future()
         self._ensure_reader()
@@ -584,35 +582,48 @@ class SDKTransport(AgentTransport):
             return
         logger.error("SDKTransport: persistent reader raised", exc_info=exc)
 
-    # How long a dispatch stays pending awaiting a background task's
-    # continuation turn before giving up (so a stuck/never-finishing task
-    # cannot pin the dispatch forever). Generous — real workflows run for
-    # minutes. Fire-and-forget ``local_bash`` is excluded from the wait
-    # entirely (see _track_background_task), so this only bounds genuinely
-    # awaited work.
-    CONTINUATION_BUDGET_S: float = 1800.0
+    @property
+    def background_agents(self) -> list[str]:
+        """Descriptions of Claude Code's own background agents still running
+        (the Agent tool's async agents and the shells they started). The
+        worker's status reports them while its turn is closed."""
+        return list(self._background_agents.values())
 
-    def _track_background_task(self, msg, outstanding: set) -> None:
-        """Track AWAITED background tasks by id so the pending dispatch stays
-        open until they emit their continuation turn.
+    def _track_background_task(self, msg) -> None:
+        """Keep ``_background_agents`` from the CLI's task frames.
 
-        ``TaskStartedMessage`` adds the id; ``TaskNotificationMessage``
-        (terminal status: completed/failed/stopped) removes it. Fire-and-forget
-        ``run_in_background`` shells (``task_type='local_bash'``) are the
-        BackgroundWorkRegistry's domain and are intentionally NOT awaited — the
-        foreground turn ends as before so a never-exiting dev server cannot pin
-        the dispatch. The shell's exit still reaches the reader: the CLI's own
-        follow-up turn is read live and ends as a self-initiated turn.
+        ``TaskStartedMessage`` adds an agent task (``local_agent`` /
+        ``local_workflow``, anything but ``local_bash``) and a shell a
+        background agent started (``local_bash`` with
+        ``data.owned_by_subagent``, live-captured 2026-11-22: the agent's own
+        notification can come while its shell still runs, and it resumes
+        when the shell ends). ``TaskNotificationMessage`` (terminal status)
+        removes it. The main agent's own ``run_in_background`` shells stay
+        the BackgroundWorkRegistry's (registered from the Bash tool call).
+
+        None of this holds the dispatch: the main agent's result closes it,
+        and its follow-up turn after a job ends arrives as a self turn.
         """
+        before = len(self._background_agents)
         if _TaskStarted and isinstance(msg, _TaskStarted):
-            if getattr(msg, "task_type", None) != "local_bash":
-                tid = getattr(msg, "task_id", None)
-                if tid:
-                    outstanding.add(tid)
+            tid = getattr(msg, "task_id", None)
+            data = getattr(msg, "data", None) or {}
+            if tid and (getattr(msg, "task_type", None) != "local_bash"
+                        or data.get("owned_by_subagent") is True):
+                self._background_agents[tid] = (
+                    getattr(msg, "description", None) or tid)
         elif _TaskNotification and isinstance(msg, _TaskNotification):
             tid = getattr(msg, "task_id", None)
             if tid:
-                outstanding.discard(tid)
+                self._background_agents.pop(tid, None)
+        if len(self._background_agents) != before:
+            self._status_changed()
+
+    def _forget_background_agents(self) -> None:
+        """The CLI process is gone, and its background agents with it."""
+        if self._background_agents:
+            self._background_agents = {}
+            self._status_changed()
 
     async def _reader_loop(self) -> None:
         """Read the SDK stream for the life of the client (spec 129 §5A).
@@ -661,6 +672,7 @@ class SDKTransport(AgentTransport):
                     if await self._reader_died(e):
                         dead_reader_error = e
                     break
+            self._forget_background_agents()
             if self._pending_dispatch:
                 logger.warning("SDKTransport: stream ended with a dispatch pending")
                 self._close_dispatch("error")
@@ -679,7 +691,7 @@ class SDKTransport(AgentTransport):
             self._status_changed()
 
     async def _handle_message(self, msg) -> None:
-        self._track_background_task(msg, self._outstanding)
+        self._track_background_task(msg)
         for event in self._message_to_events(msg):
             if self._pending_dispatch and event.event_type == "message":
                 self._dispatch_text.append(event.raw_text)
@@ -734,40 +746,15 @@ class SDKTransport(AgentTransport):
             self._emit_turn_complete(
                 origin="self", cause="error" if is_error else "success")
             return
-        self._last_result_is_error = is_error
-        if self._outstanding:
-            # Awaiting a background task's continuation turn (wire-confirmed:
-            # TaskNotification → AssistantMessage → ResultMessage on the same
-            # stream, no new query()). Bound the wait so a stuck task cannot
-            # pin the dispatch.
-            self._arm_budget()
-            return
+        # The main agent's own result ends the dispatch even while its
+        # background agents run: they are background jobs
+        # (``background_agents``), and the turn the CLI runs when one ends
+        # is read live and ends as a self turn.
         self._close_dispatch("error" if is_error else "success")
-
-    def _arm_budget(self) -> None:
-        if self._budget_handle is not None:
-            return
-        loop = asyncio.get_running_loop()
-        self._budget_handle = loop.call_later(
-            self.CONTINUATION_BUDGET_S, self._on_budget_expired)
-
-    def _on_budget_expired(self) -> None:
-        self._budget_handle = None
-        if not self._pending_dispatch:
-            return
-        logger.warning(
-            "SDKTransport: awaited background task(s) %s did not finish "
-            "within %.0fs; ending dispatch without the continuation",
-            self._outstanding, self.CONTINUATION_BUDGET_S)
-        self._close_dispatch("error" if self._last_result_is_error else "success")
 
     def _close_dispatch(self, cause: str) -> None:
         """Emit the pending dispatch's boundary and clear it."""
-        if self._budget_handle is not None:
-            self._budget_handle.cancel()
-            self._budget_handle = None
         self._pending_dispatch = False
-        self._outstanding = set()
         self._emit_turn_complete(origin="dispatch", cause=cause)
         done = self._dispatch_done
         self._dispatch_done = None
@@ -892,9 +879,7 @@ class SDKTransport(AgentTransport):
             # The reader was cancelled before it ever ran (no body to emit
             # from): the boundary still has to be written.
             self._close_dispatch("stopped")
-        if self._budget_handle is not None:
-            self._budget_handle.cancel()
-            self._budget_handle = None
+        self._background_agents = {}
 
         # 1. Best-effort graceful disconnect. The SDK's Query.close() exits an
         #    anyio task group that was entered in a DIFFERENT task (the one that
@@ -1049,6 +1034,16 @@ class SDKTransport(AgentTransport):
     def _message_to_events(self, msg) -> list[TransportEvent]:
         """Convert SDK message types to TransportEvents."""
         events = []
+
+        if (isinstance(msg, (AssistantMessage, UserMessage))
+                and getattr(msg, "parent_tool_use_id", None)):
+            # A message of one of Claude Code's own sub-agents (the Agent
+            # tool): the CLI labels each with the main agent's Agent call id
+            # (live-captured 2026-11-22). Not the worker's: no chat row, not
+            # the dispatch's reply, and its model and token figures are not
+            # the worker's. The main agent's Agent call, the launch ack and
+            # its later summary carry no parent and still show.
+            return events
 
         if isinstance(msg, AssistantMessage):
             # Thread-identity capture: the model actually serving this thread

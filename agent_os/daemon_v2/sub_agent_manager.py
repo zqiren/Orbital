@@ -3663,6 +3663,11 @@ class SubAgentManager:
         if not adapter.is_idle():
             return "running"
         transport = getattr(adapter, "_transport", None)
+        if _transport_background_agents(transport):
+            # Claude Code's own background agents, as the CLI reports them
+            # (task_started → task_notification): not a process-tree read,
+            # so no platform gate.
+            return "background-running"
         if transport is not None and getattr(
                 transport, "supports_background_status", False):
             from agent_os.daemon_v2.background_work import BackgroundWorkRegistry
@@ -3672,6 +3677,22 @@ class SubAgentManager:
                     and registry.has_live(project_id, session_id, handle)):
                 return "background-running"
         return "idle"
+
+    def background_commands(self, project_id: str, session_id: str,
+                            handle: str) -> list[str]:
+        """What runs in the background under a worker, for the status chip
+        and its stop dialog: its registered background shells, then the
+        descriptions of Claude Code's own background agents."""
+        from agent_os.daemon_v2.background_work import BackgroundWorkRegistry
+        commands: list[str] = []
+        registry = getattr(self._process_manager, "background_work", None)
+        if isinstance(registry, BackgroundWorkRegistry):
+            commands.extend(registry.live_commands(project_id, session_id, handle))
+        adapter = self._adapters.get(
+            make_session_key(project_id, session_id), {}).get(handle)
+        commands.extend(_transport_background_agents(
+            getattr(adapter, "_transport", None)))
+        return commands
 
     def _awaiting_approval(self, adapter, project_id: str, session_id: str,
                            handle: str) -> bool:
@@ -3753,16 +3774,9 @@ class SubAgentManager:
                     current, project_id, session_id, handle)
                 awaiting = (status == "running" and self._awaiting_approval(
                     current, project_id, session_id, handle))
-                commands = []
-                if status == "background-running":
-                    from agent_os.daemon_v2.background_work import (
-                        BackgroundWorkRegistry,
-                    )
-                    registry = getattr(
-                        self._process_manager, "background_work", None)
-                    if isinstance(registry, BackgroundWorkRegistry):
-                        commands = registry.live_commands(
-                            project_id, session_id, handle)
+                commands = (self.background_commands(
+                    project_id, session_id, handle)
+                    if status == "background-running" else [])
                 name = getattr(current, "display_name", handle)
             key = (project_id, session_id, handle)
             if key in getattr(self, "_quiet_respawn", ()):
@@ -4459,6 +4473,15 @@ def _is_sdk_transport(transport) -> bool:
     """The Claude Code SDK transport (the one that takes a stamped prompt)."""
     from agent_os.agent.transports.sdk_transport import SDKTransport
     return isinstance(transport, SDKTransport)
+
+
+def _transport_background_agents(transport) -> list[str]:
+    """The descriptions of a worker's own background agents still running
+    (``SDKTransport.background_agents``); empty for any other shape."""
+    agents = getattr(transport, "background_agents", None)
+    if not isinstance(agents, list):
+        return []
+    return [a for a in agents if isinstance(a, str)]
 
 
 def _same_model(adapters) -> bool:

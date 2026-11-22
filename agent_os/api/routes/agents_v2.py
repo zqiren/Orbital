@@ -4621,15 +4621,9 @@ async def sub_agents_status(project_id: str, session_id: str | None = None):
     if sid is None:
         return {"session_id": None, "agents": []}
     agents = _sub_agent_manager.list_active(project_id, session_id=sid)
-    from agent_os.daemon_v2.background_work import BackgroundWorkRegistry
-    registry = getattr(
-        _sub_agent_manager._process_manager, "background_work", None)
     for a in agents:
-        if isinstance(registry, BackgroundWorkRegistry):
-            a["background_commands"] = registry.live_commands(
-                project_id, sid, a["handle"])
-        else:
-            a["background_commands"] = []
+        a["background_commands"] = _sub_agent_manager.background_commands(
+            project_id, sid, a["handle"])
     return {"session_id": sid, "agents": agents}
 
 

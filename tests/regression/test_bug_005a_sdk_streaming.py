@@ -55,9 +55,7 @@ async def test_message_events_queued_for_read_stream():
     # Spec 129 persistent-reader fields (the tests bypass __init__).
     transport._reader_task = None
     transport._pending_dispatch = False
-    transport._outstanding = set()
-    transport._last_result_is_error = False
-    transport._budget_handle = None
+    transport._background_agents = {}
     transport._dispatch_done = None
     transport._dispatch_text = []
     transport._session_cost_seen = 0.0
@@ -102,9 +100,7 @@ async def test_tool_use_events_still_queued():
     # Spec 129 persistent-reader fields (the tests bypass __init__).
     transport._reader_task = None
     transport._pending_dispatch = False
-    transport._outstanding = set()
-    transport._last_result_is_error = False
-    transport._budget_handle = None
+    transport._background_agents = {}
     transport._dispatch_done = None
     transport._dispatch_text = []
     transport._session_cost_seen = 0.0
