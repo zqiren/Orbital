@@ -56,7 +56,7 @@ export default function FallbackModelsEditor({
         onClick={() => setExpanded(!expanded)}
         // Section-heading weight — see the note on LLMProviderSettings'
         // disclosure button; a collapsed section still has to read as one.
-        className="flex items-center gap-2 text-[15px] font-semibold leading-6 text-primary hover:text-accent transition-all duration-150 w-full text-left mb-2"
+        className="flex items-center gap-2 text-title font-semibold text-primary hover:text-accent transition-all duration-150 w-full text-left mb-2"
       >
         {expanded ? (
           <ChevronDown className="w-4 h-4 shrink-0" />
@@ -65,7 +65,7 @@ export default function FallbackModelsEditor({
         )}
         <span>{t('fallback.heading')}</span>
         {!expanded && models.length > 0 && (
-          <span className="text-[13px] text-secondary font-normal ml-1">
+          <span className="text-body text-secondary font-normal ml-1">
             {t('fallback.configuredCount', { n: models.length })}
           </span>
         )}
@@ -73,13 +73,13 @@ export default function FallbackModelsEditor({
 
       {expanded && (
         <div className="space-y-3 ml-6">
-          <p className="text-xs text-secondary">{t('fallback.intro')}</p>
+          <p className="text-caption text-secondary">{t('fallback.intro')}</p>
 
           {models.map((entry, idx) => (
             <div key={idx} className="flex items-start gap-2" data-testid={`fallback-row-${idx}`}>
               {/* The rung's position is the chain order — numbered, because
                   "tried second" is the only thing a row's place means. */}
-              <span className="text-xs text-secondary/70 font-mono pt-2.5 w-4 shrink-0">
+              <span className="text-caption text-secondary font-mono pt-2.5 w-4 shrink-0">
                 {idx + 1}
               </span>
               <div className="min-w-0 flex-1">
@@ -109,7 +109,7 @@ export default function FallbackModelsEditor({
             type="button"
             onClick={handleAdd}
             data-testid="fallback-add"
-            className="flex items-center gap-1.5 text-sm text-secondary hover:text-accent transition-all duration-150"
+            className="flex items-center gap-1.5 text-body text-secondary hover:text-accent transition-all duration-150"
           >
             <Plus className="w-4 h-4" />
             {t('fallback.addCta')}

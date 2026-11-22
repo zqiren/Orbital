@@ -69,7 +69,7 @@ export default function VersionView({ view, markdown, remarkPlugins, scrollKey }
           <MarkdownContent content={source} remarkPlugins={plugins} />
         </div>
       ) : (
-        <pre className="font-mono text-sm text-primary p-4 whitespace-pre-wrap break-words">
+        <pre className="font-mono text-body text-primary p-4 whitespace-pre-wrap break-words">
           {view.lines.map((line, i) => {
             const tint = tints[i];
             return (

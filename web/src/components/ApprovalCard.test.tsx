@@ -50,8 +50,9 @@ describe('ApprovalCard — Deny button visual treatment (FE post-build #1a)', ()
     );
     const deny = screen.getByRole('button', { name: 'Deny' });
     expect(deny.className).toContain('min-h-[44px]');
-    // Layout dims unchanged — only the color treatment moved.
-    expect(deny.className).toContain('text-[11px]');
+    // Layout dims unchanged — only the color treatment moved. 1122 type
+    // scale: `text-micro` is the 11px step the button always used.
+    expect(deny.className).toContain('text-micro');
     expect(deny.className).toContain('px-2.5');
   });
 

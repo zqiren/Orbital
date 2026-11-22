@@ -57,7 +57,7 @@ export function WorkspacePanelBar({
         aria-selected={active}
         data-testid={`panel-view-${key}`}
         onClick={() => onViewChange(key)}
-        className={`text-[11px] font-medium px-2.5 py-1 rounded-md transition-colors duration-150 ${
+        className={`text-micro font-medium px-2.5 py-1 rounded-md transition-colors duration-150 ${
           active
             ? 'bg-segment-on text-segment-on-text shadow-[0_1px_2px_rgb(0_0_0/0.06)]'
             : 'text-secondary hover:text-primary'
@@ -88,7 +88,7 @@ export function WorkspacePanelBar({
           aria-pressed={annotating}
           data-testid="panel-annotate"
           onClick={onToggleAnnotate}
-          className={`shrink-0 text-[11px] font-medium px-2.5 py-1 rounded-md border transition-colors duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 ${
+          className={`shrink-0 text-micro font-medium px-2.5 py-1 rounded-md border transition-colors duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 ${
             annotating
               ? 'border-accent bg-accent/10 text-accent'
               : 'border-border text-secondary hover:text-primary hover:bg-card-hover'

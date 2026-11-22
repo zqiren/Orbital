@@ -173,7 +173,7 @@ export default function TurnUndoSheet({ projectId, turn, onView, onRestored }: T
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-card dark:bg-elevated" data-testid="turn-undo-sheet">
-      <div className="flex min-w-0 items-center gap-1.5 px-5 pb-2.5 pt-2.5 text-xs text-muted">
+      <div className="flex min-w-0 items-center gap-1.5 px-5 pb-2.5 pt-2.5 text-caption text-secondary">
         {editorAgents.map((a) => (
           <AgentLogo key={a} slug={a} />
         ))}
@@ -190,7 +190,7 @@ export default function TurnUndoSheet({ projectId, turn, onView, onRestored }: T
           return (
             <Fragment key={f.path}>
             {i === work.length && memory.length > 0 && (
-              <p data-testid="turn-undo-memory" className="px-2.5 pb-0.5 pt-3 text-[11px] font-medium text-muted">
+              <p data-testid="turn-undo-memory" className="px-2.5 pb-0.5 pt-3 text-micro font-medium text-secondary">
                 {t('turn.memory')}
               </p>
             )}
@@ -208,10 +208,10 @@ export default function TurnUndoSheet({ projectId, turn, onView, onRestored }: T
                 {on && <CheckGlyph />}
               </button>
               <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-                <span className="truncate font-mono text-[12.5px] text-primary" title={f.path}>
+                <span className="truncate font-mono text-body text-primary" title={f.path}>
                   {f.path}
                 </span>
-                <span className="flex flex-wrap items-center gap-[5px] text-xs text-muted">
+                <span className="flex flex-wrap items-center gap-[5px] text-caption text-secondary">
                   {changeOf(f, t)}
                   {!f.clean && f.later_editor && <LaterBy editor={f.later_editor} />}
                   {note === 'busy' && <span className="text-warning-text">· {t('history.busy')}</span>}
@@ -233,20 +233,20 @@ export default function TurnUndoSheet({ projectId, turn, onView, onRestored }: T
         })}
       </div>
       {(data?.no_history ?? 0) > 0 && (
-        <p className="px-5 pt-2.5 text-xs text-muted" data-testid="turn-undo-skipped">
+        <p className="px-5 pt-2.5 text-caption text-secondary" data-testid="turn-undo-skipped">
           {data!.no_history === 1
             ? t('turn.noHistory.one', { n: 1 })
             : t('turn.noHistory.other', { n: data!.no_history })}
         </p>
       )}
-      {failed && <p className="px-5 pt-2.5 text-xs text-warning-text">{t('history.restoreFailed')}</p>}
+      {failed && <p className="px-5 pt-2.5 text-caption text-warning-text">{t('history.restoreFailed')}</p>}
       <div className="px-4 pb-[18px] pt-3.5">
         <button
           type="button"
           onClick={() => void restore()}
           disabled={n === 0 || working}
           data-testid="turn-undo-restore"
-          className="block h-9 w-full truncate rounded-[9px] bg-accent px-2.5 text-center text-[13px] font-medium text-white transition-[filter] hover:brightness-105 disabled:cursor-default disabled:opacity-35"
+          className="block h-9 w-full truncate rounded-[9px] bg-accent px-2.5 text-center text-body font-medium text-white transition-[filter] hover:brightness-105 disabled:cursor-default disabled:opacity-35"
         >
           {turn.edit
             ? n === 1
@@ -262,7 +262,7 @@ export default function TurnUndoSheet({ projectId, turn, onView, onRestored }: T
             onClick={turn.edit.onSendOnly}
             disabled={working}
             data-testid="turn-undo-send-only"
-            className="mt-2 block h-9 w-full truncate rounded-[9px] bg-soft-button px-2.5 text-center text-[13px] font-medium text-primary transition-colors hover:bg-soft-button-hover disabled:cursor-default disabled:opacity-35"
+            className="mt-2 block h-9 w-full truncate rounded-[9px] bg-soft-button px-2.5 text-center text-body font-medium text-primary transition-colors hover:bg-soft-button-hover disabled:cursor-default disabled:opacity-35"
           >
             {t('chat.edit.sendOnly')}
           </button>

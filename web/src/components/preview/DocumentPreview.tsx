@@ -96,7 +96,7 @@ function PreviewLoading() {
   const t = useT();
   return (
     <div className="flex items-center justify-center h-full min-h-[160px]" role="status">
-      <p className="text-xs text-secondary animate-pulse">{t('filePreview.doc.loading')}</p>
+      <p className="text-caption text-secondary animate-pulse">{t('filePreview.doc.loading')}</p>
     </div>
   );
 }
@@ -169,8 +169,8 @@ export default function DocumentPreview({
       <div className="flex items-center justify-center h-full p-8" data-testid="document-fallback">
         <div className="surface-float-static p-6 max-w-sm w-full text-center">
           <File size={48} className="mx-auto text-secondary mb-4" aria-hidden />
-          <p className="font-semibold text-sm text-primary mb-1 break-all">{fileName}</p>
-          <p className="text-xs text-secondary mb-4">
+          <p className="font-semibold text-title text-primary mb-1 break-all">{fileName}</p>
+          <p className="text-caption text-secondary mb-4">
             {failure === 'too_large'
               ? t('filePreview.doc.tooLarge', { size: formatSize(fileContent.size) })
               : t('filePreview.doc.failed')}
@@ -179,7 +179,7 @@ export default function DocumentPreview({
             <button
               type="button"
               onClick={() => saveBytes(readyBytes)}
-              className="inline-flex items-center gap-1.5 bg-accent text-white text-sm font-medium rounded-lg px-4 py-2 hover:bg-accent/90 transition-all duration-150"
+              className="inline-flex items-center gap-1.5 bg-accent text-white text-body font-medium rounded-lg px-4 py-2 hover:bg-accent/90 transition-all duration-150"
             >
               <Download size={14} aria-hidden />
               {t('fileExplorer.download')}
@@ -190,7 +190,7 @@ export default function DocumentPreview({
               <button
                 type="button"
                 onClick={onQuoteFile}
-                className="mt-3 inline-flex items-center gap-1.5 border border-border text-primary text-sm font-medium rounded-lg px-4 py-2 hover:bg-card transition-all duration-150"
+                className="mt-3 inline-flex items-center gap-1.5 border border-border text-primary text-body font-medium rounded-lg px-4 py-2 hover:bg-card transition-all duration-150"
               >
                 {t('panel.files.quoteFile')}
               </button>
@@ -217,7 +217,7 @@ export default function DocumentPreview({
               <button
                 type="button"
                 onClick={() => saveBytes(readyBytes)}
-                className="flex items-center gap-1 text-xs text-secondary hover:text-primary transition-colors"
+                className="flex items-center gap-1 text-caption text-secondary hover:text-primary transition-colors"
               >
                 <Download size={14} aria-hidden />
                 {t('fileExplorer.download')}
@@ -227,7 +227,7 @@ export default function DocumentPreview({
               <button
                 type="button"
                 onClick={onQuoteFile}
-                className="text-xs text-secondary hover:text-primary transition-colors"
+                className="text-caption text-secondary hover:text-primary transition-colors"
               >
                 {t('panel.files.quoteFile')}
               </button>
@@ -236,7 +236,7 @@ export default function DocumentPreview({
         </div>
       )}
       {showNote && (
-        <p className="px-3 py-1 text-2xs text-secondary bg-sidebar border-b border-border shrink-0">
+        <p className="px-3 py-1 text-micro text-secondary bg-sidebar border-b border-border shrink-0">
           {t('filePreview.doc.mayDiffer')}
         </p>
       )}

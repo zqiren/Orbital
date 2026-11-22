@@ -309,7 +309,7 @@ export default function FileExplorer({ projectId, initialPath, onSelectFile }: F
           {rootLoading ? (
             <TreeSkeleton />
           ) : rootNodes.length === 0 ? (
-            <p className="text-sm text-secondary px-2 py-1">{t('fileExplorer.noFiles')}</p>
+            <p className="text-body text-secondary px-2 py-1">{t('fileExplorer.noFiles')}</p>
           ) : (
             rootNodes.map((node) => (
               <TreeItem
@@ -327,12 +327,12 @@ export default function FileExplorer({ projectId, initialPath, onSelectFile }: F
 
         {canUpload && uploadError && (
           <div className="mx-3 mb-3 px-3 py-2 bg-error/10 border border-error/30 rounded-md">
-            <p className="text-xs text-error">{uploadError}</p>
+            <p className="text-caption text-error">{uploadError}</p>
           </div>
         )}
         {revealFailed && (
           <div role="status" className="mx-3 mb-3 px-3 py-2 bg-error/10 border border-error/30 rounded-md">
-            <p className="text-xs text-error">{t('fileExplorer.revealFailed')}</p>
+            <p className="text-caption text-error">{t('fileExplorer.revealFailed')}</p>
           </div>
         )}
 
@@ -356,7 +356,7 @@ export default function FileExplorer({ projectId, initialPath, onSelectFile }: F
                   flex items-center justify-center gap-1.5
                   bg-accent text-white rounded-full md:rounded-lg
                   w-10 h-10 md:w-auto md:h-auto md:px-3 md:py-2 md:flex-1
-                  text-sm font-medium
+                  text-body font-medium
                   hover:bg-accent/90 transition-all duration-150
                   disabled:opacity-50 disabled:cursor-not-allowed
                   shadow-lg md:shadow-none
@@ -401,7 +401,7 @@ export default function FileExplorer({ projectId, initialPath, onSelectFile }: F
         {mobileShowPreview && (
           <button
             onClick={handleBack}
-            className="md:hidden flex items-center gap-1.5 px-4 py-3 text-sm text-secondary hover:text-primary transition-colors border-b border-border w-full"
+            className="md:hidden flex items-center gap-1.5 px-4 py-3 text-body text-secondary hover:text-primary transition-colors border-b border-border w-full"
           >
             <ArrowLeft size={16} />
             {t('fileExplorer.backToFiles')}
@@ -462,7 +462,7 @@ function TreeItem({ node, depth, selectedPath, onToggle, onFileClick, onReveal }
         }}
         className={`
           group relative flex items-center gap-1.5 w-full text-left py-1 px-2 rounded-md
-          text-sm cursor-pointer select-none transition-colors duration-150
+          text-body cursor-pointer select-none transition-colors duration-150
           ${isSelected ? 'bg-selected text-selected-text' : 'text-primary hover:bg-card-hover'}
         `}
         style={{ paddingLeft: `${depth * 16 + 8}px` }}
@@ -525,7 +525,7 @@ function TreeItem({ node, depth, selectedPath, onToggle, onFileClick, onReveal }
           ))}
           {node.children.length === 0 && !node.loading && (
             <p
-              className="text-xs text-secondary py-1"
+              className="text-caption text-secondary py-1"
               style={{ paddingLeft: `${(depth + 1) * 16 + 8}px` }}
             >
               {t('fileExplorer.emptyDir')}

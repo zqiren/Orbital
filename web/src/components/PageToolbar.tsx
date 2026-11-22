@@ -71,7 +71,7 @@ export default function PageToolbar({
     </span>
   );
   const nav = (
-    <nav aria-label={t('settingsToolbar.breadcrumb')} className="flex items-center gap-2 min-w-0 text-[13px]">
+    <nav aria-label={t('settingsToolbar.breadcrumb')} className="flex items-center gap-2 min-w-0 text-body">
       {parent && (
         <>
           {onParent ? (
@@ -92,7 +92,7 @@ export default function PageToolbar({
           {slash}
         </span>
       ))}
-      <h1 className="truncate font-semibold text-primary" data-testid={titleTestId}>
+      <h1 className="truncate font-medium text-primary" data-testid={titleTestId}>
         {title}
       </h1>
     </nav>
@@ -104,7 +104,7 @@ export default function PageToolbar({
         type="button"
         onClick={onBack}
         data-testid={backTestId}
-        className="vt-settings-back inline-flex shrink-0 items-center gap-1 h-8 pl-2 pr-3 rounded-lg bg-soft-button text-[13px] font-medium text-primary transition-colors duration-150 hover:bg-soft-button-hover max-md:min-h-[44px]"
+        className="vt-settings-back inline-flex shrink-0 items-center gap-1 h-8 pl-2 pr-3 rounded-lg bg-soft-button text-body font-medium text-primary transition-colors duration-150 hover:bg-soft-button-hover max-md:min-h-[44px]"
       >
         <ChevronLeft size={16} strokeWidth={2.2} aria-hidden="true" />
         {t('settingsToolbar.back')}

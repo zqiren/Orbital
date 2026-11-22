@@ -159,15 +159,15 @@ export default function UpdatePill({
     void start(regionForLocale(locale));
   }
 
-  const textBtn = 'text-xs font-medium text-accent hover:underline';
-  const quiet = 'text-xs font-medium text-secondary tabular-nums';
+  const textBtn = 'text-caption font-medium text-accent hover:underline';
+  const quiet = 'text-caption font-medium text-secondary tabular-nums';
   let body: ReactNode;
   let canDismiss = true;
 
   if (refused || phase === 'failed') {
     body = (
       <span className="flex items-center gap-2" data-testid="update-pill-failed">
-        <span className="text-xs font-medium text-primary">{t('update.pill.failed')}</span>
+        <span className="text-caption font-medium text-primary">{t('update.pill.failed')}</span>
         {inApp && (
           <button type="button" onClick={handleStart} className={textBtn}
             data-testid="update-pill-retry">

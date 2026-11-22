@@ -29,7 +29,7 @@ interface AskCardProps {
  *  composer back for this session. */
 export default function AskCard({ ask, onOption, onDone, onNotNeeded, onLater, workspace, onOpenPath }: AskCardProps) {
   const t = useT();
-  const actionClass = 'text-[12.5px] text-muted hover:text-primary whitespace-nowrap';
+  const actionClass = 'text-body text-secondary hover:text-primary whitespace-nowrap';
   const options = ask.options ?? [];
   const detail = ask.detail ?? '';
   return (
@@ -37,12 +37,12 @@ export default function AskCard({ ask, onOption, onDone, onNotNeeded, onLater, w
       <div className="flex items-start gap-x-4 gap-y-1.5 max-md:flex-col">
         <div className="flex items-start gap-2 flex-1 min-w-0">
           <span className="mt-[7px] w-1.5 h-1.5 rounded-full bg-warning shrink-0" aria-hidden="true" />
-          <p className="m-0 flex-1 min-w-0 text-[13.5px] leading-snug font-medium text-primary break-words" data-testid="ask-card-text">
+          <p className="m-0 flex-1 min-w-0 text-body font-medium text-primary break-words" data-testid="ask-card-text">
             <InlineMarkdown text={ask.text} />
           </p>
         </div>
         <div className="flex items-center gap-x-3.5 shrink-0 max-md:pl-3.5">
-          {ask.due && <span className="text-xs text-muted whitespace-nowrap">{t('chat.ask.due', { date: ask.due })}</span>}
+          {ask.due && <span className="text-caption text-secondary whitespace-nowrap">{t('chat.ask.due', { date: ask.due })}</span>}
           <button type="button" className={actionClass} onClick={() => onDone(ask.id)}>{t('chat.ask.done')}</button>
           <button type="button" className={actionClass} onClick={() => onNotNeeded(ask.id)}>{t('chat.ask.notNeeded')}</button>
           <button type="button" className={actionClass} onClick={onLater}>{t('chat.ask.later')}</button>
@@ -66,7 +66,7 @@ export default function AskCard({ ask, onOption, onDone, onNotNeeded, onLater, w
               type="button"
               data-testid="ask-card-option"
               onClick={() => onOption(option)}
-              className="max-w-full truncate px-3 py-1 max-md:py-1.5 rounded-full border border-border text-[12.5px] text-primary hover:bg-card-hover hover:border-secondary/40 transition-colors duration-150"
+              className="max-w-full truncate px-3 py-1 max-md:py-1.5 rounded-full border border-border text-body text-primary hover:bg-card-hover hover:border-secondary/40 transition-colors duration-150"
             >
               {option}
             </button>

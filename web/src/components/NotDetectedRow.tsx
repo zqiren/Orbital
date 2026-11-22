@@ -140,9 +140,9 @@ export default function NotDetectedRow({
     >
       <div className="flex items-center gap-2 flex-wrap">
         <MessageAvatar variant="agent" agentHandle={slug} />
-        <span className="text-base font-medium text-primary">{name}</span>
-        <code className="text-xs text-secondary/80 font-mono">{slug}</code>
-        <span className="px-2 py-0.5 rounded-full border text-[11px] bg-sidebar text-secondary border-muted">
+        <span className="text-title font-medium text-primary">{name}</span>
+        <code className="text-caption text-secondary font-mono">{slug}</code>
+        <span className="px-2 py-0.5 rounded-full border text-micro bg-sidebar text-secondary border-muted">
           {t('subAgentCard.notDetected')}
         </span>
       </div>
@@ -150,7 +150,7 @@ export default function NotDetectedRow({
       {overrideMissing && overridePath && (
         <p
           data-testid={`sub-agent-locate-gone-${slug}`}
-          className="text-xs text-warning-text mt-1.5 break-all"
+          className="text-caption text-warning-text mt-1.5 break-all"
         >
           {t('subAgentCard.locate.gone', { path: overridePath })}
         </p>
@@ -165,23 +165,23 @@ export default function NotDetectedRow({
             href={desktopApp.download_url}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-xs bg-accent text-white rounded px-3 py-1.5 hover:bg-accent/90 transition-all duration-150"
+            className="text-caption bg-accent text-white rounded px-3 py-1.5 hover:bg-accent/90 transition-all duration-150"
           >
             {t('subAgentCard.desktop.install', { app: desktopApp.label })}
           </a>
-          <span className="text-xs text-secondary">{t('subAgentCard.desktop.installHint')}</span>
+          <span className="text-caption text-secondary">{t('subAgentCard.desktop.installHint')}</span>
         </div>
       )}
 
       <div className="flex items-center gap-2 flex-wrap mt-1.5">
-        <p className="text-xs text-secondary">
+        <p className="text-caption text-secondary">
           {fallbackHint ?? t('subAgentCard.locate.hint', { name })}
         </p>
         <button
           type="button"
           onClick={handleCopy}
           data-testid={`sub-agent-locate-copy-${slug}`}
-          className="text-xs border border-border rounded px-2 py-0.5 text-secondary hover:text-primary transition-all duration-150"
+          className="text-caption border border-border rounded px-2 py-0.5 text-secondary hover:text-primary transition-all duration-150"
         >
           {copied ? t('subAgentCard.locate.copied') : t('subAgentCard.locate.copy')}
         </button>
@@ -190,7 +190,7 @@ export default function NotDetectedRow({
       {copyError && promptText && (
         <pre
           data-testid={`sub-agent-locate-prompt-${slug}`}
-          className="text-[11px] text-secondary bg-sidebar border border-border rounded p-2 mt-2 whitespace-pre-wrap break-words select-all"
+          className="text-micro text-secondary bg-sidebar border border-border rounded p-2 mt-2 whitespace-pre-wrap break-words select-all"
         >
           {promptText}
         </pre>
@@ -204,7 +204,7 @@ export default function NotDetectedRow({
         spellCheck={false}
         aria-label={t('subAgentCard.locate.placeholder')}
         data-testid={`sub-agent-locate-answer-${slug}`}
-        className="w-full mt-2 text-xs font-mono bg-sidebar border border-border rounded px-2 py-1.5 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent"
+        className="w-full mt-2 text-caption font-mono bg-sidebar border border-border rounded px-2 py-1.5 text-primary placeholder:text-secondary focus:outline-none focus:border-accent"
       />
 
       <div className="flex items-center gap-2 flex-wrap mt-2">
@@ -213,7 +213,7 @@ export default function NotDetectedRow({
           onClick={handleTest}
           disabled={!trimmed || testing}
           data-testid={`sub-agent-locate-test-${slug}`}
-          className="text-xs border border-border rounded px-3 py-1.5 text-secondary hover:text-primary transition-all duration-150 disabled:opacity-50"
+          className="text-caption border border-border rounded px-3 py-1.5 text-secondary hover:text-primary transition-all duration-150 disabled:opacity-50"
         >
           {testing ? t('subAgentCard.locate.testing') : t('subAgentCard.locate.test')}
         </button>
@@ -222,14 +222,14 @@ export default function NotDetectedRow({
           onClick={handleSave}
           disabled={!tested || saving}
           data-testid={`sub-agent-locate-save-${slug}`}
-          className="text-xs bg-accent text-white rounded px-3 py-1.5 hover:bg-accent/90 transition-all duration-150 disabled:opacity-50"
+          className="text-caption bg-accent text-white rounded px-3 py-1.5 hover:bg-accent/90 transition-all duration-150 disabled:opacity-50"
         >
           {saving ? t('subAgentCard.locate.saving') : t('subAgentCard.locate.save')}
         </button>
         {result && testedAnswer === trimmed && (
           <span
             data-testid={`sub-agent-locate-result-${slug}`}
-            className={`text-xs break-all ${result.ok ? 'text-success-text' : 'text-error-text'}`}
+            className={`text-caption break-all ${result.ok ? 'text-success-text' : 'text-error-text'}`}
           >
             {result.ok
               ? (result.version_output
@@ -248,7 +248,7 @@ export default function NotDetectedRow({
           </span>
         )}
         {saveError && (
-          <span className="text-xs text-error-text break-all">{saveError}</span>
+          <span className="text-caption text-error-text break-all">{saveError}</span>
         )}
       </div>
     </div>

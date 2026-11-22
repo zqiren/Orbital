@@ -357,7 +357,7 @@ export default function WorkbenchPage({
             <div
               role="alert"
               data-testid="workbench-open-error"
-              className="mb-4 rounded-lg bg-warning-surface px-4 py-2 text-xs text-warning-text"
+              className="mb-4 rounded-lg bg-warning-surface px-4 py-2 text-caption text-warning-text"
             >
               {openError}
             </div>

@@ -267,7 +267,7 @@ export default function CardList({
 
   if (loading) {
     return (
-      <div className="flex items-center gap-2 text-sm text-secondary py-4">
+      <div className="flex items-center gap-2 text-body text-secondary py-4">
         <Loader2 className="w-4 h-4 animate-spin" />
         {t('llm.loading')}
       </div>
@@ -277,7 +277,7 @@ export default function CardList({
   if (cards.length === 0) {
     return (
       <div data-testid={testId}>
-        <p className="text-sm text-secondary/70 italic py-2" data-testid={`${testId}-empty`}>
+        <p className="text-body text-secondary italic py-2" data-testid={`${testId}-empty`}>
           {mode === 'global' ? t('cards.empty') : t('cards.picker.empty')}
         </p>
         {showAdd && <AddButton onClick={() => setAdding(true)} label={t('cards.add')} />}
@@ -298,7 +298,7 @@ export default function CardList({
   return (
     <div data-testid={testId}>
       {dangling && (
-        <p className="text-xs text-error mb-2" data-testid={`${testId}-dangling`}>
+        <p className="text-caption text-error mb-2" data-testid={`${testId}-dangling`}>
           {t('cards.picker.missing')}
         </p>
       )}
@@ -321,13 +321,13 @@ export default function CardList({
             >
               <span className="flex items-center gap-2">
                 <SelectionDot selected={selectedId === null && !dangling} />
-                <span className="text-sm font-medium text-primary">
+                <span className="text-body font-medium text-primary">
                   {defaultCard
                     ? t('cards.picker.globalDefaultNamed', { name: defaultCard.name })
                     : t('cards.picker.globalDefaultNone')}
                 </span>
               </span>
-              <span className="block text-xs text-secondary mt-1 pl-6">
+              <span className="block text-caption text-secondary mt-1 pl-6">
                 {t('cards.select.globalDefaultHint')}
               </span>
             </button>
@@ -365,14 +365,14 @@ export default function CardList({
                       ) : (
                         <SelectionDot selected={isSelected} />
                       )}
-                      <span className="text-sm font-medium text-primary truncate min-w-0">
+                      <span className="text-body font-medium text-primary truncate min-w-0">
                         {card.name}
                       </span>
                       <HealthMark health={health} cardId={card.id} />
                       {isSelected && (
                         <span
                           data-testid={`card-selected-${card.id}`}
-                          className="shrink-0 inline-flex items-center gap-1 text-[11px] rounded-full px-2 py-0.5 bg-accent/10 text-accent"
+                          className="shrink-0 inline-flex items-center gap-1 text-micro rounded-full px-2 py-0.5 bg-accent/10 text-accent"
                         >
                           <Check className="w-3 h-3" />
                           {mode === 'global'
@@ -381,18 +381,18 @@ export default function CardList({
                         </span>
                       )}
                       {card.read_only && (
-                        <span className="shrink-0 text-[11px] rounded-full px-2 py-0.5 bg-card border border-border text-secondary">
+                        <span className="shrink-0 text-micro rounded-full px-2 py-0.5 bg-card border border-border text-secondary">
                           {t('cards.badge.env')}
                         </span>
                       )}
                       {card.region === 'china' && (
-                        <span className="shrink-0 text-[11px] rounded-full px-2 py-0.5 bg-card border border-border text-secondary">
+                        <span className="shrink-0 text-micro rounded-full px-2 py-0.5 bg-card border border-border text-secondary">
                           {t('llm.region.china')}
                         </span>
                       )}
                     </span>
 
-                    <span className="block text-xs text-secondary mt-1 truncate pl-6">
+                    <span className="block text-caption text-secondary mt-1 truncate pl-6">
                       {/* A card's default name IS "<Provider> · <model>", so
                           repeating it here was pure noise. Show it only when
                           the card has been renamed and the name no longer
@@ -455,7 +455,7 @@ export default function CardList({
                     data-testid={
                       rowError?.id === card.id ? `card-error-${card.id}` : `card-note-${card.id}`
                     }
-                    className={`text-xs px-3 pb-2.5 pl-9 ${
+                    className={`text-caption px-3 pb-2.5 pl-9 ${
                       rowError?.id === card.id ? 'text-error' : 'text-secondary'
                     }`}
                   >
@@ -517,7 +517,7 @@ function HealthMark({ health, cardId }: { health: CardHealth; cardId: string }) 
       ? 'text-success'
       : health.kind === 'error'
         ? 'text-error'
-        : 'text-secondary/60';
+        : 'text-secondary';
   return (
     <span className="relative shrink-0 inline-flex group/health">
       {/* role=img + aria-label: the text still reaches a screen reader, and
@@ -529,7 +529,7 @@ function HealthMark({ health, cardId }: { health: CardHealth; cardId: string }) 
       <span
         aria-hidden="true"
         data-testid={`card-health-tip-${cardId}`}
-        className="pointer-events-none absolute left-1/2 top-full z-30 mt-1.5 hidden w-64 -translate-x-1/2 rounded-md border border-border bg-card px-2.5 py-1.5 text-xs leading-relaxed text-primary shadow-lg group-hover/health:block"
+        className="pointer-events-none absolute left-1/2 top-full z-30 mt-1.5 hidden w-64 -translate-x-1/2 rounded-md border border-border bg-card px-2.5 py-1.5 text-caption text-primary shadow-lg group-hover/health:block"
       >
         {health.text}
       </span>
@@ -551,7 +551,7 @@ function AddButton({ onClick, label }: { onClick: () => void; label: string }) {
       type="button"
       data-testid="card-list-add"
       onClick={onClick}
-      className="inline-flex items-center gap-1.5 text-sm font-medium text-accent border border-dashed border-border rounded-lg px-3 py-2 hover:border-accent hover:bg-accent/5 transition-all duration-150 w-full justify-center max-md:min-h-[44px]"
+      className="inline-flex items-center gap-1.5 text-body font-medium text-accent border border-dashed border-border rounded-lg px-3 py-2 hover:border-accent hover:bg-accent/5 transition-all duration-150 w-full justify-center max-md:min-h-[44px]"
     >
       <Plus className="w-4 h-4" strokeWidth={1.5} />
       {label}
@@ -614,7 +614,7 @@ function IconAction({
           and asks what it does. */}
       <span
         aria-hidden="true"
-        className="pointer-events-none absolute bottom-full left-1/2 z-30 mb-1.5 hidden -translate-x-1/2 whitespace-nowrap rounded-md border border-border bg-card px-2 py-1 text-[11px] font-medium text-primary shadow-lg group-hover/action:block"
+        className="pointer-events-none absolute bottom-full left-1/2 z-30 mb-1.5 hidden -translate-x-1/2 whitespace-nowrap rounded-md border border-border bg-card px-2 py-1 text-micro font-medium text-primary shadow-lg group-hover/action:block"
       >
         {label}
       </span>
@@ -667,7 +667,7 @@ export function CardFormModal({
         className="surface-float-pop w-full max-w-[560px] max-h-[85vh] flex flex-col mx-4 max-md:max-w-full max-md:max-h-full max-md:h-full max-md:mx-0 max-md:rounded-none"
       >
         <div className="flex items-center justify-between px-5 py-3.5 border-b border-border shrink-0">
-          <h2 className="text-sm font-semibold text-primary">
+          <h2 className="text-title font-semibold text-primary">
             {card ? t('cards.modal.editTitle') : t('cards.modal.addTitle')}
           </h2>
           <button
@@ -699,7 +699,7 @@ export function CardFormModal({
 
         {savedOnce && (
           <div className="px-5 py-3 border-t border-border shrink-0 flex items-center justify-between gap-3">
-            <span className="flex items-center gap-1.5 text-xs text-secondary">
+            <span className="flex items-center gap-1.5 text-caption text-secondary">
               <Check className="w-3.5 h-3.5 text-success" />
               {t('cards.modal.savedHint')}
             </span>
@@ -707,7 +707,7 @@ export function CardFormModal({
               type="button"
               data-testid="card-modal-done"
               onClick={onClose}
-              className="text-sm font-medium text-secondary border border-border rounded-lg px-4 py-1.5 hover:text-primary transition-all duration-150"
+              className="text-body font-medium text-secondary border border-border rounded-lg px-4 py-1.5 hover:text-primary transition-all duration-150"
             >
               {t('cards.modal.done')}
             </button>

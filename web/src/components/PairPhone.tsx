@@ -159,10 +159,10 @@ export default function PairPhone() {
             <Wifi className="w-4 h-4 text-accent" />
           </div>
           <div>
-            <h3 className="text-sm font-semibold text-primary leading-tight">
+            <h3 className="text-body font-semibold text-primary ">
               {t('pairPhone.lan.header')}
             </h3>
-            <p className="text-xs text-secondary">
+            <p className="text-caption text-secondary">
               {t('pairPhone.lan.subhead')}
             </p>
           </div>
@@ -172,13 +172,13 @@ export default function PairPhone() {
           {lanLoading ? (
             <div className="p-6 flex items-center justify-center gap-3">
               <RefreshCw className="w-4 h-4 text-secondary animate-spin" />
-              <span className="text-sm text-secondary">{t('pairPhone.lan.detecting')}</span>
+              <span className="text-body text-secondary">{t('pairPhone.lan.detecting')}</span>
             </div>
           ) : lanUrl ? (
             <div className="flex max-md:flex-col">
               {/* Left: instructions */}
               <div className="flex-1 p-6 flex flex-col justify-center">
-                <h4 className="text-base font-semibold text-primary mb-4">
+                <h4 className="text-title font-semibold text-primary mb-4">
                   {t('pairPhone.lan.scanTitle')}
                 </h4>
                 <ol className="space-y-3">
@@ -188,10 +188,10 @@ export default function PairPhone() {
                     t('pairPhone.lan.step3'),
                   ].map((step, i) => (
                     <li key={i} className="flex items-start gap-3">
-                      <span className="flex-shrink-0 w-5 h-5 rounded-full bg-accent/15 text-accent text-xs font-bold flex items-center justify-center mt-0.5">
+                      <span className="flex-shrink-0 w-5 h-5 rounded-full bg-accent/15 text-accent text-caption font-semibold flex items-center justify-center mt-0.5">
                         {i + 1}
                       </span>
-                      <span className="text-sm text-secondary leading-snug">
+                      <span className="text-body text-secondary ">
                         {step}
                       </span>
                     </li>
@@ -201,10 +201,10 @@ export default function PairPhone() {
                 {/* Refresh button */}
                 <div className="flex items-center gap-3 mt-5 pt-4 border-t border-border">
                   <Wifi className="w-3.5 h-3.5 text-secondary" />
-                  <span className="text-xs text-secondary">{t('pairPhone.lan.localNetwork')}</span>
+                  <span className="text-caption text-secondary">{t('pairPhone.lan.localNetwork')}</span>
                   <button
                     onClick={fetchLanUrl}
-                    className="ml-auto flex items-center gap-1.5 text-xs text-accent hover:text-accent/80 transition-colors"
+                    className="ml-auto flex items-center gap-1.5 text-caption text-accent hover:text-accent/80 transition-colors"
                   >
                     <RefreshCw className="w-3 h-3" />
                     {t('pairPhone.refresh')}
@@ -224,7 +224,7 @@ export default function PairPhone() {
                     className="max-md:w-full max-md:h-auto"
                   />
                 </div>
-                <p className="text-xs text-secondary mt-3 font-mono select-all">
+                <p className="text-caption text-secondary mt-3 font-mono select-all">
                   {lanUrl}
                 </p>
               </div>
@@ -234,22 +234,22 @@ export default function PairPhone() {
             <div className="p-6 flex items-center gap-5">
               <div className="flex-shrink-0 w-24 h-24 rounded-xl bg-accent/5 border border-accent/10 flex flex-col items-center justify-center gap-1.5">
                 <Wifi className="w-8 h-8 text-accent/40" />
-                <span className="text-2xs text-accent/40 font-medium uppercase tracking-wider">
+                <span className="type-label text-secondary">
                   LAN
                 </span>
               </div>
 
               <div className="flex-1 min-w-0">
-                <h4 className="text-sm font-semibold text-primary mb-1">
+                <h4 className="text-body font-semibold text-primary mb-1">
                   {t('pairPhone.lan.noNetworkTitle')}
                 </h4>
-                <p className="text-xs text-secondary leading-relaxed mb-3">
+                <p className="text-caption text-secondary mb-3">
                   {lanError || t('pairPhone.lan.noNetworkBody')}
                 </p>
 
                 <button
                   onClick={fetchLanUrl}
-                  className="inline-flex items-center gap-2 bg-accent text-white text-xs font-semibold rounded-lg px-4 py-2 hover:bg-accent/90 transition-all duration-150 max-md:w-full max-md:min-h-[44px] max-md:justify-center"
+                  className="inline-flex items-center gap-2 bg-accent text-white text-caption font-medium rounded-lg px-4 py-2 hover:bg-accent/90 transition-all duration-150 max-md:w-full max-md:min-h-[44px] max-md:justify-center"
                 >
                   <RefreshCw className="w-3.5 h-3.5" />
                   {t('pairPhone.retry')}
@@ -271,10 +271,10 @@ export default function PairPhone() {
           <Smartphone className="w-4 h-4 text-accent" />
         </div>
         <div>
-          <h3 className="text-sm font-semibold text-primary leading-tight">
+          <h3 className="text-body font-semibold text-primary ">
             {t('pairPhone.relay.header')}
           </h3>
-          <p className="text-xs text-secondary">
+          <p className="text-caption text-secondary">
             {t('pairPhone.relay.subhead')}
           </p>
         </div>
@@ -287,7 +287,7 @@ export default function PairPhone() {
           <div className="flex max-md:flex-col">
             {/* Left: instructions */}
             <div className="flex-1 p-6 flex flex-col justify-center">
-              <h4 className="text-base font-semibold text-primary mb-4">
+              <h4 className="text-title font-semibold text-primary mb-4">
                 {t('pairPhone.relay.pairTitle')}
               </h4>
               <ol className="space-y-3">
@@ -297,10 +297,10 @@ export default function PairPhone() {
                   t('pairPhone.relay.step3'),
                 ].map((step, i) => (
                   <li key={i} className="flex items-start gap-3">
-                    <span className="flex-shrink-0 w-5 h-5 rounded-full bg-accent/15 text-accent text-xs font-bold flex items-center justify-center mt-0.5">
+                    <span className="flex-shrink-0 w-5 h-5 rounded-full bg-accent/15 text-accent text-caption font-semibold flex items-center justify-center mt-0.5">
                       {i + 1}
                     </span>
-                    <span className="text-sm text-secondary leading-snug">
+                    <span className="text-body text-secondary ">
                       {step}
                     </span>
                   </li>
@@ -310,7 +310,7 @@ export default function PairPhone() {
               {/* Timer + refresh */}
               <div className="flex items-center gap-3 mt-5 pt-4 border-t border-border">
                 <Clock className="w-3.5 h-3.5 text-secondary" />
-                <span className="text-xs text-secondary tabular-nums">
+                <span className="text-caption text-secondary tabular-nums">
                   Expires in{' '}
                   <span
                     className={
@@ -322,7 +322,7 @@ export default function PairPhone() {
                 </span>
                 <button
                   onClick={startPairing}
-                  className="ml-auto flex items-center gap-1.5 text-xs text-accent hover:text-accent/80 transition-colors"
+                  className="ml-auto flex items-center gap-1.5 text-caption text-accent hover:text-accent/80 transition-colors"
                 >
                   <RefreshCw className="w-3 h-3" />
                   {t('pairPhone.relay.newCode')}
@@ -342,7 +342,7 @@ export default function PairPhone() {
                   className="max-md:w-full max-md:h-auto"
                 />
               </div>
-              <p className="text-xs text-secondary mt-3 font-mono tracking-[0.25em] select-all">
+              <p className="text-caption text-secondary mt-3 font-mono tracking-[0.25em] select-all">
                 {code}
               </p>
             </div>
@@ -353,21 +353,21 @@ export default function PairPhone() {
             {/* Illustration placeholder */}
             <div className="flex-shrink-0 w-24 h-24 rounded-xl bg-accent/5 border border-accent/10 flex flex-col items-center justify-center gap-1.5">
               <Scan className="w-8 h-8 text-accent/40" />
-              <span className="text-2xs text-accent/40 font-medium uppercase tracking-wider">
+              <span className="type-label text-secondary">
                 Scan
               </span>
             </div>
 
             <div className="flex-1 min-w-0">
-              <h4 className="text-sm font-semibold text-primary mb-1">
+              <h4 className="text-body font-semibold text-primary mb-1">
                 {t('pairPhone.relay.useTitle')}
               </h4>
-              <p className="text-xs text-secondary leading-relaxed mb-3">
+              <p className="text-caption text-secondary mb-3">
                 {t('pairPhone.relay.useBody')}
               </p>
 
               {error && (
-                <div className="text-xs text-error bg-error/5 border border-error/15 rounded-lg px-3 py-2 mb-3">
+                <div className="text-caption text-error bg-error/5 border border-error/15 rounded-lg px-3 py-2 mb-3">
                   {error}
                 </div>
               )}
@@ -375,7 +375,7 @@ export default function PairPhone() {
               <button
                 onClick={startPairing}
                 disabled={state === 'loading'}
-                className="inline-flex items-center gap-2 bg-accent text-white text-xs font-semibold rounded-lg px-4 py-2 hover:bg-accent/90 disabled:opacity-50 transition-all duration-150 max-md:w-full max-md:min-h-[44px] max-md:justify-center"
+                className="inline-flex items-center gap-2 bg-accent text-white text-caption font-medium rounded-lg px-4 py-2 hover:bg-accent/90 disabled:opacity-50 transition-all duration-150 max-md:w-full max-md:min-h-[44px] max-md:justify-center"
               >
                 {state === 'loading' ? (
                   <RefreshCw className="w-3.5 h-3.5 animate-spin" />
@@ -393,7 +393,7 @@ export default function PairPhone() {
       {state === 'active' && (
         <button
           onClick={resetPairing}
-          className="mt-2 text-xs text-secondary hover:text-primary transition-colors"
+          className="mt-2 text-caption text-secondary hover:text-primary transition-colors"
         >
           {t('pairPhone.relay.cancelPairing')}
         </button>
@@ -402,11 +402,11 @@ export default function PairPhone() {
       {/* ---- Paired Devices List ---- */}
       <div className="mt-6">
         <div className="flex items-center justify-between mb-3">
-          <h4 className="text-xs font-semibold text-secondary uppercase tracking-wider">
+          <h4 className="type-label text-secondary">
             {t('pairPhone.relay.pairedDevices')}
           </h4>
           {devices.length > 0 && (
-            <span className="text-xs text-secondary">
+            <span className="text-caption text-secondary">
               {t('pairPhone.relay.deviceCount', { n: devices.length })}
             </span>
           )}
@@ -417,7 +417,7 @@ export default function PairPhone() {
             <div className="w-10 h-10 rounded-full bg-secondary/5 flex items-center justify-center mb-3">
               <Laptop className="w-5 h-5 text-secondary/40" />
             </div>
-            <p className="text-xs text-secondary">
+            <p className="text-caption text-secondary">
               {t('pairPhone.relay.noDevices')}
             </p>
           </div>
@@ -441,14 +441,14 @@ export default function PairPhone() {
                   </div>
 
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm text-primary font-medium truncate">
+                    <p className="text-body text-primary font-medium truncate">
                       Phone &middot;{' '}
-                      <span className="font-mono text-xs">
+                      <span className="font-mono text-caption">
                         {device.phone_id.slice(0, 12)}
                       </span>
                     </p>
                     {pairedDate && (
-                      <p className="text-xs text-secondary">
+                      <p className="text-caption text-secondary">
                         {t('pairPhone.relay.linkedAt', {
                           date: pairedDate.toLocaleDateString(undefined, {
                             month: 'short',
@@ -467,7 +467,7 @@ export default function PairPhone() {
                   <button
                     onClick={() => revokeDevice(device.phone_id)}
                     disabled={isRevoking}
-                    className="flex items-center gap-1.5 text-xs text-secondary hover:text-error opacity-0 group-hover:opacity-100 max-md:opacity-100 transition-all duration-150 rounded-lg px-2.5 py-1.5 hover:bg-error/5 max-md:min-h-[44px]"
+                    className="flex items-center gap-1.5 text-caption text-secondary hover:text-error opacity-0 group-hover:opacity-100 max-md:opacity-100 transition-all duration-150 rounded-lg px-2.5 py-1.5 hover:bg-error/5 max-md:min-h-[44px]"
                     title={t('pairPhone.relay.unlinkTitle')}
                   >
                     <Trash2 className="w-3 h-3" />

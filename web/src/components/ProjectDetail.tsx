@@ -329,7 +329,7 @@ export default function ProjectDetail({
       <span
         data-testid="project-credential-chip"
         title={credentialLabel}
-        className={`font-mono text-[11px] text-secondary truncate ${extra}`}
+        className={`font-mono text-micro text-secondary truncate ${extra}`}
       >
         {credentialLabel}
       </span>
@@ -353,7 +353,7 @@ export default function ProjectDetail({
   );
 
   const statusSummaryLine = statusSummary ? (
-    <p className="text-xs text-secondary truncate">{statusSummary}</p>
+    <p className="text-caption text-secondary truncate">{statusSummary}</p>
   ) : null;
 
   // The page (or the chat) itself. `relative` so the file-preview drawer
@@ -397,7 +397,7 @@ export default function ProjectDetail({
         />
       </OpenPathContext.Provider>
       {previewToast && (
-        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-lg bg-primary text-background text-[13px] shadow-lg max-w-[90%] text-center pointer-events-none">
+        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-lg bg-primary text-background text-body shadow-lg max-w-[90%] text-center pointer-events-none">
           {previewToast}
         </div>
       )}
@@ -434,7 +434,7 @@ export default function ProjectDetail({
                 {/* Item 157: the state badge and the spend pill left this
                     header (the chat shows what runs; spend is in Settings). */}
                 <div data-tour="project-header" className="flex items-center gap-3 min-w-0">
-                  <h1 className="vt-project-title text-lg font-semibold tracking-[-0.01em] text-primary truncate min-w-0">
+                  <h1 className="vt-project-title text-title font-semibold text-primary truncate min-w-0">
                     {projectName}
                   </h1>
                 </div>
@@ -520,7 +520,7 @@ export default function ProjectDetail({
                   the whole row: the gear is a stop of its own). */}
               <h1
                 data-tour="project-header"
-                className="text-[17px] font-semibold tracking-[-0.01em] text-primary truncate min-w-0"
+                className="text-title font-semibold text-primary truncate min-w-0"
               >
                 {projectName}
               </h1>
@@ -536,7 +536,7 @@ export default function ProjectDetail({
                 Only a budget that paused the queue still shows here: that one
                 stops work, so it must not hide in Settings. */}
             {budgetPaused && (
-              <div className="flex items-center min-w-0 text-[11px] whitespace-nowrap" data-testid="project-spend">
+              <div className="flex items-center min-w-0 text-micro whitespace-nowrap" data-testid="project-spend">
                 {budget(true)}
               </div>
             )}

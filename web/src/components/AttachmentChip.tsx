@@ -43,7 +43,7 @@ export default function AttachmentChip({
   const isDone = status === 'done' && !localPath;
 
   const baseClass = [
-    'inline-flex items-center gap-2 rounded-md border px-2 py-1 text-xs',
+    'inline-flex items-center gap-2 rounded-md border px-2 py-1 text-caption',
     'max-w-[260px]',
     isError ? 'border-red-500 bg-red-500/10' : 'border-border bg-card-hover',
     isPendingOrUploading ? 'opacity-80' : '',
@@ -80,7 +80,7 @@ export default function AttachmentChip({
         >
           {truncated}
         </span>
-        <span className="text-2xs text-secondary">{humanSize(size)}</span>
+        <span className="text-micro text-secondary">{humanSize(size)}</span>
       </div>
 
       {isPendingOrUploading && (

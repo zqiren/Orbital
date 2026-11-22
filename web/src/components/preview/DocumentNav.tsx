@@ -60,9 +60,9 @@ function PdfNav({ nav, compact }: { nav: PdfNavState; compact: boolean }) {
           const page = parseInt(e.currentTarget.value, 10);
           if (page && page !== nav.page) nav.goTo(page);
         }}
-        className="w-9 h-6 shrink-0 text-center text-xs rounded-md border border-border bg-transparent text-primary tabular-nums focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+        className="w-9 h-6 shrink-0 text-center text-caption rounded-md border border-border bg-transparent text-primary tabular-nums focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
       />
-      <span className={`text-xs text-secondary whitespace-nowrap ${narrow}`}>
+      <span className={`text-caption text-secondary whitespace-nowrap ${narrow}`}>
         {t('filePreview.doc.pageCount', { n: nav.pageCount })}
       </span>
       <NavButton
@@ -93,7 +93,7 @@ function SheetSelect({ nav }: { nav: SheetNavState }) {
       aria-label={t('filePreview.doc.sheets')}
       value={nav.active}
       onChange={(e) => nav.select(Number(e.target.value))}
-      className="h-6 min-w-0 max-w-[12rem] truncate rounded-md border border-border bg-transparent px-1.5 text-xs text-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+      className="h-6 min-w-0 max-w-[12rem] truncate rounded-md border border-border bg-transparent px-1.5 text-caption text-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
     >
       {nav.sheets.map((name, i) => (
         <option key={`${i}:${name}`} value={i}>

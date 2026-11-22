@@ -71,11 +71,11 @@ export default function RefreshTurnStatus({ status, trigger, timestamp }: Refres
   return (
     <div className={`my-2 mx-auto max-w-sm rounded border ${config.borderClass} bg-surface-alt/40 px-3 py-2 flex items-center gap-2`}>
       <span className={`h-1.5 w-1.5 rounded-full flex-shrink-0 ${config.dotClass}`} />
-      <span className={`text-xs ${config.textClass} flex-1`}>
+      <span className={`text-caption ${config.textClass} flex-1`}>
         {t(config.labelKey)}
         <span className="ml-1 opacity-50">({triggerLabel})</span>
       </span>
-      <span className="text-xs text-tertiary opacity-40 flex-shrink-0">{time}</span>
+      <span className="text-caption text-tertiary opacity-40 flex-shrink-0">{time}</span>
     </div>
   );
 }

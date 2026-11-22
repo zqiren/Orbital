@@ -38,7 +38,7 @@ export default function ComposerDisabledPrompt({
       className="flex items-center justify-between gap-3 px-3 py-2.5 surface-float-static"
       data-testid="composer-disabled-prompt"
     >
-      <span className="text-sm text-secondary">
+      <span className="text-body text-secondary">
         {t('composerDisabled.prompt')}
       </span>
       <button
@@ -46,7 +46,7 @@ export default function ComposerDisabledPrompt({
         onClick={handlePause}
         disabled={pausing}
         data-testid="composer-pause-queue-btn"
-        className={`shrink-0 px-3 py-1 rounded-md text-xs font-semibold tracking-wide transition-colors duration-150 ${
+        className={`shrink-0 px-3 py-1 rounded-md text-caption font-medium transition-colors duration-150 ${
           pausing
             ? 'bg-secondary/20 text-secondary/40 cursor-not-allowed'
             : 'bg-accent text-white hover:bg-accent/85 cursor-pointer'

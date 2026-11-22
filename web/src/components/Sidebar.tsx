@@ -299,11 +299,11 @@ export default function Sidebar({
           <span className={`w-2 h-2 rounded-full ${dotColor}`} />
         </span>
         <div className="min-w-0 flex-1">
-          <span className="text-xs font-medium text-primary block truncate">
+          <span className={`text-caption text-primary block truncate${isActive ? ' font-medium' : ''}`}>
             {truncate(projectDisplayName(project, t), 20)}
           </span>
           {summary && (
-            <span className="text-2xs text-secondary block truncate mt-0.5">
+            <span className="text-micro text-secondary block truncate">
               {summary}
             </span>
           )}
@@ -317,7 +317,7 @@ export default function Sidebar({
             data-testid={`project-unread-count-${project.project_id}`}
             title={unreadLabel}
             aria-label={unreadLabel}
-            className="ml-auto shrink-0 font-mono text-2xs font-medium leading-none px-1.5 py-0.5 rounded-full text-secondary bg-nav-hover"
+            className="ml-auto shrink-0 text-micro tabular-nums font-medium leading-none px-1.5 py-0.5 rounded-full text-secondary bg-nav-hover"
           >
             {unread > 99 ? '99+' : unread}
           </span>
@@ -356,11 +356,10 @@ export default function Sidebar({
           aria-hidden="true"
           className="w-5 h-5 shrink-0"
         />
-        {/* text-lg, not text-sm: at text-sm the wordmark was the same size as
-            the nav rows below it and only font-weight separated them, so the
-            app name read as one more list item. Matches the project title
-            across the divider. */}
-        <span className="text-lg font-semibold text-primary tracking-tight">
+        {/* text-title, not the rows' size: at the rows' size the wordmark
+            read as one more list item. Same step as the project title across
+            the divider. */}
+        <span className="text-title font-semibold text-primary">
           {t('sidebar.wordmark')}
         </span>
         {/* The column's collapse chevron: the same control as the session
@@ -394,7 +393,7 @@ export default function Sidebar({
           the glyph on the collapsed strip (EdgeStrip), so collapsing or
           expanding the list leaves the icon where it was. */}
       <div className="flex items-center px-4 pt-2 pb-1">
-        <span className="text-2xs uppercase tracking-[0.08em] text-secondary font-medium">
+        <span className="type-label text-secondary">
           {t('workspace.zone.label')}
         </span>
       </div>
@@ -418,7 +417,7 @@ export default function Sidebar({
               />
             )}
           </span>
-          <span className="text-xs font-medium text-primary block truncate">
+          <span className={`text-caption text-primary block truncate${route.name === 'list' ? ' font-medium' : ''}`}>
             {t('workbench.title')}
           </span>
         </button>
@@ -426,10 +425,10 @@ export default function Sidebar({
 
       {/* Projects section header */}
       <div className="flex items-center justify-between px-4 pt-2 pb-1">
-        <span className="text-2xs uppercase tracking-[0.08em] text-secondary font-medium">
+        <span className="type-label text-secondary">
           {t('sidebar.projects')}
         </span>
-        <span className="font-mono text-2xs text-secondary">
+        <span className="text-micro tabular-nums text-secondary">
           {regularProjects.length}
         </span>
       </div>
@@ -440,7 +439,7 @@ export default function Sidebar({
           data-testid="safe-mode-notice"
           className="mx-2 mb-1.5 flex items-start gap-2 surface-float-static px-2.5 py-2"
         >
-          <p className="min-w-0 flex-1 text-2xs leading-relaxed text-secondary">
+          <p className="min-w-0 flex-1 text-micro text-secondary">
             {t('safeMode.notice.body')}
           </p>
           <button
@@ -524,12 +523,12 @@ export default function Sidebar({
                   setImportMenuOpen(false);
                   onImportProjects();
                 }}
-                className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm text-primary transition-colors duration-150 hover:bg-surface max-md:min-h-[44px]"
+                className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-body text-primary transition-colors duration-150 hover:bg-surface max-md:min-h-[44px]"
               >
                 <FolderInput className="h-4 w-4 shrink-0 text-secondary" aria-hidden="true" />
                 <span className="flex min-w-0 flex-col">
-                  <span className="leading-snug">{t('importProjects.menuItem')}</span>
-                  <span className="text-[11px] leading-snug text-secondary">{t('importProjects.menuHint')}</span>
+                  <span>{t('importProjects.menuItem')}</span>
+                  <span className="text-micro text-secondary">{t('importProjects.menuHint')}</span>
                 </span>
               </button>
             </div>
@@ -538,7 +537,7 @@ export default function Sidebar({
             <button
               type="button"
               onClick={onNewProject}
-              className="min-w-0 flex-1 px-3 py-2 text-sm font-medium text-primary transition-colors duration-100 ease-out hover:bg-card/80 max-md:min-h-[44px]"
+              className="min-w-0 flex-1 px-3 py-2 text-body font-medium text-primary transition-colors duration-100 ease-out hover:bg-card/80 max-md:min-h-[44px]"
             >
               {t('app.newProject')}
             </button>
@@ -566,9 +565,9 @@ export default function Sidebar({
         <button
           onClick={onSettings}
           aria-current={route.name === 'settings' ? 'page' : undefined}
-          className={`w-full text-sm px-3 py-1.5 text-left rounded-lg transition-all duration-150 max-md:min-h-[44px] ${
+          className={`w-full text-caption px-3 py-1.5 text-left rounded-lg transition-all duration-150 max-md:min-h-[44px] ${
             route.name === 'settings'
-              ? 'bg-nav-selected text-selected-text'
+              ? 'bg-nav-selected text-selected-text font-medium'
               : 'text-secondary hover:text-primary'
           }`}
         >
@@ -597,7 +596,7 @@ export default function Sidebar({
                     : 'bg-error'
             }`}
           />
-          <span className={`text-xs ${
+          <span className={`text-micro ${
             connectionState === 'disconnected' || connectionState === 'daemon_offline' ? 'text-error' : 'text-secondary'
           }`}>
             {connectionState === 'connected'

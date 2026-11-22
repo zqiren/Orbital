@@ -407,8 +407,7 @@ export function SessionSidebar({
             {/* A group with no trigger name left (queue items, renamed runs)
                 is named by its kind. */}
             <span
-              className="flex-1 min-w-0 truncate font-medium text-primary"
-              style={{ fontSize: '11.5px' }}
+              className="flex-1 min-w-0 truncate text-caption font-medium text-primary"
               title={group.name ?? kindLabel}
             >
               {group.name ?? kindLabel}
@@ -419,12 +418,12 @@ export function SessionSidebar({
                 role="img"
                 aria-label={waitingLabel}
                 title={waitingLabel}
-                className="shrink-0 self-center font-mono text-2xs font-medium leading-none px-1.5 py-0.5 rounded-full text-secondary bg-nav-hover"
+                className="shrink-0 self-center text-micro tabular-nums font-medium leading-none px-1.5 py-0.5 rounded-full text-secondary bg-nav-hover"
               >
                 {waitingRuns > 99 ? '99+' : waitingRuns}
               </span>
             )}
-            <span className="text-2xs text-secondary shrink-0">
+            <span className="text-micro text-secondary shrink-0">
               {t('sessionSidebar.group.runs', { n: group.runs.length })}
               {' · '}
               {formatRelativeTime(group.runs[0].last_activity_at, t)}
@@ -458,10 +457,10 @@ export function SessionSidebar({
           filter inline. A filter left on while closed reads in the header:
           "会话 · 自动任务 · 4", icon in accent. */}
       <div
-        className="flex items-center gap-1.5 px-4 pt-2.5 pb-0.5 min-h-[32px] shrink-0 text-xs text-secondary"
+        className="flex items-center gap-1.5 px-4 pt-2.5 pb-0.5 min-h-[32px] shrink-0 type-label text-secondary"
         data-testid="session-sidebar-header"
       >
-        <span className="font-semibold">{t('sessionSidebar.header')}</span>
+        <span>{t('sessionSidebar.header')}</span>
         <span className="text-muted" aria-hidden="true">·</span>
         {filter !== 'all' && !filterOpen && (
           <>
@@ -469,7 +468,7 @@ export function SessionSidebar({
             <span className="text-muted" aria-hidden="true">·</span>
           </>
         )}
-        <span data-testid="session-active-count">{visibleCount}</span>
+        <span data-testid="session-active-count" className="tabular-nums">{visibleCount}</span>
         <button
           type="button"
           data-testid="session-filter-toggle"
@@ -506,7 +505,7 @@ export function SessionSidebar({
                   aria-selected={active}
                   data-testid={`session-filter-${f.key}`}
                   onClick={() => chooseFilter(f.key)}
-                  className={`flex-auto whitespace-nowrap text-[11px] font-medium px-1.5 py-1 rounded-md transition-colors duration-150 ${
+                  className={`flex-auto whitespace-nowrap text-micro font-medium px-1.5 py-1 rounded-md transition-colors duration-150 ${
                     active
                       ? 'bg-segment-on text-segment-on-text shadow-[0_1px_2px_rgb(0_0_0/0.06)]'
                       : 'text-secondary hover:text-primary'
@@ -535,8 +534,7 @@ export function SessionSidebar({
             type="button"
             data-testid="session-new-button"
             onClick={onNewSession}
-            className="w-full flex items-center gap-1.5 px-2.5 py-[7px] rounded-md text-left text-primary bg-card dark:bg-elevated transition-colors"
-            style={{ fontSize: '11.5px' }}
+            className="w-full flex items-center gap-1.5 px-2.5 py-[7px] rounded-md text-left text-caption text-primary bg-card dark:bg-elevated transition-colors"
           >
             <span className="w-[14px] shrink-0 flex items-center justify-center text-secondary">
               <Plus size={13} strokeWidth={2} aria-hidden="true" />
@@ -545,12 +543,12 @@ export function SessionSidebar({
           </button>
         </div>
         {loading && sortedSessions.length === 0 && (
-          <p className="text-xs text-secondary px-2 py-2" data-testid="session-loading">
+          <p className="text-caption text-secondary px-2 py-2" data-testid="session-loading">
             {t('sessionSidebar.loading')}
           </p>
         )}
         {!loading && visibleCount === 0 && (
-          <p className="text-xs text-secondary px-2 py-2" data-testid="session-empty">
+          <p className="text-caption text-secondary px-2 py-2" data-testid="session-empty">
             {t(emptyKey)}
           </p>
         )}
@@ -574,8 +572,7 @@ export function SessionSidebar({
             type="button"
             data-testid="session-show-older"
             onClick={() => setShowOlderFor(projectId)}
-            className="w-full px-2.5 py-[7px] rounded-md text-left text-secondary hover:text-primary hover:bg-card-hover transition-colors"
-            style={{ fontSize: '11.5px' }}
+            className="w-full px-2.5 py-[7px] rounded-md text-left text-caption text-secondary hover:text-primary hover:bg-card-hover transition-colors"
           >
             {t('session.showOlder', { n: olderCount })}
           </button>

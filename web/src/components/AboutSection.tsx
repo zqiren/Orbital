@@ -68,7 +68,7 @@ export default function AboutSection({ onTakeTour, canTakeTour = false }: AboutS
       {/* Section heading is the enclosing SettingsSection's `title`
           (GlobalSettings) — see ConnectorSettings for the same note. */}
       <div className="flex items-center gap-3 flex-wrap">
-        <span className="text-sm text-secondary font-mono" data-testid="about-version">
+        <span className="text-body text-secondary font-mono" data-testid="about-version">
           {status ? t('update.about.version', { version: status.current }) : '…'}
         </span>
         <button
@@ -76,12 +76,12 @@ export default function AboutSection({ onTakeTour, canTakeTour = false }: AboutS
           onClick={handleCheck}
           disabled={checking}
           data-testid="about-check-updates"
-          className="text-xs text-accent hover:underline disabled:opacity-50"
+          className="text-caption text-accent hover:underline disabled:opacity-50"
         >
           {checking ? t('update.about.checking') : t('update.about.check')}
         </button>
       </div>
-      <p className="text-xs text-secondary mt-1.5" data-testid="about-check-result">
+      <p className="text-caption text-secondary mt-1.5" data-testid="about-check-result">
         {error
           ? t('update.about.error')
           : status?.update_available && status.latest
@@ -106,11 +106,11 @@ export default function AboutSection({ onTakeTour, canTakeTour = false }: AboutS
             onClick={onTakeTour}
             disabled={!canTakeTour}
             data-testid="about-take-tour"
-            className="text-sm font-medium text-accent border border-accent/30 rounded-lg px-4 py-2 hover:bg-accent/5 transition-all duration-150 disabled:opacity-50 disabled:hover:bg-transparent max-md:min-h-[44px]"
+            className="text-body font-medium text-accent border border-accent/30 rounded-lg px-4 py-2 hover:bg-accent/5 transition-all duration-150 disabled:opacity-50 disabled:hover:bg-transparent max-md:min-h-[44px]"
           >
             {t('tour.takeTour')}
           </button>
-          <p className="text-xs text-secondary mt-1.5">
+          <p className="text-caption text-secondary mt-1.5">
             {canTakeTour ? t('tour.takeTour.hint') : t('tour.takeTour.needsProject')}
           </p>
         </div>

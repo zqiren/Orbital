@@ -38,7 +38,7 @@ export default function AutosaveStatusPill({
       <div
         role="status"
         data-testid="settings-autosave-status"
-        className={`pointer-events-auto inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs shadow-sm ${
+        className={`pointer-events-auto inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-caption shadow-sm ${
           status === 'error'
             ? 'border-error/40 bg-background text-error'
             : 'border-border bg-background text-secondary'

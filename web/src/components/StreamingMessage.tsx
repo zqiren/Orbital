@@ -34,11 +34,11 @@ function StreamingMessage({
     <div className="flex gap-[10px]">
       <MessageAvatar variant="agent" />
       <div className="flex-1 min-w-0">
-        <div className="font-mono text-[11px] mb-1">
+        <div className="font-mono text-micro mb-1">
           <span className="text-secondary">{senderLabel}</span>
-          <span className="text-muted"> · {nowTime()}</span>
+          <span className="text-secondary"> · {nowTime()}</span>
         </div>
-        <div className="-mx-4 px-4 -my-1.5 py-1.5 text-[13px] leading-[1.55] text-primary break-words overflow-x-auto">
+        <div className="-mx-4 px-4 -my-1.5 py-1.5 text-body text-primary break-words overflow-x-auto">
           <MarkdownContent content={text} />
           {!isComplete && <span className="streaming-cursor">|</span>}
         </div>

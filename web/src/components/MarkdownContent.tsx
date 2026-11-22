@@ -106,10 +106,10 @@ function PathCard({
     >
       <FileText size={18} className="shrink-0 text-secondary" />
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-[13px] font-medium text-primary">{label}</span>
-        <span className="block truncate font-mono text-[11px] text-secondary">{filename}</span>
+        <span className="block truncate text-body font-medium text-primary">{label}</span>
+        <span className="block truncate font-mono text-micro text-secondary">{filename}</span>
       </span>
-      <span className="shrink-0 inline-flex items-center gap-1 text-[11px] font-medium text-accent">
+      <span className="shrink-0 inline-flex items-center gap-1 text-micro font-medium text-accent">
         <PanelRightOpen size={13} />
         {t('chat.path.open')}
       </span>

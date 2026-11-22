@@ -56,7 +56,7 @@ export default function CredentialCards({ providers }: CredentialCardsProps) {
           type="button"
           data-testid="cards-add"
           onClick={() => setAdding(true)}
-          className="inline-flex items-center gap-1.5 bg-accent text-white text-sm font-medium rounded-lg px-4 py-2 hover:bg-accent/90 transition-all duration-150 max-md:min-h-[44px]"
+          className="inline-flex items-center gap-1.5 bg-accent text-white text-body font-medium rounded-lg px-4 py-2 hover:bg-accent/90 transition-all duration-150 max-md:min-h-[44px]"
         >
           <Plus className="w-4 h-4" />
           {t('cards.add')}

@@ -32,8 +32,8 @@ export default function SkillChip({ name, title, onRemove, inline = false, 'data
     <div
       className={
         inline
-          ? 'inline-flex min-w-0 items-center gap-1 rounded-md border border-border bg-card-hover pl-1.5 pr-1 h-[18px] text-[11px] leading-none max-w-[180px]'
-          : 'inline-flex items-center gap-1.5 rounded-md border border-border bg-card-hover px-2 py-1 text-xs max-w-[260px]'
+          ? 'inline-flex min-w-0 items-center gap-1 rounded-md border border-border bg-card-hover pl-1.5 pr-1 h-[18px] text-micro leading-none max-w-[180px]'
+          : 'inline-flex items-center gap-1.5 rounded-md border border-border bg-card-hover px-2 py-1 text-caption max-w-[260px]'
       }
       data-testid={testId}
       title={title ?? name}

@@ -25,7 +25,7 @@ const CHEVRON_CLEARANCE = '1.75rem';
  * `className` passes through to the `<select>` untouched, so this is a drop-in
  * at every existing call site: each screen keeps the exact metrics it had, and
  * only the native-widget look changes. Deliberately no `size` prop — the app's
- * menus range from a full-width settings field to a text-xs chip inside a
+ * menus range from a full-width settings field to a text-caption chip inside a
  * sentence, and inventing two or three canonical sizes would mean restyling
  * screens this change has no business touching.
  *

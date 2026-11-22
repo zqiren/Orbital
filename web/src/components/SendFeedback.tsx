@@ -148,9 +148,9 @@ export function SendFeedbackDialog({
         className="w-full max-w-2xl max-h-[85vh] flex flex-col surface-float-pop"
       >
         <div className="px-5 pt-4 pb-2">
-          <h2 className="text-[15px] font-semibold text-primary">{t('feedback.button')}</h2>
+          <h2 className="text-title font-semibold text-primary">{t('feedback.button')}</h2>
           {contextLine && (
-            <p className="mt-1 text-xs text-secondary" data-testid="feedback-context">
+            <p className="mt-1 text-caption text-secondary" data-testid="feedback-context">
               {contextLine}
             </p>
           )}
@@ -158,13 +158,13 @@ export function SendFeedbackDialog({
 
         <div className="px-5 pb-4 overflow-y-auto flex-1 min-h-0 space-y-4">
           {sent ? (
-            <p className="text-sm text-primary" data-testid="feedback-sent">
+            <p className="text-body text-primary" data-testid="feedback-sent">
               {t('feedback.sent', { size: formatSize(send.bytes) })}
             </p>
           ) : (
             <>
               <div>
-                <label className="block text-sm font-medium text-primary mb-1" htmlFor="feedback-message">
+                <label className="block text-body font-medium text-primary mb-1" htmlFor="feedback-message">
                   {t('feedback.message.label')}
                 </label>
                 <textarea
@@ -179,26 +179,26 @@ export function SendFeedbackDialog({
               </div>
 
               <div>
-                <h3 className="text-sm font-medium text-primary mb-1">
+                <h3 className="text-body font-medium text-primary mb-1">
                   {t('feedback.preview.heading')}
                 </h3>
                 {previewError ? (
-                  <p className="text-xs text-error">{t('feedback.preview.error')}</p>
+                  <p className="text-caption text-error">{t('feedback.preview.error')}</p>
                 ) : preview === null ? (
-                  <p className="text-xs text-secondary">{t('feedback.preview.loading')}</p>
+                  <p className="text-caption text-secondary">{t('feedback.preview.loading')}</p>
                 ) : (
                   <>
                     <pre
                       data-testid="feedback-preview"
-                      className="text-[11px] font-mono bg-sidebar border border-border rounded-lg p-3 max-h-64 overflow-auto whitespace-pre-wrap break-all"
+                      className="text-micro font-mono bg-sidebar border border-border rounded-lg p-3 max-h-64 overflow-auto whitespace-pre-wrap break-all"
                     >
                       {preview.text}
                     </pre>
-                    <p className="mt-1.5 text-xs text-secondary" data-testid="feedback-size">
+                    <p className="mt-1.5 text-caption text-secondary" data-testid="feedback-size">
                       {t('feedback.size', { size: formatSize(preview.bytes) })}
                     </p>
                     {!preview.telemetry_enabled && (
-                      <p className="mt-1 text-xs text-secondary" data-testid="feedback-telemetry-off">
+                      <p className="mt-1 text-caption text-secondary" data-testid="feedback-telemetry-off">
                         {t('feedback.telemetryOff')}
                       </p>
                     )}
@@ -207,7 +207,7 @@ export function SendFeedbackDialog({
               </div>
 
               {send.status === 'failed' && (
-                <p className="text-xs text-error" role="alert" data-testid="feedback-failed">
+                <p className="text-caption text-error" role="alert" data-testid="feedback-failed">
                   {t('feedback.failed')}
                 </p>
               )}
@@ -219,7 +219,7 @@ export function SendFeedbackDialog({
           <button
             type="button"
             onClick={onClose}
-            className="text-sm px-3 py-1.5 rounded-lg border border-border text-primary hover:bg-sidebar transition-colors"
+            className="text-body px-3 py-1.5 rounded-lg border border-border text-primary hover:bg-sidebar transition-colors"
           >
             {sent ? t('feedback.close') : t('feedback.cancel')}
           </button>
@@ -229,7 +229,7 @@ export function SendFeedbackDialog({
               data-testid="feedback-send"
               onClick={() => void handleSend()}
               disabled={preview === null || send.status === 'sending'}
-              className="text-sm px-3 py-1.5 rounded-lg bg-accent text-white disabled:opacity-50 transition-colors"
+              className="text-body px-3 py-1.5 rounded-lg bg-accent text-white disabled:opacity-50 transition-colors"
             >
               {send.status === 'sending' ? t('feedback.sending') : t('feedback.send')}
             </button>
@@ -260,7 +260,7 @@ export function SendDiagnosticsLink({
         type="button"
         onClick={() => setOpen(true)}
         data-testid="feedback-diagnostics-link"
-        className={className ?? 'text-xs underline underline-offset-2 text-accent hover:opacity-80'}
+        className={className ?? 'text-caption underline underline-offset-2 text-accent hover:opacity-80'}
       >
         {t('feedback.link')}
       </button>
@@ -275,12 +275,12 @@ export default function SendFeedback() {
   const [open, setOpen] = useState(false);
   return (
     <div className="flex items-start justify-between gap-4">
-      <p className="text-xs text-secondary min-w-0">{t('feedback.intro')}</p>
+      <p className="text-caption text-secondary min-w-0">{t('feedback.intro')}</p>
       <button
         type="button"
         data-testid="feedback-open"
         onClick={() => setOpen(true)}
-        className="shrink-0 text-sm px-3 py-1.5 rounded-lg border border-border text-primary hover:bg-sidebar transition-colors"
+        className="shrink-0 text-body px-3 py-1.5 rounded-lg border border-border text-primary hover:bg-sidebar transition-colors"
       >
         {t('feedback.button')}
       </button>

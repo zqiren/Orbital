@@ -317,7 +317,7 @@ function SessionListItemBase({
           <span
             data-testid="session-kind-chip"
             title={labelInfo.detail}
-            className="text-2xs text-secondary border border-border rounded px-1 shrink-0"
+            className="text-micro leading-3.5 text-secondary border border-border rounded px-1 shrink-0"
           >
             {chipText}
           </span>
@@ -344,15 +344,13 @@ function SessionListItemBase({
                 cancelRename();
               }
             }}
-            className="flex-1 min-w-0 text-xs text-primary bg-card border border-border rounded px-1 py-0.5"
-            style={{ fontSize: '11.5px' }}
+            className="flex-1 min-w-0 text-caption text-primary bg-card border border-border rounded px-1 py-0.5"
           />
         ) : (
           <>
             <span
               data-testid="session-name"
-              className={`text-xs truncate${wasHere ? ' text-secondary font-normal' : ' text-primary'}${unread ? ' font-medium' : ''}`}
-              style={{ fontSize: '11.5px' }}
+              className={`text-caption truncate${wasHere ? ' text-secondary font-normal' : ' text-primary'}${unread ? ' font-medium' : ''}`}
               onDoubleClick={(e) => {
                 e.stopPropagation();
                 startRename();
@@ -372,7 +370,7 @@ function SessionListItemBase({
             )}
             <span
               data-testid="session-time"
-              className="text-2xs text-secondary shrink-0"
+              className="text-micro text-secondary shrink-0"
             >
               {formatRelativeTime(session.last_activity_at, t)}
             </span>
@@ -425,7 +423,7 @@ function SessionListItemBase({
                   setMenuOpen(false);
                   void onPin?.(session.session_id, !session.pinned);
                 }}
-                className="w-full text-left px-3 py-1.5 text-sm text-primary hover:bg-card-hover"
+                className="w-full text-left px-3 py-1.5 text-body text-primary hover:bg-card-hover"
               >
                 {session.pinned ? t('sessionItem.unpin') : t('sessionItem.pin')}
               </button>
@@ -437,7 +435,7 @@ function SessionListItemBase({
                   e.stopPropagation();
                   startRename();
                 }}
-                className="w-full text-left px-3 py-1.5 text-sm text-primary hover:bg-card-hover"
+                className="w-full text-left px-3 py-1.5 text-body text-primary hover:bg-card-hover"
               >
                 {t('sessionItem.rename')}
               </button>
@@ -451,7 +449,7 @@ function SessionListItemBase({
                     setMenuOpen(false);
                     setMoveOpen(true);
                   }}
-                  className="w-full text-left px-3 py-1.5 text-sm text-primary hover:bg-card-hover"
+                  className="w-full text-left px-3 py-1.5 text-body text-primary hover:bg-card-hover"
                 >
                   {t('sessionItem.moveTo')}
                 </button>
@@ -465,7 +463,7 @@ function SessionListItemBase({
                   setMenuOpen(false);
                   setConfirmingDelete(true);
                 }}
-                className="w-full text-left px-3 py-1.5 text-sm text-error-text hover:bg-error-surface"
+                className="w-full text-left px-3 py-1.5 text-body text-error-text hover:bg-error-surface"
               >
                 {t('sessionItem.delete')}
               </button>
@@ -503,8 +501,8 @@ function SessionListItemBase({
             className="max-w-sm w-[320px] surface-float-pop p-4"
             onClick={(e) => e.stopPropagation()}
           >
-            <p className="text-sm text-primary font-medium mb-1">{t('sessionItem.deleteConfirm.title')}</p>
-            <p className="text-xs text-secondary mb-4">
+            <p className="text-body text-primary font-medium mb-1">{t('sessionItem.deleteConfirm.title')}</p>
+            <p className="text-caption text-secondary mb-4">
               {t('sessionItem.deleteConfirm.body')}
             </p>
             <div className="flex justify-end gap-2">
@@ -515,7 +513,7 @@ function SessionListItemBase({
                   e.stopPropagation();
                   setConfirmingDelete(false);
                 }}
-                className="px-3 py-1.5 text-sm rounded-md border border-border text-secondary hover:bg-card-hover"
+                className="px-3 py-1.5 text-body rounded-md border border-border text-secondary hover:bg-card-hover"
               >
                 {t('sessionItem.deleteConfirm.cancel')}
               </button>
@@ -526,7 +524,7 @@ function SessionListItemBase({
                   e.stopPropagation();
                   confirmDelete();
                 }}
-                className="px-3 py-1.5 text-sm rounded-md bg-red-600 text-white hover:bg-red-700"
+                className="px-3 py-1.5 text-body rounded-md bg-red-600 text-white hover:bg-red-700"
               >
                 {t('sessionItem.delete')}
               </button>

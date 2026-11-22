@@ -259,12 +259,12 @@ export default function AnnotateOverlay({ active, boxes, onAdd, onRemove }: Anno
                   cancel();
                 }
               }}
-              className="text-[12px] px-2 py-1 rounded border border-border bg-card text-primary outline-none focus:border-accent"
+              className="text-caption px-2 py-1 rounded border border-border bg-card text-primary outline-none focus:border-accent"
             />
             <button
               type="button"
               onClick={commit}
-              className="text-[12px] px-2 py-1 rounded bg-accent text-white font-medium"
+              className="text-caption px-2 py-1 rounded bg-accent text-white font-medium"
             >
               {t('panel.annotation.add')}
             </button>

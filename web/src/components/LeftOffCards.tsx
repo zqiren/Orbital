@@ -59,11 +59,10 @@ const CAUSE_KEY: Record<StopCause, StringKey> = {
   no_reply: 'leftOff.cause.noReply',
 };
 
-const sectionLabel = 'block text-secondary font-semibold';
-const sectionLabelStyle = { fontSize: '9.5px', letterSpacing: '0.8px', textTransform: 'uppercase' } as const;
+const sectionLabel = 'block type-label text-secondary';
 const cardShell =
   'group flex w-full flex-col gap-1.5 surface-float px-3.5 py-3 text-left active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 motion-reduce:transition-none motion-reduce:active:scale-100';
-const chip = 'rounded-full border border-border bg-sidebar px-2 py-0.5 text-[11px] text-secondary';
+const chip = 'rounded-full border border-border bg-sidebar px-2 py-0.5 text-micro text-secondary';
 
 export default function LeftOffCards({ projectId, agents, onOpen, fallback }: LeftOffCardsProps) {
   const t = useT();
@@ -101,13 +100,13 @@ export default function LeftOffCards({ projectId, agents, onOpen, fallback }: Le
       ? t('leftOff.cause.usageLimitAt', { time: timeOf(r.resets_at) })
       : t(CAUSE_KEY[r.cause]);
   const open = (
-    <span className="ml-auto inline-flex shrink-0 items-center gap-1 text-xs font-medium text-secondary transition-colors duration-150 group-hover:text-accent">
+    <span className="ml-auto inline-flex shrink-0 items-center gap-1 text-caption font-medium text-secondary transition-colors duration-150 group-hover:text-accent">
       {t('leftOff.open')}
       <ArrowRight size={12} aria-hidden="true" />
     </span>
   );
   const quote = (text: string) => (
-    <span className="line-clamp-3 text-[13px] leading-snug text-primary [overflow-wrap:anywhere]">{`“${text}”`}</span>
+    <span className="line-clamp-3 text-body text-primary [overflow-wrap:anywhere]">{`“${text}”`}</span>
   );
 
   const last = data.last_time;
@@ -117,7 +116,7 @@ export default function LeftOffCards({ projectId, agents, onOpen, fallback }: Le
     <div data-tour="left-off" data-testid="left-off" className="mt-6 flex w-full flex-col gap-4 text-left">
       {last && (
         <div className="flex flex-col gap-2">
-          <span aria-hidden="true" className={sectionLabel} style={sectionLabelStyle}>{t('leftOff.lastTime')}</span>
+          <span aria-hidden="true" className={sectionLabel}>{t('leftOff.lastTime')}</span>
           <button
             type="button"
             data-testid="left-off-last"
@@ -129,7 +128,7 @@ export default function LeftOffCards({ projectId, agents, onOpen, fallback }: Le
           >
             <span className="flex w-full items-center gap-2">
               <MessageAvatar variant="agent" agentHandle={last.agent ?? undefined} />
-              <span className="min-w-0 truncate text-xs text-secondary">
+              <span className="min-w-0 truncate text-caption text-secondary">
                 {t('leftOff.youTo', { agent: name(last.agent), when: formatRelativeTime(last.at, t) })}
               </span>
               {open}
@@ -157,7 +156,7 @@ export default function LeftOffCards({ projectId, agents, onOpen, fallback }: Le
       )}
       {data.unfinished.length > 0 && (
         <div className="flex flex-col gap-2" data-testid="left-off-unfinished">
-          <span aria-hidden="true" className={sectionLabel} style={sectionLabelStyle}>{t('leftOff.unfinished')}</span>
+          <span aria-hidden="true" className={sectionLabel}>{t('leftOff.unfinished')}</span>
           {data.unfinished.map((r) => (
             <button
               key={r.session_id}
@@ -171,12 +170,12 @@ export default function LeftOffCards({ projectId, agents, onOpen, fallback }: Le
             >
               <span className="flex w-full flex-wrap items-center gap-x-2 gap-y-1">
                 <MessageAvatar variant="agent" agentHandle={r.agent ?? undefined} />
-                <span className="min-w-0 truncate text-xs text-secondary">
+                <span className="min-w-0 truncate text-caption text-secondary">
                   {t('leftOff.agentWhen', { agent: name(r.agent), when: formatRelativeTime(r.at, t) })}
                 </span>
                 <span
                   data-testid={`left-off-cause-${r.session_id}`}
-                  className={`shrink-0 rounded-full border px-2 py-0.5 text-[11px] ${
+                  className={`shrink-0 rounded-full border px-2 py-0.5 text-micro ${
                     r.cause === 'usage_limit'
                       ? 'border-warning/30 bg-warning-surface text-warning-text'
                       : 'border-border bg-sidebar text-secondary'

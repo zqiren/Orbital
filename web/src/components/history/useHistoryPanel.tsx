@@ -251,7 +251,7 @@ export function useHistoryPanel(
       aria-pressed={open}
       title={t('history.open')}
       data-testid="history-open"
-      className={`flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-[9px] text-[12.5px] transition-colors hover:bg-accent/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 ${
+      className={`flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-[9px] text-body transition-colors hover:bg-accent/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 ${
         open ? 'text-accent' : 'text-secondary hover:text-primary'
       }`}
     >
@@ -287,7 +287,7 @@ export function useHistoryPanel(
     <div
       role="status"
       data-testid="history-toast"
-      className="absolute bottom-[22px] left-1/2 z-30 flex -translate-x-1/2 items-center gap-3 whitespace-nowrap rounded-[10px] bg-[#18181B] py-2 pl-3.5 pr-2 text-[12.5px] text-white shadow-[0_10px_30px_rgb(0_0_0/0.25)] dark:bg-[#F4F6F9] dark:text-[#18181B]"
+      className="absolute bottom-[22px] left-1/2 z-30 flex -translate-x-1/2 items-center gap-3 whitespace-nowrap rounded-[10px] bg-[#18181B] py-2 pl-3.5 pr-2 text-body text-white shadow-[0_10px_30px_rgb(0_0_0/0.25)] dark:bg-[#F4F6F9] dark:text-[#18181B]"
     >
       <span>{toast.text}</span>
       {toast.undo && (

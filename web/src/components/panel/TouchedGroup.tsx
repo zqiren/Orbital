@@ -42,7 +42,7 @@ export default function TouchedGroup({
         onClick={() => setOpen((prev) => !prev)}
         aria-expanded={open}
         data-testid="panel-touched-group"
-        className="flex items-center gap-1.5 w-full text-left py-1 px-1 rounded-md text-xs font-medium text-secondary hover:text-primary hover:bg-card-hover transition-colors"
+        className="flex items-center gap-1.5 w-full text-left py-1 px-1 rounded-md text-caption font-medium text-secondary hover:text-primary hover:bg-card-hover transition-colors"
       >
         {open ? (
           <ChevronDown size={13} className="shrink-0" aria-hidden />
@@ -59,11 +59,11 @@ export default function TouchedGroup({
             key={entry.path}
             type="button"
             onClick={() => onSelectFile(entry.path)}
-            className="flex items-center gap-1.5 w-full text-left py-1 px-2 rounded-md text-xs text-primary hover:bg-card-hover transition-colors"
+            className="flex items-center gap-1.5 w-full text-left py-1 px-2 rounded-md text-caption text-primary hover:bg-card-hover transition-colors"
           >
             <File size={13} className="shrink-0 text-secondary" aria-hidden />
             <span className="truncate">{entry.path}</span>
-            <span className="ml-auto shrink-0 text-2xs text-secondary font-mono">
+            <span className="ml-auto shrink-0 text-micro text-secondary font-mono">
               {t(OP_LABEL[entry.op])}
             </span>
           </button>

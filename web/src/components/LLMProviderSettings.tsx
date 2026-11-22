@@ -119,7 +119,7 @@ export function regionDefaultForProvider(
 function HintDetails({ className = '', children }: { className?: string; children: ReactNode }) {
   const t = useT();
   return (
-    <details className={`text-xs ${className}`}>
+    <details className={`text-caption ${className}`}>
       <summary className="cursor-pointer text-secondary hover:text-primary">
         {t('llm.hints.details')}
       </summary>
@@ -903,8 +903,8 @@ export default function LLMProviderSettings({
     if (globalSettings?.api_key_set) return null;
     return (
       <div className="border border-warning/30 rounded-lg p-4 bg-warning/5">
-        <p className="text-sm text-primary font-medium mb-1">{t('llm.provider.heading')}</p>
-        <p className="text-sm text-secondary">
+        <p className="text-body text-primary font-medium mb-1">{t('llm.provider.heading')}</p>
+        <p className="text-body text-secondary">
           {apiKeySkipped ? t('llm.wizard.keyless') : t('llm.wizard.notConfigured')}
         </p>
       </div>
@@ -914,7 +914,7 @@ export default function LLMProviderSettings({
   // ---- Loading state ----
   if (providersLoading || !globalLoaded) {
     return (
-      <div className="flex items-center gap-2 text-sm text-secondary py-4">
+      <div className="flex items-center gap-2 text-body text-secondary py-4">
         <Loader2 className="w-4 h-4 animate-spin" />
         {t('llm.loading')}
       </div>
@@ -926,9 +926,9 @@ export default function LLMProviderSettings({
   // the section heading is only drawn for a standalone mount (the wizard).
   const globalHeader = !card ? (
     <div className="mb-4">
-      <h2 className="text-sm font-semibold text-primary mb-1">{t('llm.global.heading')}</h2>
+      <h2 className="text-title font-semibold text-primary mb-1">{t('llm.global.heading')}</h2>
       <HintDetails>
-        <p className="text-xs text-secondary">
+        <p className="text-caption text-secondary">
           {t('llm.global.subhead')}
         </p>
       </HintDetails>
@@ -943,7 +943,7 @@ export default function LLMProviderSettings({
           those are chosen. */}
       {card && (
         <div>
-          <label htmlFor="card-name-field" className="block text-sm font-medium text-primary mb-1.5">
+          <label htmlFor="card-name-field" className="block text-body font-medium text-primary mb-1.5">
             {t('llm.field.name')}
           </label>
           <input
@@ -953,14 +953,14 @@ export default function LLMProviderSettings({
             data-testid="card-name-field"
             onChange={(e) => setCardName(e.target.value)}
             placeholder={card.name}
-            className="w-full text-sm bg-sidebar border border-border rounded-lg px-3 py-2 text-primary focus:outline-none focus:border-accent transition-all duration-150"
+            className="w-full text-body bg-sidebar border border-border rounded-lg px-3 py-2 text-primary focus:outline-none focus:border-accent transition-all duration-150"
           />
         </div>
       )}
 
       {/* Provider */}
       <div>
-        <label className="block text-sm font-medium text-primary mb-1.5">{t('llm.field.provider')}</label>
+        <label className="block text-body font-medium text-primary mb-1.5">{t('llm.field.provider')}</label>
         {providerPicker === 'cards' ? (
           <ProviderCombobox
             label={t('llm.field.provider')}
@@ -973,7 +973,7 @@ export default function LLMProviderSettings({
           <Select
             value={provider}
             onChange={(e) => handleProviderChange(e.target.value)}
-            className="w-full text-sm bg-sidebar border border-border rounded-lg px-3 py-2 text-primary focus:outline-none focus:border-accent transition-all duration-150"
+            className="w-full text-body bg-sidebar border border-border rounded-lg px-3 py-2 text-primary focus:outline-none focus:border-accent transition-all duration-150"
           >
             {orderedProviderKeys.map((key) => (
               <option key={key} value={key}>{providers[key].display_name}</option>
@@ -983,26 +983,26 @@ export default function LLMProviderSettings({
         )}
         {provider !== CUSTOM_PROVIDER_KEY && providers[provider]?.notes && (
           <HintDetails className="mt-1">
-            <p className="text-xs text-secondary">{providers[provider].notes}</p>
+            <p className="text-caption text-secondary">{providers[provider].notes}</p>
           </HintDetails>
         )}
         {provider !== CUSTOM_PROVIDER_KEY && providers[provider]?.no_china_endpoint && (
-          <p className="text-xs text-secondary/70 mt-1">{t('llm.provider.noChinaEndpoint')}</p>
+          <p className="text-caption text-secondary mt-1">{t('llm.provider.noChinaEndpoint')}</p>
         )}
         {provider !== CUSTOM_PROVIDER_KEY && providers[provider]?.china_only && (
-          <p className="text-xs text-secondary/70 mt-1">{t('llm.provider.chinaOnly')}</p>
+          <p className="text-caption text-secondary mt-1">{t('llm.provider.chinaOnly')}</p>
         )}
       </div>
 
       {/* Region toggle */}
       {currentProviderHasChinaUrl && (
         <div>
-          <label className="block text-sm font-medium text-primary mb-1.5">{t('llm.field.region')}</label>
+          <label className="block text-body font-medium text-primary mb-1.5">{t('llm.field.region')}</label>
           <div className="inline-flex rounded-lg border border-border overflow-hidden">
             <button
               type="button"
               onClick={() => handleRegionChange('global')}
-              className={`text-sm px-4 py-1.5 transition-all duration-150 ${
+              className={`text-body px-4 py-1.5 transition-all duration-150 ${
                 region === 'global'
                   ? 'bg-accent text-white'
                   : 'bg-sidebar text-secondary hover:text-primary'
@@ -1013,7 +1013,7 @@ export default function LLMProviderSettings({
             <button
               type="button"
               onClick={() => handleRegionChange('china')}
-              className={`text-sm px-4 py-1.5 transition-all duration-150 ${
+              className={`text-body px-4 py-1.5 transition-all duration-150 ${
                 region === 'china'
                   ? 'bg-accent text-white'
                   : 'bg-sidebar text-secondary hover:text-primary'
@@ -1027,7 +1027,7 @@ export default function LLMProviderSettings({
 
       {/* API Key */}
       <div>
-        <label className="block text-sm font-medium text-primary mb-1.5">{t('llm.field.apiKey')}</label>
+        <label className="block text-body font-medium text-primary mb-1.5">{t('llm.field.apiKey')}</label>
         {provider === 'tokendance' && mode === 'global' && (
           <div className="mb-2">
             {!tokendanceKeyActive ? (
@@ -1037,7 +1037,7 @@ export default function LLMProviderSettings({
                   data-testid="tokendance-signin"
                   onClick={handleTokendanceSignin}
                   disabled={tokendanceSigninBusy}
-                  className="inline-flex items-center gap-2 text-sm font-medium rounded-lg px-4 py-2 bg-card text-primary border border-border hover:border-[#8bdc7e] hover:shadow-sm disabled:opacity-60 disabled:cursor-not-allowed transition-all duration-150"
+                  className="inline-flex items-center gap-2 text-body font-medium rounded-lg px-4 py-2 bg-card text-primary border border-border hover:border-[#8bdc7e] hover:shadow-sm disabled:opacity-60 disabled:cursor-not-allowed transition-all duration-150"
                 >
                   {tokendanceSigninBusy ? (
                     <Loader2 className="w-4 h-4 animate-spin" />
@@ -1053,7 +1053,7 @@ export default function LLMProviderSettings({
                     ? t('llm.tokendance.signin.waiting')
                     : t('llm.tokendance.signin.button')}
                 </button>
-                <p className="text-xs text-secondary/70 mt-1" data-testid="tokendance-sponsor">
+                <p className="text-caption text-secondary mt-1" data-testid="tokendance-sponsor">
                   {t('llm.tokendance.sponsor')}
                 </p>
               </>
@@ -1067,7 +1067,7 @@ export default function LLMProviderSettings({
                 data-testid="tokendance-reconnect"
                 onClick={handleTokendanceSignin}
                 disabled={tokendanceSigninBusy}
-                className="text-xs text-accent hover:underline disabled:opacity-60 disabled:cursor-not-allowed"
+                className="text-caption text-accent hover:underline disabled:opacity-60 disabled:cursor-not-allowed"
               >
                 {tokendanceSigninBusy
                   ? t('llm.tokendance.signin.waiting')
@@ -1075,12 +1075,12 @@ export default function LLMProviderSettings({
               </button>
             )}
             {tokendanceSigninBusy && (
-              <p className="text-xs text-secondary mt-1">{t('llm.tokendance.signin.hint')}</p>
+              <p className="text-caption text-secondary mt-1">{t('llm.tokendance.signin.hint')}</p>
             )}
             {tokendanceSigninMsg && (
               <p
                 data-testid="tokendance-signin-msg"
-                className={`text-xs mt-1 ${tokendanceSigninMsg.kind === 'ok' ? 'text-success' : 'text-error'}`}
+                className={`text-caption mt-1 ${tokendanceSigninMsg.kind === 'ok' ? 'text-success' : 'text-error'}`}
               >
                 {tokendanceSigninMsg.text}
               </p>
@@ -1093,11 +1093,11 @@ export default function LLMProviderSettings({
               href={providers[provider].console_url!}
               target="_blank"
               rel="noopener noreferrer"
-              className="text-xs text-accent hover:underline"
+              className="text-caption text-accent hover:underline"
             >
               {t('llm.apiKey.getKey')}
             </a>
-            <p className="text-xs text-secondary/70 mt-0.5">{t('llm.apiKey.howTo')}</p>
+            <p className="text-caption text-secondary mt-0.5">{t('llm.apiKey.howTo')}</p>
           </HintDetails>
         )}
         <input
@@ -1110,19 +1110,19 @@ export default function LLMProviderSettings({
               ? t('llm.apiKey.replacePlaceholder')
               : t('llm.apiKey.placeholder')
           }
-          className="w-full text-sm font-mono bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150 disabled:opacity-50"
+          className="w-full text-body font-mono bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary focus:outline-none focus:border-accent transition-all duration-150 disabled:opacity-50"
         />
         {card?.read_only && (
-          <p className="text-xs text-secondary/70 mt-1" data-testid="card-readonly-note">
+          <p className="text-caption text-secondary mt-1" data-testid="card-readonly-note">
             {t('cards.env.readOnly')}
           </p>
         )}
         {storedKeyMasked && !apiKey && (
           <div className="flex items-center gap-3 mt-1">
-            <p className="text-xs text-secondary">
+            <p className="text-caption text-secondary">
               {t('llm.apiKey.current', { masked: storedKeyMasked })}
               {storedKeySource && storedKeySource !== 'none' && (
-                <span className="ml-1 text-secondary/60">({storedKeySource})</span>
+                <span className="ml-1 text-secondary">({storedKeySource})</span>
               )}
             </p>
           </div>
@@ -1131,9 +1131,9 @@ export default function LLMProviderSettings({
 
       {/* Model combobox */}
       <div>
-        <label className="block text-sm font-medium text-primary mb-1.5">{t('llm.field.model')}</label>
+        <label className="block text-body font-medium text-primary mb-1.5">{t('llm.field.model')}</label>
         {modelsLoading ? (
-          <div className="flex items-center gap-2 text-sm text-secondary py-2">
+          <div className="flex items-center gap-2 text-body text-secondary py-2">
             <Loader2 className="w-4 h-4 animate-spin" />
             {t('llm.model.fetching')}
           </div>
@@ -1151,7 +1151,7 @@ export default function LLMProviderSettings({
                   ? t('llm.model.freetextPlaceholder')
                   : t('llm.model.selectPlaceholder')
               }
-              className="w-full text-sm bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150"
+              className="w-full text-body bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary focus:outline-none focus:border-accent transition-all duration-150"
             />
             {showModelDropdown &&
               modelSource !== 'freetext' &&
@@ -1162,7 +1162,7 @@ export default function LLMProviderSettings({
                     <button
                       type="button"
                       onClick={() => selectModel(m)}
-                      className={`w-full text-left text-sm px-3 py-2 hover:bg-accent/5 hover:text-primary transition-all duration-150 ${
+                      className={`w-full text-left text-body px-3 py-2 hover:bg-accent/5 hover:text-primary transition-all duration-150 ${
                         m === model ? 'text-accent font-medium' : 'text-primary'
                       }`}
                     >
@@ -1176,7 +1176,7 @@ export default function LLMProviderSettings({
                       <button
                         type="button"
                         onClick={() => selectModel(modelInputValue)}
-                        className="w-full text-left text-sm px-3 py-2 text-secondary hover:bg-accent/5 hover:text-primary transition-all duration-150 italic"
+                        className="w-full text-left text-body px-3 py-2 text-secondary hover:bg-accent/5 hover:text-primary transition-all duration-150 italic"
                       >
                         {t('llm.model.useCustom', { value: modelInputValue })}
                       </button>
@@ -1187,7 +1187,7 @@ export default function LLMProviderSettings({
                   <button
                     type="button"
                     onClick={enterCustomModel}
-                    className="w-full text-left text-sm px-3 py-2 text-secondary hover:bg-accent/5 hover:text-primary transition-all duration-150 italic"
+                    className="w-full text-left text-body px-3 py-2 text-secondary hover:bg-accent/5 hover:text-primary transition-all duration-150 italic"
                   >
                     {t('llm.model.enterCustom')}
                   </button>
@@ -1196,7 +1196,7 @@ export default function LLMProviderSettings({
             )}
             {modelSource !== 'none' && (
               <HintDetails className="mt-1">
-                <p className="text-xs text-secondary">
+                <p className="text-caption text-secondary">
                   {modelSource === 'api' && t('llm.model.source.api')}
                   {modelSource === 'suggested' && t('llm.model.source.suggested')}
                   {modelSource === 'freetext' && t('llm.model.source.freetext')}
@@ -1212,29 +1212,29 @@ export default function LLMProviderSettings({
         <button
           type="button"
           onClick={() => setShowAdvanced(!showAdvanced)}
-          className="text-sm text-secondary hover:text-primary transition-all duration-150"
+          className="text-body text-secondary hover:text-primary transition-all duration-150"
         >
           {showAdvanced ? '\u25BE' : '\u25B8'} {t('llm.advanced')}
         </button>
         {showAdvanced && (
           <div className="mt-3 space-y-3">
             <div>
-              <label className="block text-sm font-medium text-primary mb-1.5">{t('llm.field.baseUrl')}</label>
+              <label className="block text-body font-medium text-primary mb-1.5">{t('llm.field.baseUrl')}</label>
               <input
                 type="text"
                 value={baseUrl}
                 onChange={(e) => setBaseUrl(e.target.value)}
                 placeholder={t('llm.baseUrl.placeholder')}
-                className="w-full text-sm bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150"
+                className="w-full text-body bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary focus:outline-none focus:border-accent transition-all duration-150"
               />
             </div>
             {provider === CUSTOM_PROVIDER_KEY && (
               <div>
-                <label className="block text-sm font-medium text-primary mb-1.5">{t('llm.field.sdk')}</label>
+                <label className="block text-body font-medium text-primary mb-1.5">{t('llm.field.sdk')}</label>
                 <Select
                   value={sdk}
                   onChange={(e) => setSdk(e.target.value as LLMSdk)}
-                  className="w-full text-sm bg-sidebar border border-border rounded-lg px-3 py-2 text-primary focus:outline-none focus:border-accent transition-all duration-150"
+                  className="w-full text-body bg-sidebar border border-border rounded-lg px-3 py-2 text-primary focus:outline-none focus:border-accent transition-all duration-150"
                 >
                   <option value="openai">{t('llm.sdk.openai')}</option>
                   <option value="openai-responses">{t('llm.sdk.openaiResponses')}</option>
@@ -1253,7 +1253,7 @@ export default function LLMProviderSettings({
           onClick={handleTestConnection}
           disabled={testStatus === 'testing' || !hasTestableKey || !canTestConnection}
           data-testid="card-test"
-          className="inline-flex items-center gap-2 text-sm font-medium text-secondary border border-border rounded-lg px-4 py-2 hover:border-secondary/40 hover:text-primary transition-all duration-150 disabled:opacity-50 max-md:w-full max-md:min-h-[44px] max-md:justify-center"
+          className="inline-flex items-center gap-2 text-body font-medium text-secondary border border-border rounded-lg px-4 py-2 hover:border-secondary/40 hover:text-primary transition-all duration-150 disabled:opacity-50 max-md:w-full max-md:min-h-[44px] max-md:justify-center"
         >
           {testStatus === 'testing' ? (
             <>
@@ -1265,13 +1265,13 @@ export default function LLMProviderSettings({
           )}
         </button>
         {testStatus === 'success' && (
-          <p className="flex items-center gap-1.5 text-sm text-success mt-2">
+          <p className="flex items-center gap-1.5 text-body text-success mt-2">
             <Check className="w-4 h-4" />
             {testMessage}
           </p>
         )}
         {testStatus === 'error' && (
-          <p className="flex items-center gap-1.5 text-sm text-error mt-2">
+          <p className="flex items-center gap-1.5 text-body text-error mt-2">
             <X className="w-4 h-4" />
             {testMessage}
           </p>
@@ -1280,7 +1280,7 @@ export default function LLMProviderSettings({
           // A refused save turns this same line red rather than adding a
           // second one: the wizard has no Save button to put it beside.
           <p
-            className={`text-xs mt-2 ${gateRefused ? 'text-error' : 'text-secondary'}`}
+            className={`text-caption mt-2 ${gateRefused ? 'text-error' : 'text-secondary'}`}
             data-testid="card-save-gate"
           >
             {saveGateReason}
@@ -1291,7 +1291,7 @@ export default function LLMProviderSettings({
       {/* The wizard hides Save, so its errors were never drawn and a failed
           save read as a dead Next button. */}
       {hideSaveButton && saveError && !(gateShown && gateRefused) && (
-        <p className="text-xs text-error" role="alert" data-testid="card-save-error">
+        <p className="text-caption text-error" role="alert" data-testid="card-save-error">
           {saveError}
         </p>
       )}
@@ -1305,7 +1305,7 @@ export default function LLMProviderSettings({
               type="submit"
               disabled={saving || card?.read_only || !connectionTested}
               data-testid="card-save"
-              className="inline-flex items-center gap-2 bg-accent text-white text-sm font-medium rounded-lg px-5 py-2.5 hover:bg-accent/90 transition-all duration-150 disabled:opacity-50 max-md:w-full max-md:min-h-[44px] max-md:justify-center"
+              className="inline-flex items-center gap-2 bg-accent text-white text-body font-medium rounded-lg px-5 py-2.5 hover:bg-accent/90 transition-all duration-150 disabled:opacity-50 max-md:w-full max-md:min-h-[44px] max-md:justify-center"
             >
               {saving ? (
                 <>
@@ -1317,13 +1317,13 @@ export default function LLMProviderSettings({
               )}
             </button>
             {saved && !saveTest && (
-              <span className="flex items-center gap-1 text-sm text-success">
+              <span className="flex items-center gap-1 text-body text-success">
                 <Check className="w-4 h-4" />
                 {t('settings.saved')}
               </span>
             )}
             {saveError && (
-              <span className="text-sm text-error" data-testid="card-save-error">
+              <span className="text-body text-error" data-testid="card-save-error">
                 {saveError}
               </span>
             )}
@@ -1333,7 +1333,7 @@ export default function LLMProviderSettings({
           {saveTest?.ok && (
             <p
               data-testid="card-save-test"
-              className="flex items-start gap-1.5 text-sm mt-2 text-success"
+              className="flex items-start gap-1.5 text-body mt-2 text-success"
             >
               <Check className="w-4 h-4 shrink-0 mt-0.5" />
               <span>{saveTest.message || t('cards.save.verified')}</span>
@@ -1364,20 +1364,20 @@ export default function LLMProviderSettings({
           aria-hidden="true"
         />
         <div className="min-w-0 flex-1">
-          <p className="flex items-center gap-1.5 text-sm font-medium text-primary">
+          <p className="flex items-center gap-1.5 text-body font-medium text-primary">
             <Check className="w-4 h-4 text-success shrink-0" />
             {t('llm.tokendance.summary.title')}
           </p>
-          <p className="text-xs text-secondary mt-1">
+          <p className="text-caption text-secondary mt-1">
             {t('llm.tokendance.summary.body', { model: summaryModelLabel })}
           </p>
           {globalSettings?.api_key_masked && (
-            <p className="text-xs text-secondary/70 mt-1">
+            <p className="text-caption text-secondary mt-1">
               {t('llm.apiKey.current', { masked: globalSettings.api_key_masked })}
             </p>
           )}
           {signinTest && !signinTest.ok && (
-            <p className="text-xs text-error mt-1" data-testid="tokendance-signin-test-error">
+            <p className="text-caption text-error mt-1" data-testid="tokendance-signin-test-error">
               {t('cards.save.savedWithError', { message: signinTest.message })}
             </p>
           )}
@@ -1387,7 +1387,7 @@ export default function LLMProviderSettings({
         type="button"
         data-testid="tokendance-summary-change"
         onClick={() => setPostSigninCollapsed(false)}
-        className="mt-3 text-xs text-accent hover:underline"
+        className="mt-3 text-caption text-accent hover:underline"
       >
         {t('llm.tokendance.summary.change')}
       </button>

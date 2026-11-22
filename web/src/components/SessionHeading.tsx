@@ -78,12 +78,12 @@ export default function SessionHeading({ session }: SessionHeadingProps) {
       data-testid="session-heading"
     >
       {eyebrow && (
-        <p className="text-xs text-secondary truncate" data-testid="session-heading-eyebrow">
+        <p className="text-caption text-secondary truncate" data-testid="session-heading-eyebrow">
           {eyebrow}
         </p>
       )}
       <h1
-        className="text-[15px] font-semibold tracking-[-0.01em] text-primary truncate"
+        className="text-title font-semibold text-primary truncate"
         data-testid="session-heading-title"
       >
         {title}

@@ -57,9 +57,9 @@ export default function AgentErrorNotice({
       <div className="flex items-start gap-2">
         <AlertCircle size={14} className="mt-0.5 shrink-0 text-error" />
         <div className="min-w-0">
-          <p className="text-sm text-primary">{t(providerErrorKey(code))}</p>
+          <p className="text-body text-primary">{t(providerErrorKey(code))}</p>
           {detail && (
-            <p className="mt-1 text-xs text-secondary break-words">{detail}</p>
+            <p className="mt-1 text-caption text-secondary break-words">{detail}</p>
           )}
         </div>
       </div>
@@ -69,7 +69,7 @@ export default function AgentErrorNotice({
             type="button"
             data-testid="agent-error-notice-feedback"
             onClick={() => setFeedbackOpen(true)}
-            className="shrink-0 px-2.5 py-1 rounded-md text-xs font-semibold tracking-wide bg-accent text-white hover:bg-accent/85 transition-colors duration-150"
+            className="shrink-0 px-2.5 py-1 rounded-md text-caption font-medium bg-accent text-white hover:bg-accent/85 transition-colors duration-150"
           >
             {t('feedback.button')}
           </button>
@@ -78,7 +78,7 @@ export default function AgentErrorNotice({
             type="button"
             data-testid="agent-error-notice-settings"
             onClick={onOpenSettings}
-            className="shrink-0 px-2.5 py-1 rounded-md text-xs font-semibold tracking-wide bg-accent text-white hover:bg-accent/85 transition-colors duration-150"
+            className="shrink-0 px-2.5 py-1 rounded-md text-caption font-medium bg-accent text-white hover:bg-accent/85 transition-colors duration-150"
           >
             {t('agentError.openSettings')}
           </button>
@@ -87,7 +87,7 @@ export default function AgentErrorNotice({
           type="button"
           data-testid="agent-error-notice-dismiss"
           onClick={onDismiss}
-          className="shrink-0 px-2.5 py-1 rounded-md text-xs font-semibold tracking-wide border border-border bg-background text-secondary hover:bg-card-hover transition-colors duration-150"
+          className="shrink-0 px-2.5 py-1 rounded-md text-caption font-medium border border-border bg-background text-secondary hover:bg-card-hover transition-colors duration-150"
         >
           {t('agentError.dismiss')}
         </button>

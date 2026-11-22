@@ -112,7 +112,7 @@ export default function ProviderCombobox({ options, custom, value, onChange, lab
           setOpen(true);
         }}
         onKeyDown={onKeyDown}
-        className="w-full text-sm bg-sidebar border border-border rounded-lg pl-3 pr-8 py-2 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150"
+        className="w-full text-body bg-sidebar border border-border rounded-lg pl-3 pr-8 py-2 text-primary placeholder:text-secondary focus:outline-none focus:border-accent transition-all duration-150"
       />
       <ChevronDown
         aria-hidden="true"
@@ -121,7 +121,7 @@ export default function ProviderCombobox({ options, custom, value, onChange, lab
       {open && (
         <div className="absolute left-0 right-0 top-full z-20 mt-1 overflow-hidden surface-float-pop">
           {matches.length === 0 && (
-            <p className="px-3 pt-2 pb-1 text-xs text-secondary" data-testid="provider-combobox-empty">
+            <p className="px-3 pt-2 pb-1 text-caption text-secondary" data-testid="provider-combobox-empty">
               {t('llm.provider.noMatch')}
             </p>
           )}
@@ -137,7 +137,7 @@ export default function ProviderCombobox({ options, custom, value, onChange, lab
                   pick(o.key);
                 }}
                 onMouseEnter={() => setActive(i)}
-                className={`cursor-pointer px-3 py-1.5 text-sm max-md:min-h-[44px] max-md:flex max-md:items-center ${
+                className={`cursor-pointer px-3 py-1.5 text-body max-md:min-h-[44px] max-md:flex max-md:items-center ${
                   i === activeIndex ? 'bg-accent/10 text-primary' : 'text-primary'
                 } ${o.key === value ? 'font-medium' : ''} ${o.key === custom.key ? 'border-t border-border' : ''}`}
               >

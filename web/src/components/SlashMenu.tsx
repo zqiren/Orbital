@@ -211,7 +211,7 @@ export default function SlashMenu({ picker, onPick, className }: SlashMenuProps)
           data-testid="skill-option"
           data-skill-name={skill.name}
           title={skill.description || skill.name}
-          className={`w-full flex items-center px-3 h-10 max-md:h-11 text-left text-[13px] min-w-0 hover:bg-card-hover/50 ${
+          className={`w-full flex items-center px-3 h-10 max-md:h-11 text-left text-body min-w-0 hover:bg-card-hover/50 ${
             i === picker.selectedIndex ? 'bg-card-hover' : ''
           }`}
           onMouseDown={(e) => {
@@ -223,15 +223,15 @@ export default function SlashMenu({ picker, onPick, className }: SlashMenuProps)
           <span className="flex items-baseline gap-2 min-w-0 w-full">
             <span className="shrink-0 max-w-[45%] truncate font-medium text-primary">{skill.name}</span>
             {skill.hint && (
-              <span data-testid="skill-option-hint" className="shrink-0 max-w-[25%] truncate text-xs text-muted">{skill.hint}</span>
+              <span data-testid="skill-option-hint" className="shrink-0 max-w-[25%] truncate text-caption text-secondary">{skill.hint}</span>
             )}
             {skill.description && (
-              <span className="min-w-0 flex-1 truncate text-xs text-muted">{skill.description}</span>
+              <span className="min-w-0 flex-1 truncate text-caption text-secondary">{skill.description}</span>
             )}
             {isCloudRoutineCommand(skill) && (
               // Batch 1110 item 12: a worker command that creates a routine
               // on the user's own account, outside Orbital.
-              <span data-testid="skill-option-warning" className="shrink-0 truncate text-xs text-warning">
+              <span data-testid="skill-option-warning" className="shrink-0 truncate text-caption text-warning">
                 {t('skills.worker.cloudRoutine')}
               </span>
             )}
