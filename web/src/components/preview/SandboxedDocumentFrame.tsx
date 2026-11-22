@@ -83,7 +83,7 @@ export default function SandboxedDocumentFrame({
         />
       ) : (
         <div className="flex items-center justify-center h-full" role="status">
-          <p className="text-xs text-secondary animate-pulse">{t('filePreview.doc.loading')}</p>
+          <p className="text-caption text-secondary animate-pulse">{t('filePreview.doc.loading')}</p>
         </div>
       )}
     </div>

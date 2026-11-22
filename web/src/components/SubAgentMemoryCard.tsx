@@ -122,7 +122,7 @@ export function SubAgentMemoryEditor({ projectId, entry, onSaved }: Props) {
   return (
     <div className="flex flex-col gap-3">
       {!entry.exists && (
-        <p className="text-xs text-secondary italic">
+        <p className="text-caption text-secondary italic">
           {t('subAgentMemory.notInitialized')}
         </p>
       )}
@@ -136,10 +136,10 @@ export function SubAgentMemoryEditor({ projectId, entry, onSaved }: Props) {
           setWarning(null);
         }}
         placeholder={t('subAgentMemory.placeholder')}
-        className="w-full text-sm bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150 resize-y font-mono"
+        className="w-full text-body bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-muted focus:outline-none focus:border-accent transition-all duration-150 resize-y font-mono"
       />
 
-      <div className="flex items-center justify-between gap-2 flex-wrap text-xs">
+      <div className="flex items-center justify-between gap-2 flex-wrap text-caption">
         <span
           className={
             overMax
@@ -157,7 +157,7 @@ export function SubAgentMemoryEditor({ projectId, entry, onSaved }: Props) {
             type="button"
             onClick={handleReset}
             disabled={saving}
-            className="text-xs text-secondary hover:text-primary border border-border rounded px-3 py-1.5 hover:bg-sidebar/80 transition-all duration-150 disabled:opacity-50 max-md:min-h-[44px]"
+            className="text-caption text-secondary hover:text-primary border border-border rounded px-3 py-1.5 hover:bg-sidebar/80 transition-all duration-150 disabled:opacity-50 max-md:min-h-[44px]"
           >
             {t('subAgentMemory.reset')}
           </button>
@@ -165,7 +165,7 @@ export function SubAgentMemoryEditor({ projectId, entry, onSaved }: Props) {
             type="button"
             onClick={handleSave}
             disabled={saving || overMax}
-            className="text-xs bg-accent text-white rounded px-3 py-1.5 hover:bg-accent/90 transition-all duration-150 disabled:opacity-50 max-md:min-h-[44px]"
+            className="text-caption bg-accent text-white rounded px-3 py-1.5 hover:bg-accent/90 transition-all duration-150 disabled:opacity-50 max-md:min-h-[44px]"
           >
             {saving ? t('subAgentMemory.saving') : t('settings.save')}
           </button>
@@ -173,13 +173,13 @@ export function SubAgentMemoryEditor({ projectId, entry, onSaved }: Props) {
       </div>
 
       {saved && (
-        <p className="text-xs text-success">{t('settings.saved')}</p>
+        <p className="text-caption text-success">{t('settings.saved')}</p>
       )}
       {warning && (
-        <p className="text-xs text-warning">{warning}</p>
+        <p className="text-caption text-warning">{warning}</p>
       )}
       {error && (
-        <p className="text-xs text-error">{error}</p>
+        <p className="text-caption text-error">{error}</p>
       )}
     </div>
   );
@@ -205,14 +205,14 @@ export default function SubAgentMemoryCard({ projectId, entry, onSaved }: Props)
       >
         <div className="min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-sm font-medium text-primary">
+            <span className="text-body font-medium text-primary">
               {entry.agent_name}
             </span>
-            <code className="text-[11px] text-secondary/80 font-mono">
+            <code className="text-micro text-secondary font-mono">
               {entry.agent_slug}
             </code>
           </div>
-          <div className="mt-1 flex items-center gap-2 text-xs text-secondary flex-wrap">
+          <div className="mt-1 flex items-center gap-2 text-caption text-secondary flex-wrap">
             <span>{formatTimestamp(entry.last_modified)}</span>
             <span aria-hidden="true">·</span>
             <span

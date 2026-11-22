@@ -216,7 +216,7 @@ export default function GlobalSettings({ onBack, onTakeTour, canTakeTour, scroll
                   }}
                   placeholder={t('global.aboutYou.placeholder')}
                   disabled={loading}
-                  className="w-full text-body bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary focus:outline-none focus:border-accent transition-all duration-150 resize-y disabled:opacity-50"
+                  className="w-full text-body bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-muted focus:outline-none focus:border-accent transition-all duration-150 resize-y disabled:opacity-50"
                 />
               </SettingsSection>
 
@@ -268,7 +268,7 @@ export default function GlobalSettings({ onBack, onTakeTour, canTakeTour, scroll
                   placeholder={t('global.userMemory.placeholder')}
                   disabled={loading || !userMemoryEnabled}
                   data-testid="user-memory-textarea"
-                  className="w-full text-body bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary focus:outline-none focus:border-accent transition-all duration-150 resize-y disabled:opacity-50"
+                  className="w-full text-body bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-muted focus:outline-none focus:border-accent transition-all duration-150 resize-y disabled:opacity-50"
                 />
                 {/* Every manager reads this when it delegates; an empty
                     memory shows what a who-does-what line looks like. */}
@@ -295,7 +295,7 @@ export default function GlobalSettings({ onBack, onTakeTour, canTakeTour, scroll
                   }}
                   placeholder={t('global.scratch.placeholder')}
                   disabled={loading}
-                  className="w-full text-body font-mono bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary focus:outline-none focus:border-accent transition-all duration-150 disabled:opacity-50"
+                  className="w-full text-body font-mono bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-muted focus:outline-none focus:border-accent transition-all duration-150 disabled:opacity-50"
                 />
               </SettingsSection>
             </SettingsGroup>

@@ -92,16 +92,16 @@ export default function FirstRunHome({ onNewProject, onImportProjects }: FirstRu
       />
       <div className="relative flex max-w-md flex-col items-center text-center animate-rise-in">
         <Illustration />
-        <h1 className="-mt-4 text-2xl font-semibold text-primary">
+        <h1 className="-mt-4 text-heading font-semibold text-primary">
           {t('firstRun.title')}
         </h1>
-        <p className="mt-3 max-w-sm text-sm leading-relaxed text-secondary [text-wrap:balance]">
+        <p className="mt-3 max-w-sm text-body text-secondary [text-wrap:balance]">
           {t('firstRun.body')}
         </p>
         <button
           type="button"
           onClick={onNewProject}
-          className="mt-7 inline-flex items-center gap-2 rounded-xl bg-accent px-6 py-3 text-sm font-medium text-white shadow-[0_6px_16px_-6px_rgb(83_154_248/0.7)] transition-all duration-150 hover:bg-accent/90 hover:shadow-[0_8px_20px_-6px_rgb(83_154_248/0.8)] max-md:min-h-[44px]"
+          className="mt-7 inline-flex items-center gap-2 rounded-xl bg-accent px-6 py-3 text-body font-medium text-white shadow-[0_6px_16px_-6px_rgb(83_154_248/0.7)] transition-all duration-150 hover:bg-accent/90 hover:shadow-[0_8px_20px_-6px_rgb(83_154_248/0.8)] max-md:min-h-[44px]"
         >
           <Plus size={16} aria-hidden="true" />
           {t('firstRun.cta')}
@@ -111,7 +111,7 @@ export default function FirstRunHome({ onNewProject, onImportProjects }: FirstRu
             type="button"
             onClick={onImportProjects}
             data-testid="first-run-import-projects"
-            className="mt-3 text-sm font-medium text-secondary underline-offset-2 transition-colors duration-150 hover:text-primary hover:underline max-md:min-h-[44px]"
+            className="mt-3 text-body font-medium text-secondary underline-offset-2 transition-colors duration-150 hover:text-primary hover:underline max-md:min-h-[44px]"
           >
             {t('importProjects.entry')}
           </button>

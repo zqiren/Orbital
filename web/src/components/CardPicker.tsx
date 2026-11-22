@@ -80,7 +80,7 @@ export default function CardPicker({
   return (
     <div>
       {label && (
-        <label className="block text-sm font-medium text-primary mb-1.5">{label}</label>
+        <label className="block text-body font-medium text-primary mb-1.5">{label}</label>
       )}
       <Select
         value={dangling ? '' : selectValue}
@@ -91,7 +91,7 @@ export default function CardPicker({
           const v = e.target.value;
           onChange(v === GLOBAL_DEFAULT_VALUE || v === '' ? null : v);
         }}
-        className="w-full text-sm bg-sidebar border border-border rounded-lg px-3 py-2 text-primary focus:outline-none focus:border-accent transition-all duration-150 disabled:opacity-50"
+        className="w-full text-body bg-sidebar border border-border rounded-lg px-3 py-2 text-primary focus:outline-none focus:border-accent transition-all duration-150 disabled:opacity-50"
       >
         {allowGlobalDefault && (
           <option value={GLOBAL_DEFAULT_VALUE}>
@@ -114,19 +114,15 @@ export default function CardPicker({
       {!hideHealth && health && (
         <p
           data-testid={testId ? `${testId}-health` : undefined}
-          className={`text-xs mt-1 ${
-            health.kind === 'error'
-              ? 'text-error'
-              : health.kind === 'verified'
-                ? 'text-secondary'
-                : 'text-secondary/70'
+          className={`text-caption mt-1 ${
+            health.kind === 'error' ? 'text-error' : 'text-secondary'
           }`}
         >
           {health.text}
         </p>
       )}
       {!hideHealth && cards.length === 0 && (
-        <p className="text-xs text-secondary/70 mt-1">{t('cards.picker.empty')}</p>
+        <p className="text-caption text-secondary mt-1">{t('cards.picker.empty')}</p>
       )}
     </div>
   );

@@ -438,7 +438,7 @@ export default function ConnectorSettings() {
               placeholder={t('connectors.custom.name.placeholder')}
               aria-label={t('connectors.custom.name.label')}
               data-testid="connector-custom-name"
-              className="w-40 max-md:w-full text-body bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary focus:outline-none focus:border-accent transition-all duration-150"
+              className="w-40 max-md:w-full text-body bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-muted focus:outline-none focus:border-accent transition-all duration-150"
             />
             <input
               type="text"
@@ -447,7 +447,7 @@ export default function ConnectorSettings() {
               placeholder={t('connectors.custom.url.placeholder')}
               aria-label={t('connectors.custom.url.label')}
               data-testid="connector-custom-url"
-              className="flex-1 text-body font-mono bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary focus:outline-none focus:border-accent transition-all duration-150"
+              className="flex-1 text-body font-mono bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-muted focus:outline-none focus:border-accent transition-all duration-150"
             />
             <Select
               value={customAuth}

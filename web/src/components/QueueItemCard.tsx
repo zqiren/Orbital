@@ -71,7 +71,7 @@ function isTriggerItem(item: QueueItem): boolean {
  */
 function priorityMeta(priority: number): { labelKey: StringKey; cls: string } {
   if (priority > 0) return { labelKey: 'queue.item.priority.high', cls: 'text-warning' };
-  if (priority < 0) return { labelKey: 'queue.item.priority.low', cls: 'text-muted' };
+  if (priority < 0) return { labelKey: 'queue.item.priority.low', cls: 'text-secondary' };
   return { labelKey: 'queue.item.priority.normal', cls: 'text-secondary' };
 }
 
@@ -105,7 +105,7 @@ const CARD =
   'flex flex-col gap-1.5';
 
 /** Quiet metadata line — matches the Workbench card's meta row. */
-const META = 'text-[11px] text-muted';
+const META = 'text-micro text-secondary';
 
 /** State marker: a 6px dot, optionally pulsing. Replaces the coloured rails. */
 function StateDot({ tone, pulse = false }: { tone: string; pulse?: boolean }) {
@@ -201,7 +201,7 @@ function InterruptedNote({ item }: { item: QueueItem }) {
   const t = useT();
   if (item.interrupted_count <= 0) return null;
   return (
-    <p className="text-[11px] text-warning">
+    <p className="text-micro text-warning">
       {t('queue.item.interrupted', { n: item.interrupted_count })}
     </p>
   );
@@ -271,7 +271,7 @@ function RunningCard({
     <Shell item={item} className={CARD}>
       <div className="flex items-center gap-2">
         <StateDot tone="bg-success-text" pulse />
-        <span className="text-[11px] font-medium text-secondary">{t('queue.item.running')}</span>
+        <span className="text-micro font-medium text-secondary">{t('queue.item.running')}</span>
         {started && (
           <span className={`font-mono tabular-nums ${META}`}>
             {t('queue.item.started', { time: started })}
@@ -283,7 +283,7 @@ function RunningCard({
         {/* Disabled until the item idles — see RemoveButton's LOCKED BEHAVIOR note. */}
         <RemoveButton item={item} onRemove={onRemove} />
       </div>
-      <p className="text-[13px] text-primary whitespace-pre-wrap break-words">{item.content}</p>
+      <p className="text-body text-primary whitespace-pre-wrap break-words">{item.content}</p>
       <AttachedFiles item={item} />
       <TriggerOrigin item={item} />
       <InterruptedNote item={item} />
@@ -311,9 +311,9 @@ function QueuedRow({
           <span className={`w-4 shrink-0 text-right font-mono tabular-nums ${META}`}>{index}</span>
         )}
         <StateDot tone="bg-idle" />
-        <span className="min-w-0 flex-1 truncate text-[13px] text-primary">{item.content}</span>
+        <span className="min-w-0 flex-1 truncate text-body text-primary">{item.content}</span>
         <AgentChip item={item} />
-        <span className={`shrink-0 text-[11px] ${pri.cls}`}>{t(pri.labelKey)}</span>
+        <span className={`shrink-0 text-micro ${pri.cls}`}>{t(pri.labelKey)}</span>
         {added && <span className={`shrink-0 font-mono tabular-nums ${META}`}>{added}</span>}
         <RemoveButton item={item} onRemove={onRemove} />
       </div>
@@ -338,15 +338,15 @@ function BlockedRow({
     <Shell item={item} className={CARD}>
       <div className="flex items-center gap-2.5">
         <StateDot tone="bg-warning-text" />
-        <span className="min-w-0 flex-1 break-words text-[13px] text-primary">{item.content}</span>
+        <span className="min-w-0 flex-1 break-words text-body text-primary">{item.content}</span>
         <AgentChip item={item} />
-        <span className="shrink-0 text-[11px] font-medium text-warning">
+        <span className="shrink-0 text-micro font-medium text-warning">
           {t('queue.item.needsYou')}
         </span>
         <RemoveButton item={item} onRemove={onRemove} />
       </div>
       {latest && (latest.block_reason || latest.block_reason_code) && (
-        <p className="text-[11px] text-warning">{blockReasonText(latest, t)}</p>
+        <p className="text-micro text-warning">{blockReasonText(latest, t)}</p>
       )}
       <AttachedFiles item={item} />
       <TriggerOrigin item={item} />
@@ -373,7 +373,7 @@ function DoneRow({
       <div className="flex items-center gap-2.5">
         <CheckCheck className="w-3.5 h-3.5 shrink-0 text-success/70" aria-hidden />
         <div className="min-w-0 flex-1">
-          <div className="truncate text-[13px] text-secondary">{item.content}</div>
+          <div className="truncate text-body text-secondary">{item.content}</div>
           {latest?.summary && (
             <div className={`truncate ${META}`}>
               <span aria-hidden>→ </span>

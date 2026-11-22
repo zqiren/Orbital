@@ -119,7 +119,7 @@ export default function ConnectorAccessControl({
           <AgentLogo key={id} slug={id} title={nameOf(id)} />
         ))}
         {ticked.length > MAX_LOGOS && (
-          <span className="text-[11px] tabular-nums text-secondary">+{ticked.length - MAX_LOGOS}</span>
+          <span className="text-micro tabular-nums text-secondary">+{ticked.length - MAX_LOGOS}</span>
         )}
       </span>
     );
@@ -136,7 +136,7 @@ export default function ConnectorAccessControl({
         onClick={() => {
           if (!on) onChange(accessForMode(mode, access, list));
         }}
-        className={`flex-1 min-w-0 truncate rounded-md px-2 py-1 text-xs font-medium transition-colors duration-150 max-md:min-h-[36px] ${
+        className={`flex-1 min-w-0 truncate rounded-md px-2 py-1 text-caption font-medium transition-colors duration-150 max-md:min-h-[36px] ${
           on
             ? 'bg-segment-on text-segment-on-text shadow-[0_1px_2px_rgb(0_0_0/0.06)]'
             : 'text-secondary hover:text-primary'
@@ -160,7 +160,7 @@ export default function ConnectorAccessControl({
         aria-expanded={open}
         aria-controls={open ? menuId : undefined}
         onClick={() => setOpen((v) => !v)}
-        className="inline-flex h-7 w-[96px] items-center justify-end gap-1 rounded-lg px-2 text-xs font-medium text-secondary hover:bg-card-hover hover:text-primary transition-colors duration-150 aria-expanded:bg-card-hover max-md:min-h-[44px]"
+        className="inline-flex h-7 w-[96px] items-center justify-end gap-1 rounded-lg px-2 text-caption font-medium text-secondary hover:bg-card-hover hover:text-primary transition-colors duration-150 aria-expanded:bg-card-hover max-md:min-h-[44px]"
       >
         {summary}
         <ChevronDown size={12} aria-hidden="true" className="shrink-0 text-muted" />
@@ -180,7 +180,7 @@ export default function ConnectorAccessControl({
           </div>
 
           {agents === 'error' ? (
-            <p className="px-2 py-2 text-xs text-error" role="alert">
+            <p className="px-2 py-2 text-caption text-error" role="alert">
               {t('connectors.access.loadError')}
             </p>
           ) : (
@@ -192,7 +192,7 @@ export default function ConnectorAccessControl({
                   <li key={a.id}>
                     <label
                       data-testid={`connector-access-agent-${connectorId}-${a.id}`}
-                      className={`flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-[13px] max-md:min-h-[44px] ${
+                      className={`flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-body max-md:min-h-[44px] ${
                         disabled ? 'cursor-default' : 'cursor-pointer hover:bg-card-hover/60'
                       }`}
                     >

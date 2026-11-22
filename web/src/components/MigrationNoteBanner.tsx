@@ -63,7 +63,7 @@ export default function MigrationNoteBanner({ note, cards }: MigrationNoteBanner
       className="flex items-start gap-2 border border-warning/30 bg-warning/5 rounded-lg px-3 py-2 mb-3"
     >
       <AlertTriangle className="w-4 h-4 text-warning shrink-0 mt-0.5" />
-      <p className="text-xs text-primary min-w-0">
+      <p className="text-caption text-primary min-w-0">
         {text}
         {named && !named.model && (
           <span className="block text-secondary mt-0.5">{t('cards.note.editHint')}</span>

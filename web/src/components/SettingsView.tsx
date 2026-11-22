@@ -552,7 +552,7 @@ export default function SettingsView({
               if (e.key === 'Enter') void autosave.flush();
             }}
             placeholder={t('settings.agentName.placeholder')}
-            className="w-full text-sm bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150"
+            className="w-full text-body bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-muted focus:outline-none focus:border-accent transition-all duration-150"
           />
         </SettingsSection>
 
@@ -568,7 +568,7 @@ export default function SettingsView({
               }}
               disabled={loadingDetail}
               placeholder={loadingDetail ? t('settings.loading') : t('settings.projectGoals.placeholder')}
-              className="w-full text-sm bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150 resize-y disabled:opacity-50"
+              className="w-full text-body bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-muted focus:outline-none focus:border-accent transition-all duration-150 resize-y disabled:opacity-50"
             />
           </SettingsSection>
         )}
@@ -588,7 +588,7 @@ export default function SettingsView({
             }}
             disabled={loadingDetail}
             placeholder={loadingDetail ? t('settings.loading') : t('settings.projectInstructions.placeholder')}
-            className="w-full text-sm bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150 resize-y disabled:opacity-50"
+            className="w-full text-body bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-muted focus:outline-none focus:border-accent transition-all duration-150 resize-y disabled:opacity-50"
           />
         </SettingsSection>
         </SettingsGroup>
@@ -625,19 +625,19 @@ export default function SettingsView({
               placeholder={loadingDetail
                 ? t('settings.loading')
                 : t('settings.subAgents.deploymentInstructions.placeholder')}
-              className="w-full text-sm bg-sidebar border border-border rounded-lg px-3 py-2 mb-3 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150 resize-y disabled:opacity-50"
+              className="w-full text-body bg-sidebar border border-border rounded-lg px-3 py-2 mb-3 text-primary placeholder:text-muted focus:outline-none focus:border-accent transition-all duration-150 resize-y disabled:opacity-50"
             />
 
             {memoryError && (
-              <p className="text-xs text-error mb-2">{memoryError}</p>
+              <p className="text-caption text-error mb-2">{memoryError}</p>
             )}
 
             {loadingSubAgents ? (
-              <p className="text-xs text-secondary/60 italic">
+              <p className="text-caption text-secondary italic">
                 {t('settings.subAgents.loading')}
               </p>
             ) : installedSubAgents.length === 0 ? (
-              <p className="text-xs text-secondary/60 italic">
+              <p className="text-caption text-secondary italic">
                 {t('settings.subAgents.installHint')}
               </p>
             ) : (
@@ -657,7 +657,7 @@ export default function SettingsView({
                     />
                   ))}
                 </div>
-                <p className="text-[11px] text-secondary/60 mt-1.5 italic">
+                <p className="text-micro text-secondary mt-1.5 italic">
                   {t('settings.subAgents.installHint')}
                 </p>
               </>
@@ -673,10 +673,10 @@ export default function SettingsView({
             description={t('settings.skills.hint')}
           >
             {skillError && (
-              <p className="text-xs text-error mb-2">{skillError}</p>
+              <p className="text-caption text-error mb-2">{skillError}</p>
             )}
             {skillSuccess && (
-              <p className="text-xs text-success mb-2">{skillSuccess}</p>
+              <p className="text-caption text-success mb-2">{skillSuccess}</p>
             )}
 
             {skills.length > 0 ? (
@@ -704,7 +704,7 @@ export default function SettingsView({
                 ))}
               </div>
             ) : (
-              <p className="text-xs text-secondary/60 italic mb-3">
+              <p className="text-caption text-secondary italic mb-3">
                 {t('settings.skills.empty')}
               </p>
             )}
@@ -789,10 +789,10 @@ export default function SettingsView({
                     : ''
                 }`}
               >
-                <span className="text-sm font-medium text-primary block">
+                <span className="text-body font-medium text-primary block">
                   {t(opt.titleKey)}
                 </span>
-                <span className="text-xs text-secondary mt-1 block">
+                <span className="text-caption text-secondary mt-1 block">
                   {t(opt.descriptionKey)}
                 </span>
               </button>
@@ -914,11 +914,11 @@ export default function SettingsView({
                     }}
                     className="rounded border-border accent-accent"
                   />
-                  <span className="text-sm text-primary">{t(labelKey)}</span>
+                  <span className="text-body text-primary">{t(labelKey)}</span>
                 </label>
               ))}
             </div>
-            <p className="text-xs text-secondary/60 mt-2 italic">
+            <p className="text-caption text-secondary mt-2 italic">
               {t('settings.notifications.approvalNote')}
             </p>
           </SettingsSection>
@@ -943,14 +943,14 @@ export default function SettingsView({
               }}
               className="rounded border-border accent-accent"
             />
-            <span className="text-sm text-primary">
+            <span className="text-body text-primary">
               {t('settings.workbench.excludeGlobal.label')}
             </span>
           </label>
         </SettingsSection>
         </SettingsGroup>
 
-        <p className="text-xs text-secondary/70 mt-12" data-testid="settings-autosave-hint">
+        <p className="text-caption text-secondary mt-12" data-testid="settings-autosave-hint">
           {t('settings.autosave.hint')}
         </p>
       </div>
@@ -958,14 +958,14 @@ export default function SettingsView({
       {/* Danger zone */}
       {!project.is_scratch && (
         <div data-settings-section="danger" className="mt-12 border border-error/30 rounded-lg p-6 scroll-mt-4">
-          <h3 className="text-[15px] font-semibold leading-6 text-error mb-2">{t('settings.danger.title')}</h3>
-          <p className="text-sm text-secondary mb-4">
+          <h3 className="text-title font-semibold text-error mb-2">{t('settings.danger.title')}</h3>
+          <p className="text-body text-secondary mb-4">
             {t('settings.danger.body')}
           </p>
           {!confirmingDelete ? (
             <button
               onClick={() => setConfirmingDelete(true)}
-              className="text-sm font-medium text-error border border-error/40 rounded-lg px-4 py-2 hover:bg-error/5 transition-all duration-150 max-md:w-full max-md:min-h-[44px]"
+              className="text-body font-medium text-error border border-error/40 rounded-lg px-4 py-2 hover:bg-error/5 transition-all duration-150 max-md:w-full max-md:min-h-[44px]"
             >
               {t('settings.danger.delete')}
             </button>
@@ -973,13 +973,13 @@ export default function SettingsView({
             <div className="flex gap-2">
               <button
                 onClick={handleDelete}
-                className="text-sm font-medium text-white bg-error rounded-lg px-4 py-2 hover:bg-error/90 transition-all duration-150 max-md:min-h-[44px]"
+                className="text-body font-medium text-white bg-error rounded-lg px-4 py-2 hover:bg-error/90 transition-all duration-150 max-md:min-h-[44px]"
               >
                 {t('settings.danger.confirmDelete')}
               </button>
               <button
                 onClick={() => setConfirmingDelete(false)}
-                className="text-sm font-medium text-secondary border border-border rounded-lg px-4 py-2 hover:bg-sidebar transition-all duration-150 max-md:min-h-[44px]"
+                className="text-body font-medium text-secondary border border-border rounded-lg px-4 py-2 hover:bg-sidebar transition-all duration-150 max-md:min-h-[44px]"
               >
                 {t('settings.danger.cancel')}
               </button>

@@ -159,7 +159,7 @@ export default function AnnotateOverlay({ active, boxes, onAdd, onRemove }: Anno
               padding: '0 4px',
               textAlign: 'center',
               fontSize: 11,
-              fontWeight: 700,
+              fontWeight: 600,
               color: '#fff',
               background: stroke,
               borderRadius: 3,

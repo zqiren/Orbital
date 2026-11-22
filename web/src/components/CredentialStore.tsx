@@ -144,14 +144,14 @@ export default function CredentialStore({ projectId }: { projectId?: string }) {
         placeholder={t('credStore.form.name.placeholder')}
         value={formName}
         onChange={e => setFormName(e.target.value)}
-        className="w-full text-body bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary focus:outline-none focus:border-accent"
+        className="w-full text-body bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-muted focus:outline-none focus:border-accent"
       />
       <input
         type="text"
         placeholder={t('credStore.form.domain.placeholder')}
         value={formDomain}
         onChange={e => setFormDomain(e.target.value)}
-        className="w-full text-body bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary focus:outline-none focus:border-accent"
+        className="w-full text-body bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-muted focus:outline-none focus:border-accent"
       />
       {formFields.map((f, i) => (
         <div key={i} className="flex gap-2">
@@ -164,7 +164,7 @@ export default function CredentialStore({ projectId }: { projectId?: string }) {
               next[i] = { ...next[i], key: e.target.value };
               setFormFields(next);
             }}
-            className="w-1/3 text-body bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary focus:outline-none focus:border-accent"
+            className="w-1/3 text-body bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-muted focus:outline-none focus:border-accent"
           />
           <input
             type="password"
@@ -175,7 +175,7 @@ export default function CredentialStore({ projectId }: { projectId?: string }) {
               next[i] = { ...next[i], value: e.target.value };
               setFormFields(next);
             }}
-            className="flex-1 text-body bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary focus:outline-none focus:border-accent"
+            className="flex-1 text-body bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-muted focus:outline-none focus:border-accent"
           />
         </div>
       ))}

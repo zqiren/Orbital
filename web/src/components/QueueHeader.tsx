@@ -123,9 +123,9 @@ export default function QueueHeader({
         role="status"
       >
         <div className="min-w-0">
-          <p className="text-xs font-medium text-error">{t('queue.banner.budget.title')}</p>
+          <p className="text-caption font-medium text-error">{t('queue.banner.budget.title')}</p>
           {budgetDetail && (
-            <p className="text-[11px] text-secondary mt-0.5" data-testid="queue-budget-banner-detail">
+            <p className="text-micro text-secondary mt-0.5" data-testid="queue-budget-banner-detail">
               {budgetDetail}
             </p>
           )}
@@ -133,9 +133,9 @@ export default function QueueHeader({
       </div>
     )}
     <div className="flex items-center justify-between gap-3 px-6 py-3 border-b border-border max-md:px-4 max-md:flex-wrap">
-      <div className="flex items-center gap-4 text-xs text-secondary flex-wrap">
+      <div className="flex items-center gap-4 text-caption text-secondary flex-wrap">
         <span
-          className={`px-2 py-0.5 rounded-full text-[11px] font-medium ${
+          className={`px-2 py-0.5 rounded-full text-micro font-medium ${
             isBudgetPaused
               ? 'bg-error/15 text-error'
               : isPaused
@@ -161,7 +161,7 @@ export default function QueueHeader({
       </div>
       <div className="flex items-center gap-3">
         {resumeHint && (
-          <span className="text-xs text-secondary" data-testid="queue-autoresume-hint">
+          <span className="text-caption text-secondary" data-testid="queue-autoresume-hint">
             {t('queue.header.autoResume', { time: resumeHint })}
           </span>
         )}
@@ -170,7 +170,7 @@ export default function QueueHeader({
             onClick={() => void onResume()}
             disabled={disabled}
             data-testid="queue-resume-btn"
-            className="flex items-center gap-1.5 text-sm font-medium rounded-lg px-3 py-1.5 transition-all duration-150 disabled:opacity-40 disabled:cursor-not-allowed max-md:min-h-[44px] bg-success text-on-accent hover:bg-success/90"
+            className="flex items-center gap-1.5 text-body font-medium rounded-lg px-3 py-1.5 transition-all duration-150 disabled:opacity-40 disabled:cursor-not-allowed max-md:min-h-[44px] bg-success text-on-accent hover:bg-success/90"
           >
             <Play className="w-3.5 h-3.5" fill="currentColor" /> {t('queue.resume')}
           </button>
@@ -180,7 +180,7 @@ export default function QueueHeader({
               onClick={() => void onResume()}
               disabled={disabled}
               data-testid="queue-start-btn"
-              className="flex items-center gap-1.5 text-sm font-medium rounded-lg px-3 py-1.5 transition-all duration-150 disabled:opacity-40 disabled:cursor-not-allowed max-md:min-h-[44px] bg-success text-on-accent hover:bg-success/90"
+              className="flex items-center gap-1.5 text-body font-medium rounded-lg px-3 py-1.5 transition-all duration-150 disabled:opacity-40 disabled:cursor-not-allowed max-md:min-h-[44px] bg-success text-on-accent hover:bg-success/90"
             >
               <Play className="w-3.5 h-3.5" fill="currentColor" /> {t('queue.start')}
             </button>
@@ -193,7 +193,7 @@ export default function QueueHeader({
               aria-haspopup="menu"
               aria-expanded={menuOpen}
               data-testid="queue-stop-btn"
-              className="flex items-center gap-1.5 text-sm font-medium rounded-lg px-3 py-1.5 transition-all duration-150 disabled:opacity-40 disabled:cursor-not-allowed max-md:min-h-[44px] border border-border text-secondary hover:text-warning hover:border-warning/40"
+              className="flex items-center gap-1.5 text-body font-medium rounded-lg px-3 py-1.5 transition-all duration-150 disabled:opacity-40 disabled:cursor-not-allowed max-md:min-h-[44px] border border-border text-secondary hover:text-warning hover:border-warning/40"
             >
               <Pause className="w-3.5 h-3.5" fill="currentColor" /> {t('queue.stop')}
             </button>
@@ -209,7 +209,7 @@ export default function QueueHeader({
                     role="menuitem"
                     onClick={() => pick(undefined)}
                     data-testid="queue-pause-until-resume"
-                    className="w-full text-left text-sm px-3 py-2 hover:bg-secondary/10"
+                    className="w-full text-left text-body px-3 py-2 hover:bg-secondary/10"
                   >
                     {t('queue.pause.menu.untilResume')}
                   </button>
@@ -217,7 +217,7 @@ export default function QueueHeader({
                     role="menuitem"
                     onClick={() => pick(3600)}
                     data-testid="queue-pause-1h"
-                    className="w-full text-left text-sm px-3 py-2 hover:bg-secondary/10"
+                    className="w-full text-left text-body px-3 py-2 hover:bg-secondary/10"
                   >
                     {t('queue.pause.menu.oneHour')}
                   </button>
@@ -225,7 +225,7 @@ export default function QueueHeader({
                     role="menuitem"
                     onClick={() => pick(secondsUntilNextMorning())}
                     data-testid="queue-pause-tomorrow"
-                    className="w-full text-left text-sm px-3 py-2 hover:bg-secondary/10"
+                    className="w-full text-left text-body px-3 py-2 hover:bg-secondary/10"
                   >
                     {t('queue.pause.menu.untilTomorrow')}
                   </button>

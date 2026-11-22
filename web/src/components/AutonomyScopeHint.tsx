@@ -77,7 +77,7 @@ export default function AutonomyScopeHint() {
           data-testid="autonomy-scope-pop"
           onPointerEnter={() => window.clearTimeout(closeTimer.current)}
           onPointerLeave={() => { closeTimer.current = window.setTimeout(() => setOpen(false), 220); }}
-          className="absolute left-0 top-full z-20 mt-1.5 w-[280px] max-w-[80vw] rounded-lg border border-border bg-sidebar px-3 py-2 text-left text-xs font-normal leading-relaxed text-secondary shadow-lg"
+          className="absolute left-0 top-full z-20 mt-1.5 w-[280px] max-w-[80vw] rounded-lg border border-border bg-sidebar px-3 py-2 text-left text-caption font-normal text-secondary shadow-lg"
         >
           {t('autonomy.scope.hint')}
         </span>

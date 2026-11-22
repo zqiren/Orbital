@@ -112,7 +112,7 @@ export default function ProviderCombobox({ options, custom, value, onChange, lab
           setOpen(true);
         }}
         onKeyDown={onKeyDown}
-        className="w-full text-body bg-sidebar border border-border rounded-lg pl-3 pr-8 py-2 text-primary placeholder:text-secondary focus:outline-none focus:border-accent transition-all duration-150"
+        className="w-full text-body bg-sidebar border border-border rounded-lg pl-3 pr-8 py-2 text-primary placeholder:text-muted focus:outline-none focus:border-accent transition-all duration-150"
       />
       <ChevronDown
         aria-hidden="true"

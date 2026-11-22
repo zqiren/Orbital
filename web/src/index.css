@@ -59,7 +59,9 @@
                                           disabled controls, separators.
      Hierarchy between secondary lines and meta comes from SIZE (caption vs
      micro), not from a third, unreadable grey. Opacity-faded greys
-     (`text-secondary/60` = 2.0-2.4:1) are retired on migrated screens. */
+     (`text-secondary/60` = 2.0-2.4:1) are retired. The one place text keeps
+     the muted grey is a DISABLED control (an unavailable menu option, a
+     disabled send button), where reading as unavailable is the point. */
   --color-primary: #18181B;
   --color-secondary: #62626C;
   --color-muted: #8A8A94;
@@ -121,26 +123,6 @@
   --radius-xl: 14px;
   --radius-2xl: 18px;
 
-  /* -------------------------------------------------------------- type scale
-     Tracking is size-specific by design: letters read too far apart as they
-     grow, and too tight as they shrink. A single global `letter-spacing` is
-     therefore wrong somewhere by definition.
-
-     Sizes and line-heights are deliberately UNCHANGED — `text-sm` (×282) and
-     `text-xs` (×236) are load-bearing across the app, and re-scaling them
-     would resize 518 sites. Only tracking is added, so this is an optical
-     correction, not a layout change.
-
-     Explicit uppercase micro-labels still override with `tracking-wide`;
-     letter-spacing utilities sort after font-size utilities, so they win. */
-  --text-3xs: 9px;
-  --text-3xs--line-height: 1.4;
-  --text-3xs--letter-spacing: 0.02em;
-
-  --text-2xs: 10px;
-  --text-2xs--line-height: 1.4;
-  --text-2xs--letter-spacing: 0.015em;
-
   /* ------------------------------------------------------------------ depth
      Edge shading, so the shell and the project read as stacked layers rather
      than as regions that merely abut: `panel` is a RAISED surface casting onto
@@ -155,15 +137,16 @@
 
   /* ------------------------------------------------------ type roles (1122)
      The one type scale. Five sizes, each with its line height and tracking,
-     named for what the text is doing. New and migrated UI uses ONLY these
-     (plus `type-label` below); the Tailwind steps around them (`text-xs`,
-     `text-sm`, `text-[13px]`, …) are the unmigrated remainder.
+     named for what the text is doing. The whole UI uses ONLY these (plus
+     `type-label` below). Tailwind's own steps (`text-xs`, `text-sm`,
+     `text-[13px]`, …) are retired; the one survivor is `max-md:text-base`
+     on composer inputs: 16px on phones stops iOS Safari zooming on focus.
 
        micro    11/16  timestamps, counts, badges, pills, mono meta, labels
        caption  12/16  secondary lines, hints, navigation-list rows, small buttons
        body     13/20  the default: messages, content rows, inputs, buttons
        title    15/22  column, section and card-group headings
-       heading  20/28  the one page lead (Workbench)
+       heading  20/28  page leads (Workbench, onboarding and setup pages)
 
      Weights: Geist ships 400/500/600 only. 400 for running text; 500 for
      emphasis inside UI (selected or unread rows, names, buttons, field
@@ -189,12 +172,8 @@
   --text-heading--line-height: 28px;
   --text-heading--letter-spacing: -0.015em;
 
-  --text-xs--letter-spacing: 0.005em;
-  --text-sm--letter-spacing: 0em;
-  --text-base--letter-spacing: -0.005em;
-  --text-lg--letter-spacing: -0.01em;
-  --text-xl--letter-spacing: -0.015em;
-  --text-2xl--letter-spacing: -0.02em;
+  --text-base--letter-spacing: -0.005em;  /* the phone-input exception above */
+
   /* Latin glyphs render in Geist / JetBrains Mono (unchanged). CJK glyphs,
      which those Latin-only faces don't cover, fall through to a professional
      system Chinese font — PingFang SC (Apple), Microsoft YaHei (Windows),
@@ -365,6 +344,12 @@
 body {
   margin: 0;
   font-family: var(--font-sans);
+  /* The body token is the default, so text with no size class of its own
+     (an icon glyph, a bare span) renders on the scale, not at the browser's
+     16/24. Set on body, not html, so rem-based spacing is unchanged. */
+  font-size: var(--text-body);
+  line-height: var(--text-body--line-height);
+  letter-spacing: var(--text-body--letter-spacing);
   color: var(--color-primary);
   background: var(--color-background);
   -webkit-font-smoothing: antialiased;

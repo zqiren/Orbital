@@ -302,7 +302,7 @@ describe('ProjectDetail — no tab bar, one page at a time', () => {
       expect(container.querySelector('header')).toBeNull();
       const h1 = within(screen.getByTestId('page-heading')).getByRole('heading', { level: 1 });
       expect(h1.textContent).toBe('Tasks');
-      expect(h1.className).toContain('text-lg');
+      expect(h1.className).toContain('text-title');
       expect(screen.queryByTestId('tasks-back-button')).toBeNull();
       unmount();
     }

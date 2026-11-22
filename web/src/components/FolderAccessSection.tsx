@@ -45,15 +45,15 @@ export function FolderAccessSection({ folders, onRevoke }: FolderAccessSectionPr
     // Heading + intro come from the enclosing SettingsSection.
     <div data-testid="folder-access-section">
       {folders.length === 0 ? (
-        <p className="text-xs text-secondary/60 italic">{t('settings.folders.empty')}</p>
+        <p className="text-caption text-secondary italic">{t('settings.folders.empty')}</p>
       ) : (
         <div className="flex flex-col gap-1">
           {folders.map((folder) => (
             <div key={folder.path} className="flex items-center gap-2 py-1 max-md:min-h-[44px]">
-              <span className="text-sm font-mono text-primary flex-1 truncate" title={folder.path}>
+              <span className="text-body font-mono text-primary flex-1 truncate" title={folder.path}>
                 {folder.path}
               </span>
-              <span className="text-xs text-secondary shrink-0">
+              <span className="text-caption text-secondary shrink-0">
                 {folder.mode === 'read_write'
                   ? t('settings.folders.readWrite')
                   : t('settings.folders.readOnly')}
@@ -63,7 +63,7 @@ export function FolderAccessSection({ folders, onRevoke }: FolderAccessSectionPr
                 aria-label={t('settings.folders.removeAria', { path: folder.path })}
                 disabled={busyPath === folder.path}
                 onClick={() => revoke(folder)}
-                className="text-xs font-medium text-error border border-error/40 rounded-lg px-2.5 py-1 hover:bg-error/5 transition-all duration-150 disabled:opacity-50 max-md:min-h-[44px]"
+                className="text-caption font-medium text-error border border-error/40 rounded-lg px-2.5 py-1 hover:bg-error/5 transition-all duration-150 disabled:opacity-50 max-md:min-h-[44px]"
               >
                 {t('settings.folders.remove')}
               </button>
@@ -71,7 +71,7 @@ export function FolderAccessSection({ folders, onRevoke }: FolderAccessSectionPr
           ))}
         </div>
       )}
-      {error && <p className="text-xs text-error mt-2">{error}</p>}
+      {error && <p className="text-caption text-error mt-2">{error}</p>}
     </div>
   );
 }

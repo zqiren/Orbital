@@ -6,14 +6,14 @@
  * The one description of what a form control looks like.
  *
  * Before this, the same class string
- * (`text-sm bg-sidebar border border-border rounded-lg … focus:border-accent`)
+ * (`text-body bg-sidebar border border-border rounded-lg … focus:border-accent`)
  * was written out by hand at ~19 call sites across 13 files, with the padding
  * step drifting between `px-2`, `px-2.5` and `px-3` depending on which screen
  * copied which. Retuning the field look meant finding all of them.
  */
 const SURFACE =
   'bg-sidebar border border-border rounded-lg text-primary ' +
-  'placeholder:text-secondary/60 focus:outline-none focus:border-accent ' +
+  'placeholder:text-muted focus:outline-none focus:border-accent ' +
   'transition-all duration-150';
 
 /**
@@ -31,10 +31,10 @@ const SURFACE =
  * widgets INSIDE need the `field-native-none` pseudo-element rules in
  * `index.css`, which is the other half of this class.
  */
-export const FIELD = `h-9 appearance-none field-native-none text-sm px-2.5 ${SURFACE}`;
+export const FIELD = `h-9 appearance-none field-native-none text-body px-2.5 ${SURFACE}`;
 
 /**
  * Multi-line controls. Same surface, no fixed height, no `appearance-none`
  * (a textarea has no native widget to suppress and needs its resize grip).
  */
-export const FIELD_MULTILINE = `text-sm px-2.5 py-2 ${SURFACE}`;
+export const FIELD_MULTILINE = `text-body px-2.5 py-2 ${SURFACE}`;

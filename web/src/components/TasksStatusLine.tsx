@@ -91,13 +91,17 @@ export default function TasksStatusLine({
     });
   }
 
+  // Only the LAST fact may shrink, so a line that does not fit ends in an
+  // ellipsis (its "N off" part first) instead of being clipped mid-word —
+  // zh "2 个已关闭" was cut to "2 个已" in the 260px column.
   const factNodes = facts.flatMap((f, i) => {
+    const last = i === facts.length - 1;
     const node = (
-      <span key={f.key} className="flex items-center gap-1.5 shrink-0">
+      <span key={f.key} className={`flex items-center gap-1.5 ${last ? 'min-w-0' : 'shrink-0'}`}>
         {f.icon === 'play' && <Play size={11} aria-hidden="true" className="shrink-0 text-success" fill="currentColor" />}
         {f.icon === 'clock' && <Clock size={13} aria-hidden="true" className="shrink-0 text-muted" />}
-        <span className="text-primary">{f.text}</span>
-        {f.off && <span className="text-secondary">{f.off}</span>}
+        <span className={`text-primary ${f.off ? 'shrink-0' : 'min-w-0 truncate'}`}>{f.text}</span>
+        {f.off && <span className="min-w-0 truncate text-secondary">{f.off}</span>}
       </span>
     );
     return i === 0 ? [node] : [<span key={`dot-${i}`}>{dot}</span>, node];

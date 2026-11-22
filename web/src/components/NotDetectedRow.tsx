@@ -204,7 +204,7 @@ export default function NotDetectedRow({
         spellCheck={false}
         aria-label={t('subAgentCard.locate.placeholder')}
         data-testid={`sub-agent-locate-answer-${slug}`}
-        className="w-full mt-2 text-caption font-mono bg-sidebar border border-border rounded px-2 py-1.5 text-primary placeholder:text-secondary focus:outline-none focus:border-accent"
+        className="w-full mt-2 text-caption font-mono bg-sidebar border border-border rounded px-2 py-1.5 text-primary placeholder:text-muted focus:outline-none focus:border-accent"
       />
 
       <div className="flex items-center gap-2 flex-wrap mt-2">

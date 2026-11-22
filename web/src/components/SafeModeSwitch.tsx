@@ -37,7 +37,7 @@ export default function SafeModeSwitch({ checked, onChange, disabled = false }: 
     >
       <div className="flex items-center justify-between gap-4">
         <div className="flex items-center gap-1.5 min-w-0">
-          <span className="text-sm font-medium text-primary">{t('safeMode.label')}</span>
+          <span className="text-body font-medium text-primary">{t('safeMode.label')}</span>
           <button
             // type="button" is load-bearing in the create dialog's <form>.
             type="button"
@@ -46,7 +46,7 @@ export default function SafeModeSwitch({ checked, onChange, disabled = false }: 
             aria-label={t('safeMode.about')}
             title={t('safeMode.about')}
             className={`shrink-0 transition-colors duration-150 max-md:min-h-[44px] max-md:min-w-[44px] max-md:flex max-md:items-center max-md:justify-center ${
-              pinned ? 'text-primary' : 'text-secondary/60 hover:text-primary'
+              pinned ? 'text-primary' : 'text-secondary hover:text-primary'
             }`}
           >
             <Info size={13} aria-hidden="true" />
@@ -72,7 +72,7 @@ export default function SafeModeSwitch({ checked, onChange, disabled = false }: 
         </button>
       </div>
       {showHint && (
-        <p className="mt-1.5 text-xs leading-relaxed text-secondary" data-testid="safe-mode-hint">
+        <p className="mt-1.5 text-caption text-secondary" data-testid="safe-mode-hint">
           {t('safeMode.tooltip')}
         </p>
       )}

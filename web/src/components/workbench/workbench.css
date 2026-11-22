@@ -60,7 +60,7 @@
 .wb-foot { display: flex; align-items: center; gap: 4px; min-height: 28px; }
 .wb-chip {
   display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 8px 0 7px; border-radius: 999px;
-  font-size: var(--text-caption); color: var(--color-secondary); white-space: nowrap; min-width: 0; max-width: 200px;
+  font-size: var(--text-caption); line-height: var(--text-caption--line-height); letter-spacing: var(--text-caption--letter-spacing); color: var(--color-secondary); white-space: nowrap; min-width: 0; max-width: 200px;
 }
 .wb-chip:hover, .wb-chip[aria-expanded="true"] { background: var(--wb-tint); color: var(--color-primary); }
 .wb-chip.is-set { background: var(--wb-tint); color: var(--color-primary); }
@@ -281,7 +281,7 @@ button.wb-slot:not([aria-disabled="true"]):hover .wb-cv, .wb-slot[aria-expanded=
 .wb-askopt {
   max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   padding: 3px 11px; border-radius: 999px; border: 1px solid var(--color-border);
-  font-size: var(--text-body); color: var(--color-primary); background: transparent; transition: background .15s, border-color .15s;
+  font-size: var(--text-body); line-height: var(--text-body--line-height); color: var(--color-primary); background: transparent; transition: background .15s, border-color .15s;
 }
 .wb-askopt:hover { background: var(--wb-tint); border-color: color-mix(in srgb, var(--color-muted) 45%, transparent); }
 .wb-askopt:disabled { opacity: .5; }

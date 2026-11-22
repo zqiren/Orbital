@@ -78,7 +78,7 @@ export default function BudgetCorner({
   if (cost == null && corner.state !== 'exhausted') return null;
   if (!hasSignal) return null;
 
-  const font = plain ? 'text-[11px]' : 'font-mono text-[11px]';
+  const font = plain ? 'text-micro' : 'font-mono text-micro';
   const windowWord = t(WINDOW_WORD[window]);
   const spentStr = formatMoney(corner.spent, corner.currency, locale);
   const limitStr =

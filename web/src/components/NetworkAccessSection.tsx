@@ -56,7 +56,7 @@ export function NetworkAccessSection({
     <div data-testid="network-access-section">
       {pendingRequests.length > 0 && (
         <div className="mb-3">
-          <h4 className="text-xs font-semibold text-primary mb-1.5">
+          <h4 className="text-body font-semibold text-primary mb-1.5">
             {t('settings.network.pendingTitle')}
           </h4>
           <div className="flex flex-col gap-1">
@@ -66,14 +66,14 @@ export function NetworkAccessSection({
                 className="flex items-center gap-2 py-1 max-md:min-h-[44px]"
               >
                 <div className="flex-1 min-w-0">
-                  <span className="text-sm text-primary truncate">{req.domain}</span>
-                  <span className="text-xs text-secondary truncate ml-2">{req.reason}</span>
+                  <span className="text-body text-primary truncate">{req.domain}</span>
+                  <span className="text-caption text-secondary truncate ml-2">{req.reason}</span>
                 </div>
                 <button
                   type="button"
                   aria-label={t('settings.network.approveAria', { domain: req.domain })}
                   onClick={() => approve(req)}
-                  className="text-xs font-medium text-accent border border-border rounded-lg px-2.5 py-1 hover:bg-accent/5 transition-all duration-150 max-md:min-h-[44px]"
+                  className="text-caption font-medium text-accent border border-border rounded-lg px-2.5 py-1 hover:bg-accent/5 transition-all duration-150 max-md:min-h-[44px]"
                 >
                   {t('settings.network.approve')}
                 </button>
@@ -81,7 +81,7 @@ export function NetworkAccessSection({
                   type="button"
                   aria-label={t('settings.network.dismissAria', { domain: req.domain })}
                   onClick={() => dismiss(req)}
-                  className="text-xs font-medium text-secondary border border-border rounded-lg px-2.5 py-1 hover:bg-secondary/5 transition-all duration-150 max-md:min-h-[44px]"
+                  className="text-caption font-medium text-secondary border border-border rounded-lg px-2.5 py-1 hover:bg-secondary/5 transition-all duration-150 max-md:min-h-[44px]"
                 >
                   {t('settings.network.dismiss')}
                 </button>
@@ -92,17 +92,17 @@ export function NetworkAccessSection({
       )}
 
       {approvedDomains.length === 0 ? (
-        <p className="text-xs text-secondary/60 italic">{t('settings.network.empty')}</p>
+        <p className="text-caption text-secondary italic">{t('settings.network.empty')}</p>
       ) : (
         <div className="flex flex-col gap-1">
           {approvedDomains.map((domain) => (
             <div key={domain} className="flex items-center gap-2 py-1 max-md:min-h-[44px]">
-              <span className="text-sm text-primary flex-1 truncate">{domain}</span>
+              <span className="text-body text-primary flex-1 truncate">{domain}</span>
               <button
                 type="button"
                 aria-label={t('settings.network.removeAria', { domain })}
                 onClick={() => remove(domain)}
-                className="text-xs font-medium text-error border border-error/40 rounded-lg px-2.5 py-1 hover:bg-error/5 transition-all duration-150 max-md:min-h-[44px]"
+                className="text-caption font-medium text-error border border-error/40 rounded-lg px-2.5 py-1 hover:bg-error/5 transition-all duration-150 max-md:min-h-[44px]"
               >
                 {t('settings.network.remove')}
               </button>

@@ -689,7 +689,7 @@ export default function App() {
   if (setupComplete === null || needsWizard === null) {
     return (
       <div className="min-h-screen flex items-center justify-center">
-        <span className="text-sm text-secondary">{t('app.loading')}</span>
+        <span className="text-body text-secondary">{t('app.loading')}</span>
       </div>
     );
   }
@@ -830,11 +830,11 @@ export default function App() {
             >
               <img src="/icon-192.png" alt="" aria-hidden="true" className="h-6 w-6 shrink-0 rounded-md" />
               {selectedProject ? (
-                <span className="truncate text-[15px] font-medium text-secondary">
+                <span className="truncate text-title font-medium text-secondary">
                   {projectDisplayName(selectedProject, t)}
                 </span>
               ) : (
-                <span className="text-[17px] font-semibold text-primary">{t('sidebar.wordmark')}</span>
+                <span className="text-title font-semibold text-primary">{t('sidebar.wordmark')}</span>
               )}
             </button>
             <button
@@ -851,7 +851,7 @@ export default function App() {
         )}
 
         {platform.status && platform.status.platform !== 'null' && !platform.status.setup_complete && (
-          <div className="bg-warning/10 border border-warning/20 rounded-lg px-4 py-3 mx-4 mt-4 text-sm">
+          <div className="bg-warning/10 border border-warning/20 rounded-lg px-4 py-3 mx-4 mt-4 text-body">
             <span className="text-warning font-medium">{t('app.sandboxWarning.title')}</span>{' '}
             <span className="text-secondary">
               {t('app.sandboxWarning.body')}

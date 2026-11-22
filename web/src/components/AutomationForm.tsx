@@ -148,12 +148,12 @@ export default function AutomationForm({ trigger, onSubmit, onCancel, agents = [
       data-testid="automation-form"
       className="flex flex-col gap-4 surface-float-static px-4 py-4"
     >
-      <p className="text-[13px] font-medium text-primary">
+      <p className="text-body font-medium text-primary">
         {isEdit ? t('trigger.form.title.edit') : t('trigger.new')}
       </p>
 
       <label className="flex flex-col gap-1">
-        <span className="text-[11px] uppercase tracking-wide text-secondary">
+        <span className="type-label text-secondary">
           {t('trigger.form.name')}
         </span>
         <input
@@ -168,11 +168,11 @@ export default function AutomationForm({ trigger, onSubmit, onCancel, agents = [
       </label>
 
       <div className="flex flex-col gap-1">
-        <span className="text-[11px] uppercase tracking-wide text-secondary">
+        <span className="type-label text-secondary">
           {t('trigger.form.type')}
         </span>
         {isEdit ? (
-          <span className="text-sm text-secondary" data-testid="automation-form-type-fixed">
+          <span className="text-body text-secondary" data-testid="automation-form-type-fixed">
             {type === 'schedule'
               ? t('trigger.form.type.schedule')
               : t('trigger.form.type.fileWatch')}
@@ -196,7 +196,7 @@ export default function AutomationForm({ trigger, onSubmit, onCancel, agents = [
       ) : (
         <div className="flex flex-col gap-3">
           <label className="flex flex-col gap-1">
-            <span className="text-[11px] uppercase tracking-wide text-secondary">
+            <span className="type-label text-secondary">
               {t('trigger.form.watchPath')}
             </span>
             <input
@@ -208,10 +208,10 @@ export default function AutomationForm({ trigger, onSubmit, onCancel, agents = [
               data-testid="automation-form-watch-path"
               className={`${FIELD} font-mono`}
             />
-            <span className="text-[11px] text-muted">{t('trigger.form.watchPathHint')}</span>
+            <span className="text-micro text-secondary">{t('trigger.form.watchPathHint')}</span>
           </label>
           <label className="flex flex-col gap-1">
-            <span className="text-[11px] uppercase tracking-wide text-secondary">
+            <span className="type-label text-secondary">
               {t('trigger.form.patterns')}
             </span>
             <input
@@ -223,10 +223,10 @@ export default function AutomationForm({ trigger, onSubmit, onCancel, agents = [
               data-testid="automation-form-patterns"
               className={`${FIELD} font-mono`}
             />
-            <span className="text-[11px] text-muted">{t('trigger.form.patternsHint')}</span>
+            <span className="text-micro text-secondary">{t('trigger.form.patternsHint')}</span>
           </label>
           <div className="flex flex-wrap items-end gap-4">
-            <label className="flex items-center gap-2 text-sm text-primary">
+            <label className="flex items-center gap-2 text-body text-primary">
               <input
                 type="checkbox"
                 checked={recursive}
@@ -237,7 +237,7 @@ export default function AutomationForm({ trigger, onSubmit, onCancel, agents = [
               {t('trigger.form.recursive')}
             </label>
             <label className="flex flex-col gap-1">
-              <span className="text-[11px] uppercase tracking-wide text-secondary">
+              <span className="type-label text-secondary">
                 {t('trigger.form.debounce')}
               </span>
               <input
@@ -256,7 +256,7 @@ export default function AutomationForm({ trigger, onSubmit, onCancel, agents = [
 
       {agents.length > 0 && (
         <div className="flex flex-col gap-1" data-testid="automation-form-agent-field">
-          <span className="text-[11px] uppercase tracking-wide text-secondary">
+          <span className="type-label text-secondary">
             {t('automation.agent.label')}
           </span>
           <div className="flex items-center gap-2">
@@ -268,7 +268,7 @@ export default function AutomationForm({ trigger, onSubmit, onCancel, agents = [
               managerLabel={t('automation.agent.aria')}
               data-testid="automation-form-agent"
             />
-            <span className="text-xs text-secondary">
+            <span className="text-caption text-secondary">
               {agent
                 ? (agents.find((a) => a.slug === agent)?.name ?? agent)
                 : t('pinAgent.orbital')}
@@ -278,7 +278,7 @@ export default function AutomationForm({ trigger, onSubmit, onCancel, agents = [
       )}
 
       <label className="flex flex-col gap-1">
-        <span className="text-[11px] uppercase tracking-wide text-secondary">
+        <span className="type-label text-secondary">
           {t('trigger.task')}
         </span>
         <textarea
@@ -288,13 +288,13 @@ export default function AutomationForm({ trigger, onSubmit, onCancel, agents = [
           placeholder={t('trigger.form.promptPlaceholder')}
           aria-label={t('trigger.task')}
           data-testid="automation-form-prompt"
-          className={`${FIELD_MULTILINE} resize-y leading-relaxed`}
+          className={`${FIELD_MULTILINE} resize-y`}
         />
       </label>
 
       {error && (
         <p
-          className="text-xs text-error border border-error/40 bg-error/5 rounded px-2.5 py-2"
+          className="text-caption text-error border border-error/40 bg-error/5 rounded px-2.5 py-2"
           data-testid="automation-form-error"
         >
           {error}
@@ -303,14 +303,14 @@ export default function AutomationForm({ trigger, onSubmit, onCancel, agents = [
 
       {/* A footer, not a pair of buttons at the end of a stack. Negative
           margins pull it out to the card's edges so the rule reads as the
-          bottom of the form; text-xs was the same size as the field HINTS for
+          bottom of the form; text-caption was the same size as the field HINTS for
           what is the terminal action of a card this tall. */}
       <div className="-mx-4 -mb-4 mt-1 flex items-center gap-2 border-t border-border/60 px-4 py-3">
         <button
           type="submit"
           disabled={saving}
           data-testid="automation-form-save"
-          className="text-[13px] font-medium px-4 py-2 rounded-lg bg-accent text-white disabled:opacity-60 transition-colors max-md:min-h-[44px]"
+          className="text-body font-medium px-4 py-2 rounded-lg bg-accent text-white disabled:opacity-60 transition-colors max-md:min-h-[44px]"
         >
           {saving
             ? t('trigger.form.saving')
@@ -323,7 +323,7 @@ export default function AutomationForm({ trigger, onSubmit, onCancel, agents = [
           onClick={onCancel}
           disabled={saving}
           data-testid="automation-form-cancel"
-          className="text-[13px] text-secondary hover:text-primary transition-colors px-3 py-2 max-md:min-h-[44px]"
+          className="text-body text-secondary hover:text-primary transition-colors px-3 py-2 max-md:min-h-[44px]"
         >
           {t('trigger.form.cancel')}
         </button>

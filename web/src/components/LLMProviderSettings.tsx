@@ -1110,7 +1110,7 @@ export default function LLMProviderSettings({
               ? t('llm.apiKey.replacePlaceholder')
               : t('llm.apiKey.placeholder')
           }
-          className="w-full text-body font-mono bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary focus:outline-none focus:border-accent transition-all duration-150 disabled:opacity-50"
+          className="w-full text-body font-mono bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-muted focus:outline-none focus:border-accent transition-all duration-150 disabled:opacity-50"
         />
         {card?.read_only && (
           <p className="text-caption text-secondary mt-1" data-testid="card-readonly-note">
@@ -1151,7 +1151,7 @@ export default function LLMProviderSettings({
                   ? t('llm.model.freetextPlaceholder')
                   : t('llm.model.selectPlaceholder')
               }
-              className="w-full text-body bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary focus:outline-none focus:border-accent transition-all duration-150"
+              className="w-full text-body bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-muted focus:outline-none focus:border-accent transition-all duration-150"
             />
             {showModelDropdown &&
               modelSource !== 'freetext' &&
@@ -1225,7 +1225,7 @@ export default function LLMProviderSettings({
                 value={baseUrl}
                 onChange={(e) => setBaseUrl(e.target.value)}
                 placeholder={t('llm.baseUrl.placeholder')}
-                className="w-full text-body bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary focus:outline-none focus:border-accent transition-all duration-150"
+                className="w-full text-body bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-muted focus:outline-none focus:border-accent transition-all duration-150"
               />
             </div>
             {provider === CUSTOM_PROVIDER_KEY && (

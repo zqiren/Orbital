@@ -893,7 +893,7 @@ function SubAgentCard({ entry, onChanged, onChangeLocation }: CardProps) {
         <div>
           <div className="flex items-center gap-2">
             <MessageAvatar variant="agent" agentHandle={entry.slug} />
-            <h2 className="text-title font-medium text-primary">{entry.name}</h2>
+            <h2 className="text-body font-medium text-primary">{entry.name}</h2>
             <code className="text-caption text-secondary font-mono">{entry.slug}</code>
           </div>
           <div className="mt-1 flex items-center gap-3 text-caption">
@@ -1283,7 +1283,7 @@ function SubAgentCard({ entry, onChanged, onChangeLocation }: CardProps) {
                     onChange={e => handleChange(paramKey, e.target.value)}
                     disabled={!entry.installed}
                     placeholder={t('subAgentCard.param.cliDefault')}
-                    className="text-body font-mono bg-sidebar border border-border rounded px-2 py-1.5 text-primary placeholder:text-secondary focus:outline-none focus:border-accent disabled:opacity-50"
+                    className="text-body font-mono bg-sidebar border border-border rounded px-2 py-1.5 text-primary placeholder:text-muted focus:outline-none focus:border-accent disabled:opacity-50"
                   />
                 )}
                 {entry.slug === 'cursor' && paramKey === 'permission-mode' && (
@@ -1480,7 +1480,7 @@ function ManagedCredentials({ slug, fields, onChanged }: ManagedCredentialsProps
               disabled={viaProvider}
               onChange={e => setDrafts(d => ({ ...d, [field.key]: e.target.value }))}
               placeholder={t('subAgentCard.cred.placeholder')}
-              className="text-body font-mono bg-sidebar border border-border rounded px-2 py-1.5 text-primary placeholder:text-secondary focus:outline-none focus:border-accent disabled:opacity-50"
+              className="text-body font-mono bg-sidebar border border-border rounded px-2 py-1.5 text-primary placeholder:text-muted focus:outline-none focus:border-accent disabled:opacity-50"
             />
 
             {hintKey && <p className="text-caption text-secondary">{t(hintKey)}</p>}

@@ -236,7 +236,7 @@ export default function ScopeChip({ project, projects, sessionId }: ScopeChipPro
         aria-label={t('scopeChip.chip.aria')}
         data-testid="scope-chip-trigger"
         onClick={() => setOpen((v) => !v)}
-        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full border border-border bg-card text-xs font-medium text-secondary hover:text-primary hover:bg-card-hover transition-colors disabled:opacity-50 disabled:cursor-default"
+        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full border border-border bg-card text-caption font-medium text-secondary hover:text-primary hover:bg-card-hover transition-colors disabled:opacity-50 disabled:cursor-default"
       >
         <span data-testid="scope-chip-label">{label}</span>
         <ChevronDown size={12} aria-hidden="true" className="shrink-0" />
@@ -246,7 +246,7 @@ export default function ScopeChip({ project, projects, sessionId }: ScopeChipPro
         <span
           role="alert"
           data-testid="scope-chip-error"
-          className="absolute left-0 top-full mt-1 z-50 whitespace-nowrap rounded-md border border-error/30 bg-error/10 px-2 py-1 text-[11px] text-error"
+          className="absolute left-0 top-full mt-1 z-50 whitespace-nowrap rounded-md border border-error/30 bg-error/10 px-2 py-1 text-micro text-error"
         >
           {t('scopeChip.error.update')}
         </span>
@@ -261,7 +261,7 @@ export default function ScopeChip({ project, projects, sessionId }: ScopeChipPro
           className="absolute left-0 top-full mt-1 z-50 w-64 surface-float-pop p-3"
         >
           {/* Master toggle */}
-          <label className="flex items-center gap-2 text-xs text-primary cursor-pointer">
+          <label className="flex items-center gap-2 text-caption text-primary cursor-pointer">
             <input
               type="checkbox"
               checked={scope.mode === 'all'}
@@ -274,11 +274,11 @@ export default function ScopeChip({ project, projects, sessionId }: ScopeChipPro
 
           {/* Project multi-select */}
           <div className="mt-2 pt-2 border-t border-border">
-            <div className="text-2xs uppercase tracking-wide text-muted mb-1">
+            <div className="type-label text-secondary mb-1">
               {t('scopeChip.projects.heading')}
             </div>
             {selectable.length === 0 ? (
-              <p className="text-xs text-secondary">
+              <p className="text-caption text-secondary">
                 {t('scopeChip.projects.empty')}
               </p>
             ) : (
@@ -290,7 +290,7 @@ export default function ScopeChip({ project, projects, sessionId }: ScopeChipPro
                       scope.selected_project_ids.includes(p.project_id));
                   return (
                     <li key={p.project_id}>
-                      <label className="flex items-center gap-2 py-1 text-xs text-primary cursor-pointer">
+                      <label className="flex items-center gap-2 py-1 text-caption text-primary cursor-pointer">
                         <input
                           type="checkbox"
                           checked={checked}
@@ -308,7 +308,7 @@ export default function ScopeChip({ project, projects, sessionId }: ScopeChipPro
           </div>
 
           {/* Fixed footnote — the write guarantee. */}
-          <p className="mt-2 pt-2 border-t border-border text-[11px] text-secondary">
+          <p className="mt-2 pt-2 border-t border-border text-micro text-secondary">
             {t('scopeChip.footnote')}
           </p>
         </div>

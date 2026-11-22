@@ -40,7 +40,7 @@ export default function CredentialCard({
 
   if (resolved || credential.resolved) {
     return (
-      <div className="mb-3 shrink-0 px-4 py-2 rounded-lg bg-sidebar text-sm">
+      <div className="mb-3 shrink-0 px-4 py-2 rounded-lg bg-sidebar text-body">
         <span className="text-success">{t('credCard.providedHeader')}</span>{' '}
         <span className="text-secondary">{t('credCard.providedFor', { domain: credential.domain })}</span>
       </div>
@@ -89,12 +89,12 @@ export default function CredentialCard({
   return (
     <div className="mb-3 shrink-0 surface-float-static overflow-hidden">
       <div className="bg-accent/10 px-4 py-1.5 border-b border-border">
-        <span className="text-accent font-semibold text-sm">{t('credCard.header')}</span>
+        <span className="type-label text-accent-text">{t('credCard.header')}</span>
       </div>
 
       <div className="px-4 py-3 space-y-3">
-        <p className="text-sm">
-          <span className="font-semibold">{credential.domain}</span>
+        <p className="text-body">
+          <span className="font-medium">{credential.domain}</span>
           {' \u2014 '}
           {credential.reason}
         </p>
@@ -102,7 +102,7 @@ export default function CredentialCard({
         <div className="space-y-2">
           {credential.fields.map((field) => (
             <div key={field}>
-              <label className="block text-xs text-secondary mb-1 capitalize">
+              <label className="block text-caption text-secondary mb-1 capitalize">
                 {field}
               </label>
               <input
@@ -111,13 +111,13 @@ export default function CredentialCard({
                 onChange={(e) => setValues((prev) => ({ ...prev, [field]: e.target.value }))}
                 placeholder={field}
                 autoComplete={field.toLowerCase().includes('password') ? 'current-password' : field.toLowerCase().includes('user') || field.toLowerCase().includes('email') || field.toLowerCase().includes('account') ? 'username' : 'off'}
-                className="w-full text-sm px-3 py-1.5 rounded-lg border border-border bg-sidebar focus:outline-none focus:border-accent max-md:min-h-[44px]"
+                className="w-full text-body px-3 py-1.5 rounded-lg border border-border bg-sidebar focus:outline-none focus:border-accent max-md:min-h-[44px]"
               />
             </div>
           ))}
         </div>
 
-        <p className="text-xs text-secondary">
+        <p className="text-caption text-secondary">
           {t('credCard.storedNote')}
         </p>
 
@@ -127,7 +127,7 @@ export default function CredentialCard({
             onClick={handleDeny}
             onTouchEnd={(e) => { e.preventDefault(); handleDeny(); }}
             disabled={submitting}
-            className="px-4 py-1.5 text-sm rounded-lg border border-border text-secondary hover:bg-card-hover transition-colors duration-150 disabled:opacity-50 cursor-pointer w-full md:w-auto min-h-[44px]"
+            className="px-4 py-1.5 text-body rounded-lg border border-border text-secondary hover:bg-card-hover transition-colors duration-150 disabled:opacity-50 cursor-pointer w-full md:w-auto min-h-[44px]"
           >
             {t('credCard.deny')}
           </button>
@@ -136,7 +136,7 @@ export default function CredentialCard({
             onClick={handleSubmit}
             onTouchEnd={(e) => { e.preventDefault(); handleSubmit(); }}
             disabled={submitting || !allFilled}
-            className="px-4 py-1.5 text-sm rounded-lg bg-accent text-white hover:opacity-90 transition-opacity duration-150 disabled:opacity-50 cursor-pointer w-full md:w-auto min-h-[44px]"
+            className="px-4 py-1.5 text-body rounded-lg bg-accent text-white hover:opacity-90 transition-opacity duration-150 disabled:opacity-50 cursor-pointer w-full md:w-auto min-h-[44px]"
           >
             {submitting ? t('credCard.submitting') : t('credCard.provide')}
           </button>

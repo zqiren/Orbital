@@ -482,7 +482,7 @@ export default function SourceDetail({
           <Instruction source={source} toast={toast} />
           {(rows.length > 0 || catchup) && (
             <div className="hist" data-testid="src-history">
-              <div className="hlr"><span>{t('sources.recent')}</span>{catchup}</div>
+              <div className="hlr"><span className="type-label">{t('sources.recent')}</span>{catchup}</div>
               {rows.map((r) => r.kind === 'gap' ? (
                 <div key={r.id} className="gap" title={t('sources.gap')} data-testid="src-gap">
                   <Unplug size={11} strokeWidth={2} aria-hidden="true" /><span>{gapLabel(r.entry, now, locale, tr)}</span>

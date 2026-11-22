@@ -30,7 +30,7 @@ export default function PageHeading({ parents = [], title, titleTestId }: PageHe
   return (
     <div className="shrink-0 px-6 pt-[22px] bg-background" data-testid="page-heading">
       {parents.length > 0 && (
-        <nav aria-label={t('settingsToolbar.breadcrumb')} className="flex items-center gap-1.5 min-w-0 text-xs">
+        <nav aria-label={t('settingsToolbar.breadcrumb')} className="flex items-center gap-1.5 min-w-0 text-caption">
           {parents.map((p, i) => (
             <span key={p.label} className="contents">
               {i > 0 && (
@@ -50,7 +50,7 @@ export default function PageHeading({ parents = [], title, titleTestId }: PageHe
         </nav>
       )}
       <h1
-        className="text-lg font-semibold tracking-[-0.01em] text-primary truncate"
+        className="text-title font-semibold text-primary truncate"
         data-testid={titleTestId}
       >
         {title}

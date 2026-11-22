@@ -48,8 +48,8 @@ export default function ImportProjectsDialog({ onClose, onImported }: ImportProj
       >
         <div className="flex items-start gap-3 border-b border-border pt-5 pb-3 pl-6 pr-4">
           <div className="min-w-0 flex-1">
-            <h2 id={titleId} className="text-[15px] font-semibold text-primary">{t('importProjects.entry')}</h2>
-            <p className="mt-1 text-xs leading-relaxed text-secondary">
+            <h2 id={titleId} className="text-title font-semibold text-primary">{t('importProjects.entry')}</h2>
+            <p className="mt-1 text-caption text-secondary">
               {t('importProjects.intro')}
             </p>
           </div>

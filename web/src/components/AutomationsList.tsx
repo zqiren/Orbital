@@ -144,7 +144,7 @@ function AutomationRow({
         ) : (
           <FolderOpen className="w-3.5 h-3.5 shrink-0 text-muted" aria-hidden />
         )}
-        <span className="flex-1 truncate text-[13px] font-medium text-primary">
+        <span className="flex-1 truncate text-body font-medium text-primary">
           {trigger.name}
         </span>
         {/* Spec 079 — who runs it. Only drawn for an assigned automation: an
@@ -153,7 +153,7 @@ function AutomationRow({
             has since been uninstalled, so a stale choice stays visible. */}
         {trigger.agent && (
           <span
-            className="inline-flex shrink-0 items-center gap-1 text-[11px] text-secondary"
+            className="inline-flex shrink-0 items-center gap-1 text-micro text-secondary"
             title={t('automation.agent.chip', {
               name: agents.find((a) => a.slug === trigger.agent)?.name ?? trigger.agent,
             })}
@@ -166,8 +166,8 @@ function AutomationRow({
             tinted pill. Enabled/disabled stays legible because a paused
             automation is a silent failure mode. */}
         <span
-          className={`inline-flex shrink-0 items-center gap-1.5 text-[11px] ${
-            trigger.enabled ? 'text-secondary' : 'text-muted'
+          className={`inline-flex shrink-0 items-center gap-1.5 text-micro ${
+            'text-secondary'
           }`}
           data-testid={`automation-status-${trigger.id}`}
         >
@@ -212,12 +212,12 @@ function AutomationRow({
           className="flex items-center gap-2 pl-[22px]"
           data-testid={`automation-delete-confirm-${trigger.id}`}
         >
-          <span className="text-xs text-secondary">{t('trigger.deleteConfirm')}</span>
+          <span className="text-caption text-secondary">{t('trigger.deleteConfirm')}</span>
           <button
             type="button"
             onClick={() => setConfirmDelete(false)}
             disabled={deleting}
-            className="text-xs text-secondary hover:text-primary transition-colors"
+            className="text-caption text-secondary hover:text-primary transition-colors"
           >
             {t('trigger.delete.cancelBtn')}
           </button>
@@ -226,7 +226,7 @@ function AutomationRow({
             onClick={handleDelete}
             disabled={deleting}
             data-testid={`automation-delete-confirm-btn-${trigger.id}`}
-            className="text-xs text-error hover:text-error/80 transition-colors"
+            className="text-caption text-error hover:text-error/80 transition-colors"
           >
             {deleting ? t('trigger.deleting') : t('trigger.delete.confirmBtn')}
           </button>
@@ -234,28 +234,28 @@ function AutomationRow({
       )}
 
       <div className="flex flex-col gap-1 pl-[22px]">
-        <p className="text-[11px] text-muted">
-          <span className="mr-1.5 uppercase tracking-wide">{conditionLabel}</span>
+        <p className="text-micro text-secondary">
+          <span className="mr-1.5 type-label">{conditionLabel}</span>
           <span
-            className={`text-secondary ${conditionMono ? 'font-mono' : ''}`}
+            className={`text-primary ${conditionMono ? 'font-mono' : ''}`}
             data-testid={`automation-condition-${trigger.id}`}
           >
             {condition}
           </span>
         </p>
-        <p className="text-[11px] text-muted">
-          <span className="mr-1.5 uppercase tracking-wide">{t('automations.lastFired')}</span>
+        <p className="text-micro text-secondary">
+          <span className="mr-1.5 type-label">{t('automations.lastFired')}</span>
           <span
-            className="font-mono tabular-nums text-secondary"
+            className="font-mono tabular-nums text-primary"
             data-testid={`automation-last-fired-${trigger.id}`}
           >
             {formatLastFired(trigger.last_triggered)}
           </span>
           {trigger.trigger_count > 0 && (
             <>
-              <span className="mx-1.5 uppercase tracking-wide">{t('trigger.runs')}</span>
+              <span className="mx-1.5 type-label">{t('trigger.runs')}</span>
               <span
-                className="font-mono tabular-nums text-secondary"
+                className="font-mono tabular-nums text-primary"
                 data-testid={`automation-runs-${trigger.id}`}
               >
                 {trigger.trigger_count}
@@ -352,7 +352,7 @@ export default function AutomationsList({ projectId, agents = [], onTryInChat, o
   return (
     <div className="flex flex-col gap-3" data-testid="automations-pane">
       <div className="flex items-center justify-between gap-2">
-        <span className="text-xs text-secondary">
+        <span className="text-caption text-secondary">
           {triggers.length > 0
             ? t(triggers.length === 1 ? 'statusLine.automations.one' : 'statusLine.automations.other', {
                 n: triggers.length,
@@ -370,7 +370,7 @@ export default function AutomationsList({ projectId, agents = [], onTryInChat, o
             setCreating(true);
           }}
           data-testid="automations-new"
-          className="inline-flex items-center gap-1.5 text-xs font-medium text-accent hover:text-accent/80 transition-colors max-md:min-h-[44px]"
+          className="inline-flex items-center gap-1.5 text-caption font-medium text-accent hover:text-accent/80 transition-colors max-md:min-h-[44px]"
         >
           <Plus size={14} aria-hidden />
           {t('trigger.new')}
@@ -379,7 +379,7 @@ export default function AutomationsList({ projectId, agents = [], onTryInChat, o
 
       {error && (
         <p
-          className="text-xs text-error border border-error/40 bg-error/5 rounded px-2.5 py-2"
+          className="text-caption text-error border border-error/40 bg-error/5 rounded px-2.5 py-2"
           data-testid="automations-error"
         >
           {error}
@@ -395,7 +395,7 @@ export default function AutomationsList({ projectId, agents = [], onTryInChat, o
       )}
 
       {loading && triggers.length === 0 && (
-        <p className="text-sm text-secondary px-1 italic" data-testid="automations-loading">
+        <p className="text-body text-secondary px-1 italic" data-testid="automations-loading">
           {t('automations.loading')}
         </p>
       )}
@@ -423,8 +423,8 @@ export default function AutomationsList({ projectId, agents = [], onTryInChat, o
               <FolderSearch size={20} strokeWidth={1.75} />
             </span>
           </div>
-          <p className="mt-4 text-sm font-semibold text-primary">{t('automations.empty')}</p>
-          <p className="mt-1 text-[13px] leading-relaxed text-secondary">
+          <p className="mt-4 text-title font-semibold text-primary">{t('automations.empty')}</p>
+          <p className="mt-1 text-body text-secondary">
             {t('automations.emptyHint')}
           </p>
           <div className="mt-5 flex w-full flex-col gap-2">

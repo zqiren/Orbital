@@ -209,16 +209,16 @@ export default function PricingEditor({ onSaved }: PricingEditorProps) {
   // --- render ---------------------------------------------------------------
 
   if (loading) {
-    return <p className="text-sm text-secondary px-6 py-8">{t('pricing.loading')}</p>;
+    return <p className="text-body text-secondary px-6 py-8">{t('pricing.loading')}</p>;
   }
   if (loadError || !table) {
     return (
       <div className="px-6 py-8">
-        <p className="text-sm text-error mb-3">{loadError ?? t('pricing.loadError')}</p>
+        <p className="text-body text-error mb-3">{loadError ?? t('pricing.loadError')}</p>
         <button
           type="button"
           onClick={() => void fetchTable()}
-          className="text-sm font-medium text-accent hover:underline"
+          className="text-body font-medium text-accent hover:underline"
         >
           {t('pricing.retry')}
         </button>
@@ -231,11 +231,11 @@ export default function PricingEditor({ onSaved }: PricingEditorProps) {
   if (providerNames.length === 0) {
     return (
       <div className="px-6 py-8">
-        <p className="text-sm text-secondary mb-3">{t('pricing.empty')}</p>
+        <p className="text-body text-secondary mb-3">{t('pricing.empty')}</p>
         <button
           type="button"
           onClick={() => void fetchTable()}
-          className="text-sm font-medium text-accent hover:underline"
+          className="text-body font-medium text-accent hover:underline"
         >
           {t('pricing.retry')}
         </button>
@@ -245,7 +245,7 @@ export default function PricingEditor({ onSaved }: PricingEditorProps) {
 
   return (
     <div className="max-w-[860px] mx-auto py-6 px-6 max-md:px-4">
-      <p className="text-sm text-secondary mb-5">{t('pricing.intro')}</p>
+      <p className="text-body text-secondary mb-5">{t('pricing.intro')}</p>
 
       <div className="space-y-8">
         {providerNames.map((provider) => {
@@ -256,14 +256,14 @@ export default function PricingEditor({ onSaved }: PricingEditorProps) {
             <section key={provider} data-pricing-provider={provider}>
               {/* Provider header + currency select */}
               <div className="flex items-center justify-between gap-3 mb-2 flex-wrap">
-                <h3 className="text-sm font-semibold text-primary font-mono">{provider}</h3>
-                <label className="flex items-center gap-2 text-xs text-secondary">
+                <h3 className="text-body font-semibold text-primary font-mono">{provider}</h3>
+                <label className="flex items-center gap-2 text-caption text-secondary">
                   {t('pricing.currency.label')}
                   <Select
                     value={curr.value}
                     onChange={(e) => stageCurrency(provider, e.target.value)}
                     aria-label={t('pricing.currency.aria', { provider })}
-                    className={`text-xs bg-sidebar border rounded-lg px-2 py-1 text-primary focus:outline-none focus:border-accent transition-all duration-150 ${
+                    className={`text-caption bg-sidebar border rounded-lg px-2 py-1 text-primary focus:outline-none focus:border-accent transition-all duration-150 ${
                       curr.origin === 'override' ? 'border-accent' : 'border-border'
                     }`}
                   >
@@ -275,7 +275,7 @@ export default function PricingEditor({ onSaved }: PricingEditorProps) {
                     ))}
                   </Select>
                   {curr.origin === 'override' && (
-                    <span className="text-2xs text-accent uppercase tracking-wide">
+                    <span className="type-label text-accent-text">
                       {t('pricing.badge.override')}
                     </span>
                   )}
@@ -284,7 +284,7 @@ export default function PricingEditor({ onSaved }: PricingEditorProps) {
 
               {/* Per-model 4-tier grid */}
               <div className="overflow-x-auto">
-                <table className="w-full text-xs border-collapse min-w-[560px]">
+                <table className="w-full text-caption border-collapse min-w-[560px]">
                   <thead>
                     <tr className="text-secondary text-left">
                       <th className="font-normal py-1.5 pr-3">{t('pricing.col.model')}</th>
@@ -330,7 +330,7 @@ export default function PricingEditor({ onSaved }: PricingEditorProps) {
                                   })}
                                   aria-invalid={err ? true : undefined}
                                   data-origin={cell.origin}
-                                  className={`w-20 text-xs text-right tabular-nums bg-sidebar border rounded-md px-1.5 py-1 focus:outline-none focus:border-accent transition-all duration-150 ${
+                                  className={`w-20 text-caption text-right tabular-nums bg-sidebar border rounded-md px-1.5 py-1 focus:outline-none focus:border-accent transition-all duration-150 ${
                                     err
                                       ? 'border-error text-error'
                                       : isOverride
@@ -356,7 +356,7 @@ export default function PricingEditor({ onSaved }: PricingEditorProps) {
                                 )}
                               </div>
                               {err && (
-                                <p className="text-2xs text-error mt-0.5 text-right">{err}</p>
+                                <p className="text-micro text-error mt-0.5 text-right">{err}</p>
                               )}
                             </td>
                           );
@@ -372,13 +372,13 @@ export default function PricingEditor({ onSaved }: PricingEditorProps) {
       </div>
 
       {/* Legend */}
-      <p className="text-[11px] text-secondary/70 mt-6">
+      <p className="text-micro text-secondary mt-6">
         <span className="inline-block w-2 h-2 rounded-sm border border-accent align-middle mr-1" />
         {t('pricing.legend')}
       </p>
 
       {/* Override file path (read-only debug aid) */}
-      <p className="text-[11px] text-secondary/50 mt-1 font-mono break-all">
+      <p className="text-micro text-secondary mt-1 font-mono break-all">
         {t('pricing.overridePath', { path: table.override_path })}
       </p>
 
@@ -388,19 +388,19 @@ export default function PricingEditor({ onSaved }: PricingEditorProps) {
           type="button"
           onClick={() => void handleSave()}
           disabled={saving || !dirty || hasFieldErrors}
-          className="bg-accent text-white text-sm font-medium rounded-lg px-5 py-2.5 hover:bg-accent/90 transition-all duration-150 disabled:opacity-40 disabled:cursor-not-allowed max-md:min-h-[44px]"
+          className="bg-accent text-white text-body font-medium rounded-lg px-5 py-2.5 hover:bg-accent/90 transition-all duration-150 disabled:opacity-40 disabled:cursor-not-allowed max-md:min-h-[44px]"
         >
           {saving ? t('pricing.saving') : t('pricing.save')}
         </button>
-        {saved && <span className="text-sm text-success">{t('pricing.saved')}</span>}
+        {saved && <span className="text-body text-success">{t('pricing.saved')}</span>}
         {hasFieldErrors && !saveError && (
-          <span className="text-sm text-error">{t('pricing.fixErrors')}</span>
+          <span className="text-body text-error">{t('pricing.fixErrors')}</span>
         )}
-        {saveError && <span className="text-sm text-error">{saveError}</span>}
+        {saveError && <span className="text-body text-error">{saveError}</span>}
       </div>
 
       {/* Locale-layer currency-symbol hint (the data layer stays ISO codes). */}
-      <p className="text-[11px] text-secondary/50 mt-2">
+      <p className="text-micro text-secondary mt-2">
         {t('pricing.currencyHint', { sample: sampleSymbol(curr0(table, staged, providerNames), locale) })}
       </p>
     </div>
