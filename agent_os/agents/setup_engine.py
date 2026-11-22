@@ -113,6 +113,27 @@ def _mtime(path: str) -> float:
         return 0.0
 
 
+_RELEASE_RE = re.compile(r"(\d+)\.(\d+)(?:\.(\d+))?(?:-([0-9A-Za-z.-]+))?")
+
+
+def release_key(text: str | None) -> tuple | None:
+    """Sort key for the version in ``--version`` output, None without one.
+
+    ``codex-cli 0.171.0-alpha.13`` > ``codex-cli 0.157.1``: the numeric
+    release decides first; on an equal release a stable build sorts above
+    any pre-release of it, and pre-releases compare part by part (numbers as
+    numbers, ``alpha.13`` > ``alpha.2``)."""
+    match = _RELEASE_RE.search(text or "")
+    if match is None:
+        return None
+    release = tuple(int(g or 0) for g in match.group(1, 2, 3))
+    pre = match.group(4)
+    if pre is None:
+        return release + ((1,),)
+    return release + ((0, tuple((0, int(p), "") if p.isdigit() else (1, 0, p)
+                                for p in pre.split(".") if p)),)
+
+
 def _expand_auto_detect_entry(expanded: str) -> list[str]:
     """Spec 115 D3: an ``auto_detect`` entry containing ``*`` is a glob —
     ``$HOME/.nvm/versions/node/*/bin/codex``. Spec 144: matches come
@@ -308,6 +329,9 @@ class SetupEngine:
         # Spec 144: whether a candidate binary starts, keyed like the version
         # cache, so a sweep launches each copy once per change of its file.
         self._start_checks: dict[tuple, bool] = {}
+        # What each successful start check printed, same key: the version a
+        # ``binary_choice: newest`` manifest compares its copies by.
+        self._start_outputs: dict[tuple, str] = {}
         # Spec 136 B.4: slugs whose binary was not found, with when that
         # answer expires (the sweep TTL). Read by sweeps only, so a missing
         # agent stops spawning its check command through a shell every sweep
@@ -549,6 +573,7 @@ class SetupEngine:
         """Drop every cached version answer — the user's Refresh."""
         self._version_cache.clear()
         self._start_checks.clear()
+        self._start_outputs.clear()
 
     def _starts(self, manifest: AgentManifest, binary: str, *,
                 check_env: dict[str, str] | None = None,
@@ -567,13 +592,8 @@ class SetupEngine:
         ``extra_dir`` a directory the caller appends to the daemon PATH on
         acceptance (an npm shim needs its ``node`` beside it).
         """
-        command = manifest.runtime.command
         check = manifest.setup.check_command or ""
-        if check and command and (check == command or check.startswith(command + " ")):
-            cmd = self._substitute_binary(check, command, binary)
-        else:
-            cmd = (f'"{binary}"' if " " in binary else binary) + " --version"
-        version_key = self._version_key(manifest.slug, binary, cmd, check_env)
+        cmd, version_key = self._start_cmd_and_key(manifest, binary, check_env)
         if version_key is None:
             return False
         key = version_key + (extra_dir,)
@@ -605,9 +625,32 @@ class SetupEngine:
             ok = False
             logger.info("%s: %s does not start: %s", manifest.slug, binary, exc)
         self._start_checks[key] = ok
+        if output:
+            self._start_outputs[key] = output
         if output and check:
             self._version_cache[version_key] = self._version_line(output)
         return ok
+
+    def _start_cmd_and_key(self, manifest: AgentManifest, binary: str,
+                           check_env: dict[str, str] | None) -> tuple[str, tuple | None]:
+        """The start check's command line and its version-cache key."""
+        command = manifest.runtime.command
+        check = manifest.setup.check_command or ""
+        if check and command and (check == command or check.startswith(command + " ")):
+            cmd = self._substitute_binary(check, command, binary)
+        else:
+            cmd = (f'"{binary}"' if " " in binary else binary) + " --version"
+        return cmd, self._version_key(manifest.slug, binary, cmd, check_env)
+
+    def _start_output(self, manifest: AgentManifest, binary: str,
+                      extra_dir: str | None = None) -> str | None:
+        """What the cached start check of ``binary`` printed (its version
+        line), None when it printed nothing or timed out. Never launches."""
+        _cmd, version_key = self._start_cmd_and_key(manifest, binary, None)
+        if version_key is None:
+            return None
+        output = self._start_outputs.get(version_key + (extra_dir,))
+        return self._version_line(output) if output else None
 
     def _accept(self, manifest: AgentManifest, path: str, source: dict, *,
                 check_env: dict[str, str] | None = None,
@@ -1086,7 +1129,10 @@ class SetupEngine:
         2. shutil.which(command) — works if PATH is correct
         3. Expand and probe auto_detect paths for current OS
         4. A desktop app declared ``order: after_cli`` (a standalone CLI the
-           user installed wins over the copy inside ChatGPT.app).
+           user installed wins over the copy inside the app). With
+           ``setup.binary_choice: newest``, 2-4 are all looked at and the
+           copy reporting the highest version wins (Codex: ChatGPT.app's
+           copy runs ahead of Homebrew's); ties keep this order.
         5. Try check_command via subprocess
 
         A candidate counts only if it also starts (spec 144, ``_starts``):
@@ -1166,14 +1212,68 @@ class SetupEngine:
         if not command:
             return None
 
-        # Strategy 2: shutil.which
-        path = shutil.which(command)
-        if path and self._accept(manifest, path, {"kind": "path"}):
+        # Strategies 2-4: PATH, auto_detect, an after_cli desktop app. The
+        # first copy that starts, or with ``binary_choice: newest`` every
+        # copy that starts, the highest version winning (batch 1122: the
+        # codex inside ChatGPT.app runs ahead of Homebrew's and lists models
+        # the older CLI cannot see).
+        newest = manifest.setup.binary_choice == "newest"
+        found = []
+        for hit in self._unaided_candidates(manifest, current_os, command,
+                                            dedupe=newest):
+            found.append(hit)
+            if not newest:
+                break
+        if found:
+            path, source, extra_dir = (self._newest_of(manifest, found)
+                                       if len(found) > 1 else found[0])
+            self._pin(slug, path, source)
+            if extra_dir:
+                # Spec 115 D3 rule: a binary found in auto_detect is one
+                # shutil.which could not see, so its directory is not on
+                # PATH. An npm entry point is a `#!/usr/bin/env node` shim and
+                # the manifest's Node.js dependency is checked with
+                # `node --version` on the same PATH — both would fail, and
+                # the agent would read "installed" and die at dispatch.
+                _append_to_daemon_path(extra_dir)
             return path
 
+        # Strategy 5: try check_command via subprocess
+        if manifest.setup.check_command:
+            result = self._run_check_command(manifest.setup.check_command)
+            if result is not None:
+                # check_command succeeded, so the command is available
+                # Use shutil.which one more time or fall back to bare command
+                path = shutil.which(command)
+                if path and self._accept(manifest, path, {"kind": "check_command"}):
+                    return path
+
+        return None
+
+    def _unaided_candidates(self, manifest: AgentManifest, current_os: str,
+                            command: str, *, dedupe: bool):
+        """Strategies 2-4 in order, lazily: ``(path, source, extra_dir)`` for
+        each copy that starts. One per auto_detect entry (a glob's newest
+        match that starts, spec 144). ``dedupe`` skips a file already yielded
+        under another name (npm's shim on PATH and in auto_detect)."""
+        seen: set[str] = set()
+
+        def fresh(path: str) -> bool:
+            if not dedupe:
+                return True
+            real = os.path.normcase(os.path.realpath(path))
+            if real in seen:
+                return False
+            seen.add(real)
+            return True
+
+        # Strategy 2: shutil.which
+        path = shutil.which(command)
+        if path and fresh(path) and self._accept(manifest, path, {"kind": "path"}):
+            yield path, {"kind": "path"}, None
+
         # Strategy 3: auto_detect paths for current OS
-        auto_paths = manifest.setup.auto_detect.get(current_os, [])
-        for raw_path in auto_paths:
+        for raw_path in manifest.setup.auto_detect.get(current_os, []):
             # ${ORBITAL_DATA_DIR} is resolved before expandvars: it is not an
             # environment variable, and dev daemons never export one.
             substituted = raw_path.replace(
@@ -1187,36 +1287,36 @@ class SetupEngine:
                 # returned verbatim, as they always were.
                 expanded = os.path.normpath(expanded)
             for candidate in _expand_auto_detect_entry(expanded):
-                if not os.path.isfile(candidate):
+                if not os.path.isfile(candidate) or not fresh(candidate):
                     continue
                 if not self._accept(manifest, candidate, {"kind": "auto_detect"},
                                     extra_dir=os.path.dirname(candidate)):
                     continue
-                # Spec 115 D3 rule: a binary found here is one shutil.which
-                # could not see, so its directory is not on PATH. An npm
-                # entry point is a `#!/usr/bin/env node` shim and the
-                # manifest's Node.js dependency is checked with
-                # `node --version` on the same PATH — both would fail, and
-                # the agent would read "installed" and die at dispatch.
-                _append_to_daemon_path(os.path.dirname(candidate))
-                return candidate
+                yield candidate, {"kind": "auto_detect"}, os.path.dirname(candidate)
+                break
 
         # Strategy 4: the CLI inside a desktop app, behind a standalone CLI.
         hit = self._desktop_app_binary(manifest, current_os, "after_cli")
-        if hit is not None:
-            return hit
+        if hit is not None and fresh(hit):
+            yield hit, dict(self._resolved_sources.get(manifest.slug) or {}), None
 
-        # Strategy 5: try check_command via subprocess
-        if manifest.setup.check_command:
-            result = self._run_check_command(manifest.setup.check_command)
-            if result is not None:
-                # check_command succeeded, so the command is available
-                # Use shutil.which one more time or fall back to bare command
-                path = shutil.which(command)
-                if path and self._accept(manifest, path, {"kind": "check_command"}):
-                    return path
+    def _newest_of(self, manifest: AgentManifest, found: list) -> tuple:
+        """The copy whose version check reported the highest version. One
+        that printed no readable version (a timeout, a dev build) never beats
+        one that did; ties keep the earlier copy. Reads the outputs the start
+        checks already cached — no extra launch."""
+        def rank(item):
+            index, (path, source, extra_dir) = item
+            self._pin(manifest.slug, path, source)  # the key reads the source
+            key = release_key(self._start_output(manifest, path, extra_dir))
+            return (key is not None, key or (), -index)
 
-        return None
+        best = max(enumerate(found), key=rank)[1]
+        if best is not found[0]:
+            logger.info("%s: %d copies found; using %s over %s (newer version)",
+                        manifest.slug, len(found), best[0],
+                        ", ".join(f[0] for f in found if f is not best))
+        return best
 
     def _pin(self, slug: str, path: str, source: dict) -> None:
         self._resolved_paths[slug] = path
