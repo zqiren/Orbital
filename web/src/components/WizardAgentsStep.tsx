@@ -35,6 +35,7 @@ import {
   type NotesBreakdownRow,
 } from '../utils/onboarding';
 import { sendTelemetry } from '../utils/telemetry';
+import LoginCodeField from './LoginCodeField';
 import MessageAvatar from './MessageAvatar';
 import NotDetectedRow from './NotDetectedRow';
 
@@ -192,6 +193,7 @@ function AgentRow({
           )}
         </p>
       )}
+      {busy && <LoginCodeField slug={entry.slug} className="mt-1.5 pl-[66px]" />}
       {failed && (
         <p className="mt-1.5 pl-[66px] text-xs text-error" role="alert">{failed}</p>
       )}

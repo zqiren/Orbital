@@ -153,8 +153,8 @@ describe('SubAgentSettings', () => {
     api.mockResolvedValueOnce([
       makeEntry({ slug: 'claude-code', name: 'Claude Code', installed: true }),
       makeEntry({
-        slug: 'gemini-cli',
-        name: 'Gemini CLI',
+        slug: 'antigravity',
+        name: 'Antigravity',
         installed: false,
         binary_path: null,
       }),
@@ -167,13 +167,13 @@ describe('SubAgentSettings', () => {
     });
     // The not-installed agent used to vanish; now it is the locate card:
     // the paste flow, with no login / config controls.
-    const row = screen.getByTestId('sub-agent-not-detected-gemini-cli');
-    expect(row).toHaveTextContent('Gemini CLI');
+    const row = screen.getByTestId('sub-agent-not-detected-antigravity');
+    expect(row).toHaveTextContent('Antigravity');
     expect(row).toHaveTextContent('Not detected');
-    expect(row).toHaveTextContent('Copy a prompt into Gemini CLI and paste its answer below.');
+    expect(row).toHaveTextContent('Copy a prompt into Antigravity and paste its answer below.');
     expect(within(row).queryByRole('combobox')).not.toBeInTheDocument();
     expect(within(row).queryByText('Login')).not.toBeInTheDocument();
-    expect(within(row).getByTestId('sub-agent-locate-answer-gemini-cli')).toBeInTheDocument();
+    expect(within(row).getByTestId('sub-agent-locate-answer-antigravity')).toBeInTheDocument();
   });
 
   it('keeps the install helper out of the embedded view, and on the standalone page', async () => {
@@ -901,8 +901,8 @@ describe('SubAgentSettings — Orbital-managed install', () => {
     mockList([
       makeEntry({ slug: 'claude-code', name: 'Claude Code', installed: true }),
       makeDshEntry({
-        slug: 'gemini-cli',
-        name: 'Gemini CLI',
+        slug: 'antigravity',
+        name: 'Antigravity',
         // Bring-your-own everywhere: no platform list to be excluded from.
         install: { supported: false, state: 'not_installed', platforms: [] },
       }),
@@ -912,9 +912,9 @@ describe('SubAgentSettings — Orbital-managed install', () => {
 
     await waitFor(() => expect(screen.getByText('Claude Code')).toBeInTheDocument());
     // Spec 115 D4: the compact row, not the full card — so no Install.
-    expect(screen.getByTestId('sub-agent-not-detected-gemini-cli')).toHaveTextContent('Not detected');
+    expect(screen.getByTestId('sub-agent-not-detected-antigravity')).toHaveTextContent('Not detected');
     expect(screen.queryByRole('button', { name: 'Install' })).not.toBeInTheDocument();
-    expect(screen.queryByTestId('sub-agent-install-unsupported-gemini-cli')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('sub-agent-install-unsupported-antigravity')).not.toBeInTheDocument();
   });
 
   it('explains an unsupported platform instead of offering the button', async () => {

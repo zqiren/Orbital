@@ -562,8 +562,18 @@ class LifecycleObserver:
 
     async def on_error(self, project_id: str, handle: str, error: str,
                        transcript_path: str,
-                       *, session_id: str | None = None) -> None:
-        """Sub-agent encountered an error."""
+                       *, session_id: str | None = None,
+                       detail: dict | None = None) -> None:
+        """Sub-agent encountered an error.
+
+        ``detail`` (spec 193): what the transport knew about the error —
+        ``reason`` (an enum such as ``region_unavailable``) and the agent's
+        display ``name``. It rides on the durable row's meta and the WS
+        event, so the UI can say it in its own words; ``error`` stays the
+        agent's own text for the log and the manager.
+        """
+        extra = {k: v for k, v in (detail or {}).items()
+                 if k in ("reason", "name") and isinstance(v, str) and v}
         # Spec 113 A2/A3: the reason enum for the ping, and one local log
         # line (the on_failed call sites already log; this path never did).
         telemetry.emit("subagent_failed", {
@@ -593,6 +603,7 @@ class LifecycleObserver:
             await self._inject(
                 project_id, content, session_id=session_id,
                 meta={"event": "sub_agent_terminal", "kind": "error",
+                      **extra,
                       **({"suppress_wake": True}
                          if (pinned or queue_settled or parent) else {})},
             )
@@ -608,6 +619,7 @@ class LifecycleObserver:
             "handle": handle,
             "error": error,
             "session_id": session_id,
+            **extra,
         })
 
     async def on_failed(self, project_id: str, handle: str, reason: str,

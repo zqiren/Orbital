@@ -53,6 +53,12 @@ class ManifestRuntime:
     # what works in the app works here). {home_env, home_default, file, rows,
     # default_model_row, default_provider} — see agents/composition.py.
     config_mirror: dict = field(default_factory=dict)
+    # A vendor's soft refusal that arrives as an ordinary reply (Antigravity
+    # outside its regions answers "no valid license (#3501)" with
+    # stop_reason end_turn). Each entry is {regex, reason}; the ACP transport
+    # turns a turn whose WHOLE output fullmatches ``regex`` (no tool calls)
+    # into an error carrying ``reason``, so the vendor quirk stays data here.
+    refusal_patterns: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -92,6 +98,11 @@ class ManifestCredential:
     # its directory replaced by ``$home_env`` when that is set; ``key`` is a
     # dotted path into the YAML document; ``label`` names the owner for the UI.
     agent_store: dict = field(default_factory=dict)
+    # ``setup_command`` waits on stdin for a pasted value (``agy acp --login``
+    # asks for the authorization code its browser page shows). When set, the
+    # login runner keeps the child's stdin open and, on a progress line
+    # containing this text (case-insensitive), asks the card for the value.
+    setup_input_prompt: str = ""
 
 
 @dataclass
@@ -110,7 +121,9 @@ class ManifestOrbitalInstall:
 @dataclass
 class ManifestSetup:
     dependencies: list[ManifestDependency] = field(default_factory=list)
-    install_command: str | None = None    # "npm install -g @anthropic-ai/claude-code"
+    # "npm install -g @anthropic-ai/claude-code". The YAML may also give a
+    # per-OS mapping ({macos, linux, windows}); the loader keeps this OS's.
+    install_command: str | None = None
     check_command: str | None = None      # "claude --version"
     auto_detect: dict = field(default_factory=dict)  # {"windows": [...], "macos": [...]}
     credentials: list[ManifestCredential] = field(default_factory=list)
@@ -186,6 +199,16 @@ _SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+(-[\w.]+)?$")
 
 # Slug: lowercase, digits, hyphens only (no spaces, no uppercase)
 _SLUG_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
+
+
+def _for_this_os(value):
+    """A manifest value that may be given per OS ({macos, linux, windows}):
+    this OS's entry, or None when the mapping leaves it out. A plain value
+    is the same on every OS."""
+    if not isinstance(value, dict):
+        return value
+    from agent_os.daemon_v2.models import detect_os
+    return value.get(detect_os())
 
 
 # ---------------------------------------------------------------------------
@@ -279,6 +302,10 @@ class ManifestLoader:
             config_template=runtime_data.get("config_template", ""),
             config_flag=runtime_data.get("config_flag", "--config"),
             config_mirror=dict(runtime_data.get("config_mirror") or {}),
+            refusal_patterns=[
+                dict(p) for p in (runtime_data.get("refusal_patterns") or [])
+                if isinstance(p, dict) and p.get("regex") and p.get("reason")
+            ],
         )
 
         # Setup
@@ -307,10 +334,11 @@ class ManifestLoader:
                 provider_keys=cred.get("provider_keys", []),
                 check_missing_value=cred.get("check_missing_value", ""),
                 agent_store=dict(cred.get("agent_store") or {}),
+                setup_input_prompt=cred.get("setup_input_prompt", ""),
             ))
         setup = ManifestSetup(
             dependencies=dependencies,
-            install_command=setup_data.get("install_command"),
+            install_command=_for_this_os(setup_data.get("install_command")),
             check_command=setup_data.get("check_command"),
             auto_detect=setup_data.get("auto_detect", {}),
             credentials=credentials,

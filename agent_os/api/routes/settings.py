@@ -1695,6 +1695,59 @@ def _resolve_setup_command(slug: str, action: str) -> str | None:
     return None
 
 
+def _setup_input_prompt(slug: str) -> str | None:
+    """The manifest's ``setup_input_prompt`` for ``slug``'s login (spec 193):
+    the text of the line on which the CLI waits for a pasted value, or None
+    when its login needs no input (every agent but Antigravity today)."""
+    manifest = _registry_manifest(slug)
+    for cred in getattr(getattr(manifest, "setup", None), "credentials", None) or []:
+        prompt = getattr(cred, "setup_command", "") and getattr(
+            cred, "setup_input_prompt", "")
+        if isinstance(prompt, str) and prompt.strip():
+            return prompt.strip()
+    return None
+
+
+def _redact_secrets(text: str, secrets: list[str] | None) -> str:
+    """Replace every value pasted into a login (spec 193) with a marker, so a
+    CLI that echoes the code never puts it in progress, the log or the job
+    view."""
+    for secret in secrets or []:
+        if secret:
+            text = text.replace(secret, "[redacted]")
+    return text
+
+
+class _PromptAwareLineReader:
+    """Lines from a login's stdout, plus a trailing partial line once it
+    holds the input prompt (spec 193): ``agy acp --login`` ends its prompt
+    with "press Enter:" and no newline, so ``readline`` would wait on it
+    until the idle timeout."""
+
+    def __init__(self, stream, prompt: str) -> None:
+        self._stream = stream
+        self._prompt = prompt.lower()
+        self._buf = b""
+
+    async def next(self, timeout: float) -> bytes:
+        """The next line (terminator kept), or b"" at end of output. Raises
+        ``asyncio.TimeoutError`` after ``timeout`` seconds without output."""
+        while True:
+            newline = self._buf.find(b"\n")
+            if newline >= 0:
+                line, self._buf = self._buf[:newline + 1], self._buf[newline + 1:]
+                return line
+            if self._buf and self._prompt in self._buf.decode(
+                    "utf-8", errors="replace").lower():
+                line, self._buf = self._buf, b""
+                return line
+            chunk = await asyncio.wait_for(self._stream.read(4096), timeout=timeout)
+            if not chunk:
+                line, self._buf = self._buf, b""
+                return line
+            self._buf += chunk
+
+
 async def _credentials_now_configured(slug: str) -> bool:
     """Re-run the manifest's credential ``check_command`` for ``slug``.
 
@@ -1786,7 +1839,8 @@ def _login_job_view(job_id: str, job: dict) -> dict:
 
 
 async def _run_login_job(slug: str, job_id: str, command: str,
-                         kind: str = "login") -> None:
+                         kind: str = "login",
+                         input_prompt: str | None = None) -> None:
     """Background task: run the CLI login (or update) command, broadcast progress.
 
     Captures stdout+stderr line by line and emits sanitised ``login.progress``
@@ -1814,6 +1868,14 @@ async def _run_login_job(slug: str, job_id: str, command: str,
     Tokens from this flow never enter Orbital's storage — the CLI writes them
     to its own location. (Agents with no credential store of their own don't
     come through here at all; they use the ``/credential`` routes.)
+
+    ``input_prompt`` (spec 193, the manifest's ``setup_input_prompt``): the
+    CLI reads a pasted value from stdin (``agy acp --login`` wants the
+    authorization code its browser page shows). Only then is stdin a pipe;
+    the first output line containing the prompt emits
+    ``login.input_needed`` and the ``.../input`` route writes the user's
+    line to it. Every pasted value is redacted from progress, the tail and
+    the log. Orbital never opens the sign-in URL itself.
     """
     started = time.monotonic()
     job = _login_jobs.setdefault(job_id, {"slug": slug, "status": "running"})
@@ -1837,6 +1899,10 @@ async def _run_login_job(slug: str, job_id: str, command: str,
             "finished_at": _now_iso(), "duration_ms": duration_ms,
             "tail": list(tail),
         })
+        # The pipe and the pasted values live only as long as the process.
+        job.pop("stdin", None)
+        job.pop("secrets", None)
+        job.pop("awaiting_input", None)
         _prune_login_jobs()
         logger.warning(
             "%s job %s for %s ended: status=%s reason=%s return_code=%s "
@@ -1928,12 +1994,16 @@ async def _run_login_job(slug: str, job_id: str, command: str,
                 event["manual_command"] = manual
         _ws_manager.broadcast_global(event)
 
+    wants_input = bool(input_prompt) and not is_update
     try:
         proc = await asyncio.create_subprocess_shell(
             command,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             creationflags=win_no_window_flags(),
+            # Only a login that declares a prompt gets a stdin to read; every
+            # other job keeps the stdin it always had.
+            **({"stdin": asyncio.subprocess.PIPE} if wants_input else {}),
         )
     except OSError as exc:
         tail.append(_redact_urls(str(exc)))
@@ -1944,6 +2014,11 @@ async def _run_login_job(slug: str, job_id: str, command: str,
 
     job["pid"] = proc.pid
     assert proc.stdout is not None
+    reader = None
+    if wants_input:
+        job["stdin"] = proc.stdin
+        job["secrets"] = []
+        reader = _PromptAwareLineReader(proc.stdout, input_prompt)
     timed_out = False
     while True:
         if deadline is not None:
@@ -1954,7 +2029,10 @@ async def _run_login_job(slug: str, job_id: str, command: str,
         else:
             wait = LOGIN_IDLE_TIMEOUT_SECONDS
         try:
-            raw = await asyncio.wait_for(proc.stdout.readline(), timeout=wait)
+            if reader is not None:
+                raw = await reader.next(wait)
+            else:
+                raw = await asyncio.wait_for(proc.stdout.readline(), timeout=wait)
         except asyncio.TimeoutError:
             # Login: idle too long, the user walked away mid-OAuth. Update:
             # past its budget. Kill it rather than hold the subprocess for
@@ -1964,6 +2042,7 @@ async def _run_login_job(slug: str, job_id: str, command: str,
         if not raw:
             break
         line = _strip_terminal_escapes(raw.decode("utf-8", errors="replace"))
+        line = _redact_secrets(line, job.get("secrets"))
         if line:
             tail.append(_redact_urls(line))
             del tail[:-LOGIN_JOB_TAIL_LINES]
@@ -1975,6 +2054,17 @@ async def _run_login_job(slug: str, job_id: str, command: str,
                 "kind": kind,
                 "line": line,
             })
+        if (wants_input and line and not job.get("awaiting_input")
+                and input_prompt.lower() in line.lower()):
+            # The CLI now waits on stdin: the card shows one field for it.
+            job["awaiting_input"] = True
+            if _ws_manager is not None:
+                _ws_manager.broadcast_global({
+                    "type": "login.input_needed",
+                    "job_id": job_id,
+                    "slug": slug,
+                    "kind": kind,
+                })
 
     if timed_out:
         # The command runs through the shell, so the CLI is the shell's
@@ -2086,11 +2176,50 @@ async def trigger_sub_agent_login(slug: str):
                 f"(set the API key via env or its own settings file)"
             ),
         )
+    input_prompt = _setup_input_prompt(slug)
     job_id = uuid4().hex[:12]
     _login_jobs[job_id] = {"slug": slug, "status": "running", "command": command,
                            "kind": "login", "started_at": _now_iso()}
-    asyncio.create_task(_run_login_job(slug, job_id, command))
+    asyncio.create_task(_run_login_job(
+        slug, job_id, command,
+        **({"input_prompt": input_prompt} if input_prompt else {})))
     return {"job_id": job_id, "slug": slug, "status": "running"}
+
+
+class LoginInputRequest(BaseModel):
+    # The pasted value (an authorization code, or the URL the browser landed
+    # on). A secret: never logged, never echoed back.
+    value: str
+
+
+@router.post("/settings/sub-agents/{slug}/login-jobs/{job_id}/input")
+async def submit_login_input(slug: str, job_id: str, req: LoginInputRequest):
+    """Write the user's pasted value to a running login's stdin (spec 193).
+
+    Only a login whose manifest declares ``setup_input_prompt`` has a stdin
+    to write to. The job then ends exactly as any login does (exit code,
+    credential re-check, ``login.complete`` / ``login.failed``).
+    """
+    job = _login_jobs.get(job_id)
+    if job is None or job.get("slug") != slug:
+        raise HTTPException(status_code=404, detail="no such login job")
+    stdin = job.get("stdin")
+    if job.get("status") != "running" or stdin is None:
+        raise HTTPException(status_code=409,
+                            detail="this login is not waiting for input")
+    value = (req.value or "").strip()
+    if not value or "\n" in value or "\r" in value:
+        raise HTTPException(status_code=400, detail="paste a single line")
+    # Redact before writing: a CLI that echoes the line must never print it.
+    job.setdefault("secrets", []).append(value)
+    try:
+        stdin.write((value + "\n").encode("utf-8"))
+        await stdin.drain()
+    except (BrokenPipeError, ConnectionResetError, RuntimeError, OSError):
+        raise HTTPException(status_code=409,
+                            detail="this login is not waiting for input")
+    job["awaiting_input"] = False
+    return {"job_id": job_id, "slug": slug, "status": "sent"}
 
 
 def _worker_running(slug: str) -> bool:

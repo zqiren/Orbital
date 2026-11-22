@@ -48,11 +48,10 @@ from agent_os.daemon_v2.credential_store import (
     UserCredentialStore,
 )
 
-# The slug used for route tests: gemini-cli is the shipped manifest that
-# declares a plain ``secret`` credential (dsh lands in a later task and has
-# the same shape).
-ROUTE_SLUG = "gemini-cli"
-ROUTE_KEY = "GEMINI_API_KEY"
+# The slug used for route tests: aider is a shipped manifest that declares a
+# plain ``secret`` credential (gemini-cli was, until spec 193 retired it).
+ROUTE_SLUG = "aider"
+ROUTE_KEY = "OPENAI_API_KEY"
 
 
 # ---------------------------------------------------------------------------
@@ -405,7 +404,7 @@ class TestCredentialRouteStorage:
         assert _post(client, key=ROUTE_KEY, value=raw).status_code == 200
         # Touch the config store too, so its file definitely exists on disk.
         client.put(f"/api/v2/settings/sub-agents/{ROUTE_SLUG}/config",
-                   json={"model": "gemini-2.5-pro"})
+                   json={"model": "gpt-5"})
 
         offenders = []
         scanned = 0

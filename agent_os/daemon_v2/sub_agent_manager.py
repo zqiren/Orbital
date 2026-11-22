@@ -789,10 +789,18 @@ class SubAgentManager:
             # to resume identity. Session config options the user set (dsh's
             # reasoning_effort) are applied after session/new or resume, and
             # only when the agent advertises them.
+            # Spec 193: a vendor's soft refusal (manifest data) becomes an
+            # honest error naming the agent. ``list`` guards test doubles
+            # whose runtime is a Mock.
+            refusal_patterns = getattr(manifest.runtime, "refusal_patterns", None)
+            agent_name = getattr(manifest, "name", None)
             return ACPSDKTransport(
                 resume_record=resume_record,
                 config_options=(config_dict or {}).get("acp_config_options") or None,
                 dispatch_mcp=dispatch_mcp,
+                refusal_patterns=(refusal_patterns
+                                  if isinstance(refusal_patterns, list) else None),
+                agent_name=agent_name if isinstance(agent_name, str) else None,
             )
         elif transport_type == "codex-appserver":
             from agent_os.agent.transports.codex_transport import CodexTransport

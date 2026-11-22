@@ -33,6 +33,9 @@ export const MAIN_AGENT_HANDLE = 'orbital';
 const ICONS: Record<string, AgentIcon> = {
   // Orbital's own mark — the app icon, already shipped for the PWA manifest.
   [MAIN_AGENT_HANDLE]: { src: '/icon-192.png', monogram: 'OR', color: '#D9694A' },
+  // Google's successor to Gemini CLI (spec 193). No Antigravity mark ships
+  // yet, so it wears the Gemini one.
+  antigravity: { src: '/agents/gemini.svg', monogram: 'AG', color: '#4285F4' },
   'claude-code': { src: '/agents/claude-code.svg', monogram: 'CC', color: '#D97757' },
   claude: { src: '/agents/claude-code.svg', monogram: 'CC', color: '#D97757' },
   codex: { src: '/agents/codex.svg', monogram: 'CX', color: '#10A37F' },

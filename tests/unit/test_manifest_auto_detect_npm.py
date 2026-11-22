@@ -32,7 +32,7 @@ NPM = _npm_manifests()
 
 def test_the_npm_set_is_not_vacuous():
     assert {m.slug for m in NPM} >= {"codex", "claude-code", "kimi-code",
-                                     "minimax-code", "pi", "gemini-cli"}
+                                     "minimax-code", "pi"}
 
 
 @pytest.mark.parametrize("manifest", NPM, ids=lambda m: m.slug)

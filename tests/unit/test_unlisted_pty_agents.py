@@ -17,7 +17,8 @@ from agent_os.agents.setup_engine import SetupEngine
 
 MANIFESTS = os.path.join(os.path.dirname(__file__), "..", "..",
                          "agent_os", "agents", "manifests")
-PTY_SIX = {"aider", "cline", "continue-cli", "copilot-cli", "gemini-cli", "goose"}
+# Spec 193 retired gemini-cli outright (Antigravity replaced it), so five remain.
+PTY_AGENTS = {"aider", "cline", "continue-cli", "copilot-cli", "goose"}
 
 
 def _bundled() -> AgentRegistry:
@@ -37,15 +38,15 @@ def test_listed_defaults_true_and_reads_false():
     assert ManifestLoader._build(_minimal(listed=False)).listed is False
 
 
-def test_exactly_the_six_pty_agents_are_unlisted():
+def test_exactly_the_pty_agents_are_unlisted():
     registry = _bundled()
     unlisted = {m.slug for m in registry.list_all() if not m.listed}
-    assert unlisted == PTY_SIX
+    assert unlisted == PTY_AGENTS
     for m in registry.list_all():
-        if m.slug in PTY_SIX:
+        if m.slug in PTY_AGENTS:
             assert m.runtime.transport == "pty"
     # Still registered: a saved pin or automation resolves by slug.
-    for slug in PTY_SIX:
+    for slug in PTY_AGENTS:
         assert registry.get(slug) is not None
 
 
@@ -60,11 +61,11 @@ def test_check_all_skips_unlisted_but_check_agent_still_answers(tmp_path):
 
     engine.check_agent = check_agent
     slugs = {s.slug for s in engine.check_all()}
-    assert slugs.isdisjoint(PTY_SIX)
+    assert slugs.isdisjoint(PTY_AGENTS)
     assert {"claude-code", "codex"} <= slugs
-    # The sweep no longer probes the six CLIs at all.
-    assert PTY_SIX.isdisjoint(probed)
-    assert engine.check_agent("gemini-cli").slug == "gemini-cli"
+    # The sweep no longer probes those CLIs at all.
+    assert PTY_AGENTS.isdisjoint(probed)
+    assert engine.check_agent("aider").slug == "aider"
 
 
 def test_check_all_tolerates_manifests_without_the_field(tmp_path):

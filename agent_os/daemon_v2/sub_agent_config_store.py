@@ -228,19 +228,25 @@ SCHEMA: dict[str, dict[str, _ParamSchema]] = {
             default="auto",
         ),
     },
-    "gemini-cli": {
-        # gemini-cli may not be installed today; this entry exists so the UI
-        # can render the right dropdowns the moment it shows up in the
-        # registry.
+    "antigravity": {
+        # Antigravity's model ids (gemini-3.8-flash, claude-sonnet-4-6, ...)
+        # depend on the Google account's plan, so this stays free-text.
+        # Delivered through the ACP transport, which lifts ``--model`` out of
+        # argv (agy takes it before the ``acp`` subcommand) and applies it to
+        # the session's advertised model option.
         "model": _ParamSchema(
             name="model",
             allowed=None,
             flag_template="--model {value}",
         ),
-        "approval-mode": _ParamSchema(
-            name="approval-mode",
-            allowed=("default", "auto_edit", "plan", "yolo"),
-            flag_template="--approval-mode {value}",
+        # Orbital's own ACP permission policy (same contract as cursor), not
+        # an agy flag: ``auto`` answers every permission request itself so
+        # queue runs never block; ``ask`` routes them to the approval card.
+        "permission-mode": _ParamSchema(
+            name="permission-mode",
+            allowed=("auto", "ask"),
+            flag_template="--orbital-permission-mode {value}",
+            default="auto",
         ),
     },
     "dsh": {

@@ -238,6 +238,10 @@ class ProcessManager:
         async def consume():
             last_response_text = ""
             last_error_text = ""
+            # Spec 193: what the error chunk says about itself (a refusal's
+            # ``reason`` and the agent's ``name``), handed to on_error so the
+            # durable row can carry it for the UI's own sentence.
+            last_error_detail: dict = {}
             try:
                 async for chunk in adapter.read_stream():
                     if chunk.chunk_type == "turn_complete":
@@ -346,6 +350,8 @@ class ProcessManager:
                                     or "turn ended without a completion signal",
                                     transcript.filepath,
                                     session_id=session_id,
+                                    **({"detail": last_error_detail}
+                                       if last_error_detail else {}),
                                 )
                         # Append a turn boundary so read_sub_agent_summary can
                         # split the transcript per-turn (multi-turn display).
@@ -366,6 +372,7 @@ class ProcessManager:
                             None if self_turn else self._pop_active_dispatch(key))
                         last_response_text = ""  # reset for next turn
                         last_error_text = ""
+                        last_error_detail = {}
                         self._turn_open[key] = False
                         if self.on_turn_closed is not None:
                             await self.on_turn_closed(
@@ -497,6 +504,11 @@ class ProcessManager:
                         # Keep error text out of last_response_text — it is
                         # not a "summary"; it feeds on_error at turn close.
                         last_error_text = chunk.text
+                        err_meta = getattr(chunk, "metadata", None) or {}
+                        last_error_detail = {
+                            k: err_meta[k] for k in ("reason", "name")
+                            if isinstance(err_meta.get(k), str) and err_meta[k]
+                        }
 
                     # Track last response text for completion summary
                     if chunk.chunk_type in ("response", "message") or chunk.chunk_type is None:

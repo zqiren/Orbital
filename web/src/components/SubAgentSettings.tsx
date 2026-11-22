@@ -14,6 +14,7 @@ import { LabelWithHint } from './SettingsSection';
 import type { WebSocketEvent } from '../types';
 import Select from './Select';
 import { pickLoginUrl } from '../utils/loginUrl';
+import LoginCodeField from './LoginCodeField';
 import { SendDiagnosticsLink } from './SendFeedback';
 
 // ---------------------------------------------------------------------------
@@ -1184,6 +1185,7 @@ function SubAgentCard({ entry, onChanged, onChangeLocation }: CardProps) {
           </a>
         </p>
       )}
+      <LoginCodeField slug={entry.slug} className="mb-3" />
       {loginNotice && (
         <p
           data-testid={`sub-agent-login-notice-${entry.slug}`}

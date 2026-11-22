@@ -110,7 +110,7 @@ interface AgentFixture {
 const AGENTS: AgentFixture[] = [
   { slug: 'claude-code', name: 'Claude Code', installed: true, credentials_configured: true },
   { slug: 'codex', name: 'Codex', installed: true, credentials_configured: false, supports_login: true },
-  { slug: 'gemini-cli', name: 'Gemini CLI', installed: true, credentials_configured: true },
+  { slug: 'antigravity', name: 'Antigravity', installed: true, credentials_configured: true },
   { slug: 'kimi-code', name: 'Kimi Code', installed: false, credentials_configured: false },
   { slug: 'pi', name: 'Pi', installed: false, credentials_configured: false },
 ];
@@ -390,9 +390,9 @@ describe('SetupWizard — Agents step', () => {
     );
     expect(screen.getByTestId('wizard-agent-status-codex').textContent).toBe('Installed · not signed in');
     expect(screen.getByTestId('wizard-agent-login-codex').textContent).toBe('Sign in');
-    // No history reader for gemini-cli → no count.
-    expect(screen.getByTestId('wizard-agent-status-gemini-cli').textContent).toBe('Signed in');
-    for (const slug of ['claude-code', 'codex', 'gemini-cli']) {
+    // No history reader for antigravity → no count.
+    expect(screen.getByTestId('wizard-agent-status-antigravity').textContent).toBe('Signed in');
+    for (const slug of ['claude-code', 'codex', 'antigravity']) {
       expect((screen.getByTestId(`wizard-agent-check-${slug}`) as HTMLInputElement).checked).toBe(true);
     }
     expect(screen.getByTestId('wizard-agents-continue').textContent).toBe('Continue with 3 agents');
@@ -427,20 +427,20 @@ describe('SetupWizard — Agents step', () => {
   it('an agent with no login flow says where its key goes instead of offering Sign in', async () => {
     mockApi({
       apiKeySet: false,
-      agents: [{ slug: 'gemini-cli', name: 'Gemini CLI', installed: true, credentials_configured: false, supports_login: false }],
+      agents: [{ slug: 'key-only-cli', name: 'Key Only CLI', installed: true, credentials_configured: false, supports_login: false }],
     });
     render(<SetupWizard onComplete={vi.fn()} />);
     await waitFor(() =>
-      expect(screen.getByTestId('wizard-agent-status-gemini-cli').textContent).toBe('Installed · add its key later in Settings'),
+      expect(screen.getByTestId('wizard-agent-status-key-only-cli').textContent).toBe('Installed · add its key later in Settings'),
     );
-    expect(screen.queryByTestId('wizard-agent-login-gemini-cli')).toBeNull();
+    expect(screen.queryByTestId('wizard-agent-login-key-only-cli')).toBeNull();
   });
 
   it('an agent already hidden starts unchecked', async () => {
-    mockApi({ apiKeySet: false, hidden: ['gemini-cli'] });
+    mockApi({ apiKeySet: false, hidden: ['antigravity'] });
     render(<SetupWizard onComplete={vi.fn()} />);
     await waitFor(() =>
-      expect((screen.getByTestId('wizard-agent-check-gemini-cli') as HTMLInputElement).checked).toBe(false),
+      expect((screen.getByTestId('wizard-agent-check-antigravity') as HTMLInputElement).checked).toBe(false),
     );
   });
 
@@ -480,7 +480,7 @@ describe('SetupWizard — no coding agent found', () => {
     expect(screen.getByText(/We didn't find a coding agent on this computer\./)).toBeTruthy();
     // The first chip's card is open by default.
     expect(screen.getByTestId('sub-agent-not-detected-claude-code')).toBeTruthy();
-    expect(screen.getByTestId('wizard-install-line').textContent).toContain('Claude Code · Codex · Gemini CLI · Kimi Code · Pi');
+    expect(screen.getByTestId('wizard-install-line').textContent).toContain('Claude Code · Codex · Antigravity · Kimi Code · Pi');
     expect(screen.getByTestId('wizard-agents-continue').textContent).toBe('Continue');
 
     await continueFromAgents();
