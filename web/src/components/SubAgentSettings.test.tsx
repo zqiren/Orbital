@@ -78,6 +78,7 @@ interface Entry {
   credentials_configured: boolean;
   missing_credentials: string[];
   supports_login?: boolean;
+  supports_logout?: boolean;
   setup_actions: unknown[];
   config: Record<string, string>;
   param_schema: Record<string, {
@@ -218,6 +219,36 @@ describe('SubAgentSettings', () => {
       expect(screen.getByText('API Key Only')).toBeInTheDocument();
     });
     expect(screen.queryByRole('button', { name: /^login$/i })).not.toBeInTheDocument();
+  });
+
+  // Spec 193: Antigravity signs in but has no logout command, so the card
+  // must not offer a Logout the route would refuse.
+  it('hides Logout when supports_logout is false', async () => {
+    api.mockResolvedValueOnce([
+      makeEntry({
+        slug: 'no-logout-cli',
+        name: 'No Logout CLI',
+        credentials_configured: true,
+        missing_credentials: [],
+        supports_logout: false,
+      }),
+    ]);
+    render(<SubAgentSettings />);
+    await waitFor(() => expect(screen.getByText('No Logout CLI')).toBeInTheDocument());
+    expect(screen.getByText('Logged in')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^logout$/i })).not.toBeInTheDocument();
+  });
+
+  it('keeps Logout when supports_logout is true or absent (older daemon)', async () => {
+    api.mockResolvedValueOnce([
+      makeEntry({ slug: 'a', name: 'With Flag', credentials_configured: true,
+        missing_credentials: [], supports_logout: true }),
+      makeEntry({ slug: 'b', name: 'Without Flag', credentials_configured: true,
+        missing_credentials: [] }),
+    ]);
+    render(<SubAgentSettings />);
+    await waitFor(() => expect(screen.getByText('Without Flag')).toBeInTheDocument());
+    expect(screen.getAllByRole('button', { name: /^logout$/i })).toHaveLength(2);
   });
 
   it('shows the Login button when supports_login is true and not logged in', async () => {

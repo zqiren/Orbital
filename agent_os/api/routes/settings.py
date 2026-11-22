@@ -978,6 +978,8 @@ def _build_sub_agent_status_entry(s) -> dict:
         "credential_state": getattr(s, "credential_state", None),
         "credentials": _declared_credentials(manifest, s.missing_credentials),
         "supports_login": _supports_login(s.slug),
+        # False hides the card's Logout: the agent has no logout command.
+        "supports_logout": _logout_subcommand(manifest) is not None,
         "install": _install_entry(manifest, installed=s.installed),
         # Which copy Orbital drives — {"kind": "desktop_app", "label",
         # "app_path", "app_version"} for the CLI inside a vendor app,
@@ -1680,19 +1682,30 @@ def _resolve_setup_command(slug: str, action: str) -> str | None:
                 return cmd
         return None
     if action == "logout":
-        # Manifests don't currently carry a logout command; fall back to a
-        # reasonable default for known CLIs that ship a logout subcommand.
-        if not binary:
+        subcommand = _logout_subcommand(manifest)
+        if not binary or subcommand is None:
             return None
-        if manifest.runtime.command in ("claude", "codex", "agent", "cursor-agent", "mcode"):
-            subcommand = (
-                "auth logout"
-                if manifest.runtime.command == "claude"
-                else "logout"
-            )
-            return f"{binary} {subcommand}"
-        return None
+        return f"{binary} {subcommand}"
     return None
+
+
+# Manifests carry no logout command, so this table is the one place that says
+# which CLIs ship a non-interactive logout subcommand. The logout route runs
+# it, and ``supports_logout`` on the status entry reads it, so the card never
+# offers a Logout the route would refuse. Antigravity is absent: `agy` has no
+# logout subcommand (its logout is an ACP method only).
+_LOGOUT_SUBCOMMANDS = {
+    "claude": "auth logout",
+    "codex": "logout",
+    "agent": "logout",
+    "cursor-agent": "logout",
+    "mcode": "logout",
+}
+
+
+def _logout_subcommand(manifest) -> str | None:
+    command = getattr(getattr(manifest, "runtime", None), "command", None)
+    return _LOGOUT_SUBCOMMANDS.get(command) if command else None
 
 
 def _setup_input_prompt(slug: str) -> str | None:

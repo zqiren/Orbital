@@ -42,7 +42,8 @@ INDEX_FILENAME = ".session-index.sqlite"
 #        import, 2026-10-21).
 #   "4": ``last_user_at`` skips bookkeeping rows; ``ask_ids`` (spec 154 §5.3).
 #   "5": ``routed_by`` — "Orbital chose this project" (spec 180).
-INDEX_VERSION = "5"
+#   "6": a pin to a retired slug reads as its successor (spec 193).
+INDEX_VERSION = "6"
 
 # ``_kind`` tags of daemon bookkeeping rows (spec 112 A6, 124, 146). Some are
 # ``role: "user"`` (the record turn's [MEMORY] ask), but none is the user's
@@ -198,6 +199,7 @@ def derive_disk_entry(path: str, uuid: str) -> dict | None:
     from agent_os.agent.session import (
         _derive_name, is_machine_derived_name, trigger_type_of,
     )
+    from agent_os.agents.retired import current_slug
 
     stored_name = None  # name on the session_start meta, if present
     stored_pinned = False  # `pinned` on the same meta (spec 067)
@@ -235,7 +237,9 @@ def derive_disk_entry(path: str, uuid: str) -> dict | None:
                     if rec.get("pinned") is not None:
                         stored_pinned = bool(rec["pinned"])
                     if rec.get("pinned_target"):
-                        stored_pinned_target = rec["pinned_target"]
+                        # A retired slug reads as its successor (as in
+                        # Session.load); the file keeps the old one.
+                        stored_pinned_target = current_slug(rec["pinned_target"])
                     if rec.get("trigger_type"):
                         stored_trigger_type = rec["trigger_type"]
                     if rec.get("routed_by") in ("model", "fallback"):
