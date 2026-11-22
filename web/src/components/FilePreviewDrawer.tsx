@@ -444,7 +444,7 @@ export default function FilePreviewDrawer({
           {header ? (
             <div className="min-w-0 flex-1">{header}</div>
           ) : (
-            <span className="text-xs font-medium text-secondary">{t('filePreview.heading')}</span>
+            <span className="text-caption font-medium text-secondary">{t('filePreview.heading')}</span>
           )}
           <button
             ref={closeBtnRef}

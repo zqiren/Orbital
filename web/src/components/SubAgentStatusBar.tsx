@@ -127,7 +127,7 @@ export default function SubAgentStatusBar({ projectId, sessionId, live }: Props)
   return (
     <div
       data-testid="sub-agent-status-bar"
-      className="sub-agent-line relative z-10 shrink-0 flex items-center gap-2 overflow-x-auto px-4 pt-2 pb-2.5 md:px-7 md:pt-0.5 bg-card text-xs"
+      className="sub-agent-line relative z-10 shrink-0 flex items-center gap-2 overflow-x-auto px-4 pt-2 pb-2.5 md:px-7 md:pt-0.5 bg-card text-caption"
     >
       {agents.map((a) => {
         const state = chipState(a);
@@ -142,7 +142,7 @@ export default function SubAgentStatusBar({ projectId, sessionId, live }: Props)
             data-testid={`sub-agent-badge-${a.handle}`}
             data-status={a.status}
             data-state={state}
-            className={`inline-flex items-center gap-1.5 text-2xs leading-4 ${
+            className={`inline-flex items-center gap-1.5 text-micro leading-4 ${
               state === 'needs-you' ? 'text-warning' : 'text-secondary'}`}
           >
             {/* The dot sits in a 12px box so the ring grows inside room of
@@ -171,7 +171,7 @@ export default function SubAgentStatusBar({ projectId, sessionId, live }: Props)
               aria-label={t('subAgentBar.stopTitle', { name: a.display_name })}
               disabled={stopping === a.handle}
               onClick={() => setConfirming(a)}
-              className="grid place-items-center h-5 w-5 rounded text-[9px] text-secondary hover:text-error-text hover:bg-error-surface disabled:opacity-40"
+              className="grid place-items-center h-5 w-5 rounded text-micro text-secondary hover:text-error-text hover:bg-error-surface disabled:opacity-40"
             >
               ■
             </button>
@@ -202,7 +202,7 @@ export default function SubAgentStatusBar({ projectId, sessionId, live }: Props)
           onClick={() => setConfirming(null)}
         >
           <div
-            className="w-full max-w-sm surface-float-pop p-4 text-sm text-primary"
+            className="w-full max-w-sm surface-float-pop p-4 text-body text-primary"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="font-medium mb-2">{t('subAgentBar.confirm.title', { name: confirming.display_name })}</div>
@@ -213,13 +213,13 @@ export default function SubAgentStatusBar({ projectId, sessionId, live }: Props)
             </p>
             {confirming.status === 'background-running' &&
               confirming.background_commands.length > 0 && (
-              <ul className="mb-2 max-h-24 overflow-y-auto rounded bg-background p-2 font-mono text-[11px] text-warning-text">
+              <ul className="mb-2 max-h-24 overflow-y-auto rounded bg-background p-2 font-mono text-micro text-warning-text">
                 {confirming.background_commands.map((c, i) => (
                   <li key={i} className="truncate">{c}</li>
                 ))}
               </ul>
             )}
-            <p data-testid="sub-agent-stop-warning" className="text-[11px] text-secondary mb-3">
+            <p data-testid="sub-agent-stop-warning" className="text-micro text-secondary mb-3">
               {t('subAgentBar.confirm.warning')}
             </p>
             <div className="flex justify-end gap-2">

@@ -49,17 +49,17 @@ export default function ClaudemdWarningBanner({ projectId, warning, onDismiss }:
       role="alert"
       className="
         mx-3 my-2 rounded-md border border-amber-500/40 bg-amber-500/10
-        px-3 py-2 text-sm text-amber-100
+        px-3 py-2 text-body text-amber-100
         flex items-start gap-2
         max-md:mx-2 max-md:px-2 max-md:py-2 max-md:flex-col max-md:items-stretch
       "
     >
       <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0 text-amber-400" aria-hidden />
       <div className="flex-1 min-w-0">
-        <div className="leading-snug">
+        <div>
           {t('claudemd.banner')}
         </div>
-        <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-xs">
+        <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-caption">
           <a
             href={`/api/v2/files/${encodeURIComponent(projectId)}?path=${encodeURIComponent('CLAUDE.md')}`}
             target="_blank"

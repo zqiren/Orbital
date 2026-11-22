@@ -252,7 +252,7 @@ export default function CreateProject({
       >
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-3.5 border-b border-border shrink-0">
-          <h2 id={titleId} className="text-sm font-semibold text-primary">{t('createProject.title')}</h2>
+          <h2 id={titleId} className="text-title font-semibold text-primary">{t('createProject.title')}</h2>
           <button
             type="button"
             onClick={onCancel}
@@ -266,7 +266,7 @@ export default function CreateProject({
         <form id="create-project-form" onSubmit={handleSubmit} className="flex-1 overflow-y-auto min-h-0 px-5 py-4 space-y-5">
           {/* Project name — first, typed by the user, never derived. */}
           <div>
-            <label className="block text-sm font-medium text-primary mb-1.5">
+            <label className="block text-body font-medium text-primary mb-1.5">
               {t('createProject.name.label')}
             </label>
             <div className="relative">
@@ -281,11 +281,11 @@ export default function CreateProject({
                 value={name}
                 onChange={(e) => handleNameChange(e.target.value)}
                 placeholder={t('createProject.name.placeholder')}
-                className="w-full text-sm bg-sidebar border border-border rounded-lg pl-9 pr-3 py-2.5 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150"
+                className="w-full text-body bg-sidebar border border-border rounded-lg pl-9 pr-3 py-2.5 text-primary placeholder:text-muted focus:outline-none focus:border-accent transition-all duration-150"
               />
             </div>
             {errors.name && (
-              <p className="text-xs text-error mt-1">{errors.name}</p>
+              <p className="text-caption text-error mt-1">{errors.name}</p>
             )}
           </div>
 
@@ -293,7 +293,7 @@ export default function CreateProject({
               the default view; the browser panel keeps its own manual-path
               row for people who want to type one). */}
           <div>
-            <label className="block text-sm font-medium text-primary mb-1.5">
+            <label className="block text-body font-medium text-primary mb-1.5">
               {t('createProject.workspace.label')}
             </label>
             {workspace ? (
@@ -303,17 +303,17 @@ export default function CreateProject({
               >
                 <Folder size={16} aria-hidden="true" className="shrink-0 text-accent" />
                 <div className="min-w-0 flex-1">
-                  <span className="block text-sm font-medium text-primary truncate">
+                  <span className="block text-body font-medium text-primary truncate">
                     {basename(workspace) || workspace}
                   </span>
-                  <span className="block text-xs font-mono text-secondary truncate">
+                  <span className="block text-caption font-mono text-secondary truncate">
                     {workspace}
                   </span>
                 </div>
                 <button
                   type="button"
                   onClick={() => setPickerExpanded((v) => !v)}
-                  className="shrink-0 text-sm font-medium text-accent hover:text-accent/80 transition-all duration-150 max-md:min-h-[44px]"
+                  className="shrink-0 text-body font-medium text-accent hover:text-accent/80 transition-all duration-150 max-md:min-h-[44px]"
                 >
                   {t('createProject.folder.change')}
                 </button>
@@ -325,16 +325,16 @@ export default function CreateProject({
                 className="w-full flex flex-col items-center justify-center gap-1.5 border border-dashed border-secondary/35 rounded-lg px-4 py-7 text-center hover:border-accent/50 hover:bg-accent/5 transition-all duration-150"
               >
                 <FolderPlus size={20} aria-hidden="true" className="text-secondary" />
-                <span className="text-sm font-medium text-primary">
+                <span className="text-body font-medium text-primary">
                   {t('createProject.folder.choose')}
                 </span>
-                <span className="text-xs text-secondary max-w-[340px]">
+                <span className="text-caption text-secondary max-w-[340px]">
                   {t('createProject.folder.chooseHint')}
                 </span>
               </button>
             )}
             {errors.workspace && (
-              <p className="text-xs text-error mt-1">{errors.workspace}</p>
+              <p className="text-caption text-error mt-1">{errors.workspace}</p>
             )}
             {pickerExpanded && (
               <div
@@ -353,7 +353,7 @@ export default function CreateProject({
           {/* What a project is — stated once, at the moment of the decision. */}
           <div className="flex items-start gap-3 bg-sidebar rounded-lg px-3.5 py-3">
             <Lightbulb size={16} aria-hidden="true" className="shrink-0 mt-0.5 text-secondary" />
-            <p className="text-xs leading-relaxed text-secondary">
+            <p className="text-caption text-secondary">
               {t('createProject.hint')}
             </p>
           </div>
@@ -373,7 +373,7 @@ export default function CreateProject({
             <button
               type="button"
               onClick={() => setAdvancedOpen((v) => !v)}
-              className="flex items-center gap-1.5 text-sm font-medium text-secondary hover:text-primary transition-all duration-150"
+              className="flex items-center gap-1.5 text-body font-medium text-secondary hover:text-primary transition-all duration-150"
             >
               {advancedOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
               {t('createProject.advanced.label')}
@@ -383,7 +383,7 @@ export default function CreateProject({
               <div className="space-y-5 pt-4">
                 {/* Agent Name */}
                 <div>
-                  <label className="block text-sm font-medium text-primary mb-1.5">
+                  <label className="block text-body font-medium text-primary mb-1.5">
                     {t('createProject.agentName.label')} <span className="text-secondary font-normal">{t('createProject.agentName.optional')}</span>
                   </label>
                   <input
@@ -391,16 +391,16 @@ export default function CreateProject({
                     value={agentName}
                     onChange={(e) => setAgentName(e.target.value)}
                     placeholder={t('createProject.agentName.placeholder')}
-                    className="w-full text-sm bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150"
+                    className="w-full text-body bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-muted focus:outline-none focus:border-accent transition-all duration-150"
                   />
-                  <p className="text-xs text-secondary mt-1">
+                  <p className="text-caption text-secondary mt-1">
                     {t('createProject.agentName.hint')}
                   </p>
                 </div>
 
                 {/* Instructions */}
                 <div>
-                  <label className="block text-sm font-medium text-primary mb-1.5">
+                  <label className="block text-body font-medium text-primary mb-1.5">
                     {t('createProject.instructions.label')}
                   </label>
                   <textarea
@@ -408,13 +408,13 @@ export default function CreateProject({
                     value={instructions}
                     onChange={(e) => setInstructions(e.target.value)}
                     placeholder={t('createProject.instructions.placeholder')}
-                    className="w-full text-sm bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150 resize-y"
+                    className="w-full text-body bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-muted focus:outline-none focus:border-accent transition-all duration-150 resize-y"
                   />
                 </div>
 
                 {/* Autonomy Level */}
                 <div>
-                  <label className="block text-sm font-medium text-primary mb-2">
+                  <label className="block text-body font-medium text-primary mb-2">
                     {t('autonomy.level.label')}
                     <AutonomyScopeHint />
                   </label>
@@ -430,10 +430,10 @@ export default function CreateProject({
                             : ''
                         }`}
                       >
-                        <span className="text-sm font-medium text-primary block">
+                        <span className="text-body font-medium text-primary block">
                           {t(opt.titleKey)}
                         </span>
-                        <span className="text-xs text-secondary mt-1 block">
+                        <span className="text-caption text-secondary mt-1 block">
                           {t(opt.descriptionKey)}
                         </span>
                       </button>
@@ -443,7 +443,7 @@ export default function CreateProject({
 
                 {/* Budget Limit */}
                 <div>
-                  <label className="block text-sm font-medium text-primary mb-1.5">
+                  <label className="block text-body font-medium text-primary mb-1.5">
                     {t('createProject.budget.label')} <span className="text-secondary font-normal">{t('createProject.agentName.optional')}</span>
                   </label>
                   <input
@@ -453,9 +453,9 @@ export default function CreateProject({
                     value={budgetLimit}
                     onChange={(e) => setBudgetLimit(e.target.value)}
                     placeholder={t('createProject.budget.placeholder')}
-                    className="w-48 text-sm bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150"
+                    className="w-48 text-body bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-muted focus:outline-none focus:border-accent transition-all duration-150"
                   />
-                  <p className="text-xs text-secondary mt-1">
+                  <p className="text-caption text-secondary mt-1">
                     {t('createProject.budget.hint')}
                   </p>
                 </div>
@@ -464,7 +464,7 @@ export default function CreateProject({
           </div>
 
           {submitError && (
-            <p className="text-sm text-error">{submitError}</p>
+            <p className="text-body text-error">{submitError}</p>
           )}
         </form>
 
@@ -473,7 +473,7 @@ export default function CreateProject({
           <button
             type="button"
             onClick={onCancel}
-            className="text-sm text-secondary hover:text-primary transition-all duration-150 px-4 py-2 max-md:w-full max-md:min-h-[44px]"
+            className="text-body text-secondary hover:text-primary transition-all duration-150 px-4 py-2 max-md:w-full max-md:min-h-[44px]"
           >
             {t('createProject.cancel')}
           </button>
@@ -481,7 +481,7 @@ export default function CreateProject({
             type="submit"
             form="create-project-form"
             disabled={submitting || !canSubmit}
-            className="inline-flex items-center justify-center gap-2 bg-accent text-white text-sm font-medium rounded-lg px-5 py-2.5 hover:bg-accent/90 transition-all duration-150 disabled:opacity-50 max-md:w-full max-md:min-h-[44px]"
+            className="inline-flex items-center justify-center gap-2 bg-accent text-white text-body font-medium rounded-lg px-5 py-2.5 hover:bg-accent/90 transition-all duration-150 disabled:opacity-50 max-md:w-full max-md:min-h-[44px]"
           >
             {submitting && <Loader2 size={14} className="animate-spin" />}
             {t('createProject.deploy')}

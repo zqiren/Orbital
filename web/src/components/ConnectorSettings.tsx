@@ -265,13 +265,13 @@ export default function ConnectorSettings() {
           it is worth reading once, not on every visit. */}
 
       {loadError && (
-        <p className="text-xs text-error mb-2" role="alert">
+        <p className="text-caption text-error mb-2" role="alert">
           {t('connectors.loadError')}
         </p>
       )}
 
       {connectors === null ? (
-        <p className="text-xs text-secondary/60 italic">{t('connectors.loading')}</p>
+        <p className="text-caption text-secondary italic">{t('connectors.loading')}</p>
       ) : (
         <ul className="space-y-2">
           {connectors.map((c) => {
@@ -284,12 +284,12 @@ export default function ConnectorSettings() {
                 className="surface-float-static relative px-3 py-2.5"
               >
                 <div className="flex items-center gap-3">
-                  <span className="text-xl shrink-0" aria-hidden="true">
+                  <span className="text-heading shrink-0" aria-hidden="true">
                     {c.icon}
                   </span>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium text-primary truncate">
+                      <span className="text-body font-medium text-primary truncate">
                         {c.name}
                       </span>
                       {/* Reserved: where a connector came from (e.g. an
@@ -299,14 +299,14 @@ export default function ConnectorSettings() {
                       {pending && (
                         <span
                           data-testid={`connector-pending-${c.id}`}
-                          className="shrink-0 text-2xs uppercase tracking-wide text-secondary border border-border rounded-full px-2 py-0.5"
+                          className="shrink-0 type-label text-secondary border border-border rounded-full px-2 py-0.5"
                         >
                           {t('connectors.pendingBadge')}
                         </span>
                       )}
                     </div>
                     <p
-                      className="text-xs text-secondary truncate"
+                      className="text-caption text-secondary truncate"
                       data-testid={`connector-status-${c.id}`}
                     >
                       {c.connected
@@ -317,7 +317,7 @@ export default function ConnectorSettings() {
                     </p>
                     {/* Dynamic backend text (session failure etc.) — not UI chrome. */}
                     {c.enabled_error && (
-                      <p className="text-xs text-error truncate">{c.enabled_error}</p>
+                      <p className="text-caption text-error truncate">{c.enabled_error}</p>
                     )}
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
@@ -335,7 +335,7 @@ export default function ConnectorSettings() {
                         type="button"
                         data-testid={`connector-disconnect-${c.id}`}
                         onClick={() => setConfirmingId(c.id)}
-                        className="text-xs font-medium text-secondary border border-border rounded-lg px-3 py-1.5 hover:text-error hover:border-error/40 transition-all duration-150 max-md:min-h-[44px]"
+                        className="text-caption font-medium text-secondary border border-border rounded-lg px-3 py-1.5 hover:text-error hover:border-error/40 transition-all duration-150 max-md:min-h-[44px]"
                       >
                         {t('connectors.disconnect')}
                       </button>
@@ -346,7 +346,7 @@ export default function ConnectorSettings() {
                           data-testid={`connector-connect-${c.id}`}
                           disabled={connecting}
                           onClick={() => handleConnect(c)}
-                          className="text-xs font-medium text-white bg-accent rounded-lg px-3 py-1.5 hover:bg-accent/90 transition-all duration-150 disabled:opacity-60 max-md:min-h-[44px]"
+                          className="text-caption font-medium text-white bg-accent rounded-lg px-3 py-1.5 hover:bg-accent/90 transition-all duration-150 disabled:opacity-60 max-md:min-h-[44px]"
                         >
                           {connecting ? t('connectors.connecting') : t('connectors.connect')}
                         </button>
@@ -358,7 +358,7 @@ export default function ConnectorSettings() {
                         data-testid={`connector-remove-${c.id}`}
                         aria-label={t('connectors.custom.removeAria', { name: c.name })}
                         onClick={() => handleRemoveCustom(c)}
-                        className="text-xs font-medium text-secondary hover:text-error transition-colors px-1.5 py-1.5 max-md:min-h-[44px]"
+                        className="text-caption font-medium text-secondary hover:text-error transition-colors px-1.5 py-1.5 max-md:min-h-[44px]"
                       >
                         {t('connectors.custom.remove')}
                       </button>
@@ -374,12 +374,12 @@ export default function ConnectorSettings() {
                     data-testid={`connector-disconnect-confirm-${c.id}`}
                     className="mt-2 pt-2 border-t border-border"
                   >
-                    <p className="text-sm font-medium text-primary">
+                    <p className="text-body font-medium text-primary">
                       {t('connectors.disconnectConfirm.title', {
                         provider: providerLabel(c.auth_provider),
                       })}
                     </p>
-                    <p className="text-xs text-secondary mt-0.5 mb-2">
+                    <p className="text-caption text-secondary mt-0.5 mb-2">
                       {t('connectors.disconnectConfirm.body', {
                         provider: providerLabel(c.auth_provider),
                       })}
@@ -389,14 +389,14 @@ export default function ConnectorSettings() {
                         type="button"
                         data-testid={`connector-disconnect-confirm-btn-${c.id}`}
                         onClick={() => handleDisconnect(c)}
-                        className="text-xs font-medium text-white bg-error rounded-lg px-3 py-1.5 hover:bg-error/90 transition-all duration-150 max-md:min-h-[44px]"
+                        className="text-caption font-medium text-white bg-error rounded-lg px-3 py-1.5 hover:bg-error/90 transition-all duration-150 max-md:min-h-[44px]"
                       >
                         {t('connectors.disconnectConfirm.confirm')}
                       </button>
                       <button
                         type="button"
                         onClick={() => setConfirmingId(null)}
-                        className="text-xs font-medium text-secondary border border-border rounded-lg px-3 py-1.5 hover:bg-card-hover transition-all duration-150 max-md:min-h-[44px]"
+                        className="text-caption font-medium text-secondary border border-border rounded-lg px-3 py-1.5 hover:bg-card-hover transition-all duration-150 max-md:min-h-[44px]"
                       >
                         {t('connectors.disconnectConfirm.cancel')}
                       </button>
@@ -406,9 +406,9 @@ export default function ConnectorSettings() {
 
                 {cardError?.id === c.id && (
                   <div className="mt-2" role="alert" data-testid={`connector-error-${c.id}`}>
-                    <p className="text-xs text-error">{cardError.message}</p>
+                    <p className="text-caption text-error">{cardError.message}</p>
                     {cardError.clientHint && (
-                      <p className="text-xs text-secondary mt-0.5">
+                      <p className="text-caption text-secondary mt-0.5">
                         {t('connectors.error.clientHint')}
                       </p>
                     )}
@@ -438,7 +438,7 @@ export default function ConnectorSettings() {
               placeholder={t('connectors.custom.name.placeholder')}
               aria-label={t('connectors.custom.name.label')}
               data-testid="connector-custom-name"
-              className="w-40 max-md:w-full text-sm bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150"
+              className="w-40 max-md:w-full text-body bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-muted focus:outline-none focus:border-accent transition-all duration-150"
             />
             <input
               type="text"
@@ -447,21 +447,21 @@ export default function ConnectorSettings() {
               placeholder={t('connectors.custom.url.placeholder')}
               aria-label={t('connectors.custom.url.label')}
               data-testid="connector-custom-url"
-              className="flex-1 text-sm font-mono bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150"
+              className="flex-1 text-body font-mono bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-muted focus:outline-none focus:border-accent transition-all duration-150"
             />
             <Select
               value={customAuth}
               onChange={(e) => setCustomAuth(e.target.value as 'none' | 'oauth2')}
               aria-label={t('connectors.custom.auth.label')}
               data-testid="connector-custom-auth"
-              className="text-sm bg-sidebar border border-border rounded-lg px-3 py-2 text-primary focus:outline-none focus:border-accent transition-all duration-150"
+              className="text-body bg-sidebar border border-border rounded-lg px-3 py-2 text-primary focus:outline-none focus:border-accent transition-all duration-150"
             >
               <option value="none">{t('connectors.custom.auth.none')}</option>
               <option value="oauth2">{t('connectors.custom.auth.oauth2')}</option>
             </Select>
           </div>
           {customError && (
-            <p className="text-xs text-error" role="alert" data-testid="connector-custom-error">
+            <p className="text-caption text-error" role="alert" data-testid="connector-custom-error">
               {customError}
             </p>
           )}
@@ -470,7 +470,7 @@ export default function ConnectorSettings() {
               type="submit"
               data-testid="connector-custom-add"
               disabled={adding || !customName.trim() || !customUrl.trim()}
-              className="text-xs font-medium text-white bg-accent rounded-lg px-4 py-2 hover:bg-accent/90 transition-all duration-150 disabled:opacity-50 max-md:min-h-[44px]"
+              className="text-caption font-medium text-white bg-accent rounded-lg px-4 py-2 hover:bg-accent/90 transition-all duration-150 disabled:opacity-50 max-md:min-h-[44px]"
             >
               {adding ? t('connectors.custom.adding') : t('connectors.custom.add')}
             </button>

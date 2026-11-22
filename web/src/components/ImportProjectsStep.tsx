@@ -196,18 +196,18 @@ export default function ImportProjectsStep({
     const body = (
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline gap-2">
-          <span className="min-w-0 flex-1 truncate text-sm font-medium text-primary">{c.name}</span>
+          <span className="min-w-0 flex-1 truncate text-body font-medium text-primary">{c.name}</span>
           {c.already_imported && (
-            <span className="shrink-0 text-xs text-success" data-testid={`import-imported-${c.path}`}>
+            <span className="shrink-0 text-caption text-success" data-testid={`import-imported-${c.path}`}>
               {t('importProjects.alreadyImported')}
             </span>
           )}
           {c.last_activity && (
-            <span className="shrink-0 text-xs text-secondary">{formatRelativeTime(c.last_activity, t)}</span>
+            <span className="shrink-0 text-caption text-secondary">{formatRelativeTime(c.last_activity, t)}</span>
           )}
         </div>
-        <p className="truncate font-mono text-[11px] text-secondary" title={c.path}>{c.path}</p>
-        {counts && <p className="text-xs text-secondary/80">{counts}</p>}
+        <p className="truncate font-mono text-micro text-secondary" title={c.path}>{c.path}</p>
+        {counts && <p className="text-caption text-secondary">{counts}</p>}
       </div>
     );
     if (c.already_imported) {
@@ -262,25 +262,25 @@ export default function ImportProjectsStep({
           <div className="min-w-0 flex-1">
             <p
               id={titleId}
-              className={`truncate text-sm font-medium ${folder ? 'text-primary' : 'text-warning-text'}`}
+              className={`truncate text-body font-medium ${folder ? 'text-primary' : 'text-warning-text'}`}
               data-testid={`import-group-title-${g.id}`}
             >
               {folder ? basename(folder) : t('importProjects.group.needsFolder')}
             </p>
-            <p className="text-xs text-secondary">{meta}</p>
+            <p className="text-caption text-secondary">{meta}</p>
             {reasons.length > 0 && (
               <div className="mt-1.5 flex flex-wrap gap-1.5">
                 {reasons.map((r) => (
-                  <span key={r} className="max-w-full truncate rounded-full border border-border bg-sidebar px-2 py-0.5 text-[11px] text-secondary">
+                  <span key={r} className="max-w-full truncate rounded-full border border-border bg-sidebar px-2 py-0.5 text-micro text-secondary">
                     {r}
                   </span>
                 ))}
               </div>
             )}
             <div className="mt-2 flex items-center gap-2">
-              <span className="shrink-0 text-xs text-secondary">{t('importProjects.group.folder')}</span>
+              <span className="shrink-0 text-caption text-secondary">{t('importProjects.group.folder')}</span>
               <span
-                className={`min-w-0 flex-1 truncate text-xs ${folder ? 'font-mono text-primary' : 'text-warning-text'}`}
+                className={`min-w-0 flex-1 truncate text-caption ${folder ? 'font-mono text-primary' : 'text-warning-text'}`}
                 title={folder ?? undefined}
               >
                 {folder ?? t('importProjects.group.chooseHint')}
@@ -290,7 +290,7 @@ export default function ImportProjectsStep({
                 onClick={() => setBrowsingGroup((cur) => (cur === g.id ? null : g.id))}
                 aria-expanded={browsingGroup === g.id}
                 data-testid={`import-group-choose-${g.id}`}
-                className="shrink-0 inline-flex items-center gap-1 rounded-lg border border-border px-2.5 py-1 text-xs font-medium text-primary transition-colors duration-150 hover:bg-surface max-md:min-h-[44px]"
+                className="shrink-0 inline-flex items-center gap-1 rounded-lg border border-border px-2.5 py-1 text-caption font-medium text-primary transition-colors duration-150 hover:bg-surface max-md:min-h-[44px]"
               >
                 <FolderOpen className="h-3.5 w-3.5" aria-hidden="true" />
                 {folder ? t('importProjects.group.change') : t('importProjects.group.choose')}
@@ -319,7 +319,7 @@ export default function ImportProjectsStep({
   const content = (
     <>
       {scan.error && (
-        <div className="mb-4 text-sm text-error" role="alert" data-testid="import-error">
+        <div className="mb-4 text-body text-error" role="alert" data-testid="import-error">
           {t('importProjects.error')}{' '}
           <button type="button" onClick={scan.retry} className="underline hover:no-underline" data-testid="import-retry">
             {t('importProjects.retry')}
@@ -328,14 +328,14 @@ export default function ImportProjectsStep({
       )}
 
       {!data && !scan.error && (
-        <div className="mb-4 inline-flex items-center gap-2 text-sm text-secondary">
+        <div className="mb-4 inline-flex items-center gap-2 text-body text-secondary">
           <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
           {t('importProjects.scanning')}
         </div>
       )}
 
       {nothing && (
-        <p className="mb-4 text-sm text-secondary" data-testid="import-empty">{t('importProjects.empty')}</p>
+        <p className="mb-4 text-body text-secondary" data-testid="import-empty">{t('importProjects.empty')}</p>
       )}
 
       {(major.length > 0 || minor.length > 0) && (
@@ -349,7 +349,7 @@ export default function ImportProjectsStep({
                 testId="import-folders-toggle"
               />
             )}
-            <h2 id="import-folders-heading" className="min-w-0 text-sm font-medium text-primary">
+            <h2 id="import-folders-heading" className="min-w-0 text-body font-medium text-primary">
               {t('importProjects.folders.heading')}
             </h2>
           </div>
@@ -361,7 +361,7 @@ export default function ImportProjectsStep({
                 onClick={() => setShowMinor((v) => !v)}
                 aria-expanded={showMinor}
                 data-testid="import-minor-toggle"
-                className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-secondary transition-colors duration-150 hover:text-primary max-md:min-h-[44px]"
+                className="mt-2 inline-flex items-center gap-1 text-caption font-medium text-secondary transition-colors duration-150 hover:text-primary max-md:min-h-[44px]"
               >
                 {showMinor ? <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" /> : <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />}
                 {t(minor.length === 1 ? 'importProjects.minor.toggle.one' : 'importProjects.minor.toggle.other', { n: minor.length })}
@@ -383,14 +383,14 @@ export default function ImportProjectsStep({
                 testId="import-groups-toggle"
               />
             )}
-            <h2 id="import-groups-heading" className="min-w-0 text-sm font-medium text-primary">
+            <h2 id="import-groups-heading" className="min-w-0 text-body font-medium text-primary">
               {t('importProjects.groups.heading')}
             </h2>
           </div>
-          <p className={`mb-2 text-xs text-secondary px-3${groups.length > 0 ? ' pl-10' : ''}`}>{t('importProjects.groups.sub')}</p>
+          <p className={`mb-2 text-caption text-secondary px-3${groups.length > 0 ? ' pl-10' : ''}`}>{t('importProjects.groups.sub')}</p>
           {groups.length > 0 && <ul className="space-y-2" data-testid="import-groups">{groups.map(renderGroup)}</ul>}
           {scanning && (
-            <div className="mt-1 inline-flex items-center gap-2 text-xs text-secondary" data-testid="import-groups-scanning">
+            <div className="mt-1 inline-flex items-center gap-2 text-caption text-secondary" data-testid="import-groups-scanning">
               <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
               {t('importProjects.scanning')}
             </div>
@@ -399,7 +399,7 @@ export default function ImportProjectsStep({
       )}
 
       {importError && (
-        <p className="mb-2 text-right text-xs text-error" role="alert" data-testid="import-failed">
+        <p className="mb-2 text-right text-caption text-error" role="alert" data-testid="import-failed">
           {t('importProjects.importFailed')}
         </p>
       )}
@@ -414,7 +414,7 @@ export default function ImportProjectsStep({
           type="button"
           onClick={onBack}
           data-testid="import-back"
-          className="text-sm font-medium text-secondary transition-colors duration-150 hover:text-primary max-md:min-h-[44px]"
+          className="text-body font-medium text-secondary transition-colors duration-150 hover:text-primary max-md:min-h-[44px]"
         >
           {t('global.back')}
         </button>
@@ -425,7 +425,7 @@ export default function ImportProjectsStep({
             type="button"
             onClick={onSkip}
             data-testid="import-skip"
-            className="rounded-lg border border-border px-5 py-2.5 text-sm font-medium text-primary transition-all duration-150 hover:bg-surface"
+            className="rounded-lg border border-border px-5 py-2.5 text-body font-medium text-primary transition-all duration-150 hover:bg-surface"
           >
             {skipLabel ?? t('wizard.skip')}
           </button>
@@ -435,7 +435,7 @@ export default function ImportProjectsStep({
           onClick={handleImport}
           disabled={count === 0 || importing}
           data-testid="import-submit"
-          className="inline-flex items-center gap-2 rounded-lg bg-accent px-5 py-2.5 text-sm font-medium text-white transition-all duration-150 hover:bg-accent/90 disabled:opacity-50"
+          className="inline-flex items-center gap-2 rounded-lg bg-accent px-5 py-2.5 text-body font-medium text-white transition-all duration-150 hover:bg-accent/90 disabled:opacity-50"
         >
           {importing && <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />}
           {importing

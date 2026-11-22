@@ -229,7 +229,7 @@ export default function FolderBrowserPanel({ onSelect, compact = false, suggeste
                 key={folder.path}
                 type="button"
                 onClick={() => browse(folder.path)}
-                className={`w-full text-left flex items-center gap-2 px-2 py-1.5 rounded-md text-sm transition-all duration-150 max-md:w-auto max-md:whitespace-nowrap max-md:min-h-[36px] ${
+                className={`w-full text-left flex items-center gap-2 px-2 py-1.5 rounded-md text-body transition-all duration-150 max-md:w-auto max-md:whitespace-nowrap max-md:min-h-[36px] ${
                   currentPath === folder.path
                     ? 'bg-accent/10 text-accent'
                     : 'text-primary hover:bg-card-hover'
@@ -244,7 +244,7 @@ export default function FolderBrowserPanel({ onSelect, compact = false, suggeste
           <button
             type="button"
             onClick={() => browse('/')}
-            className={`w-full text-left flex items-center gap-2 px-2 py-1.5 rounded-md text-sm transition-all duration-150 max-md:w-auto max-md:whitespace-nowrap max-md:min-h-[36px] ${
+            className={`w-full text-left flex items-center gap-2 px-2 py-1.5 rounded-md text-body transition-all duration-150 max-md:w-auto max-md:whitespace-nowrap max-md:min-h-[36px] ${
               currentPath === '/'
                 ? 'bg-accent/10 text-accent'
                 : 'text-primary hover:bg-card-hover'
@@ -263,7 +263,7 @@ export default function FolderBrowserPanel({ onSelect, compact = false, suggeste
                     key={rp}
                     type="button"
                     onClick={() => browse(rp)}
-                    className="w-full text-left flex items-center gap-2 px-2 py-1.5 rounded-md text-sm text-primary hover:bg-card-hover transition-all duration-150 max-md:hidden"
+                    className="w-full text-left flex items-center gap-2 px-2 py-1.5 rounded-md text-body text-primary hover:bg-card-hover transition-all duration-150 max-md:hidden"
                   >
                     <Clock size={14} className="shrink-0 text-secondary" />
                     <span className="truncate">{label}</span>
@@ -277,10 +277,10 @@ export default function FolderBrowserPanel({ onSelect, compact = false, suggeste
         <div className="flex-1 flex flex-col min-h-0 min-w-0">
           {/* Breadcrumb + New folder */}
           <div className="px-3 py-2 border-b border-border flex items-center justify-between gap-2 shrink-0">
-            <div className="flex items-center gap-1 flex-wrap text-xs text-secondary min-w-0">
+            <div className="flex items-center gap-1 flex-wrap text-caption text-secondary min-w-0">
               {breadcrumbs.map((crumb, i) => (
                 <span key={crumb.path} className="flex items-center gap-1">
-                  {i > 0 && <ChevronRight size={10} className="text-secondary/50" />}
+                  {i > 0 && <ChevronRight size={10} className="text-muted" />}
                   <button
                     type="button"
                     onClick={() => browse(crumb.path)}
@@ -297,7 +297,7 @@ export default function FolderBrowserPanel({ onSelect, compact = false, suggeste
               type="button"
               onClick={openNewFolder}
               disabled={!currentPath || loading}
-              className="inline-flex items-center gap-1 text-xs font-medium text-accent hover:text-accent/80 transition-all duration-150 shrink-0 disabled:opacity-40"
+              className="inline-flex items-center gap-1 text-caption font-medium text-accent hover:text-accent/80 transition-all duration-150 shrink-0 disabled:opacity-40"
             >
               <FolderPlus size={13} />
               {t('folderPicker.newFolder.button')}
@@ -323,13 +323,13 @@ export default function FolderBrowserPanel({ onSelect, compact = false, suggeste
                   else if (e.key === 'Enter') { e.preventDefault(); handleCreateFolder(); }
                 }}
                 placeholder={t('folderPicker.newFolder.placeholder')}
-                className="flex-1 text-xs bg-sidebar border border-border rounded-md px-2 py-1 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150"
+                className="flex-1 text-caption bg-sidebar border border-border rounded-md px-2 py-1 text-primary placeholder:text-muted focus:outline-none focus:border-accent transition-all duration-150"
               />
               <button
                 type="button"
                 onClick={handleCreateFolder}
                 disabled={!newFolderName.trim() || creatingFolder}
-                className="inline-flex items-center gap-1 text-xs font-medium text-white bg-accent rounded-md px-2.5 py-1 hover:bg-accent/90 transition-all duration-150 disabled:opacity-40"
+                className="inline-flex items-center gap-1 text-caption font-medium text-white bg-accent rounded-md px-2.5 py-1 hover:bg-accent/90 transition-all duration-150 disabled:opacity-40"
               >
                 {creatingFolder && <Loader2 size={12} className="animate-spin" />}
                 {t('folderPicker.newFolder.create')}
@@ -337,14 +337,14 @@ export default function FolderBrowserPanel({ onSelect, compact = false, suggeste
               <button
                 type="button"
                 onClick={cancelNewFolder}
-                className="text-xs text-secondary hover:text-primary transition-all duration-150"
+                className="text-caption text-secondary hover:text-primary transition-all duration-150"
               >
                 {t('folderPicker.cancel')}
               </button>
             </div>
           )}
           {newFolderOpen && newFolderError && (
-            <p className="text-xs text-error px-3 pb-2 -mt-1 shrink-0">{newFolderError}</p>
+            <p className="text-caption text-error px-3 pb-2 -mt-1 shrink-0">{newFolderError}</p>
           )}
 
           {/* Entries list */}
@@ -355,22 +355,22 @@ export default function FolderBrowserPanel({ onSelect, compact = false, suggeste
               </div>
             )}
             {!loading && error && (
-              <p className="text-xs text-error px-2 py-4">{error}</p>
+              <p className="text-caption text-error px-2 py-4">{error}</p>
             )}
             {!loading && !error && entries.length === 0 && (
-              <p className="text-xs text-secondary px-2 py-4">{t('folderPicker.empty')}</p>
+              <p className="text-caption text-secondary px-2 py-4">{t('folderPicker.empty')}</p>
             )}
             {!loading && !error && entries.map((entry) => (
               <button
                 key={entry.path}
                 type="button"
                 onClick={() => handleFolderClick(entry)}
-                className="w-full text-left flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-primary hover:bg-card-hover transition-all duration-150 max-md:min-h-[44px]"
+                className="w-full text-left flex items-center gap-2.5 px-3 py-2 rounded-lg text-body text-primary hover:bg-card-hover transition-all duration-150 max-md:min-h-[44px]"
               >
                 <Folder size={15} className="shrink-0 text-accent" />
                 <span className="flex-1 truncate">{entry.name}</span>
                 {entry.has_children && (
-                  <ChevronRight size={14} className="shrink-0 text-secondary/50" />
+                  <ChevronRight size={14} className="shrink-0 text-muted" />
                 )}
               </button>
             ))}
@@ -389,13 +389,13 @@ export default function FolderBrowserPanel({ onSelect, compact = false, suggeste
             onChange={(e) => setManualInput(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleManualNavigate(); } }}
             placeholder={t('folderPicker.manualPath.placeholder')}
-            className="flex-1 text-xs font-mono bg-sidebar border border-border rounded-lg px-2.5 py-1.5 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150"
+            className="flex-1 text-caption font-mono bg-sidebar border border-border rounded-lg px-2.5 py-1.5 text-primary placeholder:text-muted focus:outline-none focus:border-accent transition-all duration-150"
           />
           <button
             type="button"
             onClick={() => select(currentPath)}
             disabled={!currentPath}
-            className="text-xs font-medium text-white bg-accent rounded-lg px-3 py-1.5 hover:bg-accent/90 transition-all duration-150 disabled:opacity-40 shrink-0"
+            className="text-caption font-medium text-white bg-accent rounded-lg px-3 py-1.5 hover:bg-accent/90 transition-all duration-150 disabled:opacity-40 shrink-0"
           >
             {t('folderPicker.useThisFolder')}
           </button>

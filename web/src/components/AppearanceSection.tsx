@@ -123,7 +123,7 @@ export default function AppearanceSection() {
                 {value === 'system' ? <SystemThumb /> : <Thumb p={value === 'dark' ? DARK : LIGHT} />}
               </div>
               <span
-                className={`px-0.5 pb-0.5 text-[13px] ${
+                className={`px-0.5 pb-0.5 text-body ${
                   selected ? 'font-medium text-primary' : 'text-secondary'
                 }`}
               >
@@ -133,7 +133,7 @@ export default function AppearanceSection() {
           );
         })}
       </div>
-      <p className="mt-2.5 text-xs leading-relaxed text-secondary">{t('appearance.hint')}</p>
+      <p className="mt-2.5 text-caption text-secondary">{t('appearance.hint')}</p>
     </fieldset>
   );
 }

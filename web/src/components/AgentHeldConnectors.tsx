@@ -71,8 +71,8 @@ export default function AgentHeldConnectors() {
                   <li
                     key={c.raw_name}
                     data-ready={ready ? 'true' : 'false'}
-                    className={`max-w-full truncate rounded-md bg-sidebar px-2 py-0.5 text-xs ${
-                      ready ? 'text-primary' : 'text-secondary/70'
+                    className={`max-w-full truncate rounded-md bg-sidebar px-2 py-0.5 text-caption ${
+                      ready ? 'text-primary' : 'text-secondary'
                     }`}
                   >
                     {c.name}

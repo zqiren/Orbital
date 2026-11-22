@@ -67,7 +67,7 @@ export default function PendingInputNotice({
       >
         <Clock size={14} className="mt-0.5 shrink-0 text-secondary" />
         <span
-          className="text-sm text-secondary group-enabled:group-hover:text-primary transition-colors duration-150"
+          className="text-body text-secondary group-enabled:group-hover:text-primary transition-colors duration-150"
           data-testid="pending-input-notice-body"
         >
           {t('pending.waiting.sameSession')}
@@ -82,7 +82,7 @@ export default function PendingInputNotice({
       </button>
       {error && (
         <p
-          className="text-sm text-error mt-2"
+          className="text-body text-error mt-2"
           data-testid="pending-input-notice-error"
         >
           {error}

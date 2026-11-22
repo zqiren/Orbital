@@ -179,11 +179,11 @@ export default function GlobalSkillsSettings() {
   return (
     <div data-testid="global-skills">
       {error && (
-        <p className="text-xs text-error mb-2" role="alert" data-testid="global-skills-error">
+        <p className="text-caption text-error mb-2" role="alert" data-testid="global-skills-error">
           {error}
         </p>
       )}
-      {added && <p className="text-xs text-success mb-2">{t('settings.skills.added')}</p>}
+      {added && <p className="text-caption text-success mb-2">{t('settings.skills.added')}</p>}
 
       {groups !== null &&
         (rows.length > 0 ? (
@@ -220,7 +220,7 @@ export default function GlobalSkillsSettings() {
             })}
           </div>
         ) : (
-          <p className="text-xs text-secondary/60 mb-3" data-testid="global-skills-empty">
+          <p className="text-caption text-secondary mb-3" data-testid="global-skills-empty">
             {t('global.skills.empty')}
           </p>
         ))}

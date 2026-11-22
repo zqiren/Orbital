@@ -182,7 +182,7 @@ export default function SettingsRail({ sections, containerRef }: SettingsRailPro
           onChange={(e) => {
             if (e.target.value) handleJump(e.target.value);
           }}
-          className="w-full text-sm bg-sidebar border border-border rounded-lg px-3 py-2 text-primary focus:outline-none focus:border-accent"
+          className="w-full text-body bg-sidebar border border-border rounded-lg px-3 py-2 text-primary focus:outline-none focus:border-accent"
         >
           <option value="" disabled>
             {t('settingsRail.jump')}
@@ -241,7 +241,7 @@ export default function SettingsRail({ sections, containerRef }: SettingsRailPro
                   // row (bg-nav-hover on bg-nav, 1.11:1), so the two columns
                   // read as one system instead of the rail being three times
                   // fainter than every other selection in the app.
-                  className={`block w-full text-left text-[13px] leading-5 rounded-md px-2.5 py-1.5 transition-colors duration-150 truncate ${
+                  className={`block w-full text-left text-body rounded-md px-2.5 py-1.5 transition-colors duration-150 truncate ${
                     activeId === s.id
                       ? 'text-selected-text bg-selected font-medium'
                       : 'text-secondary hover:text-primary hover:bg-card-hover/50'

@@ -389,7 +389,7 @@ function ToolCallRow({ row }: { row: ToolCallRowItem }): React.ReactNode {
   return (
     <div
       data-testid="tool-call-row"
-      className="mb-1 font-mono text-[11px] text-secondary"
+      className="mb-1 font-mono text-micro text-secondary"
     >
       <button
         type="button"
@@ -408,10 +408,10 @@ function ToolCallRow({ row }: { row: ToolCallRowItem }): React.ReactNode {
       </button>
       {expanded && dispatch && (
         <div className="mt-1 ml-5">
-          <div className="mb-1 px-3 text-[11px] text-secondary/70">
+          <div className="mb-1 px-3 text-micro text-secondary">
             {t('chat.toolRow.messageTo', { agent: dispatch.agent })}
           </div>
-          <pre className="max-h-80 overflow-y-auto px-3 py-2 rounded bg-background border border-border/40 text-xs text-secondary leading-relaxed whitespace-pre-wrap break-words font-mono">
+          <pre className="max-h-80 overflow-y-auto px-3 py-2 rounded bg-background border border-border/40 text-caption text-secondary whitespace-pre-wrap break-words font-mono">
             {dispatch.message}
           </pre>
         </div>
@@ -419,13 +419,13 @@ function ToolCallRow({ row }: { row: ToolCallRowItem }): React.ReactNode {
       {expanded && hasResult && (() => {
         const raw = row.result_content;
         const label = dispatch && (
-          <div className="mt-2 mb-1 px-3 text-[11px] text-secondary/70">{t('chat.toolRow.result')}</div>
+          <div className="mt-2 mb-1 px-3 text-micro text-secondary">{t('chat.toolRow.result')}</div>
         );
         if (raw === null || raw === '') {
           return (
             <div className="mt-1 ml-5">
               {label}
-              <div className="px-3 py-2 rounded bg-background border border-border/40 text-xs italic text-secondary/70">
+              <div className="px-3 py-2 rounded bg-background border border-border/40 text-caption italic text-secondary">
                 {t('chat.toolRow.noResult')}
               </div>
             </div>
@@ -435,11 +435,11 @@ function ToolCallRow({ row }: { row: ToolCallRowItem }): React.ReactNode {
         return (
           <div className="mt-1 ml-5">
             {label}
-            <pre className="px-3 py-2 rounded bg-background border border-border/40 text-xs text-secondary leading-relaxed whitespace-pre-wrap break-words font-mono">
+            <pre className="px-3 py-2 rounded bg-background border border-border/40 text-caption text-secondary whitespace-pre-wrap break-words font-mono">
               {text}
             </pre>
             {footer && (
-              <div className="mt-1 px-3 text-[11px] text-secondary/60 italic">{footer}</div>
+              <div className="mt-1 px-3 text-micro text-secondary italic">{footer}</div>
             )}
           </div>
         );
@@ -507,7 +507,7 @@ const AgentRunCapsule = memo(function AgentRunCapsule({
         type="button"
         onClick={isLocked ? undefined : () => onToggle(item.capsule_id)}
         disabled={isLocked}
-        className={`flex items-center gap-2 w-full text-left font-mono text-[11px] text-secondary ${isLocked ? 'cursor-default' : 'cursor-pointer hover:text-primary'}`}
+        className={`flex items-center gap-2 w-full text-left font-mono text-micro text-secondary ${isLocked ? 'cursor-default' : 'cursor-pointer hover:text-primary'}`}
       >
         <Chevron size={13} className="shrink-0" />
         {derivedStatus === 'running' && (
@@ -529,7 +529,7 @@ const AgentRunCapsule = memo(function AgentRunCapsule({
               return (
                 <div
                   key={`rc-r-${ci}`}
-                  className="mb-2 pl-3 border-l-2 border-accent/40 italic text-secondary text-[13px] leading-relaxed whitespace-pre-wrap"
+                  className="mb-2 pl-3 border-l-2 border-accent/40 italic text-secondary text-body whitespace-pre-wrap"
                 >
                   {child.content}
                 </div>
@@ -3973,9 +3973,9 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     >
       {annotations.map((a) => (
         <li key={a.n} className="flex items-center gap-2">
-          <span className="font-mono text-[11px] text-secondary shrink-0">[{a.n}]</span>
+          <span className="font-mono text-micro text-secondary shrink-0">[{a.n}]</span>
           <span
-            className="text-[11px] text-secondary truncate max-w-[40%]"
+            className="text-micro text-secondary truncate max-w-[40%]"
             title={annotationSummary(a, chromeTr)}
           >
             {annotationSummary(a, chromeTr)}
@@ -3985,13 +3985,13 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
             onChange={(e) => updateAnnotationNote(a.n, e.target.value)}
             placeholder={t('panel.annotation.note')}
             aria-label={`${t('panel.annotation.note')} [${a.n}]`}
-            className="flex-1 min-w-0 text-[11px] bg-transparent border border-border rounded px-1.5 py-0.5 text-primary outline-none focus:border-accent"
+            className="flex-1 min-w-0 text-micro bg-transparent border border-border rounded px-1.5 py-0.5 text-primary outline-none focus:border-accent"
           />
           <button
             type="button"
             onClick={() => removeAnnotation(a.n)}
             aria-label={`${t('panel.annotation.remove')} [${a.n}]`}
-            className="shrink-0 text-secondary hover:text-primary text-xs leading-none px-1"
+            className="shrink-0 text-secondary hover:text-primary text-caption leading-none px-1"
           >
             ×
           </button>
@@ -4012,7 +4012,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         onClick={() => setAnnotationsOpen((open) => !open)}
         aria-expanded={annotationsOpen}
         data-testid="annotation-chip"
-        className="self-start inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5 text-[11px] text-secondary hover:text-primary transition-colors"
+        className="self-start inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5 text-micro text-secondary hover:text-primary transition-colors"
       >
         {annotationCount}
         {annotationsOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
@@ -4036,7 +4036,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         e.preventDefault();
         textareaRef.current?.focus();
       }}
-      className="absolute left-0 top-0 z-10 flex max-w-[75%] items-center gap-1 pr-1.5 h-[1.625em] text-[13px] max-md:text-base"
+      className="absolute left-0 top-0 z-10 flex max-w-[75%] items-center gap-1 pr-1.5 h-[1.625em] text-body max-md:text-base"
     >
       {pickedSkill && (
         <SkillChip
@@ -4057,7 +4057,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
             aria-label={annotationCount}
             title={annotationCount}
             data-testid="annotation-chip"
-            className="inline-flex min-w-0 items-center gap-0.5 rounded-full border border-border bg-card pl-1.5 pr-1 h-[18px] text-[11px] leading-none text-secondary hover:text-primary transition-colors whitespace-nowrap"
+            className="inline-flex min-w-0 items-center gap-0.5 rounded-full border border-border bg-card pl-1.5 pr-1 h-[18px] text-micro leading-none text-secondary hover:text-primary transition-colors whitespace-nowrap"
           >
             <MessageSquareQuote size={11} aria-hidden="true" className="shrink-0" />
             {/* The words where there is room; on a phone (173px of input) the
@@ -4073,7 +4073,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
               aria-label={annotationCount}
               data-testid="annotation-popover"
               style={popoverShift ? { transform: `translateX(-${popoverShift}px)` } : undefined}
-              className="absolute bottom-full left-0 mb-2 z-50 w-[min(26rem,calc(100vw-3rem))] surface-float-pop p-2 text-[13px]"
+              className="absolute bottom-full left-0 mb-2 z-50 w-[min(26rem,calc(100vw-3rem))] surface-float-pop p-2 text-body"
             >
               {annotationList}
             </div>
@@ -4096,7 +4096,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
           className="absolute inset-0 z-50 bg-background/80 border-2 border-dashed border-accent rounded flex items-center justify-center pointer-events-none"
           data-testid="chat-drop-overlay"
         >
-          <span className="text-lg font-medium">{t('chat.dropFiles')}</span>
+          <span className="text-title font-medium">{t('chat.dropFiles')}</span>
         </div>
       )}
       {claudemdWarning && (
@@ -4129,7 +4129,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         {loading && (
           <div className="space-y-3">
             {viewedIsUnimportedImport && (
-              <p data-testid="chat-importing" className="text-xs text-secondary px-1">
+              <p data-testid="chat-importing" className="text-caption text-secondary px-1">
                 {t('chat.importing')}
               </p>
             )}
@@ -4143,7 +4143,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
           <button
             onClick={loadOlderMessages}
             disabled={loadingMore}
-            className="w-full py-2 text-xs text-secondary hover:text-primary transition-colors disabled:opacity-50"
+            className="w-full py-2 text-caption text-secondary hover:text-primary transition-colors disabled:opacity-50"
           >
             {loadingMore ? t('chat.loadingMore') : t('chat.loadEarlier', { n: totalMessages - loadedOffset })}
           </button>
@@ -4157,7 +4157,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
               <div className="flex h-14 w-14 items-center justify-center dark:rounded-[14px] dark:bg-logo-tile">
                 <OrbitalMark keepColours className="h-14 w-14 opacity-90 dark:h-12 dark:w-12 dark:opacity-100" />
               </div>
-              <p className="mt-3 text-sm text-secondary">{t('chat.empty')}</p>
+              <p className="mt-3 text-body text-secondary">{t('chat.empty')}</p>
               {/* Example prompts for a project's empty chat — what to ask is
                   the first thing a new user does not know, and the middle one
                   shows that automations are created by just asking. A click
@@ -4190,8 +4190,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                 >
                   <span
                     aria-hidden="true"
-                    className="text-secondary font-semibold"
-                    style={{ fontSize: '9.5px', letterSpacing: '0.8px', textTransform: 'uppercase' }}
+                    className="type-label text-secondary"
                   >
                     {t('chat.empty.examples')}
                   </span>
@@ -4359,7 +4358,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                   key={`sa-${index}`}
                   data-testid="sub-agent-activity"
                   data-action={item.action}
-                  className={`flex items-baseline gap-2 px-2 py-1 text-[11px] font-mono ${tone}`}
+                  className={`flex items-baseline gap-2 px-2 py-1 text-micro font-mono ${tone}`}
                 >
                   <span className="text-primary">{item.handle}</span>
                   <span className="truncate">{label}</span>
@@ -4367,7 +4366,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
               );
             } else if (item.type === 'ask_line') {
               rendered = (
-                <p key={`ask-${index}`} className="m-0 pl-9 text-[13px] text-muted break-words" data-testid="ask-line">
+                <p key={`ask-${index}`} className="m-0 pl-9 text-body text-secondary break-words" data-testid="ask-line">
                   {t('chat.ask.title')} · <InlineMarkdown text={item.text} />
                 </p>
               );
@@ -4394,7 +4393,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                   data-event={item.event}
                 >
                   <div className="flex-1 border-t border-border" />
-                  <span data-testid="chat-daemon-row" className="text-xs text-secondary text-center">
+                  <span data-testid="chat-daemon-row" className="text-caption text-secondary text-center">
                     {text}
                   </span>
                   <div className="flex-1 border-t border-border" />
@@ -4411,7 +4410,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
               rendered = (
                 <div key={`moved-${index}`} className="flex items-center gap-3 px-2" data-testid="chat-session-moved">
                   <div className="flex-1 min-w-4 border-t border-border" />
-                  <span className="inline-flex items-center min-w-0 max-w-[82%] whitespace-nowrap text-xs text-secondary">
+                  <span className="inline-flex items-center min-w-0 max-w-[82%] whitespace-nowrap text-caption text-secondary">
                     {parts.map((part, i) => {
                       if (part !== '\u0001' && part !== '\u0002') return part ? <span key={i} className="whitespace-pre">{part}</span> : null;
                       const name = part === '\u0001' ? fromName : toName;
@@ -4429,7 +4428,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
               return (
                 <div key={`sep-${index}`} className="flex items-center gap-3 px-2 opacity-50">
                   <div className="flex-1 border-t border-border" />
-                  <span className="text-xs text-secondary whitespace-nowrap">
+                  <span className="text-caption text-secondary whitespace-nowrap">
                     {t('chat.previousSession')}
                   </span>
                   <div className="flex-1 border-t border-border" />
@@ -4450,7 +4449,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                   className="flex items-center gap-3 px-2 opacity-50"
                 >
                   <div className="flex-1 border-t border-border" />
-                  <span className="text-xs text-secondary whitespace-nowrap">
+                  <span className="text-caption text-secondary whitespace-nowrap">
                     {t('chat.compacted')}
                   </span>
                   <div className="flex-1 border-t border-border" />
@@ -4496,8 +4495,8 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
               const urgencyColor = item.urgency === 'high' ? 'border-error/40 bg-error/5' : 'border-accent/30 bg-accent/5';
               rendered = (
                 <div key={`notify-${index}`} className={`rounded-lg border ${urgencyColor} px-4 py-3`}>
-                  <p className="text-sm font-medium text-primary">{item.title}</p>
-                  <p className="text-sm text-secondary mt-1">{item.body}</p>
+                  <p className="text-body font-medium text-primary">{item.title}</p>
+                  <p className="text-body text-secondary mt-1">{item.body}</p>
                 </div>
               );
             } else if (item.type === 'refresh_status') {
@@ -4520,7 +4519,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                   data-testid="budget-timeline-row"
                   className="rounded-lg border border-error/30 bg-error/5 px-4 py-2.5"
                 >
-                  <p className="text-xs font-medium text-error">{text}</p>
+                  <p className="text-caption font-medium text-error">{text}</p>
                 </div>
               );
             } else if (item.type === 'fanout_card') {
@@ -4568,7 +4567,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                 <div
                   key={`fanout-summary-${item.fanout_id}-${index}`}
                   data-testid="fanout-summary"
-                  className="px-2 py-1 text-[11px] font-mono text-secondary whitespace-pre-wrap"
+                  className="px-2 py-1 text-micro font-mono text-secondary whitespace-pre-wrap"
                 >
                   {item.content}
                 </div>
@@ -4689,10 +4688,10 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
           <div className="flex gap-[10px]">
             <MessageAvatar variant="agent" />
             <div className="flex-1 min-w-0">
-              <div className="font-mono text-[11px] mb-1">
+              <div className="font-mono text-micro mb-1">
                 <span className="text-secondary">{subAgentLoadingTarget}</span>
               </div>
-              <div className="text-[13px] leading-[1.55]">
+              <div className="text-body">
                 <span className="inline-flex gap-1 text-secondary">
                   <span className="animate-pulse">●</span>
                   <span className="animate-pulse" style={{animationDelay: '0.2s'}}>●</span>
@@ -4704,7 +4703,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         )}
 
         {thinkingVisible && !stream && !subAgentLoadingTarget && (
-          <div className="flex items-center gap-2 px-2 py-1 text-secondary text-sm">
+          <div className="flex items-center gap-2 px-2 py-1 text-secondary text-body">
             <Loader2 size={14} className="animate-spin" />
             <span>{t('chat.thinking')}</span>
           </div>
@@ -4756,7 +4755,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         <div
           role="status"
           data-testid="chat-action-toast"
-          className="absolute bottom-24 left-1/2 z-40 -translate-x-1/2 whitespace-nowrap rounded-[10px] bg-[#18181B] px-3.5 py-2 text-[12.5px] text-white shadow-[0_10px_30px_rgb(0_0_0/0.25)] dark:bg-[#F4F6F9] dark:text-[#18181B] max-md:fixed max-md:bottom-[112px]"
+          className="absolute bottom-24 left-1/2 z-40 -translate-x-1/2 whitespace-nowrap rounded-[10px] bg-[#18181B] px-3.5 py-2 text-body text-white shadow-[0_10px_30px_rgb(0_0_0/0.25)] dark:bg-[#F4F6F9] dark:text-[#18181B] max-md:fixed max-md:bottom-[112px]"
         >
           {actionToast}
         </div>
@@ -4764,7 +4763,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
 
       {injectError && (
         <div className="shrink-0 px-4 py-1">
-          <p className="text-xs text-error">{injectError}</p>
+          <p className="text-caption text-error">{injectError}</p>
         </div>
       )}
 
@@ -4784,7 +4783,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
 
       {cancelTimeoutNotice && (
         <div className="shrink-0 px-4 py-1">
-          <p className="text-xs text-secondary" role="status">{cancelTimeoutNotice}</p>
+          <p className="text-caption text-secondary" role="status">{cancelTimeoutNotice}</p>
         </div>
       )}
 
@@ -4891,7 +4890,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
               disabled={isCancelling}
               // First line only: the text starts after the capsule row.
               style={capsuleWidth > 0 ? { textIndent: `${capsuleWidth}px` } : undefined}
-              className="flex-1 w-full resize-none text-[13px] max-md:text-base bg-transparent focus:outline-none leading-relaxed disabled:opacity-50"
+              className="flex-1 w-full resize-none text-body max-md:text-base bg-transparent focus:outline-none leading-relaxed disabled:opacity-50"
             />
             </div>
             {!bareAsk && (agentStatus === 'running' || agentStatus === 'waiting') ? (
@@ -4942,7 +4941,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                   onTouchEnd={(e) => { e.preventDefault(); handleSend(); }}
                   disabled={!canSend || isCancelling}
                   title={disabledReason || undefined}
-                  className={`shrink-0 px-2.5 py-1 rounded-md text-xs font-semibold tracking-wide transition-colors duration-150 max-md:min-h-[44px] max-md:flex max-md:items-center max-md:justify-center ${
+                  className={`shrink-0 px-2.5 py-1 rounded-md text-caption font-medium transition-colors duration-150 max-md:min-h-[44px] max-md:flex max-md:items-center max-md:justify-center ${
                     canSend && !isCancelling
                       ? 'bg-accent text-white hover:bg-accent/85 cursor-pointer'
                       : 'bg-secondary/20 text-secondary/40 cursor-default'
@@ -4976,7 +4975,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         {!managerReady && pinnedAgentName && !loading && items.length === 0 && !stream && (
           <p
             data-testid="chat-keyless-hint"
-            className="mt-2 px-1 text-xs text-secondary leading-relaxed"
+            className="mt-2 px-1 text-caption text-secondary"
           >
             {t('chat.keyless.hint', { agent: pinnedAgentName })}
           </p>

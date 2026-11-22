@@ -20,11 +20,12 @@ function entry(over: Partial<SessionListEntry>): SessionListEntry {
 // Spec 137 follow-up: the chat beside the project column starts with the
 // session's name as a heading — same type as PageHeading, no bar, no line.
 describe('SessionHeading', () => {
-  it('a named chat: the name as a 15px heading, nothing above it', () => {
+  it('a named chat: the name as a title-size (15px) heading, nothing above it', () => {
     const { container } = render(<SessionHeading session={entry({ name: '看看tutti的近况' })} />);
     const h1 = screen.getByRole('heading', { level: 1 });
     expect(h1.textContent).toBe('看看tutti的近况');
-    expect(h1.className).toContain('text-[15px]');
+    // 1122 type scale: `text-title` is the 15px column/section heading step.
+    expect(h1.className).toContain('text-title');
     expect(screen.queryByTestId('session-heading-eyebrow')).toBeNull();
     expect(container.innerHTML).not.toMatch(/border/);
   });

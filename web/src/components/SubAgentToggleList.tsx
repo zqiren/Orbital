@@ -33,7 +33,7 @@ export default function SubAgentToggleList({ agents, disabled, onToggle }: Props
   const t = useT();
   if (agents.length === 0) {
     return (
-      <p className="text-xs text-secondary/60 italic">
+      <p className="text-caption text-secondary italic">
         {t('subAgentToggle.empty')}
       </p>
     );
@@ -48,7 +48,7 @@ export default function SubAgentToggleList({ agents, disabled, onToggle }: Props
         return (
           <label
             key={agent.slug}
-            className="flex items-center gap-2 cursor-pointer select-none text-sm text-primary"
+            className="flex items-center gap-2 cursor-pointer select-none text-body text-primary"
           >
             <input
               type="checkbox"
@@ -58,7 +58,7 @@ export default function SubAgentToggleList({ agents, disabled, onToggle }: Props
               className="w-3.5 h-3.5"
             />
             <span>{agent.name}</span>
-            <span className="font-mono text-[11px] text-secondary/60">{agent.slug}</span>
+            <span className="font-mono text-micro text-secondary">{agent.slug}</span>
           </label>
         );
       })}

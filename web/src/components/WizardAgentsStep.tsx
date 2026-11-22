@@ -130,9 +130,9 @@ function AgentRow({
         />
         <MessageAvatar variant="agent" agentHandle={entry.slug} />
         <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-medium text-primary">{entry.name}</p>
+          <p className="truncate text-body font-medium text-primary">{entry.name}</p>
           <p
-            className={`text-xs ${notes === null ? 'truncate' : 'leading-snug'} ${signedIn ? 'text-secondary' : 'text-warning-text'}`}
+            className={`text-caption ${notes === null ? 'truncate' : ''} ${signedIn ? 'text-secondary' : 'text-warning-text'}`}
             data-testid={`wizard-agent-status-${entry.slug}`}
           >
             {status}
@@ -159,7 +159,7 @@ function AgentRow({
             onClick={handleLogin}
             disabled={busy}
             data-testid={`wizard-agent-login-${entry.slug}`}
-            className="shrink-0 inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-primary transition-colors duration-150 hover:bg-surface disabled:opacity-60 max-md:min-h-[44px]"
+            className="shrink-0 inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-caption font-medium text-primary transition-colors duration-150 hover:bg-surface disabled:opacity-60 max-md:min-h-[44px]"
           >
             {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />}
             {busy ? t('subAgentCard.startingLogin') : t('wizard.agents.signIn')}
@@ -170,11 +170,11 @@ function AgentRow({
         <ul
           aria-label={t('wizard.agents.notes.byFolder')}
           data-testid={`wizard-agent-notes-breakdown-${entry.slug}`}
-          className="mb-0.5 mt-2 flex flex-col gap-[3px] pl-[66px] text-xs"
+          className="mb-0.5 mt-2 flex flex-col gap-[3px] pl-[66px] text-caption"
         >
           {breakdown.map((row) => (
             <li key={`${row.notFound ? 'nf' : 'f'}:${row.label}`} className="flex justify-between gap-3 py-0.5 text-secondary">
-              <span className={`min-w-0 truncate ${row.notFound ? 'italic text-muted' : 'text-primary'}`}>
+              <span className={`min-w-0 truncate ${row.notFound ? 'italic text-secondary' : 'text-primary'}`}>
                 {row.notFound ? `${t('wizard.agents.notes.folderNotFound')} · ${row.label}` : row.label}
               </span>
               <span className="shrink-0 font-mono">{row.n}</span>
@@ -183,7 +183,7 @@ function AgentRow({
         </ul>
       )}
       {busy && (
-        <p className="mt-1.5 pl-[66px] text-xs text-secondary">
+        <p className="mt-1.5 pl-[66px] text-caption text-secondary">
           {t('subAgentCard.loginBrowserHint')}{' '}
           {url && (
             <a href={url} target="_blank" rel="noreferrer" className="text-accent underline">
@@ -193,7 +193,7 @@ function AgentRow({
         </p>
       )}
       {failed && (
-        <p className="mt-1.5 pl-[66px] text-xs text-error" role="alert">{failed}</p>
+        <p className="mt-1.5 pl-[66px] text-caption text-error" role="alert">{failed}</p>
       )}
     </li>
   );
@@ -230,10 +230,10 @@ export default function WizardAgentsStep({ entries, history, ticks, onToggle, re
 
   const notFound = missing.length > 0 && (
     <section className={none ? '' : 'mt-6 border-t border-border pt-5'} data-testid="wizard-not-found">
-      <h2 className="text-sm font-medium text-primary">
+      <h2 className="text-body font-medium text-primary">
         {none ? t('wizard.agents.notFound.heroHeading') : t('wizard.agents.notFound.heading')}
       </h2>
-      <p className="mb-3 mt-0.5 text-xs text-secondary">{t('wizard.agents.notFound.hint')}</p>
+      <p className="mb-3 mt-0.5 text-caption text-secondary">{t('wizard.agents.notFound.hint')}</p>
       <div className="flex flex-wrap gap-2" role="group" aria-label={t('wizard.agents.notFound.heading')}>
         {missing.map((e) => (
           <button
@@ -242,7 +242,7 @@ export default function WizardAgentsStep({ entries, history, ticks, onToggle, re
             onClick={() => setOpen((cur) => (cur === e.slug ? null : e.slug))}
             aria-expanded={open === e.slug}
             data-testid={`wizard-locate-chip-${e.slug}`}
-            className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors duration-150 max-md:min-h-[44px] ${
+            className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-caption transition-colors duration-150 max-md:min-h-[44px] ${
               open === e.slug
                 ? 'border-accent bg-accent/10 text-primary'
                 : 'border-border bg-sidebar text-secondary hover:text-primary'
@@ -267,7 +267,7 @@ export default function WizardAgentsStep({ entries, history, ticks, onToggle, re
         );
       })()}
       {none && (
-        <div className="mt-4 text-xs text-secondary" data-testid="wizard-install-line">
+        <div className="mt-4 text-caption text-secondary" data-testid="wizard-install-line">
           <p>{t('wizard.agents.install')}</p>
           <p className="mt-0.5 text-primary">{missing.map((e) => e.name).join(' · ')}</p>
           <button
@@ -279,7 +279,7 @@ export default function WizardAgentsStep({ entries, history, ticks, onToggle, re
               setChecking(false);
             }}
             data-testid="wizard-agents-recheck"
-            className="mt-2 inline-flex items-center gap-1.5 text-xs font-medium text-accent hover:underline disabled:opacity-60 max-md:min-h-[44px]"
+            className="mt-2 inline-flex items-center gap-1.5 text-caption font-medium text-accent hover:underline disabled:opacity-60 max-md:min-h-[44px]"
           >
             {checking && <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />}
             {t('wizard.agents.checkAgain')}

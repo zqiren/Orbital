@@ -244,7 +244,7 @@ export default function PdfPreview({ bytes, fileName, onNav, onError }: EnginePr
       {password ? (
         <PasswordPrompt key={password.attempt} incorrect={password.incorrect} onSubmit={password.submit} />
       ) : !doc ? (
-        <p className="p-4 text-xs text-secondary">{t('filePreview.doc.loading')}</p>
+        <p className="p-4 text-caption text-secondary">{t('filePreview.doc.loading')}</p>
       ) : (
         <div className="relative" style={{ height: layout.height, width: contentWidth }}>
           {view.width > 0 &&
@@ -387,8 +387,8 @@ function PasswordPrompt({
       }}
       className="mx-auto mt-10 max-w-xs flex flex-col gap-2 surface-float-static p-4"
     >
-      <p className="text-sm text-primary">{t('filePreview.doc.password.prompt')}</p>
-      {incorrect && <p className="text-xs text-error">{t('filePreview.doc.password.incorrect')}</p>}
+      <p className="text-body text-primary">{t('filePreview.doc.password.prompt')}</p>
+      {incorrect && <p className="text-caption text-error">{t('filePreview.doc.password.incorrect')}</p>}
       <input
         type="password"
         autoFocus
@@ -396,11 +396,11 @@ function PasswordPrompt({
         placeholder={t('filePreview.doc.password.label')}
         value={value}
         onChange={(e) => setValue(e.target.value)}
-        className="h-8 rounded-md border border-border bg-transparent px-2 text-sm text-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+        className="h-8 rounded-md border border-border bg-transparent px-2 text-body text-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
       />
       <button
         type="submit"
-        className="bg-accent text-white text-sm font-medium rounded-lg px-4 py-1.5 hover:bg-accent/90 transition-colors"
+        className="bg-accent text-white text-body font-medium rounded-lg px-4 py-1.5 hover:bg-accent/90 transition-colors"
       >
         {t('filePreview.doc.password.submit')}
       </button>

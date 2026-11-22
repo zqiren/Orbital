@@ -45,10 +45,10 @@ export default function SetupGate({ setupIssues, onComplete }: SetupGateProps) {
             ladder in index.css. Kept in step with SetupWizard, which users can
             see back-to-back with this screen. */}
         <div className="surface-float-static p-8">
-          <h1 className="text-2xl font-semibold text-primary mb-3">
+          <h1 className="text-heading font-semibold text-primary mb-3">
             {t('setupGate.welcome')}
           </h1>
-          <p className="text-secondary text-sm leading-relaxed mb-6">
+          <p className="text-secondary text-body mb-6">
             {t('setupGate.intro')}
           </p>
 
@@ -57,7 +57,7 @@ export default function SetupGate({ setupIssues, onComplete }: SetupGateProps) {
               {setupIssues.map((issue, i) => (
                 <div
                   key={i}
-                  className="flex items-start gap-2 text-sm text-warning bg-warning/5 border border-warning/20 rounded-lg px-3 py-2"
+                  className="flex items-start gap-2 text-body text-warning bg-warning/5 border border-warning/20 rounded-lg px-3 py-2"
                 >
                   <span className="shrink-0 mt-0.5">!</span>
                   <span>{issue}</span>
@@ -67,21 +67,21 @@ export default function SetupGate({ setupIssues, onComplete }: SetupGateProps) {
           )}
 
           {error && (
-            <div className="mb-6 text-sm text-error bg-error/5 border border-error/20 rounded-lg px-3 py-2">
+            <div className="mb-6 text-body text-error bg-error/5 border border-error/20 rounded-lg px-3 py-2">
               {error}
             </div>
           )}
 
           {loading ? (
             <div className="text-center py-4">
-              <p className="text-sm text-secondary">
+              <p className="text-body text-secondary">
                 {t('setupGate.settingUp')}
               </p>
             </div>
           ) : (
             <button
               onClick={handleSetup}
-              className="w-full bg-accent text-white text-sm font-medium rounded-lg px-4 py-2.5 hover:bg-accent/90 transition-all duration-150"
+              className="w-full bg-accent text-white text-body font-medium rounded-lg px-4 py-2.5 hover:bg-accent/90 transition-all duration-150"
             >
               {error ? t('setupGate.retry') : t('setupGate.setup')}
             </button>

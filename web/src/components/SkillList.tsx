@@ -114,11 +114,11 @@ export function SkillRow({
         {leading && <span className={`flex shrink-0 ${muted ? 'opacity-50' : ''}`}>{leading}</span>}
         <div className="min-w-0">
           <span className="flex items-center gap-1.5">
-            <span className={`text-sm font-medium text-primary truncate ${muted ? 'opacity-50' : ''}`}>{name}</span>
+            <span className={`text-body font-medium text-primary truncate ${muted ? 'opacity-50' : ''}`}>{name}</span>
             {badge}
           </span>
           {description && (
-            <span className={`text-xs text-secondary block truncate ${muted ? 'opacity-50' : ''}`}>{description}</span>
+            <span className={`text-caption text-secondary block truncate ${muted ? 'opacity-50' : ''}`}>{description}</span>
           )}
         </div>
       </div>
@@ -132,7 +132,7 @@ export function SkillRow({
               data-testid={testId ? `${testId}-confirm` : undefined}
               disabled={busy}
               onClick={() => void confirmDelete()}
-              className="text-xs font-medium text-white bg-error rounded-lg px-2.5 py-1 hover:bg-error/90 transition-all duration-150 disabled:opacity-60 max-md:min-h-[36px]"
+              className="text-caption font-medium text-white bg-error rounded-lg px-2.5 py-1 hover:bg-error/90 transition-all duration-150 disabled:opacity-60 max-md:min-h-[36px]"
             >
               {t('settings.skills.deleteConfirm')}
             </button>
@@ -140,7 +140,7 @@ export function SkillRow({
               type="button"
               data-testid={testId ? `${testId}-cancel` : undefined}
               onClick={() => setConfirming(false)}
-              className="text-xs font-medium text-secondary border border-border rounded-lg px-2.5 py-1 hover:bg-card-hover transition-all duration-150 max-md:min-h-[36px]"
+              className="text-caption font-medium text-secondary border border-border rounded-lg px-2.5 py-1 hover:bg-card-hover transition-all duration-150 max-md:min-h-[36px]"
             >
               {t('settings.skills.deleteCancel')}
             </button>
@@ -187,7 +187,7 @@ export const SkillUpload = forwardRef<HTMLInputElement, SkillUploadProps>(functi
   const t = useT();
   return (
     <label className="flex items-center justify-center border border-dashed border-border rounded-lg px-3 py-3 cursor-pointer hover:border-accent/50 hover:bg-accent/5 transition-all duration-150 max-md:min-h-[44px]">
-      <span className="text-sm text-secondary">
+      <span className="text-body text-secondary">
         {uploading ? t('settings.skills.uploading') : t('settings.skills.uploadCta')}
       </span>
       <input

@@ -135,7 +135,7 @@ export default function SheetGrid({ sheet }: { sheet: SheetData }) {
       key={key}
       role="gridcell"
       title={value.length > 24 ? value : undefined}
-      className="absolute px-1.5 text-xs text-primary whitespace-nowrap overflow-hidden text-ellipsis border-r border-b border-border bg-card select-text"
+      className="absolute px-1.5 text-caption text-primary whitespace-nowrap overflow-hidden text-ellipsis border-r border-b border-border bg-card select-text"
       style={{
         top,
         left,
@@ -173,7 +173,7 @@ export default function SheetGrid({ sheet }: { sheet: SheetData }) {
     rowNumbers.push(
       <div
         key={r}
-        className="absolute left-0 pr-1.5 text-right text-2xs text-secondary tabular-nums bg-sidebar border-r border-b border-border"
+        className="absolute left-0 pr-1.5 text-right text-micro text-secondary tabular-nums bg-sidebar border-r border-b border-border"
         style={{ top: r * ROW_H, width: gutter, height: ROW_H, lineHeight: `${ROW_H - 1}px` }}
       >
         {r + 1}
@@ -186,7 +186,7 @@ export default function SheetGrid({ sheet }: { sheet: SheetData }) {
     columnHeaders.push(
       <div
         key={c}
-        className="absolute top-0 text-center text-2xs font-medium text-secondary bg-sidebar border-r border-b border-border"
+        className="absolute top-0 text-center text-micro font-medium text-secondary bg-sidebar border-r border-b border-border"
         style={{ left: gutter + lefts[c], width: widths[c], height: HEADER_H, lineHeight: `${HEADER_H - 1}px` }}
       >
         {columnLabel(c)}

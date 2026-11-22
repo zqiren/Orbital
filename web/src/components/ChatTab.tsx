@@ -367,7 +367,7 @@ export default function ChatTab({
   );
   // Spec 156 §5.6: the same sheet, opened by editing a sent message.
   const undoTitle = (
-    <span className="text-[15px] font-semibold text-primary">
+    <span className="text-title font-semibold text-primary">
       {t(undoTurn?.edit ? 'chat.edit.sheetTitle' : 'turn.sheetTitle')}
     </span>
   );
@@ -529,7 +529,7 @@ export default function ChatTab({
   const panelBody = (
     <>
       {canUpload && uploadError && (
-        <p role="status" className="shrink-0 mx-3 mt-2 px-3 py-2 text-xs text-error bg-error/10 border border-error/30 rounded-md">
+        <p role="status" className="shrink-0 mx-3 mt-2 px-3 py-2 text-caption text-error bg-error/10 border border-error/30 rounded-md">
           {uploadError}
         </p>
       )}
@@ -694,7 +694,7 @@ export default function ChatTab({
         <div
           role="status"
           data-testid="turn-undo-toast"
-          className="fixed bottom-[22px] left-1/2 z-50 flex -translate-x-1/2 items-center gap-3 whitespace-nowrap rounded-[10px] bg-[#18181B] py-2 pl-3.5 pr-2 text-[12.5px] text-white shadow-[0_10px_30px_rgb(0_0_0/0.25)] dark:bg-[#F4F6F9] dark:text-[#18181B]"
+          className="fixed bottom-[22px] left-1/2 z-50 flex -translate-x-1/2 items-center gap-3 whitespace-nowrap rounded-[10px] bg-[#18181B] py-2 pl-3.5 pr-2 text-body text-white shadow-[0_10px_30px_rgb(0_0_0/0.25)] dark:bg-[#F4F6F9] dark:text-[#18181B]"
         >
           <span>{undoToast.text}</span>
           <button

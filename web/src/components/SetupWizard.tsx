@@ -98,7 +98,7 @@ function LocaleToggle() {
         data-testid="wizard-locale-select"
         value={locale}
         onChange={(e) => setLocale(e.target.value as typeof locale)}
-        className="text-xs bg-card border border-border rounded-lg px-2 py-1 text-primary focus:outline-none focus:border-accent transition-all duration-150"
+        className="text-caption bg-card border border-border rounded-lg px-2 py-1 text-primary focus:outline-none focus:border-accent transition-all duration-150"
       >
         {LOCALES.map((l) => (
           <option key={l.code} value={l.code}>{l.label}</option>
@@ -112,10 +112,10 @@ function LocaleToggle() {
 function StepIndicator({ current }: { current: WizardStep }) {
   const t = useT();
   return (
-    <ol className="mb-4 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-secondary" data-testid="wizard-steps">
+    <ol className="mb-4 flex flex-wrap items-center gap-x-2 gap-y-1 text-caption text-secondary" data-testid="wizard-steps">
       {STEP_ORDER.map((s, i) => (
         <li key={s} className="inline-flex items-center gap-2">
-          {i > 0 && <span aria-hidden="true" className="text-secondary/50">·</span>}
+          {i > 0 && <span aria-hidden="true" className="text-muted">·</span>}
           <span
             aria-current={s === current ? 'step' : undefined}
             className={s === current ? 'font-medium text-primary' : undefined}
@@ -154,10 +154,10 @@ function WizardCard({
     <div className="surface-float-static p-8 max-md:p-5">
       <StepIndicator current={step} />
       <div className="flex items-start justify-between gap-4 mb-3">
-        <h1 className="text-2xl font-semibold text-primary">{title}</h1>
+        <h1 className="text-heading font-semibold text-primary">{title}</h1>
         <LocaleToggle />
       </div>
-      <p className="text-secondary text-sm leading-relaxed mb-6">{intro}</p>
+      <p className="text-secondary text-body mb-6">{intro}</p>
       {children}
     </div>
   );
@@ -442,7 +442,7 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
             intro={noAgents ? t('wizard.agents.introNone') : t('wizard.agents.intro')}
           >
             {agentEntries === null ? (
-              <div className="inline-flex items-center gap-2 text-sm text-secondary" data-testid="wizard-agents-loading">
+              <div className="inline-flex items-center gap-2 text-body text-secondary" data-testid="wizard-agents-loading">
                 <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
                 {t('wizard.agents.loading')}
               </div>
@@ -462,7 +462,7 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
                 onClick={handleAgentsContinue}
                 disabled={agentEntries === null || savingAgents}
                 data-testid="wizard-agents-continue"
-                className="bg-accent text-white text-sm font-medium rounded-lg px-5 py-2.5 hover:bg-accent/90 transition-all duration-150 disabled:opacity-50 inline-flex items-center gap-2"
+                className="bg-accent text-white text-body font-medium rounded-lg px-5 py-2.5 hover:bg-accent/90 transition-all duration-150 disabled:opacity-50 inline-flex items-center gap-2"
               >
                 {savingAgents && <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />}
                 {checkedAgents === 0
@@ -470,7 +470,7 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
                   : t(checkedAgents === 1 ? 'wizard.agents.continue.one' : 'wizard.agents.continue.other', { n: checkedAgents })}
               </button>
               {agentsError && (
-                <p className="text-xs text-error mt-2" role="alert" data-testid="wizard-agents-error">
+                <p className="text-caption text-error mt-2" role="alert" data-testid="wizard-agents-error">
                   {agentsError}
                 </p>
               )}
@@ -520,7 +520,7 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
                 non-blocking; the full inspectable payload lives in Global
                 Settings → Data & privacy. */}
             <p
-              className="mt-4 text-xs text-secondary/80"
+              className="mt-4 text-caption text-secondary"
               data-testid="wizard-telemetry-disclosure"
             >
               {t('telemetry.wizard.disclosure')}
@@ -536,14 +536,14 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
                   onClick={() => setStep(nothingToImport ? 'agents' : 'projects')}
                   disabled={checkingKey || skippingKey}
                   data-testid="wizard-key-back"
-                  className="mr-auto text-sm font-medium text-secondary transition-colors duration-150 hover:text-primary disabled:opacity-50 max-md:min-h-[44px]"
+                  className="mr-auto text-body font-medium text-secondary transition-colors duration-150 hover:text-primary disabled:opacity-50 max-md:min-h-[44px]"
                 >
                   {t('global.back')}
                 </button>
                 <button
                   onClick={handleNext}
                   disabled={checkingKey || skippingKey}
-                  className="bg-accent text-white text-sm font-medium rounded-lg px-5 py-2.5 hover:bg-accent/90 transition-all duration-150 disabled:opacity-50 inline-flex items-center gap-2"
+                  className="bg-accent text-white text-body font-medium rounded-lg px-5 py-2.5 hover:bg-accent/90 transition-all duration-150 disabled:opacity-50 inline-flex items-center gap-2"
                 >
                   {checkingKey ? (
                     <>
@@ -556,7 +556,7 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
                 </button>
               </div>
               {nextError && (
-                <p className="text-xs text-error mt-2" data-testid="wizard-next-error">
+                <p className="text-caption text-error mt-2" data-testid="wizard-next-error">
                   {nextError}
                 </p>
               )}
@@ -568,7 +568,7 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
                 only way anything gets done. */}
             {keyCompulsory ? (
               <div
-                className="mt-5 rounded-lg border border-warning/30 bg-warning-surface px-3.5 py-3 text-xs leading-relaxed text-warning-text"
+                className="mt-5 rounded-lg border border-warning/30 bg-warning-surface px-3.5 py-3 text-caption text-warning-text"
                 data-testid="wizard-key-compulsory"
               >
                 {t('wizard.apiKey.compulsory')}{' '}
@@ -589,19 +589,19 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
                     onClick={handleSkipKey}
                     disabled={checkingKey || skippingKey}
                     data-testid="wizard-skip-key"
-                    className="text-sm font-medium text-secondary hover:text-primary underline-offset-2 hover:underline transition-colors duration-150 disabled:opacity-50 max-md:min-h-[44px]"
+                    className="text-body font-medium text-secondary hover:text-primary underline-offset-2 hover:underline transition-colors duration-150 disabled:opacity-50 max-md:min-h-[44px]"
                   >
                     {t('wizard.skipKey')}
                   </button>
                 </div>
                 <p
-                  className="mt-1 text-xs text-secondary/80 leading-relaxed max-w-[380px]"
+                  className="mt-1 text-caption text-secondary max-w-[380px]"
                   data-testid="wizard-skip-key-hint"
                 >
                   {t('wizard.skipKey.hint')}
                 </p>
                 {skipError && (
-                  <p className="text-xs text-error mt-2" role="alert" data-testid="wizard-skip-error">
+                  <p className="text-caption text-error mt-2" role="alert" data-testid="wizard-skip-error">
                     {skipError}
                   </p>
                 )}
@@ -619,15 +619,15 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
               <div className="mb-6" data-testid="wizard-connectors-group">
                 <div className="flex items-center gap-2 mb-1">
                   <Plug className="w-4 h-4 text-accent" />
-                  <h2 className="text-sm font-medium text-primary">
+                  <h2 className="text-body font-medium text-primary">
                     {t('wizard.accounts.connectorsHeading')}
                   </h2>
                   <BetaBadge />
                 </div>
-                <p className="text-xs text-secondary mb-1">
+                <p className="text-caption text-secondary mb-1">
                   {t('wizard.accounts.connectorsHint')}
                 </p>
-                <p className="text-xs text-secondary/80 mb-3">
+                <p className="text-caption text-secondary mb-3">
                   {t('connectors.betaNote')}
                 </p>
                 <ul className="space-y-2">
@@ -640,16 +640,16 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
                         className="surface-float-static surface-float-nested px-3 py-2.5"
                       >
                         <div className="flex items-center gap-3">
-                          <span className="text-xl shrink-0" aria-hidden="true">
+                          <span className="text-heading shrink-0" aria-hidden="true">
                             {c.icon}
                           </span>
                           <div className="min-w-0 flex-1">
-                            <span className="block text-sm font-medium text-primary truncate">
+                            <span className="block text-body font-medium text-primary truncate">
                               {c.name}
                             </span>
                             {c.connected && (
                               <p
-                                className="text-xs text-secondary truncate"
+                                className="text-caption text-secondary truncate"
                                 data-testid={`wizard-connector-status-${c.id}`}
                               >
                                 {t('wizard.accounts.connectedAs', { account: c.account ?? '' })}
@@ -662,7 +662,7 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
                               data-testid={`wizard-connector-connect-${c.id}`}
                               disabled={connectingId !== null}
                               onClick={() => handleConnect(c)}
-                              className="shrink-0 text-xs font-medium text-white bg-accent rounded-lg px-3 py-1.5 hover:bg-accent/90 transition-all duration-150 disabled:opacity-60 inline-flex items-center gap-1.5 max-md:min-h-[44px]"
+                              className="shrink-0 text-caption font-medium text-white bg-accent rounded-lg px-3 py-1.5 hover:bg-accent/90 transition-all duration-150 disabled:opacity-60 inline-flex items-center gap-1.5 max-md:min-h-[44px]"
                             >
                               {connecting ? (
                                 <>
@@ -677,7 +677,7 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
                         </div>
                         {connectError?.id === c.id && (
                           <p
-                            className="mt-2 text-xs text-error"
+                            className="mt-2 text-caption text-error"
                             role="alert"
                             data-testid={`wizard-connector-error-${c.id}`}
                           >
@@ -696,33 +696,33 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
             <div data-testid="wizard-browser-group">
               <div className="flex items-center gap-2 mb-1">
                 <Globe className="w-4 h-4 text-accent" />
-                <h2 className="text-sm font-medium text-primary">
+                <h2 className="text-body font-medium text-primary">
                   {t('wizard.accounts.browserHeading')}
                 </h2>
               </div>
-              <p className="text-secondary text-xs leading-relaxed mb-1.5">
+              <p className="text-secondary text-caption mb-1.5">
                 {t('wizard.browser.body1')}
               </p>
-              <p className="text-secondary text-xs leading-relaxed mb-3">
+              <p className="text-secondary text-caption mb-3">
                 {t('wizard.browser.body2')}
               </p>
 
               {browserError && (
-                <div className="bg-error/10 border border-error/20 rounded-lg px-4 py-3 mb-3 text-sm text-error">
+                <div className="bg-error/10 border border-error/20 rounded-lg px-4 py-3 mb-3 text-body text-error">
                   {browserError}
                 </div>
               )}
 
               {browserDone ? (
                 <div
-                  className="inline-flex items-center gap-2 text-sm text-success"
+                  className="inline-flex items-center gap-2 text-body text-success"
                   data-testid="wizard-browser-done"
                 >
                   <span aria-hidden="true">{'✓'}</span>
                   {t('wizard.accounts.browserDone')}
                 </div>
               ) : browserLoading ? (
-                <div className="inline-flex items-center gap-2 text-sm text-secondary">
+                <div className="inline-flex items-center gap-2 text-body text-secondary">
                   <Loader2 className="w-4 h-4 animate-spin" />
                   {t('wizard.browser.opening')}
                 </div>
@@ -730,7 +730,7 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
                 <button
                   onClick={handleOpenBrowser}
                   data-testid="wizard-open-browser"
-                  className="border border-border text-primary text-sm font-medium rounded-lg px-4 py-2 hover:bg-surface transition-all duration-150"
+                  className="border border-border text-primary text-body font-medium rounded-lg px-4 py-2 hover:bg-surface transition-all duration-150"
                 >
                   {t('wizard.openBrowser')}
                 </button>
@@ -741,14 +741,14 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
               <button
                 onClick={finish}
                 data-testid="wizard-skip"
-                className="border border-border text-primary text-sm font-medium rounded-lg px-5 py-2.5 hover:bg-surface transition-all duration-150"
+                className="border border-border text-primary text-body font-medium rounded-lg px-5 py-2.5 hover:bg-surface transition-all duration-150"
               >
                 {t('wizard.skip')}
               </button>
               <button
                 onClick={finish}
                 data-testid="wizard-get-started"
-                className="bg-accent text-white text-sm font-medium rounded-lg px-5 py-2.5 hover:bg-accent/90 transition-all duration-150"
+                className="bg-accent text-white text-body font-medium rounded-lg px-5 py-2.5 hover:bg-accent/90 transition-all duration-150"
               >
                 {t('wizard.getStarted')}
               </button>

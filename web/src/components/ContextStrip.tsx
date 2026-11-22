@@ -54,7 +54,7 @@ const TONE_BAR: Record<Tone, string> = {
 };
 
 const TONE_TEXT: Record<Tone, string> = {
-  calm: 'text-muted',
+  calm: 'text-secondary',
   near: 'text-warning',
   over: 'text-warning',
 };
@@ -105,7 +105,7 @@ export default function ContextStrip({ usage, onNewSession }: ContextStripProps)
           type="button"
           data-testid="context-new-session"
           onClick={onNewSession}
-          className="font-mono text-2xs text-accent hover:underline cursor-pointer"
+          className="font-mono text-micro text-accent hover:underline cursor-pointer"
         >
           {t('chat.context.newSession')}
         </button>
@@ -137,7 +137,7 @@ export default function ContextStrip({ usage, onNewSession }: ContextStripProps)
       </div>
       <span
         data-testid="context-label"
-        className={`font-mono text-2xs tabular-nums ${TONE_TEXT[tone]}`}
+        className={`font-mono text-micro tabular-nums ${TONE_TEXT[tone]}`}
       >
         {t('chat.context.label', { used: usedLabel, window: windowLabel })}
       </span>

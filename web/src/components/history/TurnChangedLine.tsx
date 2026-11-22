@@ -49,7 +49,7 @@ export default function TurnChangedLine({
   return (
     <div
       data-testid="turn-changed-line"
-      className="group/chg relative mt-1 flex w-fit max-w-full flex-wrap items-center gap-1.5 py-0.5 pr-9 text-xs text-muted"
+      className="group/chg relative mt-1 flex w-fit max-w-full flex-wrap items-center gap-1.5 py-0.5 pr-9 text-caption text-secondary"
     >
       <span className="inline-flex">
         <FileGlyph />
@@ -61,12 +61,12 @@ export default function TurnChangedLine({
           type="button"
           title={f.path}
           onClick={() => onOpenFile?.(f.path, f.last_v)}
-          className="whitespace-nowrap rounded-md bg-accent/10 px-[7px] py-px font-mono text-[11px] text-secondary transition-colors hover:text-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+          className="whitespace-nowrap rounded-md bg-accent/10 px-[7px] py-px font-mono text-micro text-secondary transition-colors hover:text-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
         >
           {f.path.split('/').pop()}
         </button>
       ))}
-      {undone > 0 && <span className="text-muted">· {t('turn.undone', { n: undone })}</span>}
+      {undone > 0 && <span className="text-secondary">· {t('turn.undone', { n: undone })}</span>}
       {onUndo && (
         <button
           type="button"
@@ -78,7 +78,7 @@ export default function TurnChangedLine({
           <UndoGlyph />
           <span
             role="tooltip"
-            className="pointer-events-none absolute left-1/2 top-[calc(100%+6px)] z-20 hidden -translate-x-1/2 whitespace-nowrap rounded-md bg-[#18181B] px-2 py-1 text-[11.5px] font-medium text-white shadow-[0_6px_18px_rgb(0_0_0/0.18)] group-hover/ub:block dark:bg-[#F4F6F9] dark:text-[#18181B]"
+            className="pointer-events-none absolute left-1/2 top-[calc(100%+6px)] z-20 hidden -translate-x-1/2 whitespace-nowrap rounded-md bg-[#18181B] px-2 py-1 text-micro font-medium text-white shadow-[0_6px_18px_rgb(0_0_0/0.18)] group-hover/ub:block dark:bg-[#F4F6F9] dark:text-[#18181B]"
           >
             {t('turn.undo')}
           </span>

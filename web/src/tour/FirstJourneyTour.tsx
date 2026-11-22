@@ -266,14 +266,14 @@ export default function FirstJourneyTour({ folderName, agentNames, onClose }: Fi
         className="fixed z-[202] surface-float-pop p-4"
         style={{ left: pos.left, top: pos.top, width: CARD_WIDTH }}
       >
-        <h2 id={titleId} className="text-sm font-semibold text-primary">
+        <h2 id={titleId} className="text-title font-semibold text-primary">
           {t(step.titleKey)}
         </h2>
-        <p className="mt-1.5 text-[13px] leading-relaxed text-secondary">
+        <p className="mt-1.5 text-body text-secondary">
           {t(step.bodyKey, vars)}
         </p>
         <div className="mt-4 flex items-center justify-between gap-3">
-          <span className="text-2xs font-mono text-secondary" data-testid="tour-counter">
+          <span className="text-micro font-mono text-secondary" data-testid="tour-counter">
             {t('tour.counter', { n: index + 1, total: steps.length })}
           </span>
           <div className="flex items-center gap-1">
@@ -282,7 +282,7 @@ export default function FirstJourneyTour({ folderName, agentNames, onClose }: Fi
                 type="button"
                 onClick={onClose}
                 data-testid="tour-skip"
-                className="text-xs text-secondary hover:text-primary transition-colors duration-150 px-2.5 py-1.5 max-md:min-h-[44px]"
+                className="text-caption text-secondary hover:text-primary transition-colors duration-150 px-2.5 py-1.5 max-md:min-h-[44px]"
               >
                 {t('tour.skip')}
               </button>
@@ -292,7 +292,7 @@ export default function FirstJourneyTour({ folderName, agentNames, onClose }: Fi
               type="button"
               onClick={advance}
               data-testid="tour-next"
-              className="bg-accent text-white text-xs font-medium rounded-lg px-3.5 py-1.5 hover:bg-accent/90 transition-all duration-150 max-md:min-h-[44px]"
+              className="bg-accent text-white text-caption font-medium rounded-lg px-3.5 py-1.5 hover:bg-accent/90 transition-all duration-150 max-md:min-h-[44px]"
             >
               {isLast ? t('tour.done') : t('tour.next')}
             </button>

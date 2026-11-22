@@ -162,7 +162,7 @@ export interface PinModels {
 }
 
 const MENU_ROW =
-  'w-full flex items-center gap-2.5 px-3 py-2 text-[13px] text-primary text-left ' +
+  'w-full flex items-center gap-2.5 px-3 py-2 text-body text-primary text-left ' +
   'hover:bg-card-hover/50 max-md:min-h-[52px]';
 
 const ELEVATED = 'surface-float-pop';
@@ -239,7 +239,7 @@ const LINE_CLASS: Record<LineTone, string> = {
   ok: 'text-secondary',
   low: 'text-warning-text',
   out: 'text-error-text',
-  muted: 'text-muted',
+  muted: 'text-secondary',
 };
 
 function windowText(w: ShownWindow, t: T): string {
@@ -317,13 +317,13 @@ function QuotaCard({ slug, name, info, now, t, locale }: {
       {body}
     </div>
   );
-  const note = (text: string) => <p className="m-0 text-xs text-secondary">{text}</p>;
+  const note = (text: string) => <p className="m-0 text-caption text-secondary">{text}</p>;
 
   if (info.update_needed || info.ready === false) {
     return shell(
       <>
         <AvatarWithDot slug={slug} dot={{ color: 'grey', pulse: false }} dotTestId="pin-card-dot" t={t} />
-        <b className="text-[13px] font-semibold">{name}</b>
+        <b className="text-body font-medium">{name}</b>
       </>,
       note(info.update_needed
         ? t('pinAgent.card.needsUpdate', {
@@ -338,7 +338,7 @@ function QuotaCard({ slug, name, info, now, t, locale }: {
     return shell(
       <>
         <MessageAvatar variant="agent" agentHandle={slug} />
-        <b className="text-[13px] font-semibold">{name}</b>
+        <b className="text-body font-medium">{name}</b>
       </>,
       note(t('pinAgent.card.cursor')),
     );
@@ -348,9 +348,9 @@ function QuotaCard({ slug, name, info, now, t, locale }: {
   const header = (
     <>
       <MessageAvatar variant="agent" agentHandle={slug} />
-      <b className="text-[13px] font-semibold">{t('pinAgent.card.usage', { name })}</b>
+      <b className="text-body font-medium">{t('pinAgent.card.usage', { name })}</b>
       {quota?.plan && (
-        <span className="ml-auto text-[11px] text-muted">
+        <span className="ml-auto text-micro text-secondary">
           {t('pinAgent.card.plan', { plan: titleCase(quota.plan) })}
         </span>
       )}
@@ -379,7 +379,7 @@ function QuotaCard({ slug, name, info, now, t, locale }: {
     const tone = left === null ? 'ok' : leftTone(left);
     return [(
       <div key={kind} className="flex flex-col gap-1">
-        <div className="flex justify-between gap-2 text-xs">
+        <div className="flex justify-between gap-2 text-caption">
           <b className="font-medium">{t(labelKey)}</b>
           <span className="text-secondary tabular-nums">{left === null ? '—' : `${left}%`}</span>
         </div>
@@ -389,7 +389,7 @@ function QuotaCard({ slug, name, info, now, t, locale }: {
             style={{ width: `${left ?? 0}%` }}
           />
         </div>
-        <div className="text-[11px] text-muted tabular-nums">{sub}</div>
+        <div className="text-micro text-secondary tabular-nums">{sub}</div>
       </div>
     )];
   });
@@ -405,7 +405,7 @@ function QuotaCard({ slug, name, info, now, t, locale }: {
     <>
       {blocks}
       {footer && (
-        <div className="text-[11px] text-muted border-t border-border pt-2">{footer}</div>
+        <div className="text-micro text-secondary border-t border-border pt-2">{footer}</div>
       )}
     </>
   ));
@@ -425,7 +425,7 @@ function Radio({ checked, onClick, testId, children }: {
       aria-checked={checked}
       data-testid={testId}
       onClick={onClick}
-      className="flex w-full min-w-0 items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-[13px] text-primary
+      className="flex w-full min-w-0 items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-body text-primary
                  hover:bg-card-hover/50 focus-visible:outline-none focus-visible:bg-card-hover/50 max-md:min-h-[44px]"
     >
       <span
@@ -444,7 +444,7 @@ function Radio({ checked, onClick, testId, children }: {
 function Section({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="flex flex-col gap-1">
-      <span className="px-2 text-[11px] font-medium text-secondary">{label}</span>
+      <span className="px-2 text-micro font-medium text-secondary">{label}</span>
       {children}
     </div>
   );
@@ -452,7 +452,7 @@ function Section({ label, children }: { label: string; children: ReactNode }) {
 
 function PanelFooter({ text, error, t }: { text: string; error: boolean; t: T }) {
   return (
-    <p className="m-0 border-t border-border/60 px-2 pt-2 text-[11px] leading-snug text-muted">
+    <p className="m-0 border-t border-border/60 px-2 pt-2 text-micro text-secondary">
       {error && (
         <span role="alert" data-testid="pin-model-error" className="block text-error-text">
           {t('pinAgent.model.saveFailed')}
@@ -499,7 +499,7 @@ function WorkerPanel({ info, onChange, error, t }: {
           >
             <span className="shrink-0">{t('pinAgent.model.default')}</span>
             {settingsLabel && (
-              <span className={`${VALUE_TEXT} text-muted`}>
+              <span className={`${VALUE_TEXT} text-secondary`}>
                 {breakable(t('pinAgent.model.defaultValue', { value: settingsLabel }))}
               </span>
             )}
@@ -537,7 +537,7 @@ function WorkerPanel({ info, onChange, error, t }: {
                 onClick={() => onChange({
                   effort: l === info.effort || l === info.settingsEffort ? null : l,
                 })}
-                className={`flex-auto whitespace-nowrap rounded-md px-1 py-1 text-[11px] font-medium transition-colors duration-150 max-md:min-h-[36px] ${
+                className={`flex-auto whitespace-nowrap rounded-md px-1 py-1 text-micro font-medium transition-colors duration-150 max-md:min-h-[36px] ${
                   level === l
                     ? 'bg-segment-on text-segment-on-text shadow-[0_1px_2px_rgb(0_0_0/0.06)]'
                     : 'text-secondary hover:text-primary'
@@ -568,7 +568,7 @@ function FreeTextModel({ info, onChange, t }: {
   const custom = info.model !== null;
   return (
     <div
-      className="flex w-full min-w-0 items-center gap-2.5 rounded-md px-2 py-1 text-[13px] max-md:min-h-[44px]"
+      className="flex w-full min-w-0 items-center gap-2.5 rounded-md px-2 py-1 text-body max-md:min-h-[44px]"
       data-testid="pin-model-opt-other"
     >
       <button
@@ -595,7 +595,7 @@ function FreeTextModel({ info, onChange, t }: {
         aria-label={t('pinAgent.model.other')}
         spellCheck={false}
         data-testid="pin-model-other-input"
-        className="min-w-0 flex-1 rounded-md border border-border bg-card px-2 py-1 text-[13px] text-primary
+        className="min-w-0 flex-1 rounded-md border border-border bg-card px-2 py-1 text-body text-primary
                    placeholder:text-muted focus:border-accent focus:outline-none max-md:text-base"
       />
     </div>
@@ -619,7 +619,7 @@ function ManagerPanel({ manager, onChange, error, t }: {
           >
             <span className="shrink-0">{t('pinAgent.model.default')}</span>
             {manager.defaultName && (
-              <span className={`${VALUE_TEXT} text-muted`}>
+              <span className={`${VALUE_TEXT} text-secondary`}>
                 {t('pinAgent.model.defaultValue', { value: manager.defaultName })}
               </span>
             )}
@@ -828,7 +828,7 @@ function PinTargetSelect({
       >
         <div className="flex items-center gap-2 px-2">
           <MessageAvatar variant="agent" agentHandle={slug ?? undefined} />
-          <b className="text-[13px] font-semibold">{name}</b>
+          <b className="text-body font-medium">{name}</b>
         </div>
         {panel}
       </div>
@@ -846,7 +846,7 @@ function PinTargetSelect({
     const key = slug ?? 'orbital';
     if (!editable(slug)) {
       return (
-        <span data-testid={`pin-model-line-${key}`} className="mt-px text-xs text-muted whitespace-nowrap max-md:truncate max-md:max-w-full">
+        <span data-testid={`pin-model-line-${key}`} className="mt-px text-caption text-secondary whitespace-nowrap max-md:truncate max-md:max-w-full">
           {text}
         </span>
       );
@@ -862,9 +862,9 @@ function PinTargetSelect({
         title={text}
         onClick={(e) => { e.stopPropagation(); openModel(slug); }}
         className={`group/line pointer-events-auto relative z-10 mt-px inline-flex max-w-full items-center rounded-sm
-                    text-xs whitespace-nowrap transition-colors duration-150 hover:text-primary
+                    text-caption whitespace-nowrap transition-colors duration-150 hover:text-primary
                     focus-visible:outline-none focus-visible:text-primary max-md:py-1 ${
-                      active ? 'text-primary' : 'text-muted'}`}
+                      active ? 'text-primary' : 'text-secondary'}`}
       >
         <span className="min-w-0 decoration-dotted decoration-1 underline-offset-[3px] group-hover/line:underline group-focus-visible/line:underline max-md:truncate">
           {text}
@@ -923,13 +923,13 @@ function PinTargetSelect({
   const hoverCard = !open && controlHover ? card(value) : null;
 
   const orbitalTrailing = (
-    <span className="ml-auto flex items-center gap-2 text-xs text-muted whitespace-nowrap">
+    <span className="ml-auto flex items-center gap-2 text-caption text-secondary whitespace-nowrap">
       {managerReady ? (
         <span>{t('pinAgent.managerRole')}</span>
       ) : (
         <span
           data-testid="pin-orbital-key-required"
-          className="rounded-full border border-warning/40 bg-warning/10 px-2 py-px text-[11px] font-medium text-warning-text"
+          className="rounded-full border border-warning/40 bg-warning/10 px-2 py-px text-micro font-medium text-warning-text"
         >
           {t('pinAgent.orbital.keyRequired')}
         </span>
@@ -1057,7 +1057,7 @@ function PinTargetSelect({
                 />
               );
               const trailing = (
-                <span className="ml-auto flex items-center gap-2 text-xs text-muted whitespace-nowrap tabular-nums">
+                <span className="ml-auto flex items-center gap-2 text-caption text-secondary whitespace-nowrap tabular-nums">
                   {lines[0] && (
                     <span
                       data-testid={`pin-quota-${a.slug}`}
@@ -1124,7 +1124,7 @@ function PinTargetSelect({
               >
                 <MessageAvatar variant="agent" agentHandle={value} />
                 <span className="font-medium">{value}</span>
-                <span className="ml-auto flex items-center gap-2 text-xs text-muted">
+                <span className="ml-auto flex items-center gap-2 text-caption text-secondary">
                   <span className="w-3 text-center">✓</span>
                 </span>
               </button>

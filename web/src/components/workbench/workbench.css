@@ -37,7 +37,7 @@
 .wb-golden { height: max(40px, calc(38.2% - var(--wb-lead) - var(--wb-lead-gap))); }
 .wb-greeting {
   margin: 0 0 var(--wb-lead-gap); height: var(--wb-lead); line-height: var(--wb-lead);
-  text-align: center; font-size: 22px; font-weight: 500; letter-spacing: -.01em;
+  text-align: center; font-size: var(--text-heading); font-weight: 500; letter-spacing: var(--text-heading--letter-spacing);
   color: color-mix(in srgb, var(--color-primary) 78%, transparent);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
@@ -54,13 +54,13 @@
 .wb-box { padding: 20px 18px 14px 22px; display: flex; flex-direction: column; gap: 10px; }
 .wb-input {
   min-height: 42px; max-height: 240px; width: 100%; resize: none; border: 0; outline: 0; padding: 0;
-  background: transparent; font: inherit; font-size: 14px; line-height: 1.5; color: var(--color-primary);
+  background: transparent; font: inherit; font-size: var(--text-body); line-height: var(--text-body--line-height); letter-spacing: var(--text-body--letter-spacing); color: var(--color-primary);
 }
 .wb-input::placeholder { color: var(--color-muted); }
 .wb-foot { display: flex; align-items: center; gap: 4px; min-height: 28px; }
 .wb-chip {
   display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 8px 0 7px; border-radius: 999px;
-  font-size: 12px; color: var(--color-secondary); white-space: nowrap; min-width: 0; max-width: 200px;
+  font-size: var(--text-caption); line-height: var(--text-caption--line-height); letter-spacing: var(--text-caption--letter-spacing); color: var(--color-secondary); white-space: nowrap; min-width: 0; max-width: 200px;
 }
 .wb-chip:hover, .wb-chip[aria-expanded="true"] { background: var(--wb-tint); color: var(--color-primary); }
 .wb-chip.is-set { background: var(--wb-tint); color: var(--color-primary); }
@@ -81,7 +81,7 @@
 }
 .wb-plus:hover { background: var(--wb-tint); color: var(--color-primary); }
 .wb-box.is-drop { outline: 2px dashed color-mix(in srgb, var(--color-accent) 70%, transparent); outline-offset: -4px; }
-.wb-atterr { font-size: 12px; color: var(--color-warning-text); }
+.wb-atterr { font-size: var(--text-caption); color: var(--color-warning-text); }
 .wb-send {
   width: 30px; height: 30px; border-radius: 9px; background: var(--color-accent); color: #fff;
   display: inline-flex; align-items: center; justify-content: center; flex: none;
@@ -101,7 +101,7 @@
   --wb-layer: var(--float-layer);
   --wb-tint: rgb(83 154 248 / .09);
   --wb-pop: var(--float-shadow-pop);
-  color: var(--color-primary); font-size: 13px; line-height: 1.45;
+  color: var(--color-primary); font-size: var(--text-body); line-height: var(--text-body--line-height); letter-spacing: var(--text-body--letter-spacing);
 }
 :root[data-theme="dark"] .wb-pophost { --wb-tint: rgb(83 154 248 / .14); }
 .wb-pop.is-anchored { position: fixed; z-index: 120; }
@@ -111,8 +111,8 @@
 .wb-opt { display: flex; align-items: center; gap: 10px; width: 100%; padding: 7px 8px; border-radius: 8px; min-height: 36px; text-align: left; }
 .wb-opt:hover, .wb-opt:focus-visible { background: var(--wb-tint); outline: none; }
 .wb-opt .wb-tx { flex: 1; min-width: 0; }
-.wb-opt .wb-n1 { font-size: 13px; font-weight: 500; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.wb-opt .wb-n2 { font-size: 11px; color: var(--color-secondary); font-family: var(--font-mono, ui-monospace, monospace); display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wb-opt .wb-n1 { font-size: var(--text-body); font-weight: 500; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wb-opt .wb-n2 { font-size: var(--text-micro); color: var(--color-secondary); font-family: var(--font-mono, ui-monospace, monospace); display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .wb-opt .wb-ck { color: var(--color-accent); display: inline-flex; width: 14px; flex: none; }
 .wb-opt .wb-gl { width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; color: var(--color-secondary); flex: none; }
 .wb-opt .wb-av { width: 22px; height: 22px; border-radius: 6px; padding: 3px; background: #fff; box-shadow: 0 0 0 .5px rgb(0 0 0 / .08); }
@@ -120,14 +120,14 @@
 /* 自动 without an API key: visible, not selectable; the note says why. */
 .wb-opt.is-off .wb-n1, .wb-opt.is-off .wb-gl { color: var(--color-muted); }
 .wb-opt.is-off:hover { background: transparent; }
-.wb-opt .wb-note { flex: none; margin-left: 8px; font-size: 11.5px; color: var(--color-muted); white-space: nowrap; }
-.wb-opt-muted .wb-n1 { font-weight: 400; font-size: 12px; color: var(--color-secondary); }
+.wb-opt .wb-note { flex: none; margin-left: 8px; font-size: var(--text-micro); color: var(--color-secondary); white-space: nowrap; }
+.wb-opt-muted .wb-n1 { font-weight: 400; font-size: var(--text-caption); color: var(--color-secondary); }
 .wb-opt-muted { min-height: 32px; }
 .wb-pop-foot { position: sticky; bottom: -5px; margin-bottom: -5px; padding-bottom: 5px; background: var(--wb-layer); }
 .wb-sep { height: 6px; }
 
 /* ── summary + list ── */
-.wb-summary { margin-top: 30px; margin-bottom: -18px; padding: 0 4px; font-size: 12px; color: var(--color-muted); }
+.wb-summary { margin-top: 30px; margin-bottom: -18px; padding: 0 4px; font-size: var(--text-caption); line-height: var(--text-caption--line-height); letter-spacing: var(--text-caption--letter-spacing); color: var(--color-secondary); }
 .wb-phone .wb-summary { margin-top: 22px; margin-bottom: -12px; }
 .wb-cards { margin-top: 36px; display: flex; flex-direction: column; gap: 16px; }
 .wb-phone .wb-cards { margin-top: 26px; }
@@ -144,7 +144,7 @@
 .wb-tx { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .wb-title {
   display: block; min-width: 0; width: fit-content; max-width: 100%; text-align: left; cursor: pointer;
-  font-size: 13.5px; line-height: 1.4; font-weight: 500; color: var(--color-primary);
+  font-size: var(--text-body); line-height: var(--text-body--line-height); letter-spacing: var(--text-body--letter-spacing); font-weight: 500; color: var(--color-primary);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   text-decoration: underline; text-decoration-color: transparent; text-underline-offset: 3px; text-decoration-thickness: 1px;
   transition: text-decoration-color .15s;
@@ -157,10 +157,10 @@
 /* An ask's detail (markdown): muted, clamped to six lines; the chat's block
  * margins and code surfaces are toned down to fit inside a card line. */
 .wb-askdetail {
-  font-size: 12.5px; line-height: 1.45; overflow: hidden; overflow-wrap: anywhere; margin: 1px 0 2px;
+  font-size: var(--text-body); line-height: var(--text-body--line-height); letter-spacing: var(--text-body--letter-spacing); overflow: hidden; overflow-wrap: anywhere; margin: 1px 0 2px;
   display: -webkit-box; -webkit-line-clamp: 6; -webkit-box-orient: vertical;
 }
-.wb-askdetail .markdown-content { font-size: inherit; line-height: inherit; color: color-mix(in srgb, var(--color-primary) 72%, transparent); }
+.wb-askdetail .markdown-content { font-size: inherit; line-height: inherit; color: var(--color-secondary); }
 .wb-askdetail .markdown-content strong { color: var(--color-primary); }
 .wb-askdetail .markdown-content :is(p, ul, ol, pre, blockquote, table, h1, h2, h3, h4, h5, h6) { margin: 0 0 4px; }
 .wb-askdetail .markdown-content > :last-child { margin-bottom: 0; }
@@ -174,7 +174,7 @@
  * button (spec 180) while the detail still ellipsises. */
 .wb-meta {
   display: flex; align-items: center; min-width: 0; min-height: 17px;
-  font-size: 12px; line-height: 1.4; color: var(--color-muted); white-space: nowrap;
+  font-size: var(--text-caption); line-height: var(--text-caption--line-height); letter-spacing: var(--text-caption--letter-spacing); color: var(--color-secondary); white-space: nowrap;
 }
 .wb-meta .wb-warn { color: var(--color-warning-text); }
 .wb-meta .wb-lg {
@@ -192,11 +192,11 @@
 .wb-slot {
   position: relative; display: inline-flex; align-items: center; flex: 0 1 auto; min-width: 0; max-width: 64%;
   height: 21px; margin: -2px 0 -2px -4px; padding: 0 4px; border-radius: 6px;
-  color: var(--color-muted); font-size: 12px; line-height: 17px; white-space: nowrap; text-align: left;
+  color: var(--color-secondary); font-size: var(--text-caption); letter-spacing: var(--text-caption--letter-spacing); line-height: 17px; white-space: nowrap; text-align: left;
   transition: background .15s, color .15s;
 }
 button.wb-slot { cursor: pointer; }
-button.wb-slot:not([aria-disabled="true"]):hover, .wb-slot[aria-expanded="true"] { background: var(--wb-tint); color: var(--color-secondary); }
+button.wb-slot:not([aria-disabled="true"]):hover, .wb-slot[aria-expanded="true"] { background: var(--wb-tint); color: var(--color-primary); }
 button.wb-slot[aria-disabled="true"] { cursor: default; }
 .wb-slot.is-static { padding-right: 0; }
 .wb-phone .wb-slot { max-width: 70%; }
@@ -228,11 +228,11 @@ button.wb-slot:not([aria-disabled="true"]):hover .wb-cv, .wb-slot[aria-expanded=
 .wb-phone .wb-slot .wb-cv { opacity: .75; }
 
 .wb-rz { flex: none; min-width: 52px; display: flex; justify-content: flex-end; }
-.wb-time { font-size: 11.5px; line-height: 19px; color: var(--color-muted); white-space: nowrap; transition: opacity .15s, transform .15s; }
+.wb-time { font-size: var(--text-micro); letter-spacing: var(--text-micro--letter-spacing); line-height: var(--text-body--line-height); color: var(--color-secondary); white-space: nowrap; transition: opacity .15s, transform .15s; }
 
 /* Dot: 8px, 10px gap. Amber = needs you; blue = finished, unchecked; green
  * with a quiet breathing ring = running. */
-.wb-dot { position: relative; flex: none; width: 8px; height: 8px; border-radius: 50%; margin-top: 5.5px; transition: background .35s; }
+.wb-dot { position: relative; flex: none; width: 8px; height: 8px; border-radius: 50%; margin-top: calc((var(--text-body--line-height) - 8px) / 2); transition: background .35s; }
 /* Spec 180: a session being moved rests a beat before its work continues. */
 .wb-dot.is-idle { background: var(--color-idle); }
 .wb-dot.is-need { background: var(--color-warning); }
@@ -247,7 +247,7 @@ button.wb-slot:not([aria-disabled="true"]):hover .wb-cv, .wb-slot[aria-expanded=
 /* Hover action: a bare ✓ on the title line (the card's only icon; the title
  * opens the session); the time fades. */
 .wb-acts {
-  position: absolute; right: -8px; top: 9.5px; transform: translateY(-50%); display: flex; gap: 2px;
+  position: absolute; right: -8px; top: calc(var(--text-body--line-height) / 2); transform: translateY(-50%); display: flex; gap: 2px;
   opacity: 0; pointer-events: none; transition: opacity .15s;
 }
 .wb-ab {
@@ -268,7 +268,7 @@ button.wb-slot:not([aria-disabled="true"]):hover .wb-cv, .wb-slot[aria-expanded=
  * accent (2026-11-04). */
 .wb-rbox input {
   flex: 1; min-width: 0; height: 28px; border: 0; outline: 0; background: transparent; padding: 0;
-  font: inherit; font-size: 13px; color: var(--color-primary); transition: box-shadow .15s;
+  font: inherit; font-size: var(--text-body); color: var(--color-primary); transition: box-shadow .15s;
   box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--color-muted) 28%, transparent);
 }
 .wb-rbox input::placeholder { color: var(--color-muted); }
@@ -281,7 +281,7 @@ button.wb-slot:not([aria-disabled="true"]):hover .wb-cv, .wb-slot[aria-expanded=
 .wb-askopt {
   max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   padding: 3px 11px; border-radius: 999px; border: 1px solid var(--color-border);
-  font-size: 12.5px; color: var(--color-primary); background: transparent; transition: background .15s, border-color .15s;
+  font-size: var(--text-body); line-height: var(--text-body--line-height); color: var(--color-primary); background: transparent; transition: background .15s, border-color .15s;
 }
 .wb-askopt:hover { background: var(--wb-tint); border-color: color-mix(in srgb, var(--color-muted) 45%, transparent); }
 .wb-askopt:disabled { opacity: .5; }
@@ -320,9 +320,9 @@ button.wb-slot:not([aria-disabled="true"]):hover .wb-cv, .wb-slot[aria-expanded=
 @keyframes wb-pane-in { from { width: 0; } }
 .wb-ph { display: flex; align-items: center; gap: 10px; height: 52px; padding: 0 10px 0 22px; flex: none; }
 .wb-ph .wb-dot { margin-top: 0; }
-.wb-pttl { flex: 1; min-width: 0; font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wb-pttl { flex: 1; min-width: 0; font-size: var(--text-body); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .wb-olink {
-  display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 500; color: var(--color-accent);
+  display: inline-flex; align-items: center; gap: 4px; font-size: var(--text-caption); font-weight: 500; color: var(--color-accent);
   padding: 5px 8px; border-radius: 7px; white-space: nowrap; flex: none;
 }
 .wb-olink:hover { background: var(--wb-tint); }
@@ -338,7 +338,7 @@ button.wb-slot:not([aria-disabled="true"]):hover .wb-cv, .wb-slot[aria-expanded=
 .wb-ptoast {
   position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%); z-index: 6; max-width: 90%;
   padding: 8px 16px; border-radius: 8px; background: var(--color-primary); color: var(--color-background);
-  font-size: 13px; text-align: center; pointer-events: none;
+  font-size: var(--text-body); text-align: center; pointer-events: none;
 }
 
 /* Phone: the pane is a bottom sheet over a scrim. It keeps a transform when

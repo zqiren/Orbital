@@ -67,14 +67,14 @@ export default class ErrorBoundary extends Component<
           data-testid="error-boundary-fallback"
           className="flex flex-col items-center justify-center gap-3 h-full p-8 text-center"
         >
-          <p className="text-sm text-secondary">
+          <p className="text-body text-secondary">
             {this.props.message ?? translate(locale, 'errorBoundary.message')}
           </p>
           <button
             type="button"
             data-testid="error-boundary-retry"
             onClick={this.handleRetry}
-            className="rounded-sm bg-accent text-on-accent text-sm font-medium px-4 py-1.5 hover:bg-accent/85 cursor-pointer"
+            className="rounded-sm bg-accent text-on-accent text-body font-medium px-4 py-1.5 hover:bg-accent/85 cursor-pointer"
           >
             {translate(locale, 'errorBoundary.retry')}
           </button>

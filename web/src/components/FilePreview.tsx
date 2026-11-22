@@ -210,7 +210,7 @@ function textOffsetWithin(host: Node, node: Node, offset: number): number | null
  * visible area, so the background moves there at no layout cost.
  */
 const TEXT_SCROLLER_CLASS = 'doc-sheet flex-1 overflow-auto bg-sidebar';
-const SOURCE_PRE_CLASS = 'font-mono text-sm text-primary p-4 whitespace-pre-wrap break-words';
+const SOURCE_PRE_CLASS = 'font-mono text-body text-primary p-4 whitespace-pre-wrap break-words';
 
 /**
  * Spec 078 §5.4 — a text-like preview you can quote from. Wraps the existing
@@ -314,7 +314,7 @@ function QuoteRegion({
             }
           }}
           style={{ position: 'absolute', left: pill.left, top: pill.top, zIndex: 10 }}
-          className="text-[11px] font-medium px-2 py-1 rounded-md bg-accent text-white shadow-sm"
+          className="text-micro font-medium px-2 py-1 rounded-md bg-accent text-white shadow-sm"
         >
           {t('panel.files.quote')}
         </button>
@@ -393,7 +393,7 @@ function PanelFileHeader({
       >
         <ChevronLeft size={16} aria-hidden />
       </button>
-      <h3 title={fileName} className="min-w-0 flex-1 truncate text-sm font-semibold text-primary">
+      <h3 title={fileName} className="min-w-0 flex-1 truncate text-title font-semibold text-primary">
         {fileName}
       </h3>
       {extras}
@@ -586,7 +586,7 @@ export default function FilePreview({
   if (!selectedPath) {
     return (
       <div className="flex items-center justify-center h-full min-h-[200px]">
-        <p className="text-sm text-secondary">{t('fileExplorer.selectFile')}</p>
+        <p className="text-body text-secondary">{t('fileExplorer.selectFile')}</p>
       </div>
     );
   }
@@ -619,7 +619,7 @@ export default function FilePreview({
   if (!fileContent) {
     const unableToLoad = (
       <div className="flex items-center justify-center h-full min-h-[200px]">
-        <p className="text-sm text-secondary">{t('fileExplorer.unableToLoad')}</p>
+        <p className="text-body text-secondary">{t('fileExplorer.unableToLoad')}</p>
       </div>
     );
     if (!panelHeader) return unableToLoad;
@@ -653,7 +653,7 @@ export default function FilePreview({
     <button
       type="button"
       onClick={() => onReveal(quotePath)}
-      className="flex items-center gap-1 shrink-0 whitespace-nowrap text-xs text-secondary hover:text-primary transition-colors"
+      className="flex items-center gap-1 shrink-0 whitespace-nowrap text-caption text-secondary hover:text-primary transition-colors"
     >
       <SquareArrowOutUpRight size={14} aria-hidden />
       {revealLabel}
@@ -688,16 +688,16 @@ export default function FilePreview({
         {panelHeader ? (
           renderPanelHeader(
             fileName,
-            <span className="text-xs text-secondary shrink-0 @max-[24rem]:hidden">
+            <span className="text-caption text-secondary shrink-0 @max-[24rem]:hidden">
               {formatSize(fileContent.size)}
             </span>,
             [...openInFilesItems, ...revealItems],
           )
         ) : (
           <div className="px-4 py-3 border-b border-border flex items-center justify-between">
-            <h3 className="font-semibold text-sm text-primary truncate">{fileName}</h3>
+            <h3 className="font-semibold text-title text-primary truncate">{fileName}</h3>
             <div className="flex items-center gap-2 ml-2 shrink-0">
-              <span className="text-xs text-secondary">{formatSize(fileContent.size)}</span>
+              <span className="text-caption text-secondary">{formatSize(fileContent.size)}</span>
               {revealButton}
             </div>
           </div>
@@ -736,22 +736,22 @@ export default function FilePreview({
           renderPanelHeader(fileName, null, [...openInFilesItems, ...revealItems])
         ) : (
           <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-2">
-            <h3 className="font-semibold text-sm text-primary truncate">{fileName}</h3>
+            <h3 className="font-semibold text-title text-primary truncate">{fileName}</h3>
             {revealButton}
           </div>
         )}
         <div className="flex-1 flex items-center justify-center p-8">
           <div className="surface-float-static p-6 max-w-sm w-full text-center">
             <File size={48} className="mx-auto text-secondary mb-4" />
-            <p className="font-semibold text-sm text-primary mb-1">{fileName}</p>
-            <p className="text-xs text-secondary mb-1">{formatSize(fileContent.size)}</p>
+            <p className="font-semibold text-title text-primary mb-1">{fileName}</p>
+            <p className="text-caption text-secondary mb-1">{formatSize(fileContent.size)}</p>
             {fileContent.mime && (
-              <p className="text-xs text-secondary mb-4">{fileContent.mime}</p>
+              <p className="text-caption text-secondary mb-4">{fileContent.mime}</p>
             )}
             {fileContent.content && (
               <button
                 onClick={() => handleDownload(fileContent.content, fileContent.mime || 'application/octet-stream', fileName)}
-                className="inline-flex items-center gap-1.5 bg-accent text-white text-sm font-medium rounded-lg px-4 py-2 hover:bg-accent/90 transition-all duration-150"
+                className="inline-flex items-center gap-1.5 bg-accent text-white text-body font-medium rounded-lg px-4 py-2 hover:bg-accent/90 transition-all duration-150"
               >
                 <Download size={14} />
                 {t('fileExplorer.download')}
@@ -762,7 +762,7 @@ export default function FilePreview({
             {quoting && onQuote && (
               <button
                 onClick={() => onQuote({ path: quotePath })}
-                className="mt-3 inline-flex items-center gap-1.5 border border-border text-primary text-sm font-medium rounded-lg px-4 py-2 hover:bg-card transition-all duration-150"
+                className="mt-3 inline-flex items-center gap-1.5 border border-border text-primary text-body font-medium rounded-lg px-4 py-2 hover:bg-card transition-all duration-150"
               >
                 {t('panel.files.quoteFile')}
               </button>
@@ -827,10 +827,10 @@ export default function FilePreview({
           )
         ) : (
           <div className="px-4 py-3 border-b border-border flex items-center justify-between">
-            <h3 className="font-semibold text-sm text-primary truncate">{fileName}</h3>
+            <h3 className="font-semibold text-title text-primary truncate">{fileName}</h3>
             <div className="flex items-center gap-2 ml-2 shrink-0">
               {hist.glyph}
-              <span className="text-xs text-secondary">{formatSize(fileContent.size)}</span>
+              <span className="text-caption text-secondary">{formatSize(fileContent.size)}</span>
               {revealButton}
             </div>
           </div>
@@ -860,7 +860,7 @@ export default function FilePreview({
         <button
           onClick={() => setHtmlViewMode('rendered')}
           aria-pressed={!showSource}
-          className={`text-xs px-2 py-1 transition-colors ${
+          className={`text-caption px-2 py-1 transition-colors ${
             showSource ? 'text-secondary hover:text-primary' : 'bg-accent text-white'
           }`}
         >
@@ -869,7 +869,7 @@ export default function FilePreview({
         <button
           onClick={() => setHtmlViewMode('source')}
           aria-pressed={showSource}
-          className={`text-xs px-2 py-1 transition-colors ${
+          className={`text-caption px-2 py-1 transition-colors ${
             showSource ? 'bg-accent text-white' : 'text-secondary hover:text-primary'
           }`}
         >
@@ -884,7 +884,7 @@ export default function FilePreview({
             fileName,
             <>
               {hist.glyph}
-              <span className="text-xs text-secondary shrink-0 @max-[24rem]:hidden">
+              <span className="text-caption text-secondary shrink-0 @max-[24rem]:hidden">
                 {formatSize(fileContent.size)}
               </span>
               {renderedSourceToggle('flex shrink-0 items-center rounded-md border border-border overflow-hidden')}
@@ -902,14 +902,14 @@ export default function FilePreview({
           )
         ) : (
           <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-2">
-            <h3 className="font-semibold text-sm text-primary truncate">{fileName}</h3>
+            <h3 className="font-semibold text-title text-primary truncate">{fileName}</h3>
             <div className="flex items-center gap-2 shrink-0">
               {hist.glyph}
-              <span className="text-xs text-secondary">{formatSize(fileContent.size)}</span>
+              <span className="text-caption text-secondary">{formatSize(fileContent.size)}</span>
               {renderedSourceToggle('flex items-center rounded-md border border-border overflow-hidden')}
               <button
                 onClick={() => handleDownloadRaw(fileContent.content, 'text/html', fileName)}
-                className="flex items-center gap-1 text-xs text-secondary hover:text-primary transition-colors"
+                className="flex items-center gap-1 text-caption text-secondary hover:text-primary transition-colors"
               >
                 <Download size={14} />
                 {t('fileExplorer.download')}
@@ -920,7 +920,7 @@ export default function FilePreview({
         )}
         {fileContent.truncated && (
           <div className="px-4 py-2 bg-sidebar border-b border-border">
-            <p className="text-xs text-secondary">{t('fileExplorer.truncated')}</p>
+            <p className="text-caption text-secondary">{t('fileExplorer.truncated')}</p>
           </div>
         )}
         {hist.wrap(showSource ? (
@@ -943,7 +943,7 @@ export default function FilePreview({
           )
         ) : (
           <div className="flex-1 flex flex-col min-h-0">
-            <p className="px-4 py-1.5 text-xs text-secondary bg-sidebar border-b border-border shrink-0">
+            <p className="px-4 py-1.5 text-caption text-secondary bg-sidebar border-b border-border shrink-0">
               {t('fileExplorer.sandboxedHint')}
             </p>
             <iframe
@@ -1009,7 +1009,7 @@ export default function FilePreview({
       <button
         onClick={() => setEditView('write')}
         aria-pressed={editView === 'write'}
-        className={`text-xs px-2 py-1 transition-colors ${
+        className={`text-caption px-2 py-1 transition-colors ${
           editView === 'write' ? 'bg-accent text-white' : 'text-secondary hover:text-primary'
         }`}
       >
@@ -1018,7 +1018,7 @@ export default function FilePreview({
       <button
         onClick={() => setEditView('preview')}
         aria-pressed={editView === 'preview'}
-        className={`text-xs px-2 py-1 transition-colors ${
+        className={`text-caption px-2 py-1 transition-colors ${
           editView === 'preview' ? 'bg-accent text-white' : 'text-secondary hover:text-primary'
         }`}
       >
@@ -1030,7 +1030,7 @@ export default function FilePreview({
     <button
       onClick={handleCancelEdit}
       disabled={saving}
-      className="text-xs text-secondary hover:text-primary transition-colors disabled:opacity-50"
+      className="text-caption text-secondary hover:text-primary transition-colors disabled:opacity-50"
     >
       {t('fileExplorer.cancel')}
     </button>
@@ -1039,7 +1039,7 @@ export default function FilePreview({
     <button
       onClick={handleSave}
       disabled={saving}
-      className="bg-accent text-white text-xs font-medium rounded-md px-2.5 py-1 hover:bg-accent/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+      className="bg-accent text-white text-caption font-medium rounded-md px-2.5 py-1 hover:bg-accent/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
     >
       {saving ? t('fileExplorer.saving') : t('fileExplorer.save')}
     </button>
@@ -1047,7 +1047,7 @@ export default function FilePreview({
   const editButton = editable && (
     <button
       onClick={handleStartEdit}
-      className="flex items-center gap-1 text-xs text-secondary hover:text-primary transition-colors"
+      className="flex items-center gap-1 text-caption text-secondary hover:text-primary transition-colors"
     >
       <Pencil size={14} />
       {t('fileExplorer.edit')}
@@ -1091,8 +1091,8 @@ export default function FilePreview({
     <>
       {hist.glyph}
       {editButton}
-      {tooLargeHint('shrink-0 text-xs text-secondary opacity-70 @max-[24rem]:hidden')}
-      <span role="status" className="shrink-0 text-xs text-secondary empty:hidden">
+      {tooLargeHint('shrink-0 text-caption text-secondary opacity-70 @max-[24rem]:hidden')}
+      <span role="status" className="shrink-0 text-caption text-secondary empty:hidden">
         {copied ? t('fileExplorer.copied') : ''}
       </span>
     </>
@@ -1110,7 +1110,7 @@ export default function FilePreview({
         renderPanelHeader(fileName, panelActions, editing ? [] : [copyItem, ...openInFilesItems, ...revealItems])
       ) : (
         <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-2">
-          <h3 className="font-semibold text-sm text-primary truncate">{fileName}</h3>
+          <h3 className="font-semibold text-title text-primary truncate">{fileName}</h3>
           <div className="flex items-center gap-2 shrink-0">
             {editing ? (
               <>
@@ -1123,10 +1123,10 @@ export default function FilePreview({
               <>
                 {hist.glyph}
                 {editButton}
-                {tooLargeHint('text-xs text-secondary opacity-70')}
+                {tooLargeHint('text-caption text-secondary opacity-70')}
                 <button
                   onClick={handleCopy}
-                  className="flex items-center gap-1 text-xs text-secondary hover:text-primary transition-colors"
+                  className="flex items-center gap-1 text-caption text-secondary hover:text-primary transition-colors"
                 >
                   {copied ? <Check size={14} /> : <Copy size={14} />}
                   {copied ? t('fileExplorer.copied') : t('fileExplorer.copy')}
@@ -1139,14 +1139,14 @@ export default function FilePreview({
       )}
       {fileContent.truncated && (
         <div className="px-4 py-2 bg-sidebar border-b border-border">
-          <p className="text-xs text-secondary">
+          <p className="text-caption text-secondary">
             {t('fileExplorer.truncated')}
           </p>
         </div>
       )}
       {saveError && (
         <div className="px-4 py-2 bg-error/10 border-b border-error/30">
-          <p className="text-xs text-error">{t('fileExplorer.saveFailed')}</p>
+          <p className="text-caption text-error">{t('fileExplorer.saveFailed')}</p>
         </div>
       )}
       {editing ? (
@@ -1160,7 +1160,7 @@ export default function FilePreview({
             onChange={(e) => setDraft(e.target.value)}
             spellCheck={false}
             aria-label={t('fileExplorer.edit')}
-            className="flex-1 w-full min-h-0 resize-none font-mono text-sm text-primary bg-sidebar p-4 outline-none border-0"
+            className="flex-1 w-full min-h-0 resize-none font-mono text-body text-primary bg-sidebar p-4 outline-none border-0"
           />
         )
       ) : (

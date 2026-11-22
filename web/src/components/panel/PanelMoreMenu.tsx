@@ -147,7 +147,7 @@ export default function PanelMoreMenu({ items, className }: PanelMoreMenuProps) 
                 closeToTrigger();
                 item.onSelect();
               }}
-              className="flex w-full items-center gap-2 whitespace-nowrap px-3 py-1.5 text-left text-xs text-primary hover:bg-card-hover focus:outline-none focus-visible:bg-card-hover"
+              className="flex w-full items-center gap-2 whitespace-nowrap px-3 py-1.5 text-left text-caption text-primary hover:bg-card-hover focus:outline-none focus-visible:bg-card-hover"
             >
               {item.checked === undefined ? (
                 item.icon

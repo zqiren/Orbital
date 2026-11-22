@@ -85,7 +85,7 @@ export default function HintSign({ label, children, align = 'left', testId }: Hi
           onPointerLeave={() => {
             closeTimer.current = window.setTimeout(() => setOpen(false), 200);
           }}
-          className={`absolute ${align === 'right' ? 'right-0' : 'left-0'} top-full z-30 mt-1.5 w-max max-w-[220px] rounded-lg border border-border bg-sidebar px-2.5 py-1.5 text-left text-xs font-normal leading-relaxed text-secondary shadow-lg`}
+          className={`absolute ${align === 'right' ? 'right-0' : 'left-0'} top-full z-30 mt-1.5 w-max max-w-[220px] rounded-lg border border-border bg-sidebar px-2.5 py-1.5 text-left text-caption font-normal text-secondary shadow-lg`}
         >
           {children}
         </span>

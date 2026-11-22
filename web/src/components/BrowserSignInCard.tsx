@@ -62,20 +62,20 @@ export default function BrowserSignInCard() {
           would have hidden. */}
 
       {error && (
-        <div className="bg-error/10 border border-error/20 rounded-lg px-4 py-3 mb-3 text-sm text-error">
+        <div className="bg-error/10 border border-error/20 rounded-lg px-4 py-3 mb-3 text-body text-error">
           {error}
         </div>
       )}
 
       {opening ? (
-        <div className="inline-flex items-center gap-2 text-sm text-secondary">
+        <div className="inline-flex items-center gap-2 text-body text-secondary">
           <Loader2 className="w-4 h-4 animate-spin" />
           {t('global.browserSignIn.opening')}
         </div>
       ) : (
         <button
           onClick={handleOpenBrowser}
-          className="border border-border text-primary text-sm font-medium rounded-lg px-5 py-2.5 hover:bg-surface transition-all duration-150"
+          className="border border-border text-primary text-body font-medium rounded-lg px-5 py-2.5 hover:bg-surface transition-all duration-150"
         >
           {t('global.browserSignIn.open')}
         </button>

@@ -87,7 +87,7 @@ function NameInput({
         if (e.key === 'Escape') finish(null);
       }}
       onBlur={() => finish(value.trim())}
-      className="h-[22px] min-w-0 flex-1 border-0 bg-transparent p-0 text-[13px] font-medium text-primary outline-none placeholder:font-normal placeholder:text-muted shadow-[inset_0_-1px_0_rgb(83_154_248/0.6)]"
+      className="h-[22px] min-w-0 flex-1 border-0 bg-transparent p-0 text-body font-medium text-primary outline-none placeholder:font-normal placeholder:text-muted shadow-[inset_0_-1px_0_rgb(83_154_248/0.6)]"
     />
   );
 }
@@ -138,7 +138,7 @@ export default function HistoryColumn({
         onClick={onRestore}
         disabled={!canRestore || restoring}
         data-testid="history-restore"
-        className="h-8 min-w-0 flex-1 truncate rounded-[9px] bg-accent px-2.5 text-center text-[13px] font-medium text-white transition-[filter] hover:brightness-105 disabled:cursor-default disabled:opacity-35 disabled:hover:brightness-100"
+        className="h-8 min-w-0 flex-1 truncate rounded-[9px] bg-accent px-2.5 text-center text-body font-medium text-white transition-[filter] hover:brightness-105 disabled:cursor-default disabled:opacity-35 disabled:hover:brightness-100"
       >
         {t('history.restore')}
       </button>
@@ -173,7 +173,7 @@ export default function HistoryColumn({
   let body: ReactNode;
   if (unavailable) {
     body = (
-      <p className="px-4 py-6 text-[13px] text-secondary" data-testid="history-unavailable">
+      <p className="px-4 py-6 text-body text-secondary" data-testid="history-unavailable">
         {t('history.unavailable')}
       </p>
     );
@@ -185,7 +185,7 @@ export default function HistoryColumn({
           ? 'history.skipped.size'
           : 'history.skipped.ignored';
     body = (
-      <p className="px-4 py-6 text-[13px] text-secondary" data-testid="history-skipped">
+      <p className="px-4 py-6 text-body text-secondary" data-testid="history-skipped">
         {t(key)}
       </p>
     );
@@ -197,7 +197,7 @@ export default function HistoryColumn({
     // Building, or a tracked file whose baseline hasn't landed: 当前 only.
     if (rows.length === 0) {
       items.push(
-        <div key="cur-only" className="rounded-[10px] bg-accent/10 py-2 pl-7 pr-2.5 text-[13px] font-medium text-primary">
+        <div key="cur-only" className="rounded-[10px] bg-accent/10 py-2 pl-7 pr-2.5 text-body font-medium text-primary">
           {t('history.current')}
         </div>,
       );
@@ -206,7 +206,7 @@ export default function HistoryColumn({
       if (row.dayKey !== lastDay) {
         lastDay = row.dayKey;
         items.push(
-          <div key={`day-${row.dayKey}-${ri}`} className="pb-1 pl-7 pr-2.5 pt-3.5 text-[11px] font-medium text-muted">
+          <div key={`day-${row.dayKey}-${ri}`} className="pb-1 pl-7 pr-2.5 pt-3.5 text-micro font-medium text-secondary">
             {dayLabel(row.head.ts, locale, t)}
           </div>,
         );
@@ -233,7 +233,7 @@ export default function HistoryColumn({
       ) : name ? (
         <>
           <span className="min-w-0 truncate">{name}</span>
-          <span className="text-xs font-normal tabular-nums text-muted">{formatClock(v.ts)}</span>
+          <span className="text-caption font-normal tabular-nums text-secondary">{formatClock(v.ts)}</span>
         </>
       ) : (
         <span className="tabular-nums">{formatClock(v.ts)}</span>
@@ -274,11 +274,11 @@ export default function HistoryColumn({
               <ChevronRight size={11} strokeWidth={2.4} aria-hidden />
             </button>
           )}
-          <div className="flex min-h-5 items-center gap-[7px] text-[13px] font-medium text-primary">
+          <div className="flex min-h-5 items-center gap-[7px] text-body font-medium text-primary">
             {title}
-            {row.current && <span className="whitespace-nowrap text-[11.5px] font-normal text-muted">{t('history.current')}</span>}
+            {row.current && <span className="whitespace-nowrap text-micro font-normal text-secondary">{t('history.current')}</span>}
             {folded && (
-              <span className="whitespace-nowrap text-[11.5px] font-normal text-muted">
+              <span className="whitespace-nowrap text-micro font-normal text-secondary">
                 {t('history.edits', { n: row.members.length })}
               </span>
             )}
@@ -299,12 +299,12 @@ export default function HistoryColumn({
             )}
           </div>
           {(author.label || author.agents.length > 0 || author.you) && (
-            <div className="flex min-w-0 items-center gap-[5px] text-xs text-muted">
+            <div className="flex min-w-0 items-center gap-[5px] text-caption text-secondary">
               <AuthorLogos agents={author.agents} you={author.you} title={author.either} />
               <span className="truncate">{author.label}</span>
             </div>
           )}
-          <div className="text-xs text-muted">{changeLabel(row, t, older)}</div>
+          <div className="text-caption text-secondary">{changeLabel(row, t, older)}</div>
         </div>,
       );
       if (open) {
@@ -328,12 +328,12 @@ export default function HistoryColumn({
                       onSelect(k);
                     }
                   }}
-                  className={`flex cursor-pointer items-center gap-[7px] rounded-[10px] py-1.5 pl-7 pr-2.5 text-[12.5px] outline-none focus-visible:ring-2 focus-visible:ring-accent/50 ${
+                  className={`flex cursor-pointer items-center gap-[7px] rounded-[10px] py-1.5 pl-7 pr-2.5 text-body outline-none focus-visible:ring-2 focus-visible:ring-accent/50 ${
                     sel ? 'bg-accent/10' : 'hover:bg-accent/5'
                   }`}
                 >
                   <span className="tabular-nums text-primary">{formatClock(m.ts)}</span>
-                  <span className="ml-0.5 whitespace-nowrap text-[11.5px] text-muted">
+                  <span className="ml-0.5 whitespace-nowrap text-micro text-secondary">
                     {m.lines !== null ? linesLabel(m.lines, t) : ''}
                   </span>
                 </div>
@@ -351,7 +351,7 @@ export default function HistoryColumn({
       {head}
       {legendRow}
       {list?.whole_file_only && !unavailable && (
-        <p className="shrink-0 px-4 pb-1 pt-1.5 text-xs text-muted">{t('history.wholeFileOnly')}</p>
+        <p className="shrink-0 px-4 pb-1 pt-1.5 text-caption text-secondary">{t('history.wholeFileOnly')}</p>
       )}
       {/* The phone keeps its composer fixed over the bottom of the screen:
           the sheet's list scrolls clear of it. */}

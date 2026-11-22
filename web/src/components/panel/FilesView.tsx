@@ -140,7 +140,7 @@ function RecentGroup({
         onClick={() => setOpen((prev) => !prev)}
         aria-expanded={open}
         data-testid="panel-recent-group"
-        className="flex items-center gap-1.5 w-full text-left py-1 px-1 rounded-md text-xs font-medium text-secondary hover:text-primary hover:bg-card-hover transition-colors"
+        className="flex items-center gap-1.5 w-full text-left py-1 px-1 rounded-md text-caption font-medium text-secondary hover:text-primary hover:bg-card-hover transition-colors"
       >
         {open ? (
           <ChevronDown size={13} className="shrink-0" aria-hidden />
@@ -162,15 +162,15 @@ function RecentGroup({
                 title={entry.path}
                 onClick={() => onSelectFile(entry.path)}
                 data-testid="panel-recent-row"
-                className="flex items-center gap-1.5 w-full min-w-0 text-left py-1 px-2 rounded-md text-xs text-primary hover:bg-card-hover transition-colors"
+                className="flex items-center gap-1.5 w-full min-w-0 text-left py-1 px-2 rounded-md text-caption text-primary hover:bg-card-hover transition-colors"
               >
                 <File size={13} className="shrink-0 text-secondary" aria-hidden />
                 <span className="truncate min-w-0">{name}</span>
                 {/* The folder only takes space the name leaves (flex-basis 0),
                     so it truncates first and a long name truncates only once
                     the folder is gone. It also pushes the age to the edge. */}
-                <span className="flex-1 truncate min-w-0 text-2xs text-secondary">{folder}</span>
-                <span className="shrink-0 pl-2 text-2xs text-secondary whitespace-nowrap">
+                <span className="flex-1 truncate min-w-0 text-micro text-secondary">{folder}</span>
+                <span className="shrink-0 pl-2 text-micro text-secondary whitespace-nowrap">
                   {relativeTime(new Date(entry.modified_at * 1000).toISOString(), tr)}
                 </span>
               </button>
@@ -182,7 +182,7 @@ function RecentGroup({
               onClick={() => setShowAll((prev) => !prev)}
               aria-expanded={showAll}
               data-testid="panel-recent-more"
-              className="flex items-center w-full text-left py-1 px-2 pl-[27px] rounded-md text-2xs text-secondary hover:text-primary hover:bg-card-hover transition-colors"
+              className="flex items-center w-full text-left py-1 px-2 pl-[27px] rounded-md text-micro text-secondary hover:text-primary hover:bg-card-hover transition-colors"
             >
               {showAll ? t('panel.files.less') : t('panel.files.more')}
             </button>
@@ -524,7 +524,7 @@ export default function FilesView({
       return pendingDirs.has(dirPath) ? (
         <p
           key={`${dirPath}:loading`}
-          className="text-2xs text-secondary py-1"
+          className="text-micro text-secondary py-1"
           style={{ paddingLeft: `${depth * 14 + 8}px` }}
         >
           {t('app.loading')}
@@ -535,7 +535,7 @@ export default function FilesView({
       return (
         <p
           key={`${dirPath}:empty`}
-          className="text-2xs text-secondary py-1"
+          className="text-micro text-secondary py-1"
           style={{ paddingLeft: `${depth * 14 + 8}px` }}
         >
           {t('fileExplorer.emptyDir')}
@@ -552,7 +552,7 @@ export default function FilesView({
               type="button"
               onClick={() => toggleDir(path)}
               aria-expanded={isOpen}
-              className="flex items-center gap-1.5 w-full text-left py-1 px-2 rounded-md text-xs text-primary hover:bg-card-hover transition-colors"
+              className="flex items-center gap-1.5 w-full text-left py-1 px-2 rounded-md text-caption text-primary hover:bg-card-hover transition-colors"
               style={{ paddingLeft: `${depth * 14 + 8}px` }}
             >
               {isOpen ? (
@@ -573,14 +573,14 @@ export default function FilesView({
           key={path}
           type="button"
           onClick={() => onSelectFile(path)}
-          className="flex items-center gap-1.5 w-full text-left py-1 px-2 rounded-md text-xs text-primary hover:bg-card-hover transition-colors"
+          className="flex items-center gap-1.5 w-full text-left py-1 px-2 rounded-md text-caption text-primary hover:bg-card-hover transition-colors"
           style={{ paddingLeft: `${depth * 14 + 8}px` }}
         >
           <span className="w-[13px] shrink-0" aria-hidden />
           <File size={13} className="shrink-0 text-secondary" aria-hidden />
           <span className="truncate">{entry.name}</span>
           {op && (
-            <span className="ml-auto shrink-0 text-2xs text-secondary font-mono">
+            <span className="ml-auto shrink-0 text-micro text-secondary font-mono">
               {t(OP_LABEL[op])}
             </span>
           )}

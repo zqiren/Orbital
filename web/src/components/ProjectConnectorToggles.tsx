@@ -70,15 +70,15 @@ export default function ProjectConnectorToggles({
     // Heading, Beta badge and intro come from the enclosing SettingsSection.
     <div data-testid="project-connector-toggles">
       {loadError && (
-        <p className="text-xs text-error mb-2" role="alert">
+        <p className="text-caption text-error mb-2" role="alert">
           {t('connectors.loadError')}
         </p>
       )}
 
       {connectors === null ? (
-        <p className="text-xs text-secondary/60 italic">{t('connectors.loading')}</p>
+        <p className="text-caption text-secondary italic">{t('connectors.loading')}</p>
       ) : connectors.length === 0 ? (
-        <p className="text-xs text-secondary/60 italic">{t('connectors.project.empty')}</p>
+        <p className="text-caption text-secondary italic">{t('connectors.project.empty')}</p>
       ) : (
         <>
           <div className="flex flex-col gap-1">
@@ -98,11 +98,11 @@ export default function ProjectConnectorToggles({
                   data-testid={`project-connector-toggle-${c.id}`}
                   className="rounded border-border accent-accent"
                 />
-                <span aria-hidden="true">{c.icon}</span>
-                <span className="text-sm text-primary truncate">{c.name}</span>
+                <span className="text-title shrink-0" aria-hidden="true">{c.icon}</span>
+                <span className="text-body text-primary truncate">{c.name}</span>
                 {!c.connected && (
                   <span
-                    className="text-xs text-secondary italic truncate"
+                    className="text-caption text-secondary italic truncate"
                     data-testid={`project-connector-hint-${c.id}`}
                   >
                     {t('connectors.project.connectFirst')}

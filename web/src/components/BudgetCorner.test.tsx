@@ -162,7 +162,7 @@ describe('BudgetCorner', () => {
       <BudgetCorner project={project()} pauseReason={null} onOpenBudgetSettings={vi.fn()} plain />,
     );
     const corner = screen.getByTestId('budget-corner');
-    expect(corner.className).toContain('text-[11px]');
+    expect(corner.className).toContain('text-micro');
     expect(corner.className).not.toContain('font-mono');
     unmount();
     render(<BudgetCorner project={project()} pauseReason={null} onOpenBudgetSettings={vi.fn()} />);

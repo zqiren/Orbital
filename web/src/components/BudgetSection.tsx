@@ -176,7 +176,7 @@ export default function BudgetSection({
     <div>
       <div className="space-y-4">
         {/* Limit-as-sentence row */}
-        <div className="flex items-center gap-2 flex-wrap text-sm text-primary">
+        <div className="flex items-center gap-2 flex-wrap text-body text-primary">
           <span>{t('settings.budget.sentence.prefix')}</span>
           <input
             type="number"
@@ -186,13 +186,13 @@ export default function BudgetSection({
             onChange={(e) => onLimitChange(e.target.value)}
             placeholder={t('createProject.budget.placeholder')}
             aria-label={t('createProject.budget.label')}
-            className="w-24 text-sm bg-sidebar border border-border rounded-lg px-2 py-1.5 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150"
+            className="w-24 text-body bg-sidebar border border-border rounded-lg px-2 py-1.5 text-primary placeholder:text-muted focus:outline-none focus:border-accent transition-all duration-150"
           />
           <Select
             value={currency}
             onChange={(e) => onCurrencyChange(e.target.value)}
             aria-label={t('settings.budget.aria.currency')}
-            className="text-sm bg-sidebar border border-border rounded-lg px-2 py-1.5 text-primary focus:outline-none focus:border-accent transition-all duration-150"
+            className="text-body bg-sidebar border border-border rounded-lg px-2 py-1.5 text-primary focus:outline-none focus:border-accent transition-all duration-150"
           >
             {/* Ensure the project's set-once currency is always an option even
                 if it falls outside the common list. */}
@@ -205,7 +205,7 @@ export default function BudgetSection({
             value={period}
             onChange={(e) => onPeriodChange(e.target.value as BudgetPeriod)}
             aria-label={t('settings.budget.aria.period')}
-            className="text-sm bg-sidebar border border-border rounded-lg px-2 py-1.5 text-primary focus:outline-none focus:border-accent transition-all duration-150"
+            className="text-body bg-sidebar border border-border rounded-lg px-2 py-1.5 text-primary focus:outline-none focus:border-accent transition-all duration-150"
           >
             {PERIOD_OPTIONS.map((p) => (
               <option key={p.value} value={p.value}>{t(p.labelKey)}</option>
@@ -215,12 +215,12 @@ export default function BudgetSection({
 
         {/* Period hint + reset (reset only in total mode) */}
         <div className="flex items-center gap-3 flex-wrap">
-          <p className="text-xs text-secondary">{periodHint}</p>
+          <p className="text-caption text-secondary">{periodHint}</p>
           {period === 'total' && (
             <button
               type="button"
               onClick={handleReset}
-              className="text-xs text-secondary hover:text-primary underline transition-colors duration-150"
+              className="text-caption text-secondary hover:text-primary underline transition-colors duration-150"
             >
               {t('settings.budget.reset', { date: anchorDate(project.budget_anchor_ts) })}
             </button>
@@ -229,7 +229,7 @@ export default function BudgetSection({
 
         {/* Behavior cards */}
         <div>
-          <p className="text-xs text-secondary mb-2">{t('settings.budget.behavior.label')}</p>
+          <p className="text-caption text-secondary mb-2">{t('settings.budget.behavior.label')}</p>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             {([
               { value: 'pause', titleKey: 'settings.budget.behavior.pause.title', descKey: 'settings.budget.behavior.pause.desc', accent: true },
@@ -245,8 +245,8 @@ export default function BudgetSection({
                     : ''
                 }`}
               >
-                <span className="text-sm font-medium text-primary block">{t(opt.titleKey)}</span>
-                <span className="text-xs text-secondary mt-1 block">{t(opt.descKey)}</span>
+                <span className="text-body font-medium text-primary block">{t(opt.titleKey)}</span>
+                <span className="text-caption text-secondary mt-1 block">{t(opt.descKey)}</span>
               </button>
             ))}
           </div>
@@ -255,11 +255,11 @@ export default function BudgetSection({
         {/* Spend meter */}
         <div>
           {pendingFirstLoad ? (
-            <p className="text-sm text-secondary mb-1.5">{t('settings.budget.meter.loading')}</p>
+            <p className="text-body text-secondary mb-1.5">{t('settings.budget.meter.loading')}</p>
           ) : failedWithNoData ? (
-            <p className="text-sm text-error mb-1.5">{t('settings.budget.meter.loadError')}</p>
+            <p className="text-body text-error mb-1.5">{t('settings.budget.meter.loadError')}</p>
           ) : (
-            <p className={`text-sm font-medium mb-1.5 ${meterTextColor}`}>{meterText}</p>
+            <p className={`text-body font-medium mb-1.5 ${meterTextColor}`}>{meterText}</p>
           )}
           {!spendUnknown && validLimit != null && (
             <div className="h-2 w-full bg-sidebar border border-border rounded-full overflow-hidden">
@@ -281,10 +281,10 @@ export default function BudgetSection({
             // "Nothing recorded" is a claim about the data, so it waits for the
             // data — while /cost is unresolved the meter line carries the state.
             spendUnknown ? null : (
-              <p className="text-xs text-secondary/60 italic">{t('settings.budget.breakdown.empty')}</p>
+              <p className="text-caption text-secondary italic">{t('settings.budget.breakdown.empty')}</p>
             )
           ) : (
-            <table className="w-full text-xs border-collapse">
+            <table className="w-full text-caption border-collapse">
               <thead>
                 <tr className="text-secondary text-left">
                   <th className="font-normal py-1 pr-2">{/* model name col */}</th>
@@ -300,7 +300,7 @@ export default function BudgetSection({
                     <td className="py-1 pr-2 text-primary truncate max-w-[160px]">
                       {r.model}
                       {r.isSubagent && (
-                        <span className="text-secondary/60"> · {r.provider}</span>
+                        <span className="text-secondary"> · {r.provider}</span>
                       )}
                     </td>
                     <td className="py-1 px-2 text-right text-secondary tabular-nums">{formatTokens(r.inputTokens, locale)}</td>
@@ -309,7 +309,7 @@ export default function BudgetSection({
                     <td className="py-1 pl-2 text-right text-primary tabular-nums">
                       {r.cost
                         ? formatMoney(r.cost.amount, r.cost.currency, locale)
-                        : <span className="text-secondary/60 italic">{t('settings.budget.breakdown.subscription')}</span>}
+                        : <span className="text-secondary italic">{t('settings.budget.breakdown.subscription')}</span>}
                     </td>
                   </tr>
                 ))}
@@ -322,7 +322,7 @@ export default function BudgetSection({
               conversion) + the sub-agents-not-counted clause (only when
               sub-agent rows exist). Hidden entirely under an empty table. */}
           {footnoteSegments.length > 0 && (
-            <p className="text-[11px] text-secondary/60 mt-2">
+            <p className="text-micro text-secondary mt-2">
               {footnoteSegments.join(' · ')}
             </p>
           )}
@@ -333,7 +333,7 @@ export default function BudgetSection({
           type="button"
           onClick={onEditPricing}
           data-pricing-editor-link
-          className="text-xs text-accent hover:underline transition-colors duration-150"
+          className="text-caption text-accent hover:underline transition-colors duration-150"
         >
           {t('settings.budget.editPricing')}
         </button>

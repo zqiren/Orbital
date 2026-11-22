@@ -42,19 +42,18 @@ export default function ExamplePrompt({
       <span className="min-w-0 flex-1">
         {label && (
           <span
-            className="block text-secondary font-semibold"
-            style={{ fontSize: '9.5px', letterSpacing: '0.8px', textTransform: 'uppercase' }}
+            className="block type-label text-secondary"
           >
             {label}
           </span>
         )}
-        <span className="block text-[13px] leading-snug text-primary">{text}</span>
+        <span className="block text-body text-primary">{text}</span>
       </span>
       {onClick && ActionIcon && (
         <ActionIcon
           size={14}
           aria-hidden="true"
-          className="shrink-0 text-secondary/60 transition-colors duration-150 group-hover:text-accent"
+          className="shrink-0 text-secondary transition-colors duration-150 group-hover:text-accent"
         />
       )}
     </>

@@ -91,13 +91,17 @@ export default function TasksStatusLine({
     });
   }
 
+  // Only the LAST fact may shrink, so a line that does not fit ends in an
+  // ellipsis (its "N off" part first) instead of being clipped mid-word —
+  // zh "2 个已关闭" was cut to "2 个已" in the 260px column.
   const factNodes = facts.flatMap((f, i) => {
+    const last = i === facts.length - 1;
     const node = (
-      <span key={f.key} className="flex items-center gap-1.5 shrink-0">
+      <span key={f.key} className={`flex items-center gap-1.5 ${last ? 'min-w-0' : 'shrink-0'}`}>
         {f.icon === 'play' && <Play size={11} aria-hidden="true" className="shrink-0 text-success" fill="currentColor" />}
         {f.icon === 'clock' && <Clock size={13} aria-hidden="true" className="shrink-0 text-muted" />}
-        <span className="text-primary">{f.text}</span>
-        {f.off && <span className="text-muted">{f.off}</span>}
+        <span className={`text-primary ${f.off ? 'shrink-0' : 'min-w-0 truncate'}`}>{f.text}</span>
+        {f.off && <span className="min-w-0 truncate text-secondary">{f.off}</span>}
       </span>
     );
     return i === 0 ? [node] : [<span key={`dot-${i}`}>{dot}</span>, node];
@@ -133,7 +137,7 @@ export default function TasksStatusLine({
         data-testid="trigger-summary"
         data-tour="status-line"
         data-state={state}
-        className={`mx-2 mt-1.5 mb-1 flex min-w-0 gap-2 surface-float px-2 py-[7px] text-left text-xs text-secondary whitespace-nowrap focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 ${
+        className={`mx-2 mt-1.5 mb-1 flex min-w-0 gap-2 surface-float px-2 py-[7px] text-left text-caption text-secondary whitespace-nowrap focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 ${
           empty ? 'items-start' : 'items-center'
         } ${selected ? 'ring-1 ring-accent/45' : ''}`}
       >
@@ -148,9 +152,9 @@ export default function TasksStatusLine({
                 <ChevronRight size={13} aria-hidden="true" className="shrink-0 text-muted" />
               </span>
               {teach && (
-                <span className="text-[11px] text-muted" data-testid="status-line-teach-hint">
+                <span className="text-micro text-secondary" data-testid="status-line-teach-hint">
                   {before}
-                  {keyToken('font-sans text-[10px]')}
+                  {keyToken('font-sans text-micro leading-none')}
                   {after}
                 </span>
               )}
@@ -169,11 +173,11 @@ export default function TasksStatusLine({
   const content = empty ? (
     <>
       <Clock size={13} aria-hidden="true" className="shrink-0 text-muted" />
-      <span className="min-w-0 truncate text-muted" data-testid="status-line-teach">
+      <span className="min-w-0 truncate text-secondary" data-testid="status-line-teach">
         {teach ? (
           <>
             {before}
-            {keyToken('font-mono text-[11px]')}
+            {keyToken('font-mono text-micro')}
             {after}
           </>
         ) : t('statusLine.teach.title')}
@@ -191,10 +195,10 @@ export default function TasksStatusLine({
         data-testid="trigger-summary"
         data-tour="status-line"
         data-state={state}
-        className="flex w-full min-w-0 items-center gap-2 px-6 py-1.5 text-left text-xs text-secondary transition-colors duration-100 hover:bg-sidebar/50 max-md:min-h-[44px] max-md:px-4"
+        className="flex w-full min-w-0 items-center gap-2 px-6 py-1.5 text-left text-caption text-secondary transition-colors duration-100 hover:bg-sidebar/50 max-md:min-h-[44px] max-md:px-4"
       >
         {content}
-        <span className="ml-auto flex shrink-0 items-center gap-1 pl-2 text-muted">
+        <span className="ml-auto flex shrink-0 items-center gap-1 pl-2 text-secondary">
           {t('projectDetail.tab.queue')}
           <ChevronRight size={13} aria-hidden="true" className="shrink-0" />
         </span>

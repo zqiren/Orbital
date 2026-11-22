@@ -55,12 +55,12 @@ function Section({
   if (items.length === 0 && !emptyHint) return null;
   return (
     <section className="flex flex-col gap-2" data-testid={`queue-section-${testId}`}>
-      <h2 className="text-xs font-semibold text-secondary uppercase tracking-wide px-1">
+      <h2 className="type-label text-secondary px-1">
         {title}
-        <span className="ml-2 text-secondary/60 font-normal">{items.length}</span>
+        <span className="ml-2 text-secondary font-normal">{items.length}</span>
       </h2>
       {items.length === 0 && emptyHint ? (
-        <p className="text-sm text-secondary px-1 italic">{emptyHint}</p>
+        <p className="text-body text-secondary px-1 italic">{emptyHint}</p>
       ) : (
         <div className="flex flex-col gap-2">
           {items.map((item, i) => (
@@ -130,7 +130,7 @@ export default function QueueTab({ projectId, project, agents = [] }: QueueTabPr
       />
       <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4 max-md:px-4">
         {error && (
-          <div className="text-sm text-error border border-error/40 bg-error/5 rounded px-3 py-2">
+          <div className="text-body text-error border border-error/40 bg-error/5 rounded px-3 py-2">
             {error}
           </div>
         )}

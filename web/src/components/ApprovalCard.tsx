@@ -42,13 +42,13 @@ function renderToolArgs(toolName: string, toolArgs: Record<string, unknown>, t: 
   switch (toolName) {
     case 'shell':
       return (
-        <code className="block text-xs font-mono bg-[#1a1a2e] text-green-400 rounded-lg p-3 overflow-x-auto whitespace-pre-wrap max-h-40">
+        <code className="block text-caption font-mono bg-[#1a1a2e] text-green-400 rounded-lg p-3 overflow-x-auto whitespace-pre-wrap max-h-40">
           {String(toolArgs.command ?? '')}
         </code>
       );
     case 'read':
       return (
-        <span className="text-xs font-mono text-secondary">
+        <span className="text-caption font-mono text-secondary">
           {String(toolArgs.file_path ?? toolArgs.path ?? '')}
         </span>
       );
@@ -59,9 +59,9 @@ function renderToolArgs(toolName: string, toolArgs: Record<string, unknown>, t: 
       const truncated = content.length > 500 ? content.slice(0, 500) + '...' : content;
       return (
         <div className="space-y-1">
-          <span className="text-xs font-mono text-secondary">{filePath}</span>
+          <span className="text-caption font-mono text-secondary">{filePath}</span>
           {content && (
-            <details className="text-xs">
+            <details className="text-caption">
               <summary className="cursor-pointer text-secondary hover:text-primary">
                 {t('approval.showContent')}
               </summary>
@@ -75,8 +75,8 @@ function renderToolArgs(toolName: string, toolArgs: Record<string, unknown>, t: 
     }
     case 'browser':
       return (
-        <span className="text-xs text-secondary">
-          <span className="font-semibold">{String(toolArgs.action ?? '')}</span>
+        <span className="text-caption text-secondary">
+          <span className="font-medium">{String(toolArgs.action ?? '')}</span>
           {toolArgs.target ? ` \u2014 ${String(toolArgs.target)}` : ''}
         </span>
       );
@@ -86,16 +86,16 @@ function renderToolArgs(toolName: string, toolArgs: Record<string, unknown>, t: 
       const intent = String(toolArgs.intent ?? '');
       return (
         <div className="space-y-1">
-          <div className="text-xs font-mono font-semibold">{domain}</div>
-          {intent && <div className="text-xs text-secondary">{intent}</div>}
-          {reason && <div className="text-xs text-secondary">{reason}</div>}
-          <div className="text-xs text-secondary opacity-50">{t('approval.network.permanentNote')}</div>
+          <div className="text-caption font-mono font-medium">{domain}</div>
+          {intent && <div className="text-caption text-secondary">{intent}</div>}
+          {reason && <div className="text-caption text-secondary">{reason}</div>}
+          <div className="text-caption text-secondary opacity-50">{t('approval.network.permanentNote')}</div>
         </div>
       );
     }
     default:
       return (
-        <pre className="text-xs font-mono bg-sidebar rounded-lg p-3 overflow-x-auto whitespace-pre-wrap max-h-40">
+        <pre className="text-caption font-mono bg-sidebar rounded-lg p-3 overflow-x-auto whitespace-pre-wrap max-h-40">
           {JSON.stringify(toolArgs, null, 2)}
         </pre>
       );
@@ -147,7 +147,7 @@ export default function ApprovalCard({
   if (resolution) {
     const isApproved = resolution === 'approved';
     return (
-      <div className="mb-3 shrink-0 px-4 py-2 rounded-lg bg-sidebar text-sm">
+      <div className="mb-3 shrink-0 px-4 py-2 rounded-lg bg-sidebar text-body">
         <span className={isApproved ? 'text-success' : 'text-error'}>
           {isApproved ? t('approval.approved') : t('approval.denied')}:
         </span>{' '}
@@ -215,17 +215,17 @@ export default function ApprovalCard({
   return (
     <div className="mb-3 shrink-0 rounded-lg border border-warning/50 border-l-[3px] border-l-warning bg-warning-surface overflow-hidden">
       <div className="px-4 py-1.5 border-b border-warning/20 flex items-center justify-between">
-        <span className="text-2xs uppercase tracking-[0.6px] text-warning font-semibold">{t('approval.header')}</span>
+        <span className="type-label text-warning-text">{t('approval.header')}</span>
       </div>
 
       <div className="px-4 py-3 space-y-3">
-        <p className="text-sm font-medium text-primary">
+        <p className="text-body font-medium text-primary">
           {localizedWhat}
         </p>
 
         {approval.reasoning && (
-          <div className="text-sm">
-            <span className="text-xs text-secondary font-medium">{t('approval.why')} </span>
+          <div className="text-body">
+            <span className="text-caption text-secondary font-medium">{t('approval.why')} </span>
             <span className={`text-primary whitespace-pre-wrap break-words ${!reasoningExpanded ? 'line-clamp-4 md:line-clamp-none' : ''}`}>
               {approval.reasoning}
             </span>
@@ -233,7 +233,7 @@ export default function ApprovalCard({
               <button
                 type="button"
                 onClick={() => setReasoningExpanded(!reasoningExpanded)}
-                className="text-xs text-accent hover:underline ml-1 md:hidden cursor-pointer"
+                className="text-caption text-accent hover:underline ml-1 md:hidden cursor-pointer"
               >
                 {reasoningExpanded ? t('approval.showLess') : t('approval.showMore')}
               </button>
@@ -242,16 +242,16 @@ export default function ApprovalCard({
         )}
 
         <details open={!isMobile}>
-          <summary className="text-xs text-secondary cursor-pointer select-none mb-1">
+          <summary className="text-caption text-secondary cursor-pointer select-none mb-1">
             {t('approval.actionDetails')}
           </summary>
           {isUnsandboxedRun ? (
             <div className="space-y-1.5">
-              <code className="block text-xs font-mono bg-[#1a1a2e] text-green-400 rounded-lg p-3 overflow-x-auto whitespace-pre-wrap max-h-40">
+              <code className="block text-caption font-mono bg-[#1a1a2e] text-green-400 rounded-lg p-3 overflow-x-auto whitespace-pre-wrap max-h-40">
                 {unsandboxedCommand}
               </code>
               {approval.reason && (
-                <p className="text-xs text-secondary whitespace-pre-wrap break-words">
+                <p className="text-caption text-secondary whitespace-pre-wrap break-words">
                   {approval.reason}
                 </p>
               )}
@@ -262,14 +262,14 @@ export default function ApprovalCard({
         </details>
 
         {recentLines.length > 0 && (
-          <details open={!isMobile} className="text-xs text-secondary">
+          <details open={!isMobile} className="text-caption text-secondary">
             <summary className="font-medium cursor-pointer select-none mb-0.5">
               {t('approval.recentContext')}
             </summary>
             <div className="space-y-0.5">
               {recentLines.map((line, i) => (
                 <div key={i} className="whitespace-pre-wrap break-words">
-                  <span className="font-semibold text-secondary">
+                  <span className="font-medium text-secondary">
                     {line.role === 'user' ? t('approval.you') : t('approval.agent')}
                   </span>{' '}
                   {line.content.length > 300 ? line.content.slice(0, 300) + '...' : line.content}
@@ -284,7 +284,7 @@ export default function ApprovalCard({
           placeholder={t('approval.guidance.placeholder')}
           value={replyText}
           onChange={(e) => setReplyText(e.target.value)}
-          className="w-full text-sm px-3 py-1.5 rounded-lg border border-border bg-sidebar focus:outline-none focus:border-accent max-md:min-h-[44px]"
+          className="w-full text-body px-3 py-1.5 rounded-lg border border-border bg-sidebar focus:outline-none focus:border-accent max-md:min-h-[44px]"
         />
 
         {showDenyInput && (
@@ -295,14 +295,14 @@ export default function ApprovalCard({
               value={denyFeedback}
               onChange={(e) => setDenyFeedback(e.target.value)}
               autoFocus
-              className="w-full text-sm px-3 py-1.5 rounded-lg border border-error/30 bg-sidebar focus:outline-none focus:border-error max-md:min-h-[44px]"
+              className="w-full text-body px-3 py-1.5 rounded-lg border border-error/30 bg-sidebar focus:outline-none focus:border-error max-md:min-h-[44px]"
             />
             <div className="flex flex-col md:flex-row gap-2">
               <button
                 type="button"
                 onClick={() => setShowDenyInput(false)}
                 onTouchEnd={(e) => { e.preventDefault(); setShowDenyInput(false); }}
-                className="px-4 py-1.5 text-sm font-medium rounded-lg border border-border text-secondary hover:bg-card-hover transition-colors duration-150 cursor-pointer w-full md:w-auto min-h-[44px]"
+                className="px-4 py-1.5 text-body font-medium rounded-lg border border-border text-secondary hover:bg-card-hover transition-colors duration-150 cursor-pointer w-full md:w-auto min-h-[44px]"
               >
                 {t('approval.cancel')}
               </button>
@@ -311,7 +311,7 @@ export default function ApprovalCard({
                 onClick={handleDenyConfirm}
                 onTouchEnd={(e) => { e.preventDefault(); handleDenyConfirm(); }}
                 disabled={submitting}
-                className="px-4 py-1.5 text-sm font-medium rounded-lg border border-error/40 text-error hover:bg-error/5 transition-colors duration-150 disabled:opacity-50 cursor-pointer w-full md:w-auto min-h-[44px]"
+                className="px-4 py-1.5 text-body font-medium rounded-lg border border-error/40 text-error hover:bg-error/5 transition-colors duration-150 disabled:opacity-50 cursor-pointer w-full md:w-auto min-h-[44px]"
               >
                 {t('approval.confirmDeny')}
               </button>
@@ -322,7 +322,7 @@ export default function ApprovalCard({
                   onTouchEnd={(e) => { e.preventDefault(); handleDenyAndStop(); }}
                   disabled={submitting}
                   title={t('approval.denyAndStop.title')}
-                  className="px-4 py-1.5 text-sm font-medium rounded-lg border border-error/40 text-error hover:bg-error/5 transition-colors duration-150 disabled:opacity-50 cursor-pointer w-full md:w-auto min-h-[44px]"
+                  className="px-4 py-1.5 text-body font-medium rounded-lg border border-error/40 text-error hover:bg-error/5 transition-colors duration-150 disabled:opacity-50 cursor-pointer w-full md:w-auto min-h-[44px]"
                 >
                   {t('approval.denyAndStop')}
                 </button>
@@ -338,7 +338,7 @@ export default function ApprovalCard({
               onClick={handleDenyClick}
               onTouchEnd={(e) => { e.preventDefault(); handleDenyClick(); }}
               disabled={submitting}
-              className="border border-error/40 text-error bg-background rounded-sm text-[11px] px-2.5 py-1 font-medium hover:bg-error/5 transition-colors duration-150 disabled:opacity-50 cursor-pointer w-full md:w-auto min-h-[44px]"
+              className="border border-error/40 text-error bg-background rounded-sm text-micro px-2.5 py-1 font-medium hover:bg-error/5 transition-colors duration-150 disabled:opacity-50 cursor-pointer w-full md:w-auto min-h-[44px]"
             >
               {t('credCard.deny')}
             </button>
@@ -352,7 +352,7 @@ export default function ApprovalCard({
                   onClick={() => handleApprove(false, 'disable_safe_mode')}
                   onTouchEnd={(e) => { e.preventDefault(); handleApprove(false, 'disable_safe_mode'); }}
                   disabled={submitting}
-                  className="border border-border bg-background text-secondary rounded-sm text-[11px] px-2.5 py-1 font-medium hover:bg-card-hover transition-colors duration-150 disabled:opacity-50 cursor-pointer w-full md:w-auto min-h-[44px]"
+                  className="border border-border bg-background text-secondary rounded-sm text-micro px-2.5 py-1 font-medium hover:bg-card-hover transition-colors duration-150 disabled:opacity-50 cursor-pointer w-full md:w-auto min-h-[44px]"
                 >
                   {t('approval.unsandboxed.disableSafeMode')}
                 </button>
@@ -362,7 +362,7 @@ export default function ApprovalCard({
                     onClick={() => handleApprove(false, 'always')}
                     onTouchEnd={(e) => { e.preventDefault(); handleApprove(false, 'always'); }}
                     disabled={submitting}
-                    className="border border-border bg-background text-secondary rounded-sm text-[11px] px-2.5 py-1 font-medium hover:bg-card-hover transition-colors duration-150 disabled:opacity-50 cursor-pointer w-full md:w-auto min-h-[44px]"
+                    className="border border-border bg-background text-secondary rounded-sm text-micro px-2.5 py-1 font-medium hover:bg-card-hover transition-colors duration-150 disabled:opacity-50 cursor-pointer w-full md:w-auto min-h-[44px]"
                   >
                     {t('approval.unsandboxed.alwaysAllow', { exe: alwaysAllowExe })}
                   </button>
@@ -372,7 +372,7 @@ export default function ApprovalCard({
                   onClick={() => handleApprove(false, 'once')}
                   onTouchEnd={(e) => { e.preventDefault(); handleApprove(false, 'once'); }}
                   disabled={submitting}
-                  className="bg-primary text-card rounded-sm text-xs font-medium px-3.5 py-1.5 hover:opacity-90 transition-opacity duration-150 disabled:opacity-50 cursor-pointer w-full md:w-auto min-h-[44px]"
+                  className="bg-primary text-card rounded-sm text-caption font-medium px-3.5 py-1.5 hover:opacity-90 transition-opacity duration-150 disabled:opacity-50 cursor-pointer w-full md:w-auto min-h-[44px]"
                 >
                   {t('approval.unsandboxed.allowOnce')}
                 </button>
@@ -385,7 +385,7 @@ export default function ApprovalCard({
                   onTouchEnd={(e) => { e.preventDefault(); handleApprove(true); }}
                   disabled={submitting}
                   title={t('approval.autoApprove.title')}
-                  className="border border-border bg-background text-secondary rounded-sm text-[11px] px-2.5 py-1 font-medium hover:bg-card-hover transition-colors duration-150 disabled:opacity-50 cursor-pointer w-full md:w-auto min-h-[44px]"
+                  className="border border-border bg-background text-secondary rounded-sm text-micro px-2.5 py-1 font-medium hover:bg-card-hover transition-colors duration-150 disabled:opacity-50 cursor-pointer w-full md:w-auto min-h-[44px]"
                 >
                   {t('approval.autoApprove')}
                 </button>
@@ -394,7 +394,7 @@ export default function ApprovalCard({
                   onClick={() => handleApprove()}
                   onTouchEnd={(e) => { e.preventDefault(); handleApprove(); }}
                   disabled={submitting}
-                  className="bg-primary text-card rounded-sm text-xs font-medium px-3.5 py-1.5 hover:opacity-90 transition-opacity duration-150 disabled:opacity-50 cursor-pointer w-full md:w-auto min-h-[44px]"
+                  className="bg-primary text-card rounded-sm text-caption font-medium px-3.5 py-1.5 hover:opacity-90 transition-opacity duration-150 disabled:opacity-50 cursor-pointer w-full md:w-auto min-h-[44px]"
                 >
                   {t('approval.approve')}
                 </button>
@@ -404,7 +404,7 @@ export default function ApprovalCard({
         )}
 
         {error && (
-          <p className="text-xs text-error mt-1">{error}</p>
+          <p className="text-caption text-error mt-1">{error}</p>
         )}
       </div>
     </div>

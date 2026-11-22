@@ -18,7 +18,7 @@ import {
 
 function Label({ children }: { children: React.ReactNode }) {
   return (
-    <span className="text-[11px] uppercase tracking-wide text-secondary">{children}</span>
+    <span className="type-label text-secondary">{children}</span>
   );
 }
 
@@ -166,7 +166,7 @@ export default function ScheduleInput({
             data-testid="schedule-cron"
             className={`${FIELD} font-mono`}
           />
-          <span className="text-[11px] text-muted">{t('trigger.form.cronHint')}</span>
+          <span className="text-micro text-secondary">{t('trigger.form.cronHint')}</span>
         </label>
       )}
 
@@ -180,13 +180,13 @@ export default function ScheduleInput({
           more thing to fill in. `w-fit` keeps it hugging its text rather than
           ruling a line across the card. */}
       <p
-        className="-mt-1.5 flex w-fit max-w-full items-baseline gap-1.5 rounded-md bg-sidebar px-2 py-1 text-[11px] text-secondary"
+        className="-mt-1.5 flex w-fit max-w-full items-baseline gap-1.5 rounded-md bg-sidebar px-2 py-1 text-micro text-secondary"
         data-testid="schedule-preview"
       >
-        <span className="shrink-0 uppercase tracking-wide text-muted">
+        <span className="shrink-0 type-label">
           {t('trigger.form.preview')}
         </span>
-        <span className="truncate">
+        <span className="truncate text-primary">
           {described ?? <span className="font-mono">{cron || '—'}</span>}
         </span>
       </p>

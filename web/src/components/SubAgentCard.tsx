@@ -104,19 +104,19 @@ export default function SubAgentCard({
         >
           <div className="min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-sm font-medium text-primary">
+              <span className="text-body font-medium text-primary">
                 {agentName}
               </span>
-              <code className="text-[11px] text-secondary/80 font-mono">
+              <code className="text-micro text-secondary font-mono">
                 {slug}
               </code>
               {!ready && (
-                <span className="text-[11px] font-medium text-warning-text dark:bg-warning/10 border border-warning/30 rounded px-1.5 py-0.5">
+                <span className="text-micro font-medium text-warning-text dark:bg-warning/10 border border-warning/30 rounded px-1.5 py-0.5">
                   ⚠ Sign in
                 </span>
               )}
             </div>
-            <div className="mt-1 flex items-center gap-2 text-xs flex-wrap">
+            <div className="mt-1 flex items-center gap-2 text-caption flex-wrap">
               <span
                 className={
                   sizeBytes > MEMORY_TARGET_BYTES

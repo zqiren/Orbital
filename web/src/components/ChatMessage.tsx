@@ -196,7 +196,7 @@ function MessageEditor({
               send();
             }
           }}
-          className="block max-h-[min(50vh,420px)] w-full resize-none overflow-y-auto border-0 bg-transparent p-0 text-[13px] leading-[1.55] text-bubble-text outline-none"
+          className="block max-h-[min(50vh,420px)] w-full resize-none overflow-y-auto border-0 bg-transparent p-0 text-body text-bubble-text outline-none"
         />
       </div>
       <div className="flex justify-end gap-1.5">
@@ -205,7 +205,7 @@ function MessageEditor({
           onClick={onCancel}
           title={t('chat.edit.cancelHint')}
           data-testid="message-editor-cancel"
-          className="inline-flex h-7 items-center justify-center whitespace-nowrap rounded-[7px] bg-soft-button px-3 text-xs font-medium text-primary transition-colors hover:bg-soft-button-hover max-md:h-9 max-md:px-4 max-md:text-[13px]"
+          className="inline-flex h-7 items-center justify-center whitespace-nowrap rounded-[7px] bg-soft-button px-3 text-caption font-medium text-primary transition-colors hover:bg-soft-button-hover max-md:h-9 max-md:px-4 max-md:text-body"
         >
           {t('chat.edit.cancel')}
         </button>
@@ -215,7 +215,7 @@ function MessageEditor({
           disabled={!canSend}
           title={t('chat.edit.sendHint')}
           data-testid="message-editor-send"
-          className="inline-flex h-7 items-center justify-center whitespace-nowrap rounded-[7px] bg-accent px-3 text-xs font-medium text-white transition-[filter] hover:brightness-105 disabled:cursor-default disabled:opacity-35 disabled:hover:brightness-100 max-md:h-9 max-md:px-4 max-md:text-[13px]"
+          className="inline-flex h-7 items-center justify-center whitespace-nowrap rounded-[7px] bg-accent px-3 text-caption font-medium text-white transition-[filter] hover:brightness-105 disabled:cursor-default disabled:opacity-35 disabled:hover:brightness-100 max-md:h-9 max-md:px-4 max-md:text-body"
         >
           {t('chat.edit.send')}
         </button>
@@ -290,12 +290,12 @@ function SourceTaskMessage({ task, timestamp }: { task: SourceTask; timestamp: s
       data-testid="user-message"
       data-source-task={task.type ?? 'unknown'}
     >
-      <div className="font-mono text-[11px] mb-1 flex items-center gap-1.5" data-testid="source-task-label">
+      <div className="font-mono text-micro mb-1 flex items-center gap-1.5" data-testid="source-task-label">
         <SourceMark type={task.type ?? 'unknown'} size="sm" title={typeWord || undefined} />
         {labelWords && <span className="text-secondary">{labelWords}</span>}
-        {time && <span className="text-muted">· {time}</span>}
+        {time && <span className="text-secondary">· {time}</span>}
       </div>
-      <div className="float-bubble inline-block max-w-[min(70%,680px)] rounded-lg rounded-tr-sm bg-bubble px-3 py-2 text-[13px] leading-[1.55] text-bubble-text break-words">
+      <div className="float-bubble inline-block max-w-[min(70%,680px)] rounded-lg rounded-tr-sm bg-bubble px-3 py-2 text-body text-bubble-text break-words">
         <div className="font-medium" data-testid="source-task-title">{task.title}</div>
         {task.parts.map((p, idx) => {
           // A DM's kind already says 私聊; the marker only adds to a name.
@@ -306,13 +306,13 @@ function SourceTaskMessage({ task, timestamp }: { task: SourceTask; timestamp: s
           const text = sourceTaskPartText(task, idx);
           return (
             <div key={idx} className={idx > 0 ? 'mt-2.5' : undefined} data-testid="source-task-part">
-              {by && <div className="mt-0.5 text-[12px] text-muted" data-testid="source-task-from">{by}</div>}
+              {by && <div className="mt-0.5 text-caption text-secondary" data-testid="source-task-from">{by}</div>}
               {text && <div className="mt-1.5 whitespace-pre-wrap">{text}</div>}
             </div>
           );
         })}
         {task.link && (
-          <div className="mt-1.5 truncate text-[12px] [&_a]:text-link [&_a]:no-underline [&_a:hover]:underline" data-testid="source-task-link">
+          <div className="mt-1.5 truncate text-caption [&_a]:text-link [&_a]:no-underline [&_a:hover]:underline" data-testid="source-task-link">
             {renderAnchor(task.link, linkLabel(task.link))}
           </div>
         )}
@@ -424,12 +424,12 @@ export default function ChatMessage({
             though — it is the only carrier of `you → @{target}` on @mention
             sends, which is real routing information, not chrome. The copy
             icon moved to the action row under the bubble (spec 156 §5.1). */}
-        <div className="font-mono text-[11px] mb-1 flex items-center gap-1.5">
+        <div className="font-mono text-micro mb-1 flex items-center gap-1.5">
           <span className="text-secondary">{senderLabel}</span>
-          {time && <span className="text-muted">· {time}</span>}
+          {time && <span className="text-secondary">· {time}</span>}
         </div>
         {askQuestion && (
-          <p className="m-0 mb-1 max-w-[84%] text-xs text-muted line-clamp-2" data-testid="user-message-ask">
+          <p className="m-0 mb-1 max-w-[84%] text-caption text-secondary line-clamp-2" data-testid="user-message-ask">
             {askQuestion}
           </p>
         )}
@@ -449,7 +449,7 @@ export default function ChatMessage({
              it answers. `min()` keeps it proportional on narrow/mobile panes and
              bounded on wide ones. The corner notch flips tl→tr to point back at
              the label above it, the way it used to point at the avatar. */
-          <div className="float-bubble inline-block max-w-[min(70%,680px)] rounded-lg rounded-tr-sm bg-bubble px-3 py-2 text-[13px] leading-[1.55] text-bubble-text whitespace-pre-wrap break-words">
+          <div className="float-bubble inline-block max-w-[min(70%,680px)] rounded-lg rounded-tr-sm bg-bubble px-3 py-2 text-body text-bubble-text whitespace-pre-wrap break-words">
             {chips}
             {hasText && bodyText}
             {annotationCount > 0 && quotes && (
@@ -459,7 +459,7 @@ export default function ChatMessage({
                   onClick={() => setQuotesOpen((open) => !open)}
                   aria-expanded={quotesOpen}
                   data-testid="message-annotation-chip"
-                  className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5 text-[11px] text-secondary hover:text-primary transition-colors"
+                  className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5 text-micro text-secondary hover:text-primary transition-colors"
                 >
                   {annotationCount === 1
                     ? t('composer.annotations.one')
@@ -468,7 +468,7 @@ export default function ChatMessage({
                 {quotesOpen && (
                   <pre
                     data-testid="message-annotation-quotes"
-                    className="mt-1.5 font-mono text-[11px] leading-[1.5] text-secondary whitespace-pre-wrap break-words"
+                    className="mt-1.5 font-mono text-micro text-secondary whitespace-pre-wrap break-words"
                   >
                     {quotes}
                   </pre>
@@ -538,7 +538,7 @@ export default function ChatMessage({
     >
       <MessageAvatar variant="agent" agentHandle={isSubAgent ? message.source : undefined} />
       <div className="relative flex-1 min-w-0">
-        <div className="font-mono text-[11px] mb-1 flex items-center gap-1.5">
+        <div className="font-mono text-micro mb-1 flex items-center gap-1.5">
           {/* Dark mode names the agent in its brand colour, lifted toward white
               so it reads on Graphite (palette 1a); light keeps text-secondary. */}
           <span
@@ -547,13 +547,13 @@ export default function ChatMessage({
           >
             {senderLabel}
           </span>
-          {time && <span className="text-muted">· {time}</span>}
+          {time && <span className="text-secondary">· {time}</span>}
         </div>
         {!isHeaderOnly && (
           // overflow-x clips a card's shadow at this box's edge; the bleed
           // (negative margin + equal padding) moves that edge out so file
           // cards keep their soft sides, and the text does not move.
-          <div className="-mx-4 px-4 -my-1.5 py-1.5 text-[13px] leading-[1.55] text-primary break-words overflow-x-auto">
+          <div className="-mx-4 px-4 -my-1.5 py-1.5 text-body text-primary break-words overflow-x-auto">
             <MarkdownContent content={message.content} workspace={workspace} onOpenPath={onOpenPath} />
           </div>
         )}

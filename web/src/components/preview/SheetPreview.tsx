@@ -79,7 +79,7 @@ export default function SheetPreview({ bytes, format, fileName, onNav, onError }
   if (!model) {
     return (
       <div className="flex items-center justify-center h-full" role="status">
-        <p className="text-xs text-secondary animate-pulse">{t('filePreview.doc.loading')}</p>
+        <p className="text-caption text-secondary animate-pulse">{t('filePreview.doc.loading')}</p>
       </div>
     );
   }
@@ -88,7 +88,7 @@ export default function SheetPreview({ bytes, format, fileName, onNav, onError }
   return (
     <div className="absolute inset-0 flex flex-col min-h-0">
       {sheet?.truncated && (
-        <p className="px-3 py-1 text-2xs text-secondary border-b border-border shrink-0">
+        <p className="px-3 py-1 text-micro text-secondary border-b border-border shrink-0">
           {t('filePreview.doc.sheetCapped', {
             rows: sheet.rows.length.toLocaleString(),
             cols: sheet.colCount.toLocaleString(),
@@ -97,7 +97,7 @@ export default function SheetPreview({ bytes, format, fileName, onNav, onError }
       )}
       <div className="relative flex-1 min-h-0">
         {!sheet || sheet.rows.length === 0 || sheet.colCount === 0 ? (
-          <p className="p-4 text-xs text-secondary">{t('filePreview.doc.sheetEmpty')}</p>
+          <p className="p-4 text-caption text-secondary">{t('filePreview.doc.sheetEmpty')}</p>
         ) : (
           <SheetGrid key={index} sheet={sheet} />
         )}
@@ -116,7 +116,7 @@ export default function SheetPreview({ bytes, format, fileName, onNav, onError }
               aria-selected={i === index}
               title={name}
               onClick={() => setActive(i)}
-              className={`shrink-0 max-w-[10rem] truncate text-xs px-2 py-0.5 rounded-md border transition-colors ${
+              className={`shrink-0 max-w-[10rem] truncate text-caption px-2 py-0.5 rounded-md border transition-colors ${
                 i === index
                   ? 'bg-accent text-white border-accent'
                   : 'border-border text-secondary hover:text-primary'

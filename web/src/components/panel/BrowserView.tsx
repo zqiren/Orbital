@@ -618,7 +618,7 @@ export default function BrowserView({
         spellCheck={false}
         autoCapitalize="off"
         autoCorrect="off"
-        className="ml-1 h-6 min-w-0 flex-1 rounded-md border border-border bg-card px-2 text-xs text-primary outline-none placeholder:text-muted focus:border-accent"
+        className="ml-1 h-6 min-w-0 flex-1 rounded-md border border-border bg-card px-2 text-caption text-primary outline-none placeholder:text-muted focus:border-accent"
       />
     </div>
   );
@@ -708,7 +708,7 @@ export default function BrowserView({
             <AnnotateOverlay active boxes={overlayBoxes} onAdd={handleOverlayAdd} />
           )}
         </div>
-        <div className="flex min-w-0 items-center gap-1.5 px-2 py-1 text-xs text-secondary">
+        <div className="flex min-w-0 items-center gap-1.5 px-2 py-1 text-caption text-secondary">
           <span
             aria-hidden="true"
             className="inline-block h-1.5 w-1.5 shrink-0 rounded-full"
@@ -727,7 +727,7 @@ export default function BrowserView({
     return (
       <div ref={wrapperRef} className="flex h-full w-full flex-col">
         {toolbar}
-        <div className="p-3 text-xs text-secondary">{t('panel.browser.empty')}</div>
+        <div className="p-3 text-caption text-secondary">{t('panel.browser.empty')}</div>
       </div>
     );
   }
@@ -747,7 +747,7 @@ export default function BrowserView({
             style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
           />
         </div>
-        <div className="truncate px-2 py-1 text-xs text-secondary">
+        <div className="truncate px-2 py-1 text-caption text-secondary">
           {t('panel.browser.lastScreenshot')}
           {fallback?.title ? ` · ${fallback.title}` : ''}
         </div>
@@ -759,7 +759,7 @@ export default function BrowserView({
     return (
       <div ref={wrapperRef} className="flex h-full w-full flex-col">
         {toolbar}
-        <div className="p-3 text-xs text-secondary">{t('panel.browser.connecting')}</div>
+        <div className="p-3 text-caption text-secondary">{t('panel.browser.connecting')}</div>
       </div>
     );
   }
@@ -767,7 +767,7 @@ export default function BrowserView({
   return (
     <div ref={wrapperRef} className="flex h-full w-full flex-col">
       {toolbar}
-      <div className="p-3 text-xs text-secondary">{t('panel.browser.empty')}</div>
+      <div className="p-3 text-caption text-secondary">{t('panel.browser.empty')}</div>
     </div>
   );
 }

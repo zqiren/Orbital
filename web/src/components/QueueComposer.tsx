@@ -165,7 +165,7 @@ export default function QueueComposer({
           placeholder={t('queue.composer.placeholder')}
           rows={1}
           disabled={disabled}
-          className="flex-1 resize-none bg-transparent leading-5 text-[13px] text-primary placeholder:text-secondary/60 focus:outline-none disabled:opacity-50"
+          className="flex-1 resize-none bg-transparent text-body text-primary placeholder:text-muted focus:outline-none disabled:opacity-50"
           data-testid="queue-composer-input"
         />
         <button
@@ -174,19 +174,19 @@ export default function QueueComposer({
           title={anyUploading ? t('chat.disabled.waitingUploads') : undefined}
           aria-label={t('queue.composer.submit.aria')}
           data-testid="queue-composer-submit"
-          className="shrink-0 inline-flex items-center gap-1.5 rounded-md bg-primary text-card text-[11px] font-medium px-2.5 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-primary/90 transition-colors max-md:min-h-[40px]"
+          className="shrink-0 inline-flex items-center gap-1.5 rounded-md bg-primary text-card text-micro font-medium px-2.5 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-primary/90 transition-colors max-md:min-h-[40px]"
         >
           <Send className="w-3 h-3" /> {t('queue.composer.submit')}
         </button>
       </div>
       {attachError && (
-        <p className="mt-1.5 text-2xs text-error" data-testid="queue-attach-error">
+        <p className="mt-1.5 text-micro text-error" data-testid="queue-attach-error">
           {attachError}
         </p>
       )}
-      <div className="flex items-center gap-3 mt-2 text-xs text-secondary max-md:flex-wrap">
+      <div className="flex items-center gap-3 mt-2 text-caption text-secondary max-md:flex-wrap">
         {hint && (
-          <span className="text-2xs text-muted max-md:w-full">{hint}</span>
+          <span className="text-micro text-secondary max-md:w-full">{hint}</span>
         )}
         <div className="flex items-center gap-3 ml-auto max-md:ml-0">
           <label className="flex items-center gap-1 cursor-pointer select-none">

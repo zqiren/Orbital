@@ -62,7 +62,7 @@ export function ZoomControls({
       <NavButton label={t('filePreview.doc.zoomOut')} onClick={onZoomOut}>
         <Minus size={14} aria-hidden />
       </NavButton>
-      <span className={`w-10 text-center text-xs text-secondary tabular-nums ${narrow}`}>{percent}%</span>
+      <span className={`w-10 text-center text-caption text-secondary tabular-nums ${narrow}`}>{percent}%</span>
       <NavButton label={t('filePreview.doc.zoomIn')} onClick={onZoomIn}>
         <Plus size={14} aria-hidden />
       </NavButton>

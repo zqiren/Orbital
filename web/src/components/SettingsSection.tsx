@@ -7,7 +7,7 @@
  *
  * Project settings had grown to fourteen sections stacked in a flat
  * `space-y-6`, and every one of them announced itself with the SAME
- * `text-sm font-medium text-primary` label used by the individual fields
+ * `text-body font-medium text-primary` label used by the individual fields
  * INSIDE it. "Sub-Agents" (a section) and "Sub-agent deployment
  * instructions" (one field within it) were typographically identical, and
  * the only thing separating one section from the next was 24px of air —
@@ -23,7 +23,7 @@
  *   SettingsSection a 15px semibold title, separated from its neighbours by
  *                   whitespace only — the landmark you scan for, now
  *                   unmistakably heavier than any field label.
- *   field labels    unchanged (`text-sm font-medium`); they simply stopped
+ *   field labels    unchanged (`text-body font-medium`); they simply stopped
  *                   competing with the headings once the headings grew.
  *
  * A section's `description` hides behind an info button on the title line
@@ -74,7 +74,7 @@ interface SettingsGroupProps {
 export function SettingsGroup({ title, children }: SettingsGroupProps) {
   return (
     <section className="mt-14 first:mt-0">
-      <h2 className="mb-6 border-b border-secondary/35 pb-2.5 text-[11px] font-semibold uppercase tracking-[0.1em] text-secondary">
+      <h2 className="mb-6 border-b border-secondary/35 pb-2.5 type-label text-secondary">
         {title}
       </h2>
       {/* The sections need their own parent so `first:mt-0` lands on the first
@@ -101,7 +101,7 @@ function InfoToggle({ open, onToggle }: { open: boolean; onToggle: () => void })
       aria-label={t('settings.section.about')}
       title={t('settings.section.about')}
       className={`shrink-0 transition-colors duration-150 ${
-        open ? 'text-primary' : 'text-secondary/60 hover:text-primary'
+        open ? 'text-primary' : 'text-secondary hover:text-primary'
       }`}
     >
       <Info size={13} aria-hidden="true" />
@@ -132,12 +132,12 @@ export function LabelWithHint({ htmlFor, children, hint, className = '' }: Label
   return (
     <>
       <div className="flex items-center gap-1.5 mb-1.5">
-        <label htmlFor={htmlFor} className={`text-sm font-medium text-primary ${className}`}>
+        <label htmlFor={htmlFor} className={`text-body font-medium text-primary ${className}`}>
           {children}
         </label>
         <InfoToggle open={open} onToggle={() => setOpen((v) => !v)} />
       </div>
-      {open && <p className="text-xs leading-relaxed text-secondary mb-2">{hint}</p>}
+      {open && <p className="text-caption text-secondary mb-2">{hint}</p>}
     </>
   );
 }
@@ -175,7 +175,7 @@ export default function SettingsSection({
       {title && (
         <div className="mb-3">
           <div className="flex items-center gap-1.5">
-            <h3 className="text-[15px] font-semibold leading-6 text-primary">
+            <h3 className="text-title font-semibold text-primary">
               {title}
               {suffix}
             </h3>
@@ -187,7 +187,7 @@ export default function SettingsSection({
             )}
           </div>
           {description && showDescription && (
-            <p className="mt-1.5 text-[13px] leading-relaxed text-secondary">
+            <p className="mt-1.5 text-body text-secondary">
               {description}
             </p>
           )}

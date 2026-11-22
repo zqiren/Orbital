@@ -190,7 +190,7 @@ export default function GlobalSettings({ onBack, onTakeTour, canTakeTour, scroll
                 <Select
                   value={locale}
                   onChange={(e) => setLocale(e.target.value as typeof locale)}
-                  className="w-full text-sm bg-sidebar border border-border rounded-lg px-3 py-2 text-primary focus:outline-none focus:border-accent transition-all duration-150"
+                  className="w-full text-body bg-sidebar border border-border rounded-lg px-3 py-2 text-primary focus:outline-none focus:border-accent transition-all duration-150"
                 >
                   {LOCALES.map((l) => (
                     <option key={l.code} value={l.code}>{l.label}</option>
@@ -216,7 +216,7 @@ export default function GlobalSettings({ onBack, onTakeTour, canTakeTour, scroll
                   }}
                   placeholder={t('global.aboutYou.placeholder')}
                   disabled={loading}
-                  className="w-full text-sm bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150 resize-y disabled:opacity-50"
+                  className="w-full text-body bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-muted focus:outline-none focus:border-accent transition-all duration-150 resize-y disabled:opacity-50"
                 />
               </SettingsSection>
 
@@ -268,12 +268,12 @@ export default function GlobalSettings({ onBack, onTakeTour, canTakeTour, scroll
                   placeholder={t('global.userMemory.placeholder')}
                   disabled={loading || !userMemoryEnabled}
                   data-testid="user-memory-textarea"
-                  className="w-full text-sm bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150 resize-y disabled:opacity-50"
+                  className="w-full text-body bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-muted focus:outline-none focus:border-accent transition-all duration-150 resize-y disabled:opacity-50"
                 />
                 {/* Every manager reads this when it delegates; an empty
                     memory shows what a who-does-what line looks like. */}
                 {!loading && !userMemory.trim() && (
-                  <p className="mt-1.5 text-xs text-secondary" data-testid="user-memory-routing-hint">
+                  <p className="mt-1.5 text-caption text-secondary" data-testid="user-memory-routing-hint">
                     {t('global.userMemory.routingHint')}
                   </p>
                 )}
@@ -295,7 +295,7 @@ export default function GlobalSettings({ onBack, onTakeTour, canTakeTour, scroll
                   }}
                   placeholder={t('global.scratch.placeholder')}
                   disabled={loading}
-                  className="w-full text-sm font-mono bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150 disabled:opacity-50"
+                  className="w-full text-body font-mono bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-muted focus:outline-none focus:border-accent transition-all duration-150 disabled:opacity-50"
                 />
               </SettingsSection>
             </SettingsGroup>
@@ -414,7 +414,7 @@ export default function GlobalSettings({ onBack, onTakeTour, canTakeTour, scroll
 
             </div>
 
-            <p className="text-xs text-secondary/70 mt-12" data-testid="global-settings-autosave-hint">
+            <p className="text-caption text-secondary mt-12" data-testid="global-settings-autosave-hint">
               {t('settings.autosave.hint')}
             </p>
           </div>

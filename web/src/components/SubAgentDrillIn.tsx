@@ -84,7 +84,7 @@ function WorkerCapsule({ capsule, t }: { capsule: WorkerCapsuleItem; t: Translat
     <div data-testid="drillin-capsule" className="ml-9 flex gap-[10px]">
       <div className="w-0.5 shrink-0 rounded-sm bg-border" aria-hidden />
       <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2 w-full text-left font-mono text-[11px] text-secondary">
+        <div className="flex items-center gap-2 w-full text-left font-mono text-micro text-secondary">
           <span className="truncate text-primary font-medium">{summary}</span>
         </div>
       </div>
@@ -264,23 +264,23 @@ export default function SubAgentDrillIn({ projectId, sessionId, handle, displayN
           type="button"
           onClick={onBack}
           aria-label={t('fanout.drillin.back')}
-          className="flex items-center gap-1 text-sm text-secondary hover:text-primary rounded px-1.5 py-1 -ml-1.5"
+          className="flex items-center gap-1 text-body text-secondary hover:text-primary rounded px-1.5 py-1 -ml-1.5"
         >
           <ChevronLeft size={16} />
           {t('fanout.drillin.back')}
         </button>
-        <span className="text-sm font-medium text-primary truncate">{headerName}</span>
+        <span className="text-body font-medium text-primary truncate">{headerName}</span>
       </div>
 
       <div className="flex-1 overflow-y-auto px-6 py-4 flex flex-col gap-3">
         {loading && (
-          <div className="text-sm text-secondary">{t('fanout.drillin.loading')}</div>
+          <div className="text-body text-secondary">{t('fanout.drillin.loading')}</div>
         )}
         {!loading && notFound && (
-          <div className="text-sm text-secondary">{t('fanout.drillin.error')}</div>
+          <div className="text-body text-secondary">{t('fanout.drillin.error')}</div>
         )}
         {!loading && !notFound && workerItems && workerItems.length === 0 && (
-          <div className="text-sm text-secondary">{t('fanout.drillin.empty')}</div>
+          <div className="text-body text-secondary">{t('fanout.drillin.empty')}</div>
         )}
         {!loading && !notFound && workerItems && workerItems.map((item, idx) => {
           if (
@@ -311,11 +311,11 @@ export default function SubAgentDrillIn({ projectId, sessionId, handle, displayN
           </div>
         )}
         {!loading && !notFound && !workerItems && transcript && transcript.entries.length === 0 && (
-          <div className="text-sm text-secondary">{t('fanout.drillin.empty')}</div>
+          <div className="text-body text-secondary">{t('fanout.drillin.empty')}</div>
         )}
         {!loading && !notFound && !workerItems && transcript?.entries.map((entry, idx) => (
-          <div key={`${entry.timestamp}-${idx}`} data-testid="drillin-entry" className="text-sm">
-            <div className="text-xs text-secondary font-mono mb-0.5">{entry.source}</div>
+          <div key={`${entry.timestamp}-${idx}`} data-testid="drillin-entry" className="text-body">
+            <div className="text-caption text-secondary font-mono mb-0.5">{entry.source}</div>
             <div className="whitespace-pre-wrap break-words text-primary">{entry.content}</div>
           </div>
         ))}

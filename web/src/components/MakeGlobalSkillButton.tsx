@@ -40,7 +40,7 @@ function IconTip({ text }: { text: string }) {
   return (
     <span
       role="tooltip"
-      className="pointer-events-none absolute right-0 top-[calc(100%+6px)] z-30 whitespace-nowrap rounded-[7px] bg-[#18181B] px-[9px] py-[5px] text-xs font-medium text-white opacity-0 shadow-[0_6px_18px_rgb(0_0_0/0.18)] transition-opacity duration-100 group-hover:opacity-100 group-focus-visible:opacity-100 dark:bg-[#F4F6F9] dark:text-[#18181B]"
+      className="pointer-events-none absolute right-0 top-[calc(100%+6px)] z-30 whitespace-nowrap rounded-[7px] bg-[#18181B] px-[9px] py-[5px] text-caption font-medium text-white opacity-0 shadow-[0_6px_18px_rgb(0_0_0/0.18)] transition-opacity duration-100 group-hover:opacity-100 group-focus-visible:opacity-100 dark:bg-[#F4F6F9] dark:text-[#18181B]"
     >
       {text}
     </span>
@@ -108,7 +108,7 @@ export default function MakeGlobalSkillButton({
         data-testid={testId ? `${testId}-replace` : undefined}
         onClick={() => void copy(true)}
         title={t('settings.skills.makeGlobal.replaceTitle', { name })}
-        className="shrink-0 text-xs font-medium text-secondary border border-border rounded-lg px-2.5 py-1 hover:text-primary hover:bg-card-hover transition-all duration-150 max-md:min-h-[36px]"
+        className="shrink-0 text-caption font-medium text-secondary border border-border rounded-lg px-2.5 py-1 hover:text-primary hover:bg-card-hover transition-all duration-150 max-md:min-h-[36px]"
       >
         {t('settings.skills.makeGlobal.replace')}
       </button>

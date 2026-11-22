@@ -411,20 +411,20 @@ export default function SubAgentSettings({ standalone = false, onBack }: Props) 
           `justify-end`. The standalone page still owns its own h1. */}
       <div className={`flex items-center mb-3 ${standalone ? 'justify-between' : 'justify-end'}`}>
         {standalone && (
-          <h1 className="text-xl font-semibold text-primary">{t('subAgentSettings.title')}</h1>
+          <h1 className="text-heading font-semibold text-primary">{t('subAgentSettings.title')}</h1>
         )}
         <div className="flex items-center gap-2 ml-3 shrink-0">
           <button
             onClick={handleRefresh}
             disabled={refreshing}
-            className="text-sm text-secondary hover:text-primary transition-all duration-150 disabled:opacity-50"
+            className="text-body text-secondary hover:text-primary transition-all duration-150 disabled:opacity-50"
           >
             {refreshing ? t('subAgentSettings.refreshing') : t('subAgentSettings.refresh')}
           </button>
           {standalone && onBack && (
             <button
               onClick={onBack}
-              className="text-sm text-secondary hover:text-primary transition-all duration-150"
+              className="text-body text-secondary hover:text-primary transition-all duration-150"
             >
               {t('global.back')}
             </button>
@@ -437,30 +437,30 @@ export default function SubAgentSettings({ standalone = false, onBack }: Props) 
           has no section heading to hang them on, so it still prints them. */}
       {standalone && (
         <>
-          <p className="text-xs text-secondary mb-1">
+          <p className="text-caption text-secondary mb-1">
             {t('subAgentSettings.installHint')}
           </p>
-          <p className="text-xs text-secondary mb-1 italic">
+          <p className="text-caption text-secondary mb-1 italic">
             {t('subAgentSettings.credNote')}
           </p>
-          <p className="text-xs text-secondary mb-4 italic">
+          <p className="text-caption text-secondary mb-4 italic">
             {t('subAgentSettings.loginNote')}
           </p>
         </>
       )}
 
       {error && (
-        <div className="dark:bg-warning/10 border border-warning/20 rounded-lg px-4 py-3 mb-4 text-sm text-warning-text">
+        <div className="dark:bg-warning/10 border border-warning/20 rounded-lg px-4 py-3 mb-4 text-body text-warning-text">
           {error}
         </div>
       )}
 
       {loading && entries === null && (
-        <div className="text-sm text-secondary">{t('subAgentSettings.loading')}</div>
+        <div className="text-body text-secondary">{t('subAgentSettings.loading')}</div>
       )}
 
       {visibleEntries !== null && visibleEntries.length === 0 && (
-        <div className="text-sm text-secondary">
+        <div className="text-body text-secondary">
           {t('subAgentSettings.noInstalled')}
         </div>
       )}
@@ -508,7 +508,7 @@ export default function SubAgentSettings({ standalone = false, onBack }: Props) 
               {cliMissing[entry.slug] && (
                 <p
                   data-testid={`sub-agent-update-missing-${entry.slug}`}
-                  className="text-xs text-error-text px-1"
+                  className="text-caption text-error-text px-1"
                 >
                   {t('subAgentCard.updateCliMissing', {
                     name: entry.name,
@@ -893,10 +893,10 @@ function SubAgentCard({ entry, onChanged, onChangeLocation }: CardProps) {
         <div>
           <div className="flex items-center gap-2">
             <MessageAvatar variant="agent" agentHandle={entry.slug} />
-            <h2 className="text-base font-medium text-primary">{entry.name}</h2>
-            <code className="text-xs text-secondary/80 font-mono">{entry.slug}</code>
+            <h2 className="text-body font-medium text-primary">{entry.name}</h2>
+            <code className="text-caption text-secondary font-mono">{entry.slug}</code>
           </div>
-          <div className="mt-1 flex items-center gap-3 text-xs">
+          <div className="mt-1 flex items-center gap-3 text-caption">
             <StatusPill
               label={entry.installed ? t('subAgentCard.installed') : t('subAgentCard.notInstalled')}
               variant={entry.installed ? 'success' : 'warning'}
@@ -917,13 +917,13 @@ function SubAgentCard({ entry, onChanged, onChangeLocation }: CardProps) {
               />
             )}
             {entry.version && (
-              <span className="text-secondary/80 font-mono">v{entry.version}</span>
+              <span className="text-secondary font-mono">v{entry.version}</span>
             )}
             {entry.installed && entry.source?.kind === 'desktop_app' && entry.source.label && (
               <span
                 data-testid={`sub-agent-source-${entry.slug}`}
                 title={[entry.source.app_path, entry.source.app_version].filter(Boolean).join(' · ')}
-                className="px-2 py-0.5 rounded-full border text-[11px] bg-sidebar text-secondary border-border"
+                className="px-2 py-0.5 rounded-full border text-micro bg-sidebar text-secondary border-border"
               >
                 {t('subAgentCard.source.desktop', { app: entry.source.label })}
               </span>
@@ -943,7 +943,7 @@ function SubAgentCard({ entry, onChanged, onChangeLocation }: CardProps) {
                 <span
                   data-testid={`sub-agent-locate-chip-${entry.slug}`}
                   title={entry.override_path}
-                  className="px-2 py-0.5 rounded-full border text-[11px] bg-sidebar text-secondary border-border"
+                  className="px-2 py-0.5 rounded-full border text-micro bg-sidebar text-secondary border-border"
                 >
                   {t('subAgentCard.locate.chip')}
                 </span>
@@ -965,7 +965,7 @@ function SubAgentCard({ entry, onChanged, onChangeLocation }: CardProps) {
       {HOST_NOTE_KEY[entry.slug] && (
         <p
           data-testid={`sub-agent-host-note-${entry.slug}`}
-          className="text-xs text-secondary mt-2"
+          className="text-caption text-secondary mt-2"
         >
           {t(HOST_NOTE_KEY[entry.slug])}
         </p>
@@ -974,7 +974,7 @@ function SubAgentCard({ entry, onChanged, onChangeLocation }: CardProps) {
       {entry.emits_tool_activity === false && (
         <p
           data-testid={`sub-agent-silent-note-${entry.slug}`}
-          className="text-xs text-secondary mt-2"
+          className="text-caption text-secondary mt-2"
         >
           {t('subAgentCard.silentUntilDone')}
         </p>
@@ -985,12 +985,12 @@ function SubAgentCard({ entry, onChanged, onChangeLocation }: CardProps) {
           data-testid={`sub-agent-handshake-failed-${entry.slug}`}
           className="flex flex-col gap-1 mt-2"
         >
-          <p className="text-xs text-warning-text">
+          <p className="text-caption text-warning-text">
             {t('subAgentCard.handshakeFailed', { name: entry.name })}
           </p>
           {entry.handshake.detail && (
             // The agent's own words — dynamic, never translated.
-            <pre className="text-[11px] font-mono text-secondary/80 whitespace-pre-wrap break-words">
+            <pre className="text-micro font-mono text-secondary whitespace-pre-wrap break-words">
               {entry.handshake.detail}
             </pre>
           )}
@@ -998,7 +998,7 @@ function SubAgentCard({ entry, onChanged, onChangeLocation }: CardProps) {
       )}
 
       {!entry.installed && entry.missing_dependencies.length > 0 && (
-        <p className="text-xs text-secondary mt-1 mb-2">
+        <p className="text-caption text-secondary mt-1 mb-2">
           {t('subAgentCard.missingDeps', { list: entry.missing_dependencies.join(', ') })}
         </p>
       )}
@@ -1010,7 +1010,7 @@ function SubAgentCard({ entry, onChanged, onChangeLocation }: CardProps) {
           data-testid={`sub-agent-update-${entry.slug}`}
           className="flex flex-col gap-2 mt-3 mb-3"
         >
-          <p className="text-xs text-warning-text">
+          <p className="text-caption text-warning-text">
             {t('subAgentCard.updateNeeded', {
               name: entry.name,
               version: shortVersion(entry.version),
@@ -1022,7 +1022,7 @@ function SubAgentCard({ entry, onChanged, onChangeLocation }: CardProps) {
               <button
                 onClick={handleUpdate}
                 disabled={updateBusy || updating || !entry.installed}
-                className="text-xs bg-accent text-white rounded px-3 py-1.5 hover:bg-accent/90 transition-all duration-150 disabled:opacity-50"
+                className="text-caption bg-accent text-white rounded px-3 py-1.5 hover:bg-accent/90 transition-all duration-150 disabled:opacity-50"
               >
                 {updateBusy || updating ? t('subAgentCard.updating') : t('subAgentCard.update')}
               </button>
@@ -1038,7 +1038,7 @@ function SubAgentCard({ entry, onChanged, onChangeLocation }: CardProps) {
           {updateNotice && (
             <p
               data-testid={`sub-agent-update-notice-${entry.slug}`}
-              className={`text-[11px] ${updateNotice === 'busy' ? 'text-warning-text' : 'text-error-text'}`}
+              className={`text-micro ${updateNotice === 'busy' ? 'text-warning-text' : 'text-error-text'}`}
             >
               {updateNotice === 'busy'
                 ? t('subAgentCard.updateBusy', { name: entry.name })
@@ -1059,7 +1059,7 @@ function SubAgentCard({ entry, onChanged, onChangeLocation }: CardProps) {
       {authExpired && supportsLogin && (
         <p
           data-testid={`sub-agent-auth-expired-${entry.slug}`}
-          className="text-xs text-warning-text mt-2"
+          className="text-caption text-warning-text mt-2"
         >
           {t('subAgentCard.authExpiredNote', { name: entry.name })}
         </p>
@@ -1072,7 +1072,7 @@ function SubAgentCard({ entry, onChanged, onChangeLocation }: CardProps) {
           className="flex flex-col gap-2 mt-3 mb-3"
         >
           {installing ? (
-            <div className="flex items-center gap-2 text-xs text-secondary">
+            <div className="flex items-center gap-2 text-caption text-secondary">
               <span
                 data-testid={`sub-agent-install-spinner-${entry.slug}`}
                 className="inline-block h-3 w-3 rounded-full border-2 border-accent border-t-transparent animate-spin"
@@ -1085,7 +1085,7 @@ function SubAgentCard({ entry, onChanged, onChangeLocation }: CardProps) {
               <button
                 onClick={handleInstall}
                 disabled={installBusy}
-                className="text-xs bg-accent text-white rounded px-3 py-1.5 hover:bg-accent/90 transition-all duration-150 disabled:opacity-50"
+                className="text-caption bg-accent text-white rounded px-3 py-1.5 hover:bg-accent/90 transition-all duration-150 disabled:opacity-50"
               >
                 {installBusy
                   ? t('subAgentCard.installStarting')
@@ -1093,14 +1093,14 @@ function SubAgentCard({ entry, onChanged, onChangeLocation }: CardProps) {
                     ? t('subAgentCard.installRetry')
                     : t('subAgentCard.install')}
               </button>
-              <span className="text-xs text-secondary">{t('subAgentCard.installHint')}</span>
+              <span className="text-caption text-secondary">{t('subAgentCard.installHint')}</span>
             </div>
           )}
           {installLine && (
             // Raw installer (npm) output — dynamic, never translated.
             <p
               data-testid={`sub-agent-install-progress-${entry.slug}`}
-              className="text-[11px] font-mono text-secondary/80 truncate"
+              className="text-micro font-mono text-secondary truncate"
             >
               {installLine}
             </p>
@@ -1108,7 +1108,7 @@ function SubAgentCard({ entry, onChanged, onChangeLocation }: CardProps) {
           {installError ? (
             <p
               data-testid={`sub-agent-install-error-${entry.slug}`}
-              className="text-xs text-warning-text"
+              className="text-caption text-warning-text"
             >
               {t('subAgentCard.installFailed', { error: installError })}
             </p>
@@ -1118,7 +1118,7 @@ function SubAgentCard({ entry, onChanged, onChangeLocation }: CardProps) {
             // offering a bare Retry with no explanation.
             <p
               data-testid={`sub-agent-install-error-${entry.slug}`}
-              className="text-xs text-warning-text"
+              className="text-caption text-warning-text"
             >
               {t('subAgentCard.installFailedEarlier')}
             </p>
@@ -1129,7 +1129,7 @@ function SubAgentCard({ entry, onChanged, onChangeLocation }: CardProps) {
       {!entry.installed && installUnsupported && (
         <p
           data-testid={`sub-agent-install-unsupported-${entry.slug}`}
-          className="text-xs text-secondary mt-3 mb-3"
+          className="text-caption text-secondary mt-3 mb-3"
         >
           {t('subAgentCard.installUnsupported')}
         </p>
@@ -1141,7 +1141,7 @@ function SubAgentCard({ entry, onChanged, onChangeLocation }: CardProps) {
           <button
             onClick={handleLogin}
             disabled={loginBusy || !entry.installed}
-            className="text-xs bg-accent text-white rounded px-3 py-1.5 hover:bg-accent/90 transition-all duration-150 disabled:opacity-50"
+            className="text-caption bg-accent text-white rounded px-3 py-1.5 hover:bg-accent/90 transition-all duration-150 disabled:opacity-50"
           >
             {loginBusy ? t('subAgentCard.startingLogin') : t('subAgentCard.login')}
           </button>
@@ -1150,7 +1150,7 @@ function SubAgentCard({ entry, onChanged, onChangeLocation }: CardProps) {
           <button
             onClick={() => setShowApiKeyForm(s => !s)}
             disabled={!entry.installed}
-            className="text-xs bg-accent text-white rounded px-3 py-1.5 hover:bg-accent/90 transition-all duration-150 disabled:opacity-50"
+            className="text-caption bg-accent text-white rounded px-3 py-1.5 hover:bg-accent/90 transition-all duration-150 disabled:opacity-50"
           >
             {t('subAgentCard.setApiKey')}
           </button>
@@ -1161,7 +1161,7 @@ function SubAgentCard({ entry, onChanged, onChangeLocation }: CardProps) {
           <button
             onClick={handleLogout}
             disabled={logoutBusy}
-            className="text-xs bg-sidebar border border-border text-primary rounded px-3 py-1.5 hover:bg-sidebar/80 transition-all duration-150 disabled:opacity-50"
+            className="text-caption bg-sidebar border border-border text-primary rounded px-3 py-1.5 hover:bg-sidebar/80 transition-all duration-150 disabled:opacity-50"
           >
             {logoutBusy ? t('subAgentCard.loggingOut') : t('subAgentCard.logout')}
           </button>
@@ -1171,7 +1171,7 @@ function SubAgentCard({ entry, onChanged, onChangeLocation }: CardProps) {
       {/* The CLI opens the browser itself and finishes the handshake without
           any input from us; this link is the fallback for when it cannot. */}
       {loginUrl && (
-        <p className="text-[11px] text-secondary mb-3">
+        <p className="text-micro text-secondary mb-3">
           {t('subAgentCard.loginBrowserHint')}{' '}
           <a
             href={loginUrl}
@@ -1187,7 +1187,7 @@ function SubAgentCard({ entry, onChanged, onChangeLocation }: CardProps) {
       {loginNotice && (
         <p
           data-testid={`sub-agent-login-notice-${entry.slug}`}
-          className={`text-[11px] mb-3 ${
+          className={`text-micro mb-3 ${
             loginNotice === 'unverified' ? 'text-warning-text' : 'text-error-text'
           }`}
         >
@@ -1201,7 +1201,7 @@ function SubAgentCard({ entry, onChanged, onChangeLocation }: CardProps) {
 
       {showApiKeyForm && isApiKeyFlow && (
         <div className="bg-sidebar/40 border border-border rounded p-3 mb-3 flex flex-col gap-2">
-          <label className="text-xs text-secondary">
+          <label className="text-caption text-secondary">
             {t('subAgentCard.apiKeyHint', { slug: entry.slug })}
           </label>
           <input
@@ -1209,19 +1209,19 @@ function SubAgentCard({ entry, onChanged, onChangeLocation }: CardProps) {
             value={apiKeyDraft}
             onChange={e => setApiKeyDraft(e.target.value)}
             placeholder={t('llm.apiKey.placeholder')}
-            className="w-full text-sm font-mono bg-sidebar border border-border rounded px-2 py-1.5 text-primary focus:outline-none focus:border-accent"
+            className="w-full text-body font-mono bg-sidebar border border-border rounded px-2 py-1.5 text-primary focus:outline-none focus:border-accent"
           />
           <div className="flex gap-2">
             <button
               onClick={handleApiKeySubmit}
               disabled={loginBusy || !apiKeyDraft.trim()}
-              className="text-xs bg-accent text-white rounded px-3 py-1.5 hover:bg-accent/90 disabled:opacity-50"
+              className="text-caption bg-accent text-white rounded px-3 py-1.5 hover:bg-accent/90 disabled:opacity-50"
             >
               {loginBusy ? t('subAgentCard.sending') : t('subAgentCard.submit')}
             </button>
             <button
               onClick={() => { setShowApiKeyForm(false); setApiKeyDraft(''); }}
-              className="text-xs text-secondary hover:text-primary"
+              className="text-caption text-secondary hover:text-primary"
             >
               {t('subAgentCard.cancel')}
             </button>
@@ -1245,7 +1245,7 @@ function SubAgentCard({ entry, onChanged, onChangeLocation }: CardProps) {
             const value = draft[paramKey] ?? schema.default ?? '';
             return (
               <div key={paramKey} className="flex flex-col gap-1">
-                <label className="text-xs font-medium text-primary">
+                <label className="text-caption font-medium text-primary">
                   {PARAM_LABEL_KEY[paramKey] ? t(PARAM_LABEL_KEY[paramKey]) : paramKey}
                 </label>
                 {schema.allowed ? (
@@ -1253,7 +1253,7 @@ function SubAgentCard({ entry, onChanged, onChangeLocation }: CardProps) {
                     value={value}
                     onChange={e => handleChange(paramKey, e.target.value)}
                     disabled={!entry.installed}
-                    className="text-sm bg-sidebar border border-border rounded px-2 py-1.5 text-primary focus:outline-none focus:border-accent disabled:opacity-50"
+                    className="text-body bg-sidebar border border-border rounded px-2 py-1.5 text-primary focus:outline-none focus:border-accent disabled:opacity-50"
                   >
                     {!schema.default && (
                       <option value="">{t('subAgentCard.param.default')}</option>
@@ -1283,16 +1283,16 @@ function SubAgentCard({ entry, onChanged, onChangeLocation }: CardProps) {
                     onChange={e => handleChange(paramKey, e.target.value)}
                     disabled={!entry.installed}
                     placeholder={t('subAgentCard.param.cliDefault')}
-                    className="text-sm font-mono bg-sidebar border border-border rounded px-2 py-1.5 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent disabled:opacity-50"
+                    className="text-body font-mono bg-sidebar border border-border rounded px-2 py-1.5 text-primary placeholder:text-muted focus:outline-none focus:border-accent disabled:opacity-50"
                   />
                 )}
                 {entry.slug === 'cursor' && paramKey === 'permission-mode' && (
-                  <p className="text-xs text-secondary">
+                  <p className="text-caption text-secondary">
                     {t('subAgentCard.permission.cursorHint')}
                   </p>
                 )}
                 {MODEL_HINT_KEY[entry.slug] && paramKey === 'model' && (
-                  <p className="text-xs text-secondary" data-testid={`sub-agent-model-hint-${entry.slug}`}>
+                  <p className="text-caption text-secondary" data-testid={`sub-agent-model-hint-${entry.slug}`}>
                     {t(MODEL_HINT_KEY[entry.slug])}
                   </p>
                 )}
@@ -1303,21 +1303,21 @@ function SubAgentCard({ entry, onChanged, onChangeLocation }: CardProps) {
             <button
               onClick={handleSave}
               disabled={saving || !entry.installed}
-              className="text-xs bg-accent text-white rounded px-3 py-1.5 hover:bg-accent/90 transition-all duration-150 disabled:opacity-50"
+              className="text-caption bg-accent text-white rounded px-3 py-1.5 hover:bg-accent/90 transition-all duration-150 disabled:opacity-50"
             >
               {saving ? t('subAgentCard.saving') : t('subAgentCard.save')}
             </button>
-            {saved && <span className="text-xs text-success-text">{t('subAgentCard.saved')}</span>}
+            {saved && <span className="text-caption text-success-text">{t('subAgentCard.saved')}</span>}
           </div>
         </div>
       ) : (
-        <p className="text-xs text-secondary border-t border-border pt-3 mt-1">
+        <p className="text-caption text-secondary border-t border-border pt-3 mt-1">
           {t('subAgentCard.noParams')}
         </p>
       )}
 
       {actionError && (
-        <p className="text-xs text-warning-text mt-2">{actionError}</p>
+        <p className="text-caption text-warning-text mt-2">{actionError}</p>
       )}
     </div>
   );
@@ -1413,7 +1413,7 @@ function ManagedCredentials({ slug, fields, onChanged }: ManagedCredentialsProps
           same two lines three or four times down the page. Behind the ⓘ it is
           one click away on each, and printed on none. */}
       <div>
-        <LabelWithHint className="!text-xs" hint={t('subAgentCard.cred.note')}>
+        <LabelWithHint className="!text-caption" hint={t('subAgentCard.cred.note')}>
           {t('subAgentCard.cred.heading')}
         </LabelWithHint>
       </div>
@@ -1426,7 +1426,7 @@ function ManagedCredentials({ slug, fields, onChanged }: ManagedCredentialsProps
         const draft = drafts[field.key] ?? '';
         return (
           <div key={field.key} className="flex flex-col gap-1">
-            <label htmlFor={`cred-${slug}-${field.key}`} className="text-xs font-medium text-primary">
+            <label htmlFor={`cred-${slug}-${field.key}`} className="text-caption font-medium text-primary">
               {/* Manifest-supplied label — backend copy, left untranslated. */}
               {field.label || field.key}{' '}
               <span className="font-normal text-secondary">
@@ -1441,7 +1441,7 @@ function ManagedCredentials({ slug, fields, onChanged }: ManagedCredentialsProps
                 <div className="flex items-center gap-2">
                   <StatusPill label={t('subAgentCard.cred.storedBy', { owner: field.stored_by })} variant="success" />
                 </div>
-                <p className="text-xs text-secondary">
+                <p className="text-caption text-secondary">
                   {t('subAgentCard.cred.storedByNote', { owner: field.stored_by })}
                 </p>
               </div>
@@ -1453,7 +1453,7 @@ function ManagedCredentials({ slug, fields, onChanged }: ManagedCredentialsProps
                   data-testid={`sub-agent-cred-remove-${field.key}`}
                   onClick={() => handleRemove(field.key)}
                   disabled={busy}
-                  className="text-xs text-secondary hover:text-primary disabled:opacity-50"
+                  className="text-caption text-secondary hover:text-primary disabled:opacity-50"
                 >
                   {t('subAgentCard.cred.remove')}
                 </button>
@@ -1461,7 +1461,7 @@ function ManagedCredentials({ slug, fields, onChanged }: ManagedCredentialsProps
             )}
 
             {isProviderKey && providerKeyAvailable && (
-              <label className="flex items-center gap-2 text-xs text-secondary">
+              <label className="flex items-center gap-2 text-caption text-secondary">
                 <input
                   type="checkbox"
                   data-testid={`sub-agent-cred-provider-${slug}`}
@@ -1480,17 +1480,17 @@ function ManagedCredentials({ slug, fields, onChanged }: ManagedCredentialsProps
               disabled={viaProvider}
               onChange={e => setDrafts(d => ({ ...d, [field.key]: e.target.value }))}
               placeholder={t('subAgentCard.cred.placeholder')}
-              className="text-sm font-mono bg-sidebar border border-border rounded px-2 py-1.5 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent disabled:opacity-50"
+              className="text-body font-mono bg-sidebar border border-border rounded px-2 py-1.5 text-primary placeholder:text-muted focus:outline-none focus:border-accent disabled:opacity-50"
             />
 
-            {hintKey && <p className="text-xs text-secondary">{t(hintKey)}</p>}
+            {hintKey && <p className="text-caption text-secondary">{t(hintKey)}</p>}
 
             <div className="flex items-center gap-2 pt-1">
               <button
                 data-testid={`sub-agent-cred-save-${field.key}`}
                 onClick={() => handleSave(field.key)}
                 disabled={busy || (!viaProvider && !draft.trim())}
-                className="text-xs bg-accent text-white rounded px-3 py-1.5 hover:bg-accent/90 transition-all duration-150 disabled:opacity-50"
+                className="text-caption bg-accent text-white rounded px-3 py-1.5 hover:bg-accent/90 transition-all duration-150 disabled:opacity-50"
               >
                 {busy ? t('subAgentCard.sending') : t('subAgentCard.save')}
               </button>
@@ -1499,7 +1499,7 @@ function ManagedCredentials({ slug, fields, onChanged }: ManagedCredentialsProps
             {errors[field.key] && (
               <p
                 data-testid={`sub-agent-cred-error-${field.key}`}
-                className="text-xs text-warning-text"
+                className="text-caption text-warning-text"
               >
                 {errors[field.key]}
               </p>
@@ -1517,7 +1517,7 @@ function StatusPill({ label, variant }: { label: string; variant: 'success' | 'w
     ? 'dark:bg-success/10 text-success-text border-success/20'
     : 'dark:bg-warning/10 text-warning-text border-warning/20';
   return (
-    <span className={`px-2 py-0.5 rounded-full border text-[11px] ${cls}`}>
+    <span className={`px-2 py-0.5 rounded-full border text-micro ${cls}`}>
       {label}
     </span>
   );

@@ -25,7 +25,7 @@ export default function PricingEditorPage({ onSaved }: PricingEditorPageProps) {
     <div className="flex flex-col h-full min-h-0 bg-background">
       {/* Spec 137: Back and the title ride the shared page toolbar
           (`Project / Settings / Pricing table`); only the explainer stays. */}
-      <p className="shrink-0 px-6 pt-4 pb-3 text-sm text-secondary border-b border-border max-md:px-4">
+      <p className="shrink-0 px-6 pt-4 pb-3 text-body text-secondary border-b border-border max-md:px-4">
         {t('pricing.subtitle')}
       </p>
 

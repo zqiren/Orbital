@@ -68,14 +68,14 @@ export function UnsandboxedRunsSection({
   }
 
   const answerClass =
-    'text-xs font-medium border rounded-lg px-2.5 py-1 transition-all duration-150 disabled:opacity-50 max-md:min-h-[44px]';
+    'text-caption font-medium border rounded-lg px-2.5 py-1 transition-all duration-150 disabled:opacity-50 max-md:min-h-[44px]';
 
   return (
     // Heading + intro come from the enclosing SettingsSection.
     <div data-testid="unsandboxed-runs-section">
       {pendingRuns.length > 0 && (
         <div className="mb-3">
-          <h4 className="text-xs font-semibold text-primary mb-1.5">
+          <h4 className="text-body font-semibold text-primary mb-1.5">
             {t('settings.unsandboxed.pendingTitle')}
           </h4>
           <div className="flex flex-col gap-2">
@@ -87,11 +87,11 @@ export function UnsandboxedRunsSection({
                   key={run.id}
                   className="surface-float-static px-3 py-2 space-y-2"
                 >
-                  <code className="block text-xs font-mono text-primary whitespace-pre-wrap break-all">
+                  <code className="block text-caption font-mono text-primary whitespace-pre-wrap break-all">
                     {run.command}
                   </code>
                   {run.reason && (
-                    <p className="text-xs text-secondary">{run.reason}</p>
+                    <p className="text-caption text-secondary">{run.reason}</p>
                   )}
                   <div className="flex flex-wrap gap-2">
                     <button
@@ -133,22 +133,22 @@ export function UnsandboxedRunsSection({
               );
             })}
           </div>
-          {error && <p className="text-xs text-error mt-2">{error}</p>}
+          {error && <p className="text-caption text-error mt-2">{error}</p>}
         </div>
       )}
 
       {executables.length === 0 ? (
-        <p className="text-xs text-secondary/60 italic">{t('settings.unsandboxed.empty')}</p>
+        <p className="text-caption text-secondary italic">{t('settings.unsandboxed.empty')}</p>
       ) : (
         <div className="flex flex-col gap-1">
           {executables.map((exe) => (
             <div key={exe} className="flex items-center gap-2 py-1 max-md:min-h-[44px]">
-              <span className="text-sm font-mono text-primary flex-1 truncate">{exe}</span>
+              <span className="text-body font-mono text-primary flex-1 truncate">{exe}</span>
               <button
                 type="button"
                 aria-label={t('settings.unsandboxed.removeAria', { exe })}
                 onClick={() => onRemoveExecutable(exe)}
-                className="text-xs font-medium text-error border border-error/40 rounded-lg px-2.5 py-1 hover:bg-error/5 transition-all duration-150 max-md:min-h-[44px]"
+                className="text-caption font-medium text-error border border-error/40 rounded-lg px-2.5 py-1 hover:bg-error/5 transition-all duration-150 max-md:min-h-[44px]"
               >
                 {t('settings.unsandboxed.remove')}
               </button>

@@ -47,7 +47,7 @@ export default function MessageAvatar({ variant, label, agentHandle }: MessageAv
       <div
         data-testid="message-avatar"
         data-variant="user"
-        className={`${AVATAR_BOX} text-2xs font-semibold bg-primary text-card`}
+        className={`${AVATAR_BOX} text-micro font-semibold bg-primary text-card`}
       >
         {label ?? t('chat.avatar.me')}
       </div>
@@ -83,7 +83,7 @@ export default function MessageAvatar({ variant, label, agentHandle }: MessageAv
       data-testid="message-avatar"
       data-variant="agent"
       data-agent-handle={agentHandle}
-      className={`${AVATAR_BOX} text-3xs font-semibold text-white`}
+      className={`${AVATAR_BOX} text-micro font-semibold text-white`}
       style={{ backgroundColor: icon.color }}
     >
       {icon.monogram}

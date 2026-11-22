@@ -119,7 +119,7 @@ function JobRow({ task, job, status, elapsedMs }: {
     : cancel === 'failed' ? 'fanout.job.cancelFailed' : 'fanout.job.cancel';
   return (
     <div data-testid={`fanout-row-${task.handle}`}
-         className="mb-1 flex items-center gap-2 w-full font-mono text-[11px] text-secondary">
+         className="mb-1 flex items-center gap-2 w-full font-mono text-micro text-secondary">
       <span className="flex-1 min-w-0 truncate text-primary font-medium" title={task.label}>
         {job.agent ? <span className="text-secondary">{job.agent} · </span> : null}
         {task.label}
@@ -127,11 +127,11 @@ function JobRow({ task, job, status, elapsedMs }: {
       <span
         data-testid={`fanout-status-${task.handle}`}
         data-status={status}
-        className={`shrink-0 rounded-full border px-2 py-0.5 text-2xs leading-4 ${STATUS_CLASS[status]}`}
+        className={`shrink-0 rounded-full border px-2 py-0.5 text-micro leading-4 ${STATUS_CLASS[status]}`}
       >
         {t(JOB_STATUS_LABEL_KEY[status])}
       </span>
-      <span className="shrink-0 w-14 text-right text-[11px] font-mono text-secondary">
+      <span className="shrink-0 w-14 text-right text-micro font-mono text-secondary">
         {formatElapsed(elapsedMs)}
       </span>
       {status === 'running' ? (
@@ -140,7 +140,7 @@ function JobRow({ task, job, status, elapsedMs }: {
           data-testid={`job-cancel-${task.handle}`}
           onClick={onCancel}
           disabled={cancel === 'pending'}
-          className="shrink-0 rounded border border-border px-1.5 py-0.5 text-2xs leading-4 text-secondary hover:text-primary hover:border-primary disabled:opacity-60 cursor-pointer disabled:cursor-default"
+          className="shrink-0 rounded border border-border px-1.5 py-0.5 text-micro leading-4 text-secondary hover:text-primary hover:border-primary disabled:opacity-60 cursor-pointer disabled:cursor-default"
         >
           {t(cancelKey)}
         </button>
@@ -211,13 +211,13 @@ export default function FanoutCard({
     <div data-testid="fanout-card" data-fanout-id={fanoutId} className="ml-9 flex gap-[10px]">
       <div className="w-0.5 shrink-0 rounded-sm bg-border" aria-hidden />
       <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2 w-full font-mono text-[11px] text-secondary">
+        <div className="flex items-center gap-2 w-full font-mono text-micro text-secondary">
           <span className="truncate text-primary font-medium">
             {isJobGroup
               ? t(tasks.length === 1 ? 'fanout.jobs.title.one' : 'fanout.jobs.title.other', { n: tasks.length })
               : t(tasks.length === 1 ? 'fanout.card.title.one' : 'fanout.card.title.other', { n: tasks.length })}
           </span>
-          <span className="ml-auto shrink-0 text-[11px] font-mono text-secondary">{batchDuration}</span>
+          <span className="ml-auto shrink-0 text-micro font-mono text-secondary">{batchDuration}</span>
         </div>
         <div className="mt-2 pt-2 border-t border-border/30">
           {tasks.map((task) => {
@@ -239,7 +239,7 @@ export default function FanoutCard({
                              elapsedMs={Math.max(0, jobEnd - startedAtMs)} />;
             }
             return (
-              <div key={task.handle} className="mb-1 font-mono text-[11px] text-secondary">
+              <div key={task.handle} className="mb-1 font-mono text-micro text-secondary">
                 <button
                   type="button"
                   data-testid={`fanout-row-${task.handle}`}
@@ -250,11 +250,11 @@ export default function FanoutCard({
                   <span
                     data-testid={`fanout-status-${task.handle}`}
                     data-status={status}
-                    className={`shrink-0 rounded-full border px-2 py-0.5 text-2xs leading-4 ${STATUS_CLASS[status]}`}
+                    className={`shrink-0 rounded-full border px-2 py-0.5 text-micro leading-4 ${STATUS_CLASS[status]}`}
                   >
                     {t(STATUS_LABEL_KEY[status])}
                   </span>
-                  <span className="shrink-0 w-14 text-right text-[11px] font-mono text-secondary">
+                  <span className="shrink-0 w-14 text-right text-micro font-mono text-secondary">
                     {formatElapsed(rowElapsed)}
                   </span>
                 </button>

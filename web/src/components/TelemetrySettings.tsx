@@ -89,38 +89,38 @@ export default function TelemetrySettings() {
       </div>
 
       <div className="mt-4">
-        <h3 className="text-sm font-medium text-primary mb-2">
+        <h3 className="text-body font-medium text-primary mb-2">
           {t('telemetry.viewer.heading')}
         </h3>
         {payloadError ? (
-          <p className="text-xs text-secondary">{t('telemetry.viewer.error')}</p>
+          <p className="text-caption text-secondary">{t('telemetry.viewer.error')}</p>
         ) : (
           <div className="space-y-3">
             <div>
-              <p className="text-xs text-secondary mb-1">
+              <p className="text-caption text-secondary mb-1">
                 {t('telemetry.viewer.lastSent')}
               </p>
               {payload?.last_sent ? (
                 <pre
                   data-testid="telemetry-last-sent"
-                  className="text-[11px] font-mono bg-sidebar border border-border rounded-lg p-3 overflow-x-auto whitespace-pre"
+                  className="text-micro font-mono bg-sidebar border border-border rounded-lg p-3 overflow-x-auto whitespace-pre"
                 >
                   {JSON.stringify(payload.last_sent, null, 2)}
                 </pre>
               ) : (
-                <p className="text-xs text-secondary/70">
+                <p className="text-caption text-secondary">
                   {t('telemetry.viewer.never')}
                 </p>
               )}
             </div>
             {payload?.next_pending && (
               <div>
-                <p className="text-xs text-secondary mb-1">
+                <p className="text-caption text-secondary mb-1">
                   {t('telemetry.viewer.nextPending')}
                 </p>
                 <pre
                   data-testid="telemetry-next-pending"
-                  className="text-[11px] font-mono bg-sidebar border border-border rounded-lg p-3 overflow-x-auto whitespace-pre"
+                  className="text-micro font-mono bg-sidebar border border-border rounded-lg p-3 overflow-x-auto whitespace-pre"
                 >
                   {JSON.stringify(payload.next_pending, null, 2)}
                 </pre>

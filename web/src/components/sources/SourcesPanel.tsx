@@ -268,8 +268,8 @@ export default function SourcesPanel({ phone, projects, focus, onClose, onOpenSe
         {header(t('sources.add'), { back: true })}
         <div className="src-body">
           <div className="kinds2">
-            {groups.account.length > 0 && <><div className="kg">{t('sources.group.account')}</div><div className="kc">{groups.account.map(kindRow)}</div></>}
-            {groups.bot.length > 0 && <><div className="kg">{t('sources.group.bot')}</div><div className="kc">{groups.bot.map(kindRow)}</div></>}
+            {groups.account.length > 0 && <><div className="kg type-label">{t('sources.group.account')}</div><div className="kc">{groups.account.map(kindRow)}</div></>}
+            {groups.bot.length > 0 && <><div className="kg type-label">{t('sources.group.bot')}</div><div className="kc">{groups.bot.map(kindRow)}</div></>}
             {groups.check.length > 0 && <div className="kc kc-solo">{groups.check.map(kindRow)}</div>}
           </div>
         </div>
@@ -314,7 +314,7 @@ export default function SourcesPanel({ phone, projects, focus, onClose, onOpenSe
               </div>
               {asking ? null : ready.length > 0 ? (
                 <>
-                  <div className="kg">{t('sources.guide.ready')}</div>
+                  <div className="kg type-label">{t('sources.guide.ready')}</div>
                   <div className="kc">{ready.map(kindRow)}</div>
                   <button type="button" className="gmore" onClick={() => push({ v: 'add' })} data-testid="src-guide-more">
                     {t('sources.guide.more')}<ChevronRight size={13} strokeWidth={2} aria-hidden="true" />

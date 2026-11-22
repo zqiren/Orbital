@@ -96,8 +96,8 @@ export default function PrivateNotesCard({ projectId, project, agents, onOpenPat
       <span className="shrink-0 [&>div]:h-8 [&>div]:w-8 [&>div]:rounded-lg [&>div]:p-1">
         <MessageAvatar variant="agent" agentHandle={notes.agent} />
       </span>
-      <span className="min-w-0 flex-1 text-[13px] leading-[1.45] text-primary">{text}</span>
-      <span className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-secondary transition-colors duration-150 group-hover:text-accent">
+      <span className="min-w-0 flex-1 text-body text-primary">{text}</span>
+      <span className="inline-flex shrink-0 items-center gap-1 text-caption font-medium text-secondary transition-colors duration-150 group-hover:text-accent">
         {t('notes.card.open')}
         <ArrowRight size={12} aria-hidden="true" />
       </span>
