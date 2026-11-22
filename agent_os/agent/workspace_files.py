@@ -486,6 +486,12 @@ class WorkspaceFileManager:
             content = _mem.ensure_format_header(content, file_key)
         if file_key not in _mem.ENTRY_KEYS:
             return content, []
+        prev = None
+        if file_key in _mem.DURABLE_KEYS:
+            # Spec 192: same pre-step as process_on_write, on both texts (the
+            # memory pass's prepass hands in the disk as the new text too).
+            content = _mem.reattach_hidden_lines(content)
+            prev = _mem.reattach_hidden_lines(self.read(file_key))
         res = _mem.normalise(content, file_key)
         archive_key = _mem.ARCHIVE_OF[file_key]
         if res.pointers:
@@ -509,7 +515,7 @@ class WorkspaceFileManager:
             warnings.extend(reconcile_warns)
         else:
             content, stamp_warns = _mem.stamp(
-                content, self.read(file_key), file_key, today=today,
+                content, prev, file_key, today=today,
                 archive_ids=_mem.archive_ids(self.read(archive_key)),
             )
             warnings.extend(stamp_warns)
