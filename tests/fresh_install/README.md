@@ -13,13 +13,13 @@ regressions). One scenario, `scenario.mjs`, runs on macOS and Windows.
 | 0 rig | had Codex + dsh installed already | Codex `config.toml` → OpenCode Go (Responses, `gpt-6-luna`), `codex login --with-api-key`; a localhost header forwarder for dsh |
 | 2 install | macOS: mount DMG, `ditto` to /Applications. Windows: Inno `/VERYSILENT` | app present; version; codesign/spctl facts |
 | 3 launch | opens the app normally (not `--smoke-test`) | daemon answers on the port in `~/orbital/daemon.pid.meta`; SPA served; OS window list + desktop screenshot |
-| 4 keyless | wizard → skip key → New project → pin Codex → "PONG" | Codex reply row with PONG in the session; Codex bubble in the chat |
-| 5a card | Settings → Add provider → OpenCode Go, key, `deepseek-v4-pro`, Test, Save | test result text; `/settings/cards` default card has a key |
+| 4 keyless | Welcome page (Codex ready, import line unticked) → Start with no key → Workbench → New project → pin Codex → "PONG". Builds before batch 1123: the four-page wizard → skip key | `setup.api_key_skipped` persisted; Workbench, no New project dialog, no tour by itself; Codex reply row with PONG in the session; Codex bubble in the chat |
+| 5a card | Settings → Add provider → OpenCode Go (More search), key (tests itself), model `deepseek-v4-pro`, Save | key passes; `/settings/cards` default card has a key |
 | 5b workers | Settings → Sub-agents → dsh key, base URL, model | `/settings/sub-agents` codex + dsh `ready` |
 | 5c manager | new project, message Orbital | a `management` reply row, rendered |
 | 5d dispatch | ask the manager to send "PONG" to codex and dsh | each worker's result row with PONG |
 | 6 browser | ask the manager to open example.com with its browser | a `browser` tool call whose result shows "Example Domain" |
-| 7 upgrade | (separate machine) previous release, a project + Codex turn, quit, install new over it, relaunch | no wizard; same project id; session rows intact; old reply renders |
+| 7 upgrade | (separate machine) previous release, a project + Codex turn, quit, install new over it, relaunch | no first-run page (neither Welcome nor wizard); same project id; session rows intact; old reply renders |
 | 8 evidence | — | screenshots per step, daemon/app logs, session JSONL + chat dumps, **scrubbed of the key** (`scrub-report.json`); any surviving copy fails the run |
 
 Results: `results.md` / `results.json` in the evidence dir, every step

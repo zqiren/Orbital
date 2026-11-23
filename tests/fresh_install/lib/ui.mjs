@@ -30,9 +30,83 @@ export async function openApp(page, port) {
   await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'domcontentloaded', timeout: LONG });
 }
 
-/** Onboarding wizard, keyless: agents -> (projects) -> skip key -> accounts. */
-export async function onboardingSkipKey(page, note) {
-  await page.getByTestId('wizard-steps').waitFor({ timeout: LONG });
+/**
+ * First run, keyless. Two shapes, by build:
+ *  - Welcome (batch 1123 on): ONE page; Start with no key lands on the
+ *    Workbench at once. Returns `{ flow: 'welcome' }`.
+ *  - the four-page setup wizard (every release before it; the upgrade run
+ *    still starts on one): agents -> (projects) -> skip key -> accounts.
+ *    Returns `{ flow: 'wizard' }`.
+ * `shot(name)` (optional) screenshots the page before Start.
+ */
+export async function onboardingSkipKey(page, note, shot = async () => {}) {
+  const welcome = page.getByTestId('welcome-page');
+  const wizard = page.getByTestId('wizard-steps');
+  await welcome.or(wizard).first().waitFor({ timeout: LONG });
+  if (await welcome.isVisible().catch(() => false)) return welcomeSkipKey(page, note, shot);
+  return wizardSkipKey(page, note);
+}
+
+/** The installed agents as the Welcome page shows them: `slug(state)`. */
+async function welcomeAgents(page) {
+  return page
+    .locator('li[data-testid^="welcome-agent-"][data-state]')
+    .evaluateAll((els) => els.map((e) => `${e.getAttribute('data-testid').replace('welcome-agent-', '')}(${e.getAttribute('data-state')})`));
+}
+
+async function welcomeSkipKey(page, note, shot) {
+  note('Welcome page shown (one page, no wizard steps)');
+  const agentsError = page.getByTestId('welcome-agents-error');
+  const loading = page.getByTestId('welcome-agents-loading');
+  await waitFor(
+    async () => {
+      if (await agentsError.isVisible()) return { fail: 'the Welcome page could not load the agent list (welcome-agents-error)' };
+      return (await page.getByTestId('welcome-agent-list').isVisible()) || !(await loading.isVisible());
+    },
+    { timeoutMs: LONG, intervalMs: 1000, label: 'Welcome agents list to load' },
+  );
+  // Codex is signed in by the rig (codex login --with-api-key): it must be
+  // READY here, which is what opens Start without a key.
+  const start = page.getByTestId('welcome-start');
+  await waitFor(async () => (await page.getByTestId('welcome-agent-ready-codex').isVisible()) && (await start.isEnabled()), {
+    timeoutMs: LONG,
+    intervalMs: 1000,
+    label: 'Codex ready and Start enabled',
+  }).catch(async (e) => {
+    throw new Error(`${e.message}; Welcome lists: ${(await welcomeAgents(page)).join(', ') || '(none)'}`);
+  });
+  const agents = await welcomeAgents(page);
+  note(`Welcome lists agents: ${agents.join(', ') || '(none)'}`);
+
+  // Projects band: shown only when the agents' history has something. Like
+  // the wizard run (which pressed "skip import"), import nothing, so the
+  // only projects are the ones this scenario creates. The scan never blocks
+  // Start; give it a moment to settle so a late line cannot import behind us.
+  const band = page.getByTestId('welcome-band-projects');
+  await page.getByTestId('welcome-projects-scanning').waitFor({ state: 'hidden', timeout: 60_000 }).catch(() => {});
+  if (await band.isVisible().catch(() => false)) {
+    const check = page.getByTestId('welcome-import-check');
+    if (await check.isVisible().catch(() => false)) {
+      note(`projects band: "${(await page.getByTestId('welcome-import-label').innerText()).trim()}"; unticking it`);
+      for (let i = 0; i < 3 && (await check.getAttribute('aria-checked')) !== 'false'; i++) await check.click();
+      if ((await check.getAttribute('aria-checked')) !== 'false') throw new Error('could not untick the import line');
+    } else if (await page.getByTestId('welcome-projects-error').isVisible().catch(() => false)) {
+      note('projects band: the history scan reported an error (shown with Try again); not importing');
+    }
+  } else {
+    note('no projects band (nothing in the agents\' history to import)');
+  }
+  await shot('welcome');
+  const label = (await start.innerText()).trim();
+  await start.click();
+  note(`pressed "${label}" with no key`);
+  await page.getByTestId('welcome-page').waitFor({ state: 'detached', timeout: LONG });
+  await page.getByTestId('workbench-page').waitFor({ timeout: LONG });
+  note('landed on the Workbench');
+  return { agents, flow: 'welcome' };
+}
+
+async function wizardSkipKey(page, note) {
   note('setup wizard shown');
   const cont = page.getByTestId('wizard-agents-continue');
   await cont.waitFor({ timeout: LONG });
@@ -63,7 +137,15 @@ export async function onboardingSkipKey(page, note) {
   await getStarted.click();
   await page.getByTestId('wizard-steps').waitFor({ state: 'detached', timeout: LONG });
   note('wizard finished');
-  return { agents };
+  return { agents, flow: 'wizard' };
+}
+
+/** Either first-run surface on screen (an upgraded user must see neither). */
+export async function firstRunShown(page) {
+  for (const id of ['welcome-page', 'wizard-steps']) {
+    if (await page.getByTestId(id).isVisible().catch(() => false)) return id;
+  }
+  return null;
 }
 
 /** The New project dialog: name + an existing folder typed into the folder browser. */
@@ -182,14 +264,94 @@ export async function leaveGlobalSettings(page) {
   await page.getByTestId('global-settings-title').waitFor({ state: 'detached', timeout: LONG });
 }
 
-/** Settings -> LLM Providers -> Add provider -> OpenCode Go card, test, save. */
-export async function addProviderCard(page, { providerId, key, model }, note) {
+/**
+ * Settings -> LLM Providers -> Add provider -> card, test, save. Two shapes:
+ * the connect screen (batch 1123 on: provider tiles / More search, the key
+ * tests itself, the model is picked after it passes) and, for older builds,
+ * the form with a provider combobox and a Test button.
+ */
+export async function addProviderCard(page, { providerId, key, model, providerName = 'OpenCode Go' }, note) {
   const section = page.locator('[data-settings-section="llm"]');
   await section.scrollIntoViewIfNeeded().catch(() => {});
   const add = page.getByTestId('cards-add').or(page.getByTestId('card-list-add')).first();
   await add.click();
   const modal = page.getByTestId('card-modal');
   await modal.waitFor({ timeout: LONG });
+  const panel = modal.getByTestId('connect-panel');
+  const combo = modal.getByTestId('provider-combobox');
+  await panel.or(combo).or(modal.locator('select')).first().waitFor({ timeout: LONG });
+  if (await panel.isVisible().catch(() => false)) return connectAddCard(page, modal, { providerId, key, model, providerName }, note);
+  return legacyAddCard(page, modal, { providerId, key, model }, note);
+}
+
+async function connectAddCard(page, modal, { providerId, key, model, providerName }, note) {
+  // The provider: a logo tile, else More -> search -> pick.
+  const tile = modal.getByTestId(`connect-tile-${providerId}`);
+  if (await tile.isVisible().catch(() => false)) {
+    await tile.click();
+  } else {
+    const more = modal.getByTestId('connect-more').or(modal.getByTestId('connect-more-narrow')).filter({ visible: true }).first();
+    await more.click();
+    await modal.getByTestId('connect-more-search').fill(providerName);
+    await modal.getByTestId(`connect-pick-${providerId}`).click();
+  }
+  await modal.getByTestId(`connect-provider-${providerId}`).waitFor({ timeout: LONG });
+  note(`provider chosen: ${providerId}`);
+  // A provider that lists no models asks for one before the test.
+  const typedModel = modal.getByTestId('connect-model-typed');
+  if (await typedModel.isVisible().catch(() => false)) await typedModel.fill(model);
+  const keyInput = modal.getByTestId('connect-key');
+  await keyInput.fill(key);
+  await keyInput.press('Enter'); // the test fires by itself (paste/blur/Enter); Enter is the deterministic one
+  const ok = modal.getByTestId('connect-key-ok');
+  const err = modal.getByTestId('connect-key-error');
+  await waitFor(async () => (await ok.isVisible()) || (await err.isVisible()), {
+    timeoutMs: 180_000,
+    intervalMs: 1000,
+    label: 'connection test result',
+  });
+  if (await err.isVisible()) throw new Error(`connection test failed: ${(await err.innerText()).slice(0, 300)}`);
+  note('connection test passed');
+  // The model row appears after the pass: a list (toggle) or a typed field.
+  const toggle = modal.getByTestId('connect-model-toggle');
+  const input = modal.getByTestId('connect-model-input');
+  await toggle.or(input).first().waitFor({ timeout: 30_000 });
+  if (await toggle.isVisible().catch(() => false)) {
+    if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click();
+    const search = modal.getByTestId('connect-model-search');
+    if (await search.isVisible().catch(() => false)) await search.fill(model);
+    const option = modal.getByTestId(`connect-model-option-${model}`);
+    const typed = modal.getByTestId('connect-model-use-typed');
+    if (await option.isVisible().catch(() => false)) {
+      await option.click();
+    } else if (await typed.isVisible().catch(() => false)) {
+      await typed.click();
+    } else {
+      const offered = await modal.locator('[data-testid^="connect-model-option-"]').evaluateAll((els) =>
+        els.map((e) => e.getAttribute('data-testid').replace('connect-model-option-', '')));
+      throw new Error(`model list has no ${model}: ${offered.join(', ')}`);
+    }
+  } else {
+    await input.fill(model);
+  }
+  note(`model: ${model}`);
+  const save = modal.getByTestId('card-save');
+  await waitFor(async () => save.isEnabled(), { timeoutMs: 30_000, intervalMs: 500, label: 'Save enabled' });
+  await save.click();
+  const saveErr = modal.getByTestId('card-save-error');
+  await waitFor(
+    async () => {
+      if (await saveErr.isVisible().catch(() => false)) return { fail: (await saveErr.innerText()).slice(0, 300) };
+      // Save re-tests the key server-side; a refusal comes back on the key field.
+      if (await err.isVisible().catch(() => false)) return { fail: `save refused: ${(await err.innerText()).slice(0, 300)}` };
+      return !(await modal.isVisible().catch(() => false));
+    },
+    { timeoutMs: 180_000, intervalMs: 1000, label: 'card saved (modal closed)' },
+  );
+  note('card saved (modal closed on its own)');
+}
+
+async function legacyAddCard(page, modal, { providerId, key, model }, note) {
   const combo = modal.getByTestId('provider-combobox');
   const select = modal.locator('select').first();
   await combo.or(select).first().waitFor({ timeout: LONG });

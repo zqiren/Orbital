@@ -229,13 +229,22 @@ async function stepKeyless({ id = '4-keyless', projectName = 'Fresh Keyless', pr
     async (note) => {
       needKey(); // Codex itself runs on the Go key (its own login)
       const page = S.page;
-      await ui.onboardingSkipKey(page, note);
+      const { flow } = await ui.onboardingSkipKey(page, note, (name) => run.shot(`${id}-${name}`));
       await run.shot(`${id}-after-wizard`);
       const st = await S.api.settings();
-      note(`settings after wizard: api_key_set=${st?.llm?.api_key_set} api_key_skipped=${st?.setup?.api_key_skipped}`);
+      note(`settings after first run (${flow}): api_key_set=${st?.llm?.api_key_set} api_key_skipped=${st?.setup?.api_key_skipped}`);
+      if (flow === 'welcome') {
+        // Batch 1123: Start without a key persists "skipped" (else the page
+        // comes back) and lands on the Workbench, never the New project dialog.
+        if (st?.setup?.api_key_skipped !== true) throw new Error('Start without a key did not persist setup.api_key_skipped');
+        if (await page.getByRole('dialog', { name: 'New project' }).isVisible().catch(() => false)) {
+          throw new Error('the New project dialog opened after the Welcome page');
+        }
+      }
       await ui.createProject(page, { name: projectName, folder: workspace(projectName) }, note);
       const pid = await projectId(projectName);
-      await ui.walkTourIfShown(page, note);
+      const stops = await ui.walkTourIfShown(page, note);
+      if (flow === 'welcome' && stops > 0) throw new Error('the first-journey tour opened by itself (batch 1123: it never auto-opens)');
       if (uiModel) {
         await ui.openGlobalSettings(page);
         await ui.setSubAgentModel(page, 'codex', uiModel, note);
@@ -479,9 +488,10 @@ async function stepUpgrade() {
     async (note) => {
       const page = S.page;
       await page.waitForTimeout(3000);
-      if (await page.getByTestId('wizard-steps').isVisible().catch(() => false)) {
-        throw new Error('the setup wizard came back after the upgrade');
-      }
+      // The first-run page is the Welcome page from batch 1123 on, the setup
+      // wizard before it: neither may come back for an upgraded user.
+      const shown = await ui.firstRunShown(page);
+      if (shown) throw new Error(`the first-run page (${shown}) came back after the upgrade`);
       const p = await S.api.projectByName('Upgrade Check');
       if (!p || p.project_id !== U.pid) throw new Error('project missing or re-created after the upgrade');
       const rows = await S.api.chat(U.pid, U.sid);

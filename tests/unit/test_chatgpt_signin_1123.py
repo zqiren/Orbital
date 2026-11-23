@@ -462,8 +462,12 @@ def _events(text="PONG"):
             "type": "message", "id": "msg_1", "role": "assistant", "status": "completed",
             "content": [{"type": "output_text", "text": text, "annotations": []}]}],
         "parallel_tool_calls": True, "tool_choice": "auto", "tools": [],
+        # cache_write_tokens is required by the SDK's Response model from
+        # openai 3.x (strict model_validate here); older SDKs accept it as an
+        # extra field. The real wire path tolerates its absence: see
+        # test_real_sdk_parse_tolerates_usage_without_cache_write_tokens.
         "usage": {"input_tokens": 10, "output_tokens": 2, "total_tokens": 12,
-                  "input_tokens_details": {"cached_tokens": 8},
+                  "input_tokens_details": {"cached_tokens": 8, "cache_write_tokens": 0},
                   "output_tokens_details": {"reasoning_tokens": 0}},
     })
     return [
@@ -700,3 +704,99 @@ async def test_final_errors_stop_the_run_without_any_fallback(tmp_path, err):
     assert err.message.rstrip(".") in texts and ".." not in texts
     if err.status_code in (401, 403):
         assert health and health[0][2] == err.code
+
+
+# ---------------------------------------------------------------------------
+# The wire path tolerates usage without cache_write_tokens (openai 3.x)
+# ---------------------------------------------------------------------------
+#
+# openai 3.x made ``usage.input_tokens_details.cache_write_tokens`` a required
+# field of its Response model, and the routes Orbital talks to (the ChatGPT
+# route, OpenCode Go's Responses models) do not all send it. The SDK builds
+# responses and stream events WITHOUT validation (``construct``), so a missing
+# field must neither fail the call nor lose the cache-hit count. These go
+# through the SDK's own HTTP + SSE parsing (httpx MockTransport), not through
+# a strict model_validate in a fixture.
+
+def _wire_response(with_write):
+    details = {"cached_tokens": 8}
+    if with_write:
+        details["cache_write_tokens"] = 0
+    return {
+        "id": "resp_1", "object": "response", "created_at": 0, "model": "gpt-6.2-sol",
+        "status": "completed",
+        "output": [
+            {"type": "reasoning", "id": "rs_1", "summary": [], "encrypted_content": "enc"},
+            {"type": "message", "id": "msg_1", "role": "assistant", "status": "completed",
+             "content": [{"type": "output_text", "text": "PONG", "annotations": []}]},
+            {"type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "read",
+             "arguments": "{\"path\": \"a\"}", "status": "completed"},
+        ],
+        "parallel_tool_calls": True, "tool_choice": "auto", "tools": [],
+        "usage": {"input_tokens": 10, "output_tokens": 2, "total_tokens": 12,
+                  "input_tokens_details": details,
+                  "output_tokens_details": {"reasoning_tokens": 0}},
+    }
+
+
+def _wire_sse(with_write):
+    r = _wire_response(with_write)
+    events = [
+        {"type": "response.created", "sequence_number": 0,
+         "response": {**r, "status": "in_progress", "output": [], "usage": None}},
+        {"type": "response.output_item.done", "sequence_number": 1, "output_index": 0,
+         "item": r["output"][0]},
+        {"type": "response.output_text.delta", "sequence_number": 2, "item_id": "msg_1",
+         "output_index": 1, "content_index": 0, "delta": "PONG", "logprobs": []},
+        {"type": "response.output_item.done", "sequence_number": 3, "output_index": 1,
+         "item": r["output"][1]},
+        {"type": "response.output_item.added", "sequence_number": 4, "output_index": 2,
+         "item": {**r["output"][2], "arguments": "", "status": "in_progress"}},
+        {"type": "response.function_call_arguments.delta", "sequence_number": 5,
+         "item_id": "fc_1", "output_index": 2, "delta": r["output"][2]["arguments"]},
+        {"type": "response.output_item.done", "sequence_number": 6, "output_index": 2,
+         "item": r["output"][2]},
+        {"type": "response.completed", "sequence_number": 7, "response": r},
+    ]
+    return "".join(f"event: {e['type']}\ndata: {json.dumps(e)}\n\n"
+                   for e in events).encode()
+
+
+def _wire_client(p, with_write, sent):
+    def handler(request):
+        body = json.loads(request.content)
+        sent.append(body)
+        if body.get("stream"):
+            return httpx.Response(200, content=_wire_sse(with_write),
+                                  headers={"content-type": "text/event-stream"})
+        return httpx.Response(200, json=_wire_response(with_write))
+    p._openai_client = openai.AsyncOpenAI(
+        api_key=p.api_key, base_url=p.base_url, max_retries=0,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    return p
+
+
+@pytest.mark.parametrize("with_write", [False, True])
+@pytest.mark.asyncio
+async def test_real_sdk_parse_tolerates_usage_without_cache_write_tokens(with_write):
+    # Stream-only route (ChatGPT): stream() and complete() both stream.
+    sent = []
+    p = _wire_client(_chatgpt_provider(), with_write, sent)
+    chunks = [c async for c in p.stream(MSGS)]
+    final = [c for c in chunks if c.is_final]
+    assert len(final) == 1
+    assert (final[0].usage.input_tokens, final[0].usage.cache_read_tokens) == (10, 8)
+    res = await p.complete(MSGS)
+    assert res.text == "PONG" and len(res.tool_calls) == 1
+    assert (res.usage.input_tokens, res.usage.cache_read_tokens) == (10, 8)
+    assert all(b.get("stream") is True for b in sent)
+
+    # Plain Responses route (OpenCode Go / OpenAI keys): non-streaming JSON.
+    sent = []
+    p = _wire_client(LLMProvider("gpt-x", "sk-test", "https://api.example.test/v1",
+                                 sdk="openai-responses", provider="openai"),
+                     with_write, sent)
+    res = await p.complete(MSGS)
+    assert not sent[0].get("stream")
+    assert res.text == "PONG" and len(res.tool_calls) == 1
+    assert (res.usage.input_tokens, res.usage.cache_read_tokens) == (10, 8)
