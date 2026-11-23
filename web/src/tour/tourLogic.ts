@@ -4,67 +4,9 @@
 
 /**
  * First-journey tour — the decisions, kept pure so they can be tested without
- * a DOM: who gets the tour, what triggers it, and where a coachmark goes.
+ * a DOM: the order of the stops and where a coachmark goes. The tour opens
+ * only from Settings → About (batch 1123: never by itself).
  */
-
-import type { Project } from '../types';
-
-type ProjectLike = Pick<Project, 'project_id' | 'is_scratch'>;
-
-/** Per-device, like `orbital.locale` — no backend. */
-export const TOUR_STORAGE_KEY = 'orbital.tour.firstJourney';
-
-/** `pending`: a new user who has not seen it yet. `done`: seen, skipped, or
- * opted out. */
-export type TourState = 'pending' | 'done';
-
-/**
- * Decide, once, whether this device's user is owed the tour.
- *
- * The first time a LOADED project list is seen with no stored decision: only
- * Quick Tasks → `pending`; already has a project → `done`. That second case is
- * the upgrade path — someone with hundreds of sessions must not be ambushed by
- * a tour because a new flag shipped. They can still replay it from Settings.
- *
- * Returns null while undecidable: an empty list means "not loaded / fetch
- * failed" (a loaded list always contains Quick Tasks), never "new user".
- */
-export function decideTourState(
-  stored: string | null,
-  projects: readonly ProjectLike[],
-): TourState | null {
-  if (stored === 'pending' || stored === 'done') return stored;
-  if (projects.length === 0) return null;
-  return projects.some((p) => !p.is_scratch) ? 'done' : 'pending';
-}
-
-/** The trigger: entering a project the user created, while still pending.
- * A fresh install that imported projects in the wizard is still pending: the
- * wizard writes `pending` at Finish, before the first project list loads.
- * Not at wizard completion — no project exists then, so most stops would have
- * nothing to point at. */
-export function shouldStartTour(
-  state: TourState | null,
-  project: ProjectLike | undefined,
-): boolean {
-  return state === 'pending' && !!project && !project.is_scratch;
-}
-
-export function readTourState(): string | null {
-  try {
-    return localStorage.getItem(TOUR_STORAGE_KEY);
-  } catch {
-    return null; // storage unavailable (private/locked-down webview)
-  }
-}
-
-export function writeTourState(state: TourState): void {
-  try {
-    localStorage.setItem(TOUR_STORAGE_KEY, state);
-  } catch {
-    /* storage unavailable — the tour simply is not remembered */
-  }
-}
 
 /**
  * The order of the stops that are on screen. With the left-off cards showing

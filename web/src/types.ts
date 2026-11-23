@@ -1833,10 +1833,26 @@ export interface WorkbenchFeedRow {
   stop: WorkbenchFeedStop | null;
   /** Spec 180: Orbital chose this project when the task was sent (the card's
    *  ✦); cleared when the user opens the card or moves the session. */
-  routed_by?: 'model' | 'fallback' | null;
+  routed_by?: 'model' | 'agent' | 'fallback' | null;
   /** Task sources: the source this session came from (its mark on the card
    *  opens the Task sources panel at that entry); null for any other task. */
   source?: WorkbenchFeedSource | null;
+}
+
+/** 最近 / Recent (batch 1123): a recent session that is not live, from
+ *  `GET /workbench/feed`'s `recent` (newest first; absent on an older daemon). */
+export interface WorkbenchRecentRow {
+  project_id: string;
+  project_name: string;
+  session_id: string;
+  session_uuid?: string | null;
+  /** The session-list name; null = untitled. */
+  title: string | null;
+  /** Logo slug; null = Orbital. */
+  agent: string | null;
+  updated_at: string;
+  /** An imported native session not yet opened in Orbital. */
+  imported?: boolean;
 }
 
 /** Task sources: where a Workbench row came from (`GET /workbench/feed`). */

@@ -238,7 +238,7 @@ def derive_disk_entry(path: str, uuid: str) -> dict | None:
                         stored_pinned_target = rec["pinned_target"]
                     if rec.get("trigger_type"):
                         stored_trigger_type = rec["trigger_type"]
-                    if rec.get("routed_by") in ("model", "fallback"):
+                    if rec.get("routed_by") in ("model", "agent", "fallback"):
                         stored_routed_by = rec["routed_by"]
                     if isinstance(rec.get("imported_from"), dict):
                         imported_from = rec["imported_from"]

@@ -16,6 +16,10 @@ export interface SubAgentListEntry {
   auth_expired?: boolean;
   override_path?: string | null;
   override_missing?: boolean;
+  /** Installed, dependencies met, signed in, above its version floor, its
+   *  handshake not failing (the dispatch gate's test). Absent on an older
+   *  daemon. */
+  ready?: boolean;
 }
 
 export const isSignedIn = (e: SubAgentListEntry) => e.credentials_configured && e.auth_expired !== true;

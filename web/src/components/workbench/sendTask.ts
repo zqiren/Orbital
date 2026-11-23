@@ -64,6 +64,7 @@
  */
 
 import { api } from '../../config';
+import { codedErrorOf } from '../../utils/providerError';
 import type { SessionListEntry } from '../../types';
 import type { UploadedAttachment } from '../../hooks/useAttachments';
 import {
@@ -189,9 +190,14 @@ export type SendOutcome =
   | { ok: true; projectId: string; sessionId: string }
   /** `unrouted`: 自动 found no project; the user picks one. `unsent`: ✕ while
    *  picking — the text is back, nothing went out, nothing to report. */
-  | { ok: false; restored: boolean; unrouted?: boolean; unsent?: boolean };
+  | {
+    ok: false; restored: boolean; unrouted?: boolean; unsent?: boolean;
+    /** Batch 1123: no key and the project's agent is signed out — offer its sign-in. */
+    signedOut?: { agent: string; agentName?: string };
+  };
 
-export type RoutedBy = 'model' | 'fallback';
+/** `agent`: no key, a signed-in Claude Code or Codex chose (batch 1123). */
+export type RoutedBy = 'model' | 'agent' | 'fallback';
 
 type Decision =
   | { kind: 'pick'; projectId: string }
@@ -310,7 +316,7 @@ export async function sendWorkbenchTask(choice: SendChoice, deps: SendDeps): Pro
           unrouted = true;
           throw new Error('no project to route to');
         }
-        if (d.by === 'model' || d.by === 'fallback') routedBy = d.by;
+        if (d.by === 'model' || d.by === 'agent' || d.by === 'fallback') routedBy = d.by;
       }
       draft.project_id = projectId;
       saveDraft(draft);
@@ -343,7 +349,11 @@ export async function sendWorkbenchTask(choice: SendChoice, deps: SendDeps): Pro
     clearDraft();
     void refreshFeed();
     return { ok: true, projectId, sessionId };
-  } catch {
+  } catch (err) {
+    const coded = codedErrorOf(err);
+    const signedOut = coded?.code === 'agent_signed_out' && coded.agent
+      ? { agent: coded.agent, ...(coded.agent_name ? { agentName: coded.agent_name } : {}) }
+      : undefined;
     clearDraft();
     void refreshFeed();
     if (projectId && sessionId && (await sessionExists(projectId, sessionId))) {
@@ -352,7 +362,8 @@ export async function sendWorkbenchTask(choice: SendChoice, deps: SendDeps): Pro
     }
     removePending(nonce);
     restoreComposer(text);
-    return unrouted ? { ok: false, restored: true, unrouted: true } : { ok: false, restored: true };
+    if (unrouted) return { ok: false, restored: true, unrouted: true };
+    return signedOut ? { ok: false, restored: true, signedOut } : { ok: false, restored: true };
   }
 }
 

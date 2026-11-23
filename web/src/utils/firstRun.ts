@@ -22,27 +22,13 @@ export function isFirstRun(projects: readonly ProjectLike[]): boolean {
 }
 
 /**
- * Where the setup wizard hands off. The wizard's import step can create
- * projects; if it did, land in the most recently added one (the list keeps
- * creation order for never-dragged projects, which is all a new user has).
- * `null` means the user still has no project → open Create Project.
+ * The project "Take the tour" (Settings → About) opens: the user's most
+ * recently added one (the list keeps creation order for never-dragged
+ * projects). `null` = no project of their own, so there is nothing to tour.
  */
 export function wizardLandingProjectId(projects: readonly ProjectLike[]): string | null {
   const own = projects.filter((p) => !p.is_scratch);
   return own.length > 0 ? own[own.length - 1].project_id : null;
-}
-
-/**
- * The project the wizard's Finish opens, always on a new session: the import
- * step's landing project when it is listed, else (the landing was lost, e.g. a
- * reload mid-wizard) `wizardLandingProjectId`. `null` → open Create Project.
- */
-export function wizardHandoffProjectId(
-  projects: readonly ProjectLike[],
-  imported: string | null,
-): string | null {
-  if (imported && projects.some((p) => p.project_id === imported)) return imported;
-  return wizardLandingProjectId(projects);
 }
 
 /**

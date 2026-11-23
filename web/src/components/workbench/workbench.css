@@ -378,3 +378,26 @@ button.wb-slot:not([aria-disabled="true"]):hover .wb-cv, .wb-slot[aria-expanded=
 @media (hover: none) {
   .session-dots { visibility: visible !important; }
 }
+
+/* ── 最近 / Recent (batch 1123) ──
+   Flat rows on the page (no layer, no dot, no state), a blue tint on hover:
+   the live cards are raised, so the two read differently. The label takes
+   the summary line's style; spacing alone separates it from the cards. */
+.wb-recent { margin-top: 34px; }
+.wb-recent.is-after { margin-top: 56px; }
+.wb-phone .wb-recent { margin-top: 24px; }
+.wb-phone .wb-recent.is-after { margin-top: 40px; }
+.wb-rlabel { margin: 0 0 6px; padding: 0 4px; font-size: var(--text-caption); line-height: var(--text-caption--line-height); letter-spacing: var(--text-caption--letter-spacing); font-weight: 400; color: var(--color-secondary); }
+.wb-rlist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.wb-rrow { width: 100%; display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 10px; text-align: left; color: var(--color-primary); transition: background .12s; min-width: 0; }
+.wb-rrow:hover, .wb-rrow:focus-visible { background: rgb(83 154 248 / .08); outline: none; }
+:root[data-theme="dark"] .wb-rrow:hover, :root[data-theme="dark"] .wb-rrow:focus-visible { background: rgb(83 154 248 / .14); }
+.wb-rproj { flex: 0 0 24%; min-width: 0; max-width: 220px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: var(--text-caption); line-height: var(--text-caption--line-height); color: var(--color-secondary); }
+.wb-rtitle { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: var(--text-body); line-height: var(--text-body--line-height); }
+.wb-rtime { flex: none; font-size: var(--text-caption); line-height: var(--text-caption--line-height); color: var(--color-secondary); font-variant-numeric: tabular-nums; }
+.wb-phone .wb-rproj { flex-basis: 30%; }
+
+/* Example prompts (nothing yet): quiet chips under the composer; a click fills it. */
+.wb-examples { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.wb-example { padding: 6px 12px; border-radius: 999px; background: var(--color-soft-button); color: var(--color-secondary); font-size: var(--text-caption); line-height: var(--text-caption--line-height); transition: background .12s, color .12s; max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.wb-example:hover { background: var(--color-soft-button-hover); color: var(--color-primary); }

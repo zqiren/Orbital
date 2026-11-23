@@ -4,7 +4,7 @@
 
 import type { ReactNode } from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronLeft, ChevronUp, FolderInput, GripVertical, LayoutGrid, X } from 'lucide-react';
+import { ChevronLeft, ChevronUp, FolderInput, GripVertical, LayoutGrid, Loader2, X } from 'lucide-react';
 import {
   DndContext,
   MouseSensor,
@@ -50,6 +50,13 @@ interface SidebarProps {
   onNewProject: () => void;
   /** "Import projects from your agents" (spec 138); absent = no entry. */
   onImportProjects?: () => void;
+  /** The first-run import is running in the background: a quiet spinner
+   *  beside the 项目 count. */
+  importing?: boolean;
+  /** It answered with an error: a dismissible notice with Try again. */
+  importFailed?: boolean;
+  onRetryImport?: () => void;
+  onDismissImportFailure?: () => void;
   onSettings: () => void;
   /** Persist a new manual order for the regular-projects block (spec 056).
    *  Receives the COMPLETE ordered id list. The caller applies it
@@ -170,6 +177,10 @@ export default function Sidebar({
   unreadCounts = {},
   onNewProject,
   onImportProjects,
+  importing = false,
+  importFailed = false,
+  onRetryImport,
+  onDismissImportFailure,
   onSettings,
   onReorderProjects,
   narrow = false,
@@ -428,10 +439,52 @@ export default function Sidebar({
         <span className="type-label text-secondary">
           {t('sidebar.projects')}
         </span>
-        <span className="text-micro tabular-nums text-secondary">
+        <span className="inline-flex items-center gap-1.5 text-micro tabular-nums text-secondary">
+          {importing && (
+            <Loader2
+              role="status"
+              aria-label={t('sidebar.import.running')}
+              data-testid="sidebar-import-spinner"
+              className="h-3 w-3 animate-spin motion-reduce:animate-none"
+            />
+          )}
           {regularProjects.length}
         </span>
       </div>
+
+      {importFailed && (
+        <div
+          role="alert"
+          data-testid="sidebar-import-failed"
+          className="mx-2 mb-1.5 flex items-center gap-2 surface-float-static px-2.5 py-2"
+        >
+          <p className="min-w-0 flex-1 truncate text-micro text-secondary">
+            {t('sidebar.import.failed')}
+          </p>
+          {onRetryImport && (
+            <button
+              type="button"
+              onClick={onRetryImport}
+              data-testid="sidebar-import-retry"
+              className="shrink-0 text-micro font-medium text-accent hover:underline max-md:min-h-[44px]"
+            >
+              {t('importProjects.retry')}
+            </button>
+          )}
+          {onDismissImportFailure && (
+            <button
+              type="button"
+              onClick={onDismissImportFailure}
+              aria-label={t('sidebar.import.dismiss')}
+              title={t('sidebar.import.dismiss')}
+              data-testid="sidebar-import-dismiss"
+              className="shrink-0 -mr-0.5 p-0.5 text-secondary hover:text-primary transition-colors duration-150 max-md:min-h-[44px] max-md:min-w-[44px] max-md:flex max-md:items-center max-md:justify-center"
+            >
+              <X size={12} aria-hidden="true" />
+            </button>
+          )}
+        </div>
+      )}
 
       {showSafeModeNotice && (
         <div

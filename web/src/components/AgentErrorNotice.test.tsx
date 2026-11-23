@@ -5,6 +5,9 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+vi.mock('../hooks/useWebSocket', () => ({
+  useWebSocket: () => ({ on: vi.fn(), off: vi.fn(), connectionState: 'connected', subscribe: vi.fn() }),
+}));
 import AgentErrorNotice from './AgentErrorNotice';
 
 describe('AgentErrorNotice', () => {
@@ -138,5 +141,23 @@ describe('AgentErrorNotice', () => {
       expect(screen.getByTestId('agent-error-notice-settings')).toBeTruthy();
       expect(screen.queryByTestId('agent-error-notice-feedback')).toBeNull();
     });
+  });
+});
+
+describe('AgentErrorNotice — a signed-out agent (batch 1123)', () => {
+  it('names the agent and offers Sign in instead of Open settings', async () => {
+    render(
+      <AgentErrorNotice
+        code="agent_signed_out"
+        message="Claude Code is signed out"
+        agent="claude-code"
+        agentName="Claude Code"
+        onOpenSettings={vi.fn()}
+        onDismiss={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId('agent-error-notice').textContent).toContain('Claude Code is signed out');
+    expect(screen.getByTestId('agent-error-notice-signin')).toHaveTextContent('Sign in');
+    expect(screen.queryByTestId('agent-error-notice-settings')).toBeNull();
   });
 });

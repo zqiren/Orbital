@@ -28,7 +28,7 @@
 
 import { useEffect, useRef, useSyncExternalStore } from 'react';
 import { api } from '../config';
-import type { ActivityEvent, WebSocketEvent, WorkbenchFeedRow } from '../types';
+import type { ActivityEvent, WebSocketEvent, WorkbenchFeedRow, WorkbenchRecentRow } from '../types';
 import { describeLiveActivity, describeWorkerTool, type ActivityTranslate } from '../utils/chatTransform';
 import { translate } from '../i18n/useT';
 import { useLocale } from '../i18n/LocaleContext';
@@ -48,7 +48,7 @@ export interface PendingTask {
   /** Spec 180: 自动 is still picking (the card shows a shimmering 自动). */
   routing?: boolean;
   /** Spec 180: the route answered with a project it chose (the card's ✦). */
-  routed_by?: 'model' | 'fallback' | null;
+  routed_by?: 'model' | 'agent' | 'fallback' | null;
 }
 
 /**
@@ -76,6 +76,8 @@ interface Held {
 
 export interface FeedState {
   rows: WorkbenchFeedRow[];
+  /** 最近 / Recent: recent sessions the daemon did not list in `rows`. */
+  recent: WorkbenchRecentRow[];
   loaded: boolean;
   error: boolean;
   pending: PendingTask[];
@@ -123,6 +125,7 @@ function expireHold(key: string, at: number): void {
 
 const EMPTY: FeedState = {
   rows: [],
+  recent: [],
   loaded: false,
   error: false,
   pending: [],
@@ -164,7 +167,7 @@ export function getFeedState(): FeedState {
 let inFlight = false;
 let queued = false;
 
-function applyRows(rows: WorkbenchFeedRow[]): void {
+function applyRows(rows: WorkbenchFeedRow[], recent: WorkbenchRecentRow[] = state.recent): void {
   const byKey = new Map(rows.map((r) => [sessionKeyOf(r.project_id, r.session_id), r]));
   // A pending send leaves once the feed carries its session.
   const pending = state.pending.filter(
@@ -209,7 +212,7 @@ function applyRows(rows: WorkbenchFeedRow[]): void {
   for (const [sid, m] of moves) {
     if (m.phase === 'moved' && !byKey.has(sessionKeyOf(m.from, sid))) moves.delete(sid);
   }
-  set({ rows, loaded: true, error: false, pending, held, closedAsks, activity, unmarked, moves });
+  set({ rows, recent, loaded: true, error: false, pending, held, closedAsks, activity, unmarked, moves });
 }
 
 /** Refetch the feed: one request in flight, one trailing request after it. */
@@ -219,8 +222,11 @@ export function refreshFeed(): Promise<void> {
     return Promise.resolve();
   }
   inFlight = true;
-  return api<{ rows?: WorkbenchFeedRow[] }>('/api/v2/workbench/feed')
-    .then((data) => applyRows(Array.isArray(data?.rows) ? data.rows : []))
+  return api<{ rows?: WorkbenchFeedRow[]; recent?: WorkbenchRecentRow[] }>('/api/v2/workbench/feed')
+    .then((data) => applyRows(
+      Array.isArray(data?.rows) ? data.rows : [],
+      Array.isArray(data?.recent) ? data.recent : [],
+    ))
     .catch(() => set({ error: true, loaded: true }))
     .finally(() => {
       inFlight = false;

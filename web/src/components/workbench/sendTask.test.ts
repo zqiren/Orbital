@@ -120,3 +120,30 @@ describe('sendWorkbenchTask — commands skip routing', () => {
     expect(routeCalls()).toHaveLength(1);
   });
 });
+
+describe('sendWorkbenchTask — a signed-out agent (batch 1123)', () => {
+  it('the refusal names the agent, so the page can offer its sign-in; the text comes back', async () => {
+    const d = deps();
+    d.injectMessage.mockRejectedValueOnce(new Error(JSON.stringify({
+      code: 'agent_signed_out', message: 'Claude Code is signed out', agent: 'claude-code', agent_name: 'Claude Code',
+    })));
+    const out = await sendWorkbenchTask({ text: 'fix it', projectId: 'p1', agent: null, fallbackProjectId: 'qt' }, d);
+    expect(out).toEqual({ ok: false, restored: true, signedOut: { agent: 'claude-code', agentName: 'Claude Code' } });
+  });
+
+  it('any other refusal stays generic', async () => {
+    const d = deps();
+    d.injectMessage.mockRejectedValueOnce(new Error(JSON.stringify({ code: 'no_runner', message: 'x' })));
+    const out = await sendWorkbenchTask({ text: 'fix it', projectId: 'p1', agent: null, fallbackProjectId: 'qt' }, d);
+    expect(out).toEqual({ ok: false, restored: true });
+  });
+
+  it('a keyless route answered by an agent stamps routed_by "agent"', async () => {
+    apiMock.mockImplementation((path: string) =>
+      Promise.resolve(String(path).includes('/workbench/route') ? { project_id: 'routed', by: 'agent', agent: 'codex' } : {}));
+    const d = deps(null);
+    const out = await sendWorkbenchTask({ text: 'fix the build', projectId: null, agent: null, fallbackProjectId: 'qt' }, d);
+    expect(out).toMatchObject({ ok: true, projectId: 'routed' });
+    expect(d.injectMessage.mock.calls[0][9]).toBe('agent');
+  });
+});

@@ -445,6 +445,44 @@ describe('Sidebar — import entry on the New Project split button (batch 1026)'
   });
 });
 
+// Batch 1123 follow-up: the first-run import runs in the background.
+describe('Sidebar — background import', () => {
+  it('shows nothing extra when no import runs', () => {
+    render(<Sidebar {...defaultProps} />);
+    expect(screen.queryByTestId('sidebar-import-spinner')).toBeNull();
+    expect(screen.queryByTestId('sidebar-import-failed')).toBeNull();
+  });
+
+  it('while it runs: a spinner beside the count, no sentence', () => {
+    render(<Sidebar {...defaultProps} importing />);
+    const spinner = screen.getByTestId('sidebar-import-spinner');
+    expect(spinner.getAttribute('aria-label')).toBe('Importing projects');
+    // the count stays beside it
+    expect(spinner.parentElement?.textContent).toBe('1');
+    expect(screen.queryByTestId('sidebar-import-failed')).toBeNull();
+  });
+
+  it('failed: a notice with Try again and a dismiss', () => {
+    const onRetryImport = vi.fn();
+    const onDismissImportFailure = vi.fn();
+    render(
+      <Sidebar
+        {...defaultProps}
+        importFailed
+        onRetryImport={onRetryImport}
+        onDismissImportFailure={onDismissImportFailure}
+      />,
+    );
+    const notice = screen.getByTestId('sidebar-import-failed');
+    expect(within(notice).getByText("Couldn't import projects")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('sidebar-import-retry'));
+    expect(onRetryImport).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByTestId('sidebar-import-dismiss'));
+    expect(onDismissImportFailure).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId('sidebar-import-spinner')).toBeNull();
+  });
+});
+
 // 2026-11-18: docked beside the edge strip, the list's header carries the
 // column's collapse chevron (same look as the session column's). It exists
 // only where collapsing does something: App passes onCollapse only then.

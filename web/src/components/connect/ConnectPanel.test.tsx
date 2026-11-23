@@ -592,3 +592,42 @@ describe('ConnectPanel — a provider with no model list', () => {
     expect(calls.save[0].body).toMatchObject({ model: 'llama3' });
   });
 });
+
+describe('ConnectPanel — embedded (the Welcome page)', () => {
+  it('opens on the preselected provider without taking focus, and reports a pass as connected', async () => {
+    mockApi();
+    const seen: ConnectFooterCtx[] = [];
+    const onEngage = vi.fn();
+    render(
+      <ConnectPanel
+        embedded
+        initialProvider="deepseek"
+        onEngage={onEngage}
+        onDone={vi.fn()}
+        footer={(ctx) => { seen.push(ctx); return null; }}
+      />,
+    );
+    // The footer renders while the catalog loads too (the page's Start lives there).
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen[0].connected).toBe(false);
+    await screen.findByTestId('connect-provider-deepseek');
+    expect(document.activeElement).not.toBe(keyField());
+    expect(onEngage).not.toHaveBeenCalled();
+    keyField().focus();
+    expect(onEngage).toHaveBeenCalledTimes(1);
+    await userEvent.paste('sk-good');
+    await screen.findByTestId('connect-key-ok');
+    const last = seen[seen.length - 1];
+    expect(last).toMatchObject({ connected: true, provider: 'deepseek', model: 'm-default' });
+  });
+
+  it('picking a tile engages; an unknown preset picks nothing', async () => {
+    mockApi();
+    const onEngage = vi.fn();
+    render(<ConnectPanel embedded initialProvider="nope" onEngage={onEngage} onDone={vi.fn()} footer={footer} />);
+    await screen.findByTestId('connect-tile-deepseek');
+    expect(screen.queryByTestId('connect-key')).toBeNull();
+    await userEvent.click(screen.getByTestId('connect-tile-openai'));
+    expect(onEngage).toHaveBeenCalled();
+  });
+});

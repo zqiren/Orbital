@@ -56,6 +56,12 @@ from agent_os.api.routes._skill_formatter import format_skill_prefix
 
 logger = logging.getLogger(__name__)
 
+
+def provider_error_detail(e: ProviderConfigError) -> dict:
+    """The 400 body of a refused start/inject: ``{code, message}`` plus the
+    error's extra fields (``agent_signed_out``: ``agent``, ``agent_name``)."""
+    return {"code": e.code, "message": str(e), **getattr(e, "fields", {})}
+
 router = APIRouter(prefix="/api/v2")
 
 
@@ -293,7 +299,7 @@ class InjectRequest(BaseModel):
     # Spec 180: the Workbench routed this send ("Orbital chose this
     # project"). Stamped on the session only when this send creates it; an
     # older daemon ignores it.
-    routed_by: Literal["model", "fallback"] | None = None
+    routed_by: Literal["model", "agent", "fallback"] | None = None
 
     @field_validator("content")
     @classmethod
@@ -1596,7 +1602,7 @@ async def start_agent(req: StartAgentRequest):
         )
     except ProviderConfigError as e:
         raise HTTPException(status_code=400,
-                            detail={"code": e.code, "message": str(e)})
+                            detail=provider_error_detail(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"status": "started"}
@@ -2046,7 +2052,7 @@ async def inject_message(project_id: str, req: InjectRequest):
             # credentials). Surface a structured 400 the frontend can translate
             # — never a swallowed 500.
             raise HTTPException(status_code=400,
-                                detail={"code": e.code, "message": str(e)})
+                                detail=provider_error_detail(e))
         # inject_message returns either a str (legacy: "queued"/"delivered"/
         # "started") or a dict (new: auto-deny-on-paused-approval branch,
         # includes status + approval_dismissed + dismissed_tool_call_id).

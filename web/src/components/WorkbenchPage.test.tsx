@@ -61,6 +61,7 @@ import { __resetSources } from './sources/sourcesStore';
 import { __resetCheckedMarks } from '../hooks/useSeenReplies';
 import { getWindowCovered } from '../hooks/useWindowCover';
 import { DRAFT_KEY } from './workbench/sendTask';
+import { __resetAgentAvailability, setAgentAvailability } from '../hooks/useAgentAvailability';
 import type { Project, WorkbenchFeedRow } from '../types';
 
 const NOW = Date.now();
@@ -158,12 +159,10 @@ describe('Workbench — list', () => {
     expect(within(cards()[0]).getByTestId('wb-card-project')).toHaveTextContent('Auto');
   });
 
-  it('desktop: one greeting line heads the composer, the cards follow straight under it (2026-11-05)', async () => {
+  it('desktop: the headline heads the composer, the cards follow straight under it (batch 1123)', async () => {
     await renderPage();
     const greeting = screen.getByTestId('workbench-greeting');
-    expect([
-      "Say it. I'll route it.", 'Drop it here, it finds its place.', 'One line. I take it from there.',
-    ]).toContain(greeting.textContent);
+    expect(greeting.textContent).toBe('What are we doing today?');
     const kids = [...greeting.parentElement!.children].map((el) => el.getAttribute('data-testid') ?? el.className);
     expect(kids[0]).toBe('workbench-greeting');
     // The head of the list (summary + 任务来源), then the cards.
@@ -253,20 +252,20 @@ describe('Workbench — list', () => {
     expect(within(c).getByTestId('wb-card-meta')).toHaveTextContent('Usage limit');
   });
 
-  it('empty: the composer alone, with the same placeholder as always (the greeting says the rest)', async () => {
+  it('empty: the composer alone, with no placeholder (the headline says it)', async () => {
     await renderPage([]);
     expect(screen.queryByTestId('workbench-summary')).toBeNull();
     // 任务来源 stays: it is where tasks come from.
     expect(screen.getByTestId('workbench-sources')).toHaveTextContent('Task sources');
     expect(cards()).toHaveLength(0);
-    expect(screen.getByTestId('wb-composer-input')).toHaveAttribute(
-      'placeholder', 'What do you want done?',
-    );
+    expect(screen.getByTestId('wb-composer-input')).not.toHaveAttribute('placeholder');
   });
 
-  it('non-empty: the placeholder is the question', async () => {
+  it('non-empty: still no placeholder; the box keeps its accessible name', async () => {
     await renderPage();
-    expect(screen.getByTestId('wb-composer-input')).toHaveAttribute('placeholder', 'What do you want done?');
+    const input = screen.getByTestId('wb-composer-input');
+    expect(input).not.toHaveAttribute('placeholder');
+    expect(input).toHaveAttribute('aria-label', 'What do you want done?');
   });
 });
 
@@ -941,15 +940,33 @@ describe('Workbench — keyless (no API key: Quick Tasks is not manager_ready)',
     return render(<WorkbenchPage setRoute={vi.fn()} projects={projects} agents={AGENTS} phone={false} />);
   }
 
-  it('the project chip starts on Quick Tasks, never 自动, and the greeting is hidden', async () => {
+  it('no router agent: the project chip starts on Quick Tasks, never 自动; the headline shows as always', async () => {
     await renderWith(keyless);
     expect(screen.getByTestId('wb-chip-project')).toHaveTextContent('Quick Tasks');
-    expect(screen.queryByTestId('workbench-greeting')).toBeNull();
-    // Its slot stays (empty), so the composer does not move.
-    const slot = screen.getByTestId('workbench-scroller').querySelector('.wb-greeting');
-    expect(slot).not.toBeNull();
-    expect(slot!.textContent).toBe('');
+    expect(screen.getByTestId('workbench-greeting').textContent).toBe('What are we doing today?');
     expect(screen.getByTestId('workbench-scroller').querySelector('.wb-golden')).not.toBeNull();
+  });
+
+  it('a ready Claude Code or Codex routes keyless: the chip stays on 自动, Orbital still needs the key', async () => {
+    setAgentAvailability([{ slug: 'codex', name: 'Codex', installed: true, ready: true }]);
+    try {
+      await renderWith(keyless);
+      expect(screen.getByTestId('wb-chip-project')).toHaveTextContent('Auto');
+      fireEvent.click(screen.getByTestId('wb-chip-agent'));
+      expect(screen.getByTestId('wb-opt-orbital')).toHaveAttribute('aria-disabled', 'true');
+    } finally {
+      __resetAgentAvailability();
+    }
+  });
+
+  it('a signed-out router agent does not count', async () => {
+    setAgentAvailability([{ slug: 'claude-code', name: 'Claude Code', installed: true, ready: false }]);
+    try {
+      await renderWith(keyless);
+      expect(screen.getByTestId('wb-chip-project')).toHaveTextContent('Quick Tasks');
+    } finally {
+      __resetAgentAvailability();
+    }
   });
 
   it('the chip starts on the last project sent to from this browser; a gone one falls back to Quick Tasks', async () => {
@@ -1302,5 +1319,52 @@ describe('Workbench — task sources', () => {
     fireEvent.click(selectable);
     expect(screen.queryByTestId('wb-sources-pane')).toBeNull();
     expect(screen.getByTestId('wb-pane')).toBeInTheDocument();
+  });
+});
+
+describe('Workbench — 最近 / Recent (batch 1123)', () => {
+  const REC = [
+    { project_id: 'proj-a', project_name: 'Marketing', session_id: 'r1', title: 'Fix the pricing table', agent: 'claude-code', updated_at: '2026-11-04T09:00:00Z' },
+    { project_id: 'proj-b', project_name: 'Ops', session_id: 'r2', title: null, agent: null, updated_at: '2026-11-03T09:00:00Z' },
+  ];
+
+  it('first landing: nothing live, 最近 sits under the bar; a row opens its session', async () => {
+    const { setRoute } = await renderPage([], {
+      'GET /api/v2/workbench/feed': () => ({ rows: [], window_days: 14, recent: REC }),
+    });
+    const section = screen.getByTestId('workbench-recent');
+    expect(section).toHaveTextContent('Recent');
+    expect(section.className).not.toContain('is-after');
+    const row = screen.getByTestId('workbench-recent-r1');
+    expect(row).toHaveTextContent('Fix the pricing table');
+    expect(screen.getByTestId('workbench-recent-r2')).toHaveTextContent('Untitled task');
+    // flat: no dot, no status, never "unfinished"
+    expect(section.querySelector('.wb-dot')).toBeNull();
+    expect(section.textContent).not.toMatch(/unfinished|didn.t finish/i);
+    fireEvent.click(row);
+    expect(setRoute).toHaveBeenCalledWith({ name: 'project', projectId: 'proj-a', sessionId: 'r1' });
+    expect(screen.queryByTestId('workbench-examples')).toBeNull();
+  });
+
+  it('with live cards, 最近 comes after them', async () => {
+    await renderPage(FEED, {
+      'GET /api/v2/workbench/feed': () => ({ rows: FEED, window_days: 14, recent: REC }),
+    });
+    const section = screen.getByTestId('workbench-recent');
+    expect(section.className).toContain('is-after');
+    const order = [...section.parentElement!.children].map((el) => el.getAttribute('data-testid') ?? '');
+    expect(order.indexOf('workbench-recent')).toBeGreaterThan(order.indexOf('workbench-cards'));
+  });
+
+  it('no project of their own and no history: the example prompts fill the composer, nothing is sent', async () => {
+    setApi({ 'GET /api/v2/workbench/feed': () => ({ rows: [], window_days: 14, recent: [] }) });
+    await act(async () => { await refreshFeed(); });
+    const only: Project[] = [{ project_id: 'proj-q', name: 'Quick Tasks', workspace: '/ws/q', is_scratch: true } as Project];
+    render(<WorkbenchPage setRoute={vi.fn()} projects={only} agents={AGENTS} phone={false} />);
+    const examples = screen.getByTestId('workbench-examples');
+    expect(examples.querySelectorAll('button')).toHaveLength(3);
+    expect(screen.queryByTestId('workbench-recent')).toBeNull();
+    fireEvent.click(within(examples).getByText("Look through this folder and tell me what's here"));
+    await waitFor(() => expect(screen.getByTestId('wb-composer-input')).toHaveValue("Look through this folder and tell me what's here"));
   });
 });

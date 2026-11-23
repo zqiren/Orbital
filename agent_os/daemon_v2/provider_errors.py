@@ -46,10 +46,14 @@ def _from_llm_call_path(exc: BaseException) -> bool:
 class ProviderConfigError(Exception):
     """Provider construction/credential failure with a stable machine code."""
 
-    def __init__(self, code: str, message: str):
+    def __init__(self, code: str, message: str, *, fields: dict | None = None):
         super().__init__(message)
         self.code = code
         self.message = message
+        # Extra machine-readable fields the UI acts on (``agent_signed_out``
+        # names the agent). Empty for every other code, whose 400 body stays
+        # exactly ``{code, message}``.
+        self.fields: dict = dict(fields or {})
 
 
 def classify_llm_error(exc: BaseException) -> tuple[str, str]:

@@ -29,8 +29,10 @@
  * back, one error line heads the box and the project picker opens. The line
  * goes on the next send or when a project is picked.
  *
- * Keyless (no API key, 2026-11-05): routing needs Orbital's own model, so the
- * project chip never shows 自动. It starts on the last project sent to from
+ * Keyless and nothing to route with (no API key, and neither Claude Code nor
+ * Codex signed in — batch 1123: with one of them ready the agent routes, so
+ * 自动 stays, `autoRoutes`; 2026-11-05 before that): the project chip never
+ * shows 自动. It starts on the last project sent to from
  * this browser (else Quick Tasks), and the picker's 自动 row stays visible
  * but not selectable, with a note; a click on it opens the model settings.
  * The agent picker's Orbital row does the same (2026-11-09): Orbital itself
@@ -89,8 +91,14 @@ export function rememberLastProject(projectId: string): void {
 
 export interface WorkbenchComposerProps {
   projects: Project[];
-  /** No API key: no routing, so no 自动 project (see the header). */
+  /** No API key: Orbital itself is not offered (see the header). */
   keyless?: boolean;
+  /** 自动 can pick a project: a key, or keyless with a signed-in Claude Code
+   *  or Codex to route (batch 1123). Default: not keyless. */
+  autoRoutes?: boolean;
+  /** Text to put in the box (an example prompt was clicked); `n` changes
+   *  each time, so the same example can be picked twice. */
+  prefill?: { text: string; n: number } | null;
   agents: Array<{ slug: string; name: string }>;
   /** Orbital's own model line (the default card's model). */
   managerModel?: string;
@@ -113,7 +121,7 @@ function AgentMark({ slug, size = 16 }: { slug: string; size?: number }) {
 }
 
 export default function WorkbenchComposer({
-  projects, keyless = false, agents, managerModel, onSend,
+  projects, keyless = false, autoRoutes = !keyless, agents, managerModel, onSend, prefill = null,
 }: WorkbenchComposerProps) {
   const t = useT();
   const feed = useWorkbenchFeed();
@@ -158,6 +166,19 @@ export default function WorkbenchComposer({
     }
   }, [feed.composerRestore]);
 
+  // An example prompt fills the box (never sends), caret at the end.
+  useEffect(() => {
+    if (!prefill) return;
+    changeText(prefill.text);
+    requestAnimationFrame(() => {
+      const el = inputRef.current;
+      if (!el) return;
+      el.focus({ preventScroll: true });
+      el.setSelectionRange(prefill.text.length, prefill.text.length);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefill]);
+
   // Close a picker on Esc and on a press outside it.
   useEffect(() => {
     if (pop === 'none') return;
@@ -194,8 +215,9 @@ export default function WorkbenchComposer({
     el.style.height = `${el.scrollHeight}px`;
   }, [text]);
 
-  // Keyless: the chip stands on a real project from the start.
-  const keylessDefault = keyless
+  // 自动 cannot route: the chip stands on a real project from the start.
+  const autoOff = !autoRoutes;
+  const keylessDefault = autoOff
     ? (projects.find((p) => p.project_id === lastProject)
       ?? projects.find((p) => p.is_scratch)
       ?? projects[0])?.project_id ?? null
@@ -341,7 +363,6 @@ export default function WorkbenchComposer({
           onChange={(e) => changeText(e.target.value)}
           onKeyDown={onKey}
           onPaste={(e) => { setAttError(null); handlePaste(e); }}
-          placeholder={t('workbench.composer.placeholder')}
           aria-label={t('workbench.composer.placeholder')}
           data-testid="wb-composer-input"
         />
@@ -458,11 +479,11 @@ export default function WorkbenchComposer({
         <ProjectPicker
           projects={projects}
           selectedId={effectiveProjectId}
-          auto={keyless ? 'keyless' : 'choose'}
+          auto={autoOff ? 'keyless' : 'choose'}
           autoSelected={!projectId}
           onAuto={() => {
             setPop('none');
-            if (keyless) window.dispatchEvent(new CustomEvent('open-global-settings', { detail: { section: 'llm' } }));
+            if (autoOff) window.dispatchEvent(new CustomEvent('open-global-settings', { detail: { section: 'llm' } }));
             else setProjectId(null);
           }}
           onPick={(id) => { setProjectId(id); setRouteError(false); setPop('none'); }}

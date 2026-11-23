@@ -217,9 +217,15 @@ class SDKTransport(AgentTransport):
     def __init__(self, autonomy: "Autonomy | None" = None, system_prompt: str | None = None,
                  resume_session_id: str | None = None, model: str | None = None,
                  effort: str | None = None, dispatch_mcp: dict | None = None,
-                 fork_session: bool = False, resume_session_at: str | None = None):
+                 fork_session: bool = False, resume_session_at: str | None = None,
+                 ephemeral: bool = False):
         if not HAS_SDK:
             raise ImportError("claude-agent-sdk is not installed")
+        # One-off question mode (keyless Workbench routing, 2026-11-23): the
+        # CLI writes no session file (``--no-session-persistence``), offers
+        # no tools and no MCP servers, and answers in one turn. Workers never
+        # set it.
+        self._ephemeral: bool = bool(ephemeral)
         self._client: "ClaudeSDKClient | None" = None
         self._session_id: str | None = None
         # Resume identity (TASK-resume-persistence): when set, start() passes
@@ -433,6 +439,10 @@ class SDKTransport(AgentTransport):
                 # timeout (ms) otherwise gives up after 60 s (live 2026-11-17).
                 options_kwargs["mcp_servers"]["orbital"]["timeout"] = \
                     CONNECTOR_TOOL_TIMEOUT_MS
+        if self._ephemeral:
+            options_kwargs.update(
+                extra_args={"no-session-persistence": None},
+                tools=[], strict_mcp_config=True, max_turns=1)
         if self._model is not None:
             options_kwargs["model"] = self._model
         if self._effort is not None and "effort" in getattr(
@@ -463,7 +473,8 @@ class SDKTransport(AgentTransport):
         self._alive = True
         self._capture_process_handle()
         self._ensure_reader()
-        await self._publish_server_commands()
+        if not self._ephemeral:
+            await self._publish_server_commands()
 
     async def _publish_server_commands(self) -> None:
         """Spec 166: the CLI's ``initialize`` response (stored by the SDK at
@@ -1202,7 +1213,11 @@ class SDKTransport(AgentTransport):
         (never recomputed from our rates). A total below the last one means a
         process we did not see restart, counted from zero. No increase, or
         absent/zero (subscription auth) → tokens only, no reported_cost.
+
+        Ephemeral (a one-off question): no project, so no ledger is written.
         """
+        if self._ephemeral:
+            return
         try:
             usage = getattr(msg, "usage", None)
             if not isinstance(usage, dict):

@@ -634,21 +634,64 @@ async def _project_sessions(project_id: str) -> list[dict]:
     return annotate_checked(project_id, sessions)
 
 
+RECENT_DEFAULT = 10
+RECENT_MAX = 50
+
+
+def recent_candidates(project: dict, sessions: list[dict]) -> list[tuple[datetime, dict]]:
+    """The 最近 / Recent rows one project offers (2026-11-23): its sessions
+    as ``(instant, row)``, from the list the feed already read. Left out: the
+    Memory session, automation runs and sessions never active. Pure."""
+    out: list[tuple[datetime, dict]] = []
+    for row in sessions:
+        if row.get("origin") == "memory" or row.get("trigger_type"):
+            continue
+        at = _parse_ts(row.get("last_activity_at"))
+        sid = row.get("session_id")
+        if at is None or not isinstance(sid, str) or not sid:
+            continue
+        imported = row.get("imported") if isinstance(row.get("imported"), dict) else None
+        name = row.get("name")
+        out.append((at, {
+            "project_id": project.get("project_id", ""),
+            "project_name": project.get("name") or project.get("project_id", ""),
+            "session_id": sid,
+            "session_uuid": row.get("session_uuid"),
+            "title": name if isinstance(name, str) and name.strip() else None,
+            "agent": row.get("pinned_target") or (imported or {}).get("agent") or None,
+            "updated_at": row["last_activity_at"],
+            "imported": row.get("origin") == "imported",
+        }))
+    return out
+
+
 @router.get("/feed")
-async def get_feed():
+async def get_feed(recent: int = Query(RECENT_DEFAULT, ge=0, le=RECENT_MAX)):
     """What can be on the Workbench (spec 154 §5.2): running, waiting for
     approval, an open ask, or a reply the user has not checked inside the
-    window. Excluded projects contribute nothing; Quick Tasks is included."""
+    window. Excluded projects contribute nothing; Quick Tasks is included.
+
+    ``recent`` (2026-11-23, additive): the newest ``recent`` sessions across
+    those projects that are NOT in ``rows`` — the Workbench's 最近 section.
+    Built from the same session lists, so it costs no extra read."""
     now = _now()
     rows: list[dict] = []
+    candidates: list[tuple[datetime, dict]] = []
     for project in _feed_projects():
         pid = project.get("project_id", "")
         try:
             sessions = await _project_sessions(pid)
             rows.extend(await asyncio.to_thread(feed_rows, project, sessions, now))
+            if recent:
+                candidates.extend(recent_candidates(project, sessions))
         except Exception:
             logger.warning("workbench feed: skipping project %s", pid, exc_info=True)
-    return {"rows": rows, "window_days": FEED_WINDOW_DAYS}
+    live = {(r.get("project_id"), r.get("session_id")) for r in rows if r.get("session_id")}
+    candidates = [c for c in candidates
+                  if (c[1]["project_id"], c[1]["session_id"]) not in live]
+    candidates.sort(key=lambda c: c[0], reverse=True)
+    return {"rows": rows, "window_days": FEED_WINDOW_DAYS,
+            "recent": [row for _at, row in candidates[:recent]]}
 
 
 class CheckedRequest(BaseModel):
@@ -777,6 +820,13 @@ def build_route_messages(blocks: list[str], text: str) -> list[dict]:
     ]
 
 
+def route_prompt(messages: list[dict]) -> str:
+    """The keyed route's messages as the ONE prompt a signed-in agent gets
+    when there is no key (2026-11-23): the same words in the same order, so
+    the prefix still leads and the task still comes last."""
+    return "\n\n".join(m["content"] for m in messages)
+
+
 _JSON_OBJ_RE = re.compile(r"\{[^{}]*\}", re.DOTALL)
 
 
@@ -885,11 +935,15 @@ async def pick_project(text: str | None) -> dict:
         provider = await _route_provider(fallback_pid)
     except Exception as e:
         return fallback(f"no provider: {type(e).__name__}")
+    router_agent = None
     if provider is None:
-        return fallback("no API key")
-    set_retries = getattr(provider, "set_sdk_max_retries", None)
-    if callable(set_retries):
-        set_retries(0)
+        router_agent = await _router_agent(fallback_pid)
+        if router_agent is None:
+            return fallback("no API key")
+    else:
+        set_retries = getattr(provider, "set_sdk_max_retries", None)
+        if callable(set_retries):
+            set_retries(0)
     try:
         names = await asyncio.gather(*[_recent_session_names(p["project_id"]) for p in candidates])
         blocks = await asyncio.to_thread(
@@ -898,6 +952,8 @@ async def pick_project(text: str | None) -> dict:
         return fallback(f"context failed: {type(e).__name__}")
     messages = build_route_messages(blocks, text)
     candidate_ids = {p["project_id"] for p in candidates}
+    if router_agent is not None:
+        return await _route_by_agent(router_agent, messages, candidate_ids, fallback)
 
     loop = asyncio.get_running_loop()
     deadline = loop.time() + ROUTE_BUDGET_S
@@ -937,6 +993,73 @@ async def pick_project(text: str | None) -> dict:
             await asyncio.sleep(ROUTE_RETRY_DELAY_S)
     logger.warning("workbench route: no project after %d attempt(s) (%s)", attempts, code)
     return {"project_id": None, "by": "failed", "reason": code, "attempts": attempts}
+
+
+# Keyless routing (2026-11-23): one attempt, no retry; a CLI starts per call.
+# Measured live: Claude Code ~6 s, Codex 7-11 s (see the batch report). A
+# hung call falls back to Quick Tasks after 15 s rather than holding the send.
+AGENT_ROUTE_BUDGET_S = 15.0
+
+
+def _route_cwd() -> str:
+    """A neutral, empty folder for the one-off routing question: never a
+    project's workspace (nothing there may be read or written for a
+    route), the same path every call so the agent's own prompt prefix (it
+    names the cwd) stays the same."""
+    import tempfile
+    path = os.path.join(tempfile.gettempdir(), "orbital-route")
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+async def _router_agent(scratch_pid: str) -> str | None:
+    """The first ready worker (Quick Tasks' list, registry order) that can
+    answer a one-off question without leaving a session in the user's tool;
+    None when there is none (today's keyless fallback)."""
+    subs, am = _sub_agent_manager, _agent_manager
+    if subs is None or am is None or not callable(getattr(subs, "can_ask_once", None)):
+        return None
+    try:
+        ready = await asyncio.to_thread(am.available_worker_slugs, scratch_pid)
+    except Exception:
+        logger.warning("workbench route: worker readiness failed", exc_info=True)
+        return None
+    for slug in ready or []:
+        try:
+            if subs.can_ask_once(slug):
+                return slug
+        except Exception:
+            logger.warning("workbench route: can_ask_once(%s) failed", slug, exc_info=True)
+    return None
+
+
+async def _route_by_agent(slug: str, messages: list[dict], candidate_ids: set[str],
+                          fallback) -> dict:
+    """Ask ``slug`` the routing question once (the keyed route's prompt and
+    parser). A pick answers ``by: "agent"``; anything else lands in Quick
+    Tasks, as a keyless send did before."""
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    try:
+        reply = await asyncio.wait_for(
+            _sub_agent_manager.ask_once(slug, route_prompt(messages), cwd=_route_cwd()),
+            timeout=AGENT_ROUTE_BUDGET_S)
+    except asyncio.TimeoutError:
+        logger.warning("workbench route: %s timed out after %.1fs", slug, loop.time() - started)
+        return fallback("agent timeout")
+    except Exception as e:
+        logger.warning("workbench route: %s failed after %.1fs: %s", slug,
+                       loop.time() - started, f"{type(e).__name__}: {e}"[:300])
+        return fallback("agent failed")
+    elapsed = loop.time() - started
+    pid, reason = parse_route_reply(reply, candidate_ids)
+    if pid is not None:
+        logger.info("workbench route: %s by %s in %.1fs", pid, slug, elapsed)
+        return {"project_id": pid, "by": "agent", "agent": slug}
+    if reason == "model chose no project":
+        return fallback(reason)
+    logger.warning("workbench route: %s answered unusably in %.1fs (%s)", slug, elapsed, reason)
+    return fallback("agent failed")
 
 
 def _routed(pid: str, response, elapsed: float) -> dict:
@@ -1034,7 +1157,7 @@ async def create_task(req: TaskRequest):
     200 ``{project_id, session_id, agent, by, inject}``, plus what
     ``/route`` adds: ``reason`` on a Quick Tasks fallback, ``input_tokens`` /
     ``output_tokens`` when the model routed it. ``by``: ``"given"`` | ``"model"`` |
-    ``"fallback"``. Every refusal comes before the mint, so it leaves no
+    ``"agent"`` (keyless: a signed-in agent routed it) | ``"fallback"``. Every refusal comes before the mint, so it leaves no
     session: 422 empty text, 404 unknown or Workbench-excluded project (or
     nowhere to route), 400 an agent that is not available or an invalid
     attachment, 400 ``{"code": "missing_api_key"}`` when the send would go
@@ -1074,7 +1197,7 @@ async def create_task(req: TaskRequest):
     spawned = await _spawn_seeded(
         pid, text, agent=req.agent, attachments=req.attachments,
         # Spec 180: a routed task carries the mark, as the composer's does.
-        routed_by=by if by in ("model", "fallback") else None)
+        routed_by=by if by in ("model", "agent", "fallback") else None)
     body = {"project_id": pid, "session_id": spawned["session_id"],
             "agent": spawned["agent"], "by": by, "inject": spawned["inject"]}
     body.update(extra)

@@ -16,12 +16,17 @@ import type { StringKey } from '../i18n/strings';
 export interface ProviderErrorInfo {
   code: string;
   message: string;
+  /** `agent_signed_out` (batch 1123): the agent that needs a sign-in. */
+  agent?: string;
+  agent_name?: string;
 }
 
 const KEY_BY_CODE: Record<string, StringKey> = {
   missing_api_key: 'agentError.missing_api_key',
   // Batch 1110 item 3: no key AND no enabled agent in this project.
   no_runner: 'agentError.no_runner',
+  // Batch 1123: no key, and the project's agent is installed but signed out.
+  agent_signed_out: 'agentError.agent_signed_out',
   // Spec 082: the project's credential card is gone and there is no default.
   missing_card: 'agentError.missing_card',
   invalid_api_key: 'agentError.invalid_api_key',
@@ -134,10 +139,12 @@ function codedFromText(text: string): ProviderErrorInfo | null {
       typeof parsed === 'object' &&
       typeof (parsed as { code?: unknown }).code === 'string'
     ) {
-      const p = parsed as { code: string; message?: unknown };
+      const p = parsed as { code: string; message?: unknown; agent?: unknown; agent_name?: unknown };
       return {
         code: p.code,
         message: typeof p.message === 'string' ? p.message : '',
+        ...(typeof p.agent === 'string' && p.agent ? { agent: p.agent } : {}),
+        ...(typeof p.agent_name === 'string' && p.agent_name ? { agent_name: p.agent_name } : {}),
       };
     }
   } catch {

@@ -32,7 +32,7 @@ function row(over: Partial<WorkbenchFeedRow>): WorkbenchFeedRow {
 
 function feed(rows: WorkbenchFeedRow[]): FeedState {
   return {
-    rows, loaded: true, error: false, pending: [], activity: {},
+    rows, recent: [], loaded: true, error: false, pending: [], activity: {},
     held: new Map(), closedAsks: new Set(), composerRestore: null,
     unmarked: new Set(), moves: new Map(),
   };

@@ -3452,6 +3452,17 @@ class AgentManager:
             self.validate_provider_config(config)
         except ProviderConfigError as exc:
             if getattr(exc, "code", None) == "missing_api_key" and self._no_worker_available(project_id):
+                signed_out = self._signed_out_agent(project_id)
+                if signed_out is not None:
+                    # 2026-11-23: the agent IS enabled, only signed out —
+                    # name it so the UI offers its sign-in.
+                    slug, name = signed_out
+                    raise ProviderConfigError(
+                        "agent_signed_out",
+                        f"Orbital's agent has no API key, and {name} is signed out. "
+                        f"Sign in to {name}, or add a key in Settings.",
+                        fields={"agent": slug, "agent_name": name},
+                    ) from exc
                 raise ProviderConfigError(
                     "no_runner",
                     "Orbital's agent has no API key, and no agent is enabled for this "
@@ -3459,6 +3470,32 @@ class AgentManager:
                     "project's settings.",
                 ) from exc
             raise
+
+    def _signed_out_agent(self, project_id: str) -> tuple[str, str] | None:
+        """``(slug, name)`` of the first agent (registry order) that is
+        installed and enabled here but signed out, and that Orbital can sign
+        in (its manifest has a login command, so "sign in" is the remedy, not
+        a missing key). None when there is none or the check fails."""
+        engine = self._setup_engine
+        if engine is None or self._registry is None:
+            return None
+        try:
+            project = self._project_store.get_project(project_id) or {}
+            disabled = set(project.get("disabled_sub_agents") or [])
+            for status in engine.check_all(allow_stale=True) or []:
+                slug = getattr(status, "slug", None)
+                if (not isinstance(slug, str) or slug in disabled or slug == "built-in"
+                        or getattr(status, "installed", False) is not True
+                        or getattr(status, "credentials_configured", True) is not False):
+                    continue
+                manifest = self._registry.get(slug)
+                creds = getattr(getattr(manifest, "setup", None), "credentials", None) or []
+                if any(getattr(c, "setup_command", None) for c in creds):
+                    name = getattr(status, "name", None)
+                    return slug, name if isinstance(name, str) and name else slug
+        except Exception:  # noqa: BLE001 — naming the agent is best-effort
+            logger.warning("signed-out check failed for %s", project_id, exc_info=True)
+        return None
 
     def _no_worker_available(self, project_id: str) -> bool:
         """True when a keyless send has nobody to go to: the project turned

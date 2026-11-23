@@ -130,7 +130,7 @@ export function useAgent() {
       // Spec 180: the Workbench route chose this project ('model' |
       // 'fallback'); the daemon stamps it only when this send creates the
       // session, and an older daemon ignores it.
-      routedBy?: 'model' | 'fallback',
+      routedBy?: 'model' | 'agent' | 'fallback',
     ) => {
       return api<InjectResult>(
         `/api/v2/agents/${encodeURIComponent(projectId)}/inject`,

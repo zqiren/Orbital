@@ -989,6 +989,8 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   const [agentError, setAgentError] = useState<{
     code?: string;
     message?: string;
+    agent?: string;
+    agent_name?: string;
   } | null>(null);
   const [loadedOffset, setLoadedOffset] = useState(0);
   const [stream, setStream] = useState<StreamState | null>(null);
@@ -4738,6 +4740,8 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
           <AgentErrorNotice
             code={agentError.code}
             message={agentError.message}
+            agent={agentError.agent}
+            agentName={agentError.agent_name}
             // Every non-internal code here is about the provider/key: land
             // on the LLM providers section, as the pin switcher's pill does.
             onOpenSettings={() =>

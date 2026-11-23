@@ -171,8 +171,15 @@ class CodexTransport(AgentTransport):
                  external_sandbox: bool = False,
                  dispatch_url: str | None = None,
                  serves_dispatch: bool = True,
-                 long_tool_calls: bool = False):
+                 long_tool_calls: bool = False,
+                 ephemeral: bool = False):
         record = resume_record or {}
+        # One-off question mode (keyless Workbench routing, 2026-11-23): an
+        # ``ephemeral`` thread (no rollout file, not in Codex's thread list),
+        # read-only sandbox, never asks for approval, no MCP servers, and none
+        # of a worker's background reads. Workers never set it.
+        self._ephemeral = bool(ephemeral)
+        self._background_reads = not self._ephemeral
         # Spec 161: the daemon's dispatch MCP endpoint when this worker sits
         # at the top of its session (the token is in the spawn env under
         # ORBITAL_DISPATCH_TOKEN), else None.
@@ -497,6 +504,10 @@ class CodexTransport(AgentTransport):
         cache_read = cachedInputTokens, cache_write = 0, output = outputTokens.
         No reported_cost — Codex emits none.
         """
+        if self._ephemeral:
+            # A one-off question has no project: no ledger is written.
+            self._codex_last_usage.clear()
+            return
         try:
             if self._thread_id is None or turn_id is None:
                 return
@@ -872,6 +883,8 @@ class CodexTransport(AgentTransport):
         otherwise so the provider serves the thread's last-used model.
         """
         approval_policy, sandbox = policy_for_autonomy(self._autonomy)
+        if self._ephemeral:
+            approval_policy, sandbox = "never", "read-only"
         params: dict = {"cwd": workspace, "approvalPolicy": approval_policy,
                         "sandbox": sandbox}
         if self._model:
@@ -881,6 +894,11 @@ class CodexTransport(AgentTransport):
             # inherit = "core") still governs everything else.
             params["config"] = {f"shell_environment_policy.set.{k}": v
                                 for k, v in self._orbital_env.items()}
+        if self._ephemeral:
+            params["ephemeral"] = True
+            # The turn waits for every configured MCP server to start; a
+            # routing question needs none of them.
+            params.setdefault("config", {})["mcp_servers"] = {}
         if self._resume_session_id:
             params["threadId"] = self._resume_session_id
             return "thread/resume", params
@@ -1023,19 +1041,21 @@ class CodexTransport(AgentTransport):
             "name": "orbital", "title": "Orbital", "version": "0.1.0"}})
         self._check_version(init)
         await self._notify("initialized")
-        # Spec 099: one quota read per handle start, in the background so a
-        # slow answer never delays the thread open.
-        self._rate_limit_task = asyncio.create_task(
-            self._publish_rate_limits(), name=f"codex-ratelimits-{id(self)}")
-        # Spec 166: the skills Codex offers in this cwd, for the `/` picker.
-        # Background too: optional discovery never delays or fails startup.
-        self._skills_task = asyncio.create_task(
-            self._publish_skills(), name=f"codex-skills-{id(self)}")
+        if self._background_reads:
+            # Spec 099: one quota read per handle start, in the background so a
+            # slow answer never delays the thread open.
+            self._rate_limit_task = asyncio.create_task(
+                self._publish_rate_limits(), name=f"codex-ratelimits-{id(self)}")
+            # Spec 166: the skills Codex offers in this cwd, for the `/` picker.
+            # Background too: optional discovery never delays or fails startup.
+            self._skills_task = asyncio.create_task(
+                self._publish_skills(), name=f"codex-skills-{id(self)}")
 
         await self._open_thread(workspace)
         if self._dispatch_url:
             await self._check_dispatch_mount()
-        self._schedule_mcp_status()
+        if self._background_reads:
+            self._schedule_mcp_status()
 
     # Agent-held connectors: Codex's own MCP servers, from the same
     # ``mcpServerStatus/list`` the mount check sends (its answer is reported

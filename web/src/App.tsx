@@ -30,19 +30,15 @@ import type {
 } from './types';
 import { routeKey, type Route } from './route';
 import SetupGate from './components/SetupGate';
-import SetupWizard from './components/SetupWizard';
+import WelcomePage from './components/welcome/WelcomePage';
 import Sidebar from './components/Sidebar';
 import EdgeStrip from './components/EdgeStrip';
 import { effectivePinned, useWindowCovered } from './hooks/useWindowCover';
 import CreateProject from './components/CreateProject';
-import FirstRunHome from './components/FirstRunHome';
 import ImportProjectsDialog from './components/ImportProjectsDialog';
 import { markFreshSession } from './utils/freshSession';
-import { isFirstRun, needsSetupWizard, wizardHandoffProjectId, wizardLandingProjectId } from './utils/firstRun';
+import { isFirstRun, needsSetupWizard, wizardLandingProjectId } from './utils/firstRun';
 import FirstJourneyTour from './tour/FirstJourneyTour';
-import {
-  decideTourState, readTourState, shouldStartTour, writeTourState, type TourState,
-} from './tour/tourLogic';
 import ProjectDetail from './components/ProjectDetail';
 import QueueTab from './components/QueueTab';
 import SettingsModalPage from './components/SettingsModalPage';
@@ -51,7 +47,10 @@ import ChatTab from './components/ChatTab';
 import ErrorBoundary from './components/ErrorBoundary';
 import GlobalSettings, { requestedSettingsSection } from './components/GlobalSettings';
 import WorkbenchPage from './components/WorkbenchPage';
-import { useWorkbenchFeed, useWorkbenchFeedSync } from './hooks/useWorkbenchFeed';
+import { refreshFeed, useWorkbenchFeed, useWorkbenchFeedSync } from './hooks/useWorkbenchFeed';
+import {
+  dismissBackgroundImport, importIndicator, retryBackgroundImport, useBackgroundImport,
+} from './utils/backgroundImport';
 import { useSourcesSync } from './components/sources/sourcesStore';
 import { useCheckedMarks } from './hooks/useSeenReplies';
 import { useHomeShortcut } from './hooks/useHomeShortcut';
@@ -79,6 +78,9 @@ function mapConnectionState(
   if (isRelayMode && !daemonOnline) return 'daemon_offline';
   return 'connected';
 }
+
+/** How often the project list is refetched while the first-run import runs. */
+const IMPORT_POLL_MS = 2500;
 
 export default function App() {
   const t = useT();
@@ -181,28 +183,11 @@ export default function App() {
   const selectedProjectId = route.name === 'project' ? route.projectId : null;
 
   // ── First-journey tour ────────────────────────────────────────────────
-  // `tourState` is this device's one-time decision (see decideTourState: a new
-  // install is `pending`, an install that already had a project is opted out).
-  // It is decided the first time a LOADED project list is seen and never
-  // revisited.
-  const [tourState, setTourState] = useState<TourState | null>(() => {
-    const stored = readTourState();
-    return stored === 'pending' || stored === 'done' ? stored : null;
-  });
-  useEffect(() => {
-    if (tourState !== null) return;
-    const decided = decideTourState(readTourState(), projects);
-    if (decided === null) return;
-    writeTourState(decided);
-    setTourState(decided);
-  }, [projects, tourState]);
-  // A replay from Settings → About shows the tour regardless of `tourState`.
+  // Batch 1123: the tour never opens by itself. It shows only when asked for
+  // from Settings → About ("Take the tour"); a device's old `pending` mark in
+  // localStorage is no longer read.
   const [tourReplay, setTourReplay] = useState(false);
-  const closeTour = useCallback(() => {
-    writeTourState('done');
-    setTourState('done');
-    setTourReplay(false);
-  }, []);
+  const closeTour = useCallback(() => setTourReplay(false), []);
 
   const { triggers, fetchTriggers, toggleTrigger, deleteTrigger } = useTriggers(selectedProjectId ?? '');
 
@@ -528,6 +513,23 @@ export default function App() {
     if (prev === 'settings' && route.name !== 'settings') void listProjects();
   }, [route.name, listProjects]);
 
+  // The Welcome page's import runs in the background (utils/backgroundImport).
+  // While it is out, poll the project list so rows appear as the daemon
+  // creates them (there is no project-created event); on each answer refetch
+  // the projects and the feed (最近), once.
+  const bgImport = useBackgroundImport();
+  const importShown = importIndicator(bgImport);
+  useEffect(() => {
+    if (!importShown.spinner) return;
+    const id = window.setInterval(() => { void listProjects(); }, IMPORT_POLL_MS);
+    return () => window.clearInterval(id);
+  }, [importShown.spinner, listProjects]);
+  useEffect(() => {
+    if (bgImport.finished === 0) return;
+    void listProjects();
+    void refreshFeed();
+  }, [bgImport.finished, listProjects]);
+
   // Service worker registration + push subscription (remote mode only)
   useEffect(() => {
     if (!isRelayMode) return;
@@ -657,28 +659,21 @@ export default function App() {
     }
   }
 
-  // First-run wizard (before setup gate)
+  // First run: the Welcome page (before the setup gate). Start always lands
+  // on the Workbench (batch 1123): no Create Project dialog, no landing
+  // project. With no project of their own the composer sends to Quick Tasks.
   if (needsWizard === true) {
     return (
-      <SetupWizard
-        onComplete={async (outcome) => {
+      <WelcomePage
+        onComplete={async () => {
           setNeedsWizard(false);
           setSetupComplete(true);
-          // Hand off straight into a project instead of the bare list: the
-          // most recently active one the wizard just imported, on a new
-          // session; otherwise the Create Project dialog. A new user was
-          // never told that creating a project is the next step — so make it
-          // the next step. Closing the dialog falls back to the first-run home.
-          // Always a new session: the project's newest one after an import is
-          // its background read, which may be a failure (2026-11-11).
-          const loaded = await listProjects();
-          const landing = wizardHandoffProjectId(loaded, outcome?.landingProjectId ?? null);
-          if (landing) {
-            await openProjectOnNewSession(landing);
-          } else {
-            setRoute({ name: 'create' });
-          }
+          setRoute({ name: 'list' });
           setMobileView('content');
+          // The import (if any) is still running in the background; App
+          // refetches the projects and the feed (最近) when it answers.
+          await listProjects();
+          void refreshFeed();
           await platform.getStatus();
         }}
       />
@@ -708,10 +703,8 @@ export default function App() {
     ? projects.find((p) => p.project_id === route.projectId)
     : undefined;
 
-  // The tour's trigger is DERIVED, not an event: it shows while the user is on
-  // the chat tab of a project they created and the tour is still pending (or
-  // was asked for). Finishing or skipping flips `tourState` to done, which
-  // turns this off — no "start" effect to keep in sync with the route.
+  // The tour shows while a replay is asked for and the user is on the chat
+  // tab of a project; finishing or skipping turns the replay off.
   const onProjectChat = route.name === 'project' && route.page === undefined;
   // Held until the installed-agents probe has answered (`null` = still
   // loading; it shells out to find CLI binaries, so it is slow). The tour
@@ -720,7 +713,7 @@ export default function App() {
   // dropped the stop.
   const tourShowing =
     onProjectChat && !!selectedProject && agentsAvailable !== null &&
-    (tourReplay || shouldStartTour(tourState, selectedProject));
+    tourReplay;
 
   function handleTakeTour() {
     // The tour walks through a project, so open the user's most recent one.
@@ -754,7 +747,13 @@ export default function App() {
     waiting: anythingWaiting,
     unreadCounts: projectUnreadCounts,
     onNewProject: handleNewProject,
-    onImportProjects: () => setImportOpen(true),
+    // No second import while the first-run one is out: two requests in
+    // flight could both create the same folder.
+    onImportProjects: importShown.spinner ? undefined : () => setImportOpen(true),
+    importing: importShown.spinner,
+    importFailed: importShown.failed,
+    onRetryImport: () => { void retryBackgroundImport(); },
+    onDismissImportFailure: dismissBackgroundImport,
     onReorderProjects: reorderProjects,
     onSettings: () => {
       setGlobalSettingsSection(undefined);
@@ -811,14 +810,14 @@ export default function App() {
           with the card-coloured PageToolbar, so it takes the card band
           too. Both classes are inert off macOS, so the non-mac render is
           unchanged. */}
-      <main className={`flex-1 overflow-hidden flex flex-col shadow-panel pt-titlebar ${route.name === 'project' || route.name === 'settings' ? 'titlebar-band-card' : 'titlebar-band-canvas'} ${onHome && !isFirstRun(projects) ? 'wb-band' : ''} ${contentHidden ? 'hidden' : ''}`}>
+      <main className={`flex-1 overflow-hidden flex flex-col shadow-panel pt-titlebar ${route.name === 'project' || route.name === 'settings' ? 'titlebar-band-card' : 'titlebar-band-canvas'} ${onHome ? 'wb-band' : ''} ${contentHidden ? 'hidden' : ''}`}>
         {/* Phone header (spec 154 §5.9): the Orbital mark goes home, the
             right button opens the project list. Replaces the old Back row. */}
         {isMobile && mobileView === 'content' && (
           <div
             data-testid="mobile-header"
             className={`flex items-center gap-2 pl-4 pr-3 pt-4 pb-2.5 shrink-0 ${
-              onHome && !isFirstRun(projects) ? 'bg-[#FAFBFC] dark:bg-background' : ''
+              onHome ? 'bg-[#FAFBFC] dark:bg-background' : ''
             }`}
           >
             <button
@@ -956,19 +955,10 @@ export default function App() {
           </ErrorBoundary>
         )}
 
-        {/* No project of their own yet → the first-run home. The old
-            `projects.length === 0` "create your first one" branch that stood
-            here never rendered: the daemon always creates Quick Tasks, so a
-            loaded list is never empty. */}
-        {/* One branch for 'list' AND 'create' so the home stays mounted behind
-            the Create Project dialog's backdrop: the screen is not blank
-            under it, and cancelling does not replay the entrance. */}
-        {(route.name === 'list' || route.name === 'create') && isFirstRun(projects) && (
-          <FirstRunHome onNewProject={handleNewProject} onImportProjects={() => setImportOpen(true)} />
-        )}
-        {/* Spec 154: home is the Workbench (not first run). 'create' keeps
-            it mounted behind the Create Project dialog's backdrop. */}
-        {onHome && !isFirstRun(projects) && (
+        {/* Spec 154: home is the Workbench — on the first run too (batch
+            1123; the first-run home is gone). 'create' keeps it mounted
+            behind the Create Project dialog's backdrop. */}
+        {onHome && (
           <WorkbenchPage
             setRoute={setRoute}
             projects={projects}

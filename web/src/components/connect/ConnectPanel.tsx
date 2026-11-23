@@ -62,6 +62,11 @@ export interface ConnectFooterCtx {
   submit: () => void;
   /** A refusal that is not about the key (it is drawn under the field). */
   error: string | null;
+  /** Ready to run: a key that passed its test with a model, or a sign-in. */
+  connected: boolean;
+  /** The picked provider ('' = none) and the model chosen for it. */
+  provider: string;
+  model: string;
 }
 
 export interface ConnectPanelProps {
@@ -79,6 +84,14 @@ export interface ConnectPanelProps {
   onDone: (card: CredentialCard) => void;
   /** Next / Save and anything around it. */
   footer: (ctx: ConnectFooterCtx) => ReactNode;
+  /** Embedded in the Welcome page: `initialProvider` is picked without
+   *  taking focus, the footer renders while the catalog loads, and
+   *  `onEngage` reports the first focus or pick inside the panel. */
+  embedded?: boolean;
+  /** Picked on load when the catalog has it (new cards only). */
+  initialProvider?: string;
+  /** The user started working in the panel (a tile, the key field). */
+  onEngage?: () => void;
 }
 
 type KeyStatus = 'idle' | 'testing' | 'ok' | 'fail';
@@ -143,7 +156,9 @@ function labelsOf(r: ProviderCheckResult | { models: string[]; model_details?: P
   return out;
 }
 
-export default function ConnectPanel({ card, replaceCardId, autoSignIn, onCardStored, onCardRemoved, onDone, footer }: ConnectPanelProps) {
+export default function ConnectPanel({
+  card, replaceCardId, autoSignIn, onCardStored, onCardRemoved, onDone, footer, embedded = false, initialProvider, onEngage,
+}: ConnectPanelProps) {
   const t = useT();
   const { locale } = useLocale();
   const catalog = useCatalog();
@@ -250,6 +265,15 @@ export default function ConnectPanel({ card, replaceCardId, autoSignIn, onCardSt
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [catalog, card, initialized]);
 
+  // ---- new card: the preselected provider, once the catalog is in ----
+  const presetRef = useRef(false);
+  useEffect(() => {
+    if (presetRef.current || editing || !catalog || !initialProvider) return;
+    presetRef.current = true;
+    if (catalog.some((p) => p.id === initialProvider)) pickProvider(initialProvider, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [catalog, editing, initialProvider]);
+
   /** The saved card's list, without spending a completion call. */
   async function loadCardModels(c: CredentialCard, open: boolean) {
     const token = tokenRef.current;
@@ -330,8 +354,9 @@ export default function ConnectPanel({ card, replaceCardId, autoSignIn, onCardSt
     setSubmitError(null);
   }
 
-  function pickProvider(id: string) {
+  function pickProvider(id: string, preset = false) {
     if (editing) return;
+    if (!preset) onEngage?.();
     setMoreOpen(false);
     setQuery('');
     if (id === provider) {
@@ -478,6 +503,7 @@ export default function ConnectPanel({ card, replaceCardId, autoSignIn, onCardSt
   }
 
   async function startSignin(kind: SigninKind, cardId: string | null) {
+    onEngage?.();
     signinAbortRef.current?.abort();
     const controller = new AbortController();
     signinAbortRef.current = controller;
@@ -576,6 +602,9 @@ export default function ConnectPanel({ card, replaceCardId, autoSignIn, onCardSt
     isSignin ? signin === 'ok' && !!signedCard && !!model.trim() : keyPresent && (keyStatus !== 'ok' || !!model.trim())
   );
   const busy = submitting || (keyStatus === 'testing' && awaitingPass);
+  const connected = !!provider && !!model.trim() && (
+    isSignin ? signin === 'ok' && !!signedCard : keyStatus === 'ok'
+  );
 
   async function submit() {
     if (!canSubmit) return;
@@ -656,13 +685,20 @@ export default function ConnectPanel({ card, replaceCardId, autoSignIn, onCardSt
     if (!pointerDownRef.current) window.setTimeout(flushBlur, 0);
   }
 
+  const ctx: ConnectFooterCtx = {
+    canSubmit, busy, submit: () => void submit(), error: submitError, connected, provider, model: model.trim(),
+  };
+
   // ---- render ----
   if (!catalog || (editing && !initialized)) {
     return (
-      <div className="flex items-center gap-2 py-4 text-body text-secondary">
-        <Loader2 className="h-4 w-4 animate-spin" />
-        {t('llm.loading')}
-      </div>
+      <>
+        <div className="flex items-center gap-2 py-4 text-body text-secondary">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          {t('llm.loading')}
+        </div>
+        {embedded && footer({ ...ctx, canSubmit: false })}
+      </>
     );
   }
 
@@ -724,7 +760,8 @@ export default function ConnectPanel({ card, replaceCardId, autoSignIn, onCardSt
           autoComplete="off"
           spellCheck={false}
           disabled={card?.read_only}
-          autoFocus={!editing && !isCustom}
+          autoFocus={!editing && !isCustom && !embedded}
+          onFocus={onEngage}
           onChange={(e) => onKeyChange(e.target.value)}
           onPaste={onKeyPaste}
           onKeyDown={onKeyDown}
@@ -924,7 +961,7 @@ export default function ConnectPanel({ card, replaceCardId, autoSignIn, onCardSt
             moreOpen={moreOpen}
             query={query}
             onPick={pickProvider}
-            onToggleMore={() => { setMoreOpen((v) => !v); setQuery(''); }}
+            onToggleMore={() => { onEngage?.(); setMoreOpen((v) => !v); setQuery(''); }}
             onQuery={setQuery}
           />
         </div>
@@ -953,7 +990,7 @@ export default function ConnectPanel({ card, replaceCardId, autoSignIn, onCardSt
           )}
         </div>
       )}
-      {footer({ canSubmit, busy, submit: () => void submit(), error: submitError })}
+      {footer(ctx)}
     </div>
   );
 }

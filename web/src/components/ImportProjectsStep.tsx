@@ -23,7 +23,7 @@
  */
 
 import { useState, type Dispatch, type SetStateAction } from 'react';
-import { Check, ChevronDown, ChevronRight, FolderOpen, Loader2 } from 'lucide-react';
+import { Check, ChevronDown, ChevronRight, FolderOpen, Loader2, Search } from 'lucide-react';
 import { api } from '../config';
 import { useT } from '../i18n/useT';
 import type { StringKey } from '../i18n/strings';
@@ -65,9 +65,15 @@ interface ImportProjectsStepProps {
   /** The dialog's layout: the list scrolls and the actions sit in a footer
    *  below it, always in view (a long list used to hide Cancel and Import). */
   scrollable?: boolean;
-  /** Controlled choices (the wizard's), so they outlive this step's mount. */
+  /** Controlled choices (the Welcome page's), so they outlive this list's mount. */
   choices?: [ImportChoices, Dispatch<SetStateAction<ImportChoices>>];
+  /** The Welcome page's checklist: no actions (its Start imports), no scan
+   *  states (its band line shows them), and a search over a long list. */
+  embedded?: boolean;
 }
+
+/** A list this long gets a search field (embedded only). */
+const SEARCH_FROM = 12;
 
 const basename = (p: string) => p.replace(/\\/g, '/').split('/').filter(Boolean).pop() ?? p;
 
@@ -122,6 +128,7 @@ export default function ImportProjectsStep({
   skipLabel,
   scrollable = false,
   choices,
+  embedded = false,
 }: ImportProjectsStepProps) {
   const t = useT();
   // The user's choices. The wizard holds them itself so they survive Back to
@@ -134,12 +141,19 @@ export default function ImportProjectsStep({
   const [browsingGroup, setBrowsingGroup] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState(false);
+  const [query, setQuery] = useState('');
 
   const data = scan.importable;
   const candidates = data?.candidates ?? [];
-  const groups = data?.groups ?? [];
-  const major = candidates.filter((c) => !c.minor);
-  const minor = candidates.filter((c) => c.minor);
+  const allGroups = data?.groups ?? [];
+  const q = embedded ? query.trim().toLowerCase() : '';
+  const hit = (text: string) => !q || text.toLowerCase().includes(q);
+  const searching = q.length > 0;
+  const shownCandidates = candidates.filter((c) => hit(`${c.name} ${c.path}`));
+  const groups = allGroups.filter((g) => hit(`${groupFolder(g, chosen) ?? ''} ${(g.reasons ?? []).map((r) => r.value).join(' ')}`));
+  const major = shownCandidates.filter((c) => !c.minor);
+  const minor = shownCandidates.filter((c) => c.minor);
+  const minorOpen = showMinor || searching;
   const ticks = data ? withLateRowsUnchecked(data, userTicks, offered) : userTicks;
   const request = data ? buildImportRequest(data, ticks, chosen) : { folders: [], groups: [] };
   const count = request.folders.length + request.groups.length;
@@ -157,8 +171,8 @@ export default function ImportProjectsStep({
   const open = (rows: ImportCandidate[]) => rows.filter((c) => !c.already_imported);
   const folderTicked = new Map(candidates.map((c) => [folderKey(c.path), isFolderChecked(c, ticks)]));
   const folderSection = sectionToggle(
-    [...open(major), ...(showMinor ? open(minor) : [])].map((c) => folderKey(c.path)),
-    showMinor ? [] : open(minor).map((c) => folderKey(c.path)),
+    [...open(major), ...(minorOpen ? open(minor) : [])].map((c) => folderKey(c.path)),
+    minorOpen ? [] : open(minor).map((c) => folderKey(c.path)),
     (key) => folderTicked.get(key) ?? false,
   );
   const groupTicked = new Map(groups.map((g) => [groupKey(g.id), isGroupChecked(g, ticks)]));
@@ -314,11 +328,27 @@ export default function ImportProjectsStep({
     );
   }
 
-  const nothing = scan.settled && !scan.error && candidates.length === 0 && groups.length === 0;
+  const nothing = scan.settled && !scan.error && candidates.length === 0 && allGroups.length === 0;
+  const rowCount = candidates.filter((c) => !c.already_imported).length + allGroups.length;
 
   const content = (
     <>
-      {scan.error && (
+      {embedded && rowCount >= SEARCH_FROM && (
+        <div className="mb-3 flex h-8 items-center gap-2 rounded-[9px] bg-sidebar px-2.5" data-testid="import-search">
+          <Search aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-muted" strokeWidth={1.6} />
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder={t('importProjects.search')}
+            aria-label={t('importProjects.search')}
+            data-testid="import-search-input"
+            className="h-full min-w-0 flex-1 bg-transparent text-body text-primary outline-none placeholder:text-muted"
+          />
+          <span className="shrink-0 font-mono text-micro text-secondary">{count}/{rowCount}</span>
+        </div>
+      )}
+      {!embedded && scan.error && (
         <div className="mb-4 text-body text-error" role="alert" data-testid="import-error">
           {t('importProjects.error')}{' '}
           <button type="button" onClick={scan.retry} className="underline hover:no-underline" data-testid="import-retry">
@@ -327,14 +357,14 @@ export default function ImportProjectsStep({
         </div>
       )}
 
-      {!data && !scan.error && (
+      {!embedded && !data && !scan.error && (
         <div className="mb-4 inline-flex items-center gap-2 text-body text-secondary">
           <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
           {t('importProjects.scanning')}
         </div>
       )}
 
-      {nothing && (
+      {!embedded && nothing && (
         <p className="mb-4 text-body text-secondary" data-testid="import-empty">{t('importProjects.empty')}</p>
       )}
 
@@ -356,7 +386,7 @@ export default function ImportProjectsStep({
           {major.length > 0 && <ul className="space-y-2" data-testid="import-list">{major.map(renderFolder)}</ul>}
           {minor.length > 0 && (
             <>
-              <button
+              {!searching && <button
                 type="button"
                 onClick={() => setShowMinor((v) => !v)}
                 aria-expanded={showMinor}
@@ -365,8 +395,8 @@ export default function ImportProjectsStep({
               >
                 {showMinor ? <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" /> : <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />}
                 {t(minor.length === 1 ? 'importProjects.minor.toggle.one' : 'importProjects.minor.toggle.other', { n: minor.length })}
-              </button>
-              {showMinor && <ul className="mt-2 space-y-2" data-testid="import-minor-list">{minor.map(renderFolder)}</ul>}
+              </button>}
+              {minorOpen && <ul className="mt-2 space-y-2" data-testid="import-minor-list">{minor.map(renderFolder)}</ul>}
             </>
           )}
         </section>
@@ -445,6 +475,10 @@ export default function ImportProjectsStep({
       </div>
     </div>
   );
+
+  if (embedded) {
+    return <div data-testid="import-projects">{content}</div>;
+  }
 
   if (scrollable) {
     return (

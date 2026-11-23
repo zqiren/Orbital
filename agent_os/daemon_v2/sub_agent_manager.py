@@ -705,6 +705,73 @@ class SubAgentManager:
         from agent_os.agent.transports import codex_models
         return await codex_models.fetch_codex_skills(command, workspace, env=env)
 
+    # Transports that can answer ONE question and leave nothing in the user's
+    # tool (2026-11-23): Claude Code's SDK with --no-session-persistence and
+    # Codex's app-server with an ephemeral thread. ACP's session/new writes a
+    # session in the agent's own history; PTY/pipe are terminals.
+    _ASK_ONCE_TRANSPORTS = ("sdk", "codex-appserver")
+
+    def _ask_once_kind(self, slug: str) -> str | None:
+        manifest = self._registry.get(slug) if self._registry else None
+        kind = getattr(getattr(manifest, "runtime", None), "transport", None)
+        return kind if kind in self._ASK_ONCE_TRANSPORTS else None
+
+    def can_ask_once(self, slug: str) -> bool:
+        """Whether ``slug`` can answer a one-off question (``ask_once``)
+        without leaving a session behind: its transport allows it and its
+        login did not just fail on a dispatch (``auth_expired``). Readiness
+        (installed, signed in) is the caller's test; nothing is spawned."""
+        if self._ask_once_kind(slug) is None or self._setup_engine is None:
+            return False
+        try:
+            for status in self._setup_engine.check_all_cached() or []:
+                if getattr(status, "slug", None) == slug:
+                    return getattr(status, "auth_expired", False) is not True
+        except Exception:  # noqa: BLE001 — a cache miss is not a refusal
+            logger.debug("can_ask_once(%s): no cached status", slug, exc_info=True)
+        return True
+
+    async def ask_once(self, slug: str, prompt: str, *, cwd: str) -> str:
+        """Ask ``slug`` one question in ``cwd`` (a neutral folder, never a
+        project) and return its reply text. Rides the worker's own transport
+        in its ``ephemeral`` mode: same binary, env and model setting as a
+        dispatch, but no session or history is written, no tools run, and the
+        process is stopped before returning. Raises ``ValueError`` for an
+        agent that cannot answer that way (nothing is spawned) and
+        ``RuntimeError`` when the turn fails. The caller bounds the time."""
+        kind = self._ask_once_kind(slug)
+        if kind is None or self._setup_engine is None:
+            raise ValueError(f"{slug} cannot answer a one-off question")
+        # Off the loop: resolving the binary can probe it by subprocess, and
+        # the env reads keys from the Keychain (spec 171 A3).
+        config = await asyncio.to_thread(
+            self._setup_engine.get_adapter_config, slug=slug, project_workspace=cwd)
+        command = config.get("command")
+        if not command:
+            raise RuntimeError(f"{slug} has no command to run")
+        args = list(config.get("args") or [])
+        env = {**os.environ, **(config.get("env") or {})}
+        env.pop("CLAUDECODE", None)
+        if kind == "sdk":
+            from agent_os.agent.transports import sdk_transport
+            transport = sdk_transport.SDKTransport(
+                ephemeral=True, model=self._argv_value(args, "--model"),
+                effort=self._argv_value(args, "--effort"))
+        else:
+            from agent_os.agent.transports import codex_transport
+            transport = codex_transport.CodexTransport(ephemeral=True)
+        try:
+            await transport.start(command, args, cwd, env)
+            reply = await transport.send(prompt)
+        finally:
+            try:
+                await transport.stop()
+            except Exception:  # noqa: BLE001 — the answer (or error) stands
+                logger.warning("ask_once(%s): stop failed", slug, exc_info=True)
+        if isinstance(reply, str) and reply.startswith("Error:"):
+            raise RuntimeError(reply[:300])
+        return reply or ""
+
     def _resolve_transport(self, manifest, config_dict, autonomy=None, system_prompt: str | None = None,
                            resume_record: dict | None = None,
                            dispatch_mcp: dict | None = None):

@@ -11,14 +11,17 @@
  * is the first card, the dot tells the state (see feedModel).
  *
  * Every row comes from the App-level feed store (`useWorkbenchFeed`); the
- * page itself holds no copy. With nothing waiting or running the page is the
- * greeting and the composer alone, with the composer's usual placeholder
- * (2026-11-05: the greeting already says what the old empty-state sentence
- * did) — no illustration, no "All clear".
+ * page itself holds no copy.
  *
- * Layout (2026-11-05): on desktop one short greeting (picked at random on
- * mount, three variants) sits above the composer — the logo mark tried there
- * first was dropped — and the composer's top edge lands at the golden section of the first
+ * Batch 1123: one headline above the composer for everyone (今天做什么？),
+ * keyless too, and the composer has no placeholder. Under the live list sits
+ * 最近 / Recent (recentModel): the latest sessions across projects that are
+ * not live, flat rows that open the session. A row is in one place only. With
+ * no project of their own and no history, 最近 is absent and the three example
+ * prompts show under the composer instead (a click fills it, never sends).
+ *
+ * Layout (2026-11-05): on desktop the headline sits above the composer and
+ * the composer's top edge lands at the golden section of the first
  * screen (38.2% down); the summary line and the cards follow straight under
  * it and the whole column scrolls as one, so the newest card waiting on the
  * user is the first thing under the input. The phone keeps the composer
@@ -76,10 +79,18 @@ import SourcesPanel, { type SourcesFocus } from './sources/SourcesPanel';
 import { anyFailed, useSources } from './sources/sourcesStore';
 import { Inbox } from 'lucide-react';
 import type { StringKey } from '../i18n/strings';
+import { useAgentAvailability } from '../hooks/useAgentAvailability';
+import { formatRelativeTime } from '../utils/relativeTime';
+import { buildRecent } from './workbench/recentModel';
+import AgentGlyph from './welcome/AgentGlyph';
+import AgentErrorNotice from './AgentErrorNotice';
 import './workbench/workbench.css';
 
-/** The line above the composer (2026-11-05): one, at random per mount. */
-const GREETINGS: StringKey[] = ['wb.greeting.1', 'wb.greeting.2', 'wb.greeting.3'];
+/** The example prompts a page with nothing yet offers (the chat's own three). */
+const EXAMPLES: StringKey[] = ['chat.empty.example.explore', 'chat.empty.example.plan', 'chat.empty.example.automate'];
+
+/** Without a key, these agents can answer the one-off routing question. */
+const ROUTER_AGENTS = ['claude-code', 'codex'];
 
 export interface WorkbenchPageProps {
   setRoute: Dispatch<SetStateAction<Route>>;
@@ -110,11 +121,14 @@ export default function WorkbenchPage({
   agentStatuses = {}, statusTicks = {}, sessionStatuses, sessionTicks,
 }: WorkbenchPageProps) {
   const t = useT();
-  const [greeting] = useState(() => Math.floor(Math.random() * GREETINGS.length));
   const feed = useWorkbenchFeed();
+  const availability = useAgentAvailability();
+  const [prefill, setPrefill] = useState<{ text: string; n: number } | null>(null);
   const marks = useCheckedMarks();
   const { newSession, injectMessage } = useAgent();
   const [openError, setOpenError] = useState<string | null>(null);
+  // Batch 1123: the send was refused because the project's agent is signed out.
+  const [signedOut, setSignedOut] = useState<{ agent: string; agentName?: string } | null>(null);
   // Task sources: the panel in the docked pane (the reading pane's place),
   // opened by 任务来源 or by a card's source mark (at that entry).
   const sources = useSources();
@@ -199,16 +213,34 @@ export default function WorkbenchPage({
   // nothing to route with. Read from the loaded project rows, so adding a key
   // takes effect when the list refreshes.
   const keyless = projects.find((p) => p.is_scratch)?.manager_ready === false;
+  // Batch 1123: keyless, a signed-in Claude Code or Codex routes 自动.
+  const autoRoutes = !keyless || ROUTER_AGENTS.some((slug) => availability[slug]?.ready === true);
+
+  // 最近: recent sessions that are not live, by the projects' display names.
+  const recent = useMemo(
+    () => buildRecent(
+      feed, groups,
+      projects.map((p) => ({ project_id: p.project_id, name: projectDisplayName(p, t) })),
+    ),
+    [feed, groups, projects, t],
+  );
+  const showExamples = feed.loaded && recent.length === 0 && items.length === 0
+    && !projects.some((p) => !p.is_scratch);
 
   const handleSend = useCallback(
     async (choice: SendChoice, uploadAll: NonNullable<SendDeps['uploadAll']>) => {
       setOpenError(null);
+      setSignedOut(null);
       const outcome = await sendWorkbenchTask(choice, { newSession, injectMessage, uploadAll });
       // No project found: the composer shows its own line and the picker.
       if (!outcome.ok) {
         if (outcome.unrouted) return 'unrouted' as const;
         // ✕ while picking: the text is back, nothing to report.
         if (outcome.unsent) return false;
+        if (outcome.signedOut) {
+          setSignedOut(outcome.signedOut);
+          return false;
+        }
         setOpenError(t('workbench.error.open'));
         return false;
       }
@@ -348,11 +380,7 @@ export default function WorkbenchPage({
             scroller's (definite) height: the golden section of the screen. */}
         {!phone && <div className="wb-golden" aria-hidden="true" />}
         <div className="wb-col">
-          {/* No greeting while keyless (it promises routing that cannot
-              run); its empty slot keeps the composer at the golden section. */}
-          {!phone && (keyless
-            ? <div className="wb-greeting" aria-hidden="true" />
-            : <p className="wb-greeting" data-testid="workbench-greeting">{t(GREETINGS[greeting])}</p>)}
+          {!phone && <h1 className="wb-greeting" data-testid="workbench-greeting">{t('workbench.headline')}</h1>}
           {openError && (
             <div
               role="alert"
@@ -362,13 +390,38 @@ export default function WorkbenchPage({
               {openError}
             </div>
           )}
+          {signedOut && (
+            <AgentErrorNotice
+              code="agent_signed_out"
+              agent={signedOut.agent}
+              agentName={signedOut.agentName}
+              onOpenSettings={() => {}}
+              onDismiss={() => setSignedOut(null)}
+            />
+          )}
           <WorkbenchComposer
             projects={pickable}
             keyless={keyless}
+            autoRoutes={autoRoutes}
             agents={agents}
             managerModel={managerModel}
             onSend={handleSend}
+            prefill={prefill}
           />
+          {showExamples && (
+            <div className="wb-examples" role="group" aria-label={t('chat.empty.examples')} data-testid="workbench-examples">
+              {EXAMPLES.map((key) => (
+                <button
+                  key={key}
+                  type="button"
+                  className="wb-example"
+                  onClick={() => setPrefill((prev) => ({ text: t(key), n: (prev?.n ?? 0) + 1 }))}
+                >
+                  {t(key)}
+                </button>
+              ))}
+            </div>
+          )}
           {/* The head of the task list: the summary, and 任务来源 at its
               right end (shown with no tasks too: it is where tasks come from). */}
           <div className="wb-bar" data-testid="workbench-bar">
@@ -412,6 +465,32 @@ export default function WorkbenchPage({
                 ))}
               </div>
             </>
+          )}
+          {recent.length > 0 && (
+            <section
+              className={`wb-recent${items.length > 0 ? ' is-after' : ''}`}
+              aria-labelledby="wb-recent-label"
+              data-testid="workbench-recent"
+            >
+              <h2 id="wb-recent-label" className="wb-rlabel">{t('workbench.recent')}</h2>
+              <ul className="wb-rlist">
+                {recent.map((r) => (
+                  <li key={r.key}>
+                    <button
+                      type="button"
+                      className="wb-rrow"
+                      data-testid={`workbench-recent-${r.sessionId}`}
+                      onClick={() => setRoute({ name: 'project', projectId: r.projectId, sessionId: r.sessionId })}
+                    >
+                      <AgentGlyph slug={r.agent ?? 'orbital'} size={16} title={r.agent ? agentName(r.agent) : 'Orbital'} />
+                      <span className="wb-rproj" title={r.projectName}>{r.projectName}</span>
+                      <span className="wb-rtitle" title={r.title ?? undefined}>{r.title || t('workbench.card.untitled')}</span>
+                      <span className="wb-rtime">{formatRelativeTime(r.time, t)}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </section>
           )}
         </div>
       </div>

@@ -513,7 +513,7 @@ class Session:
                                 session.trigger_type = msg["trigger_type"]
                             if isinstance(msg.get("forked_from"), dict):
                                 session.forked_from = dict(msg["forked_from"])
-                            if msg.get("routed_by") in ("model", "fallback"):
+                            if msg.get("routed_by") in ("model", "agent", "fallback"):
                                 session.routed_by = msg["routed_by"]
                             elif "routed_by" in msg:
                                 session.routed_by = None
@@ -901,10 +901,11 @@ class Session:
         self._apply_meta_fields(pinned_target=self.pinned_target)
 
     def set_routed_by(self, routed_by: str | None) -> None:
-        """Spec 180: stamp (``"model"`` / ``"fallback"``) or clear (None) the
+        """Spec 180: stamp (``"model"`` / ``"agent"`` (keyless: a signed-in agent
+        routed it) / ``"fallback"``) or clear (None) the
         "Orbital chose this project" mark on the session_start meta. A clear
         persists as an explicit null, like a cleared pin."""
-        self.routed_by = routed_by if routed_by in ("model", "fallback") else None
+        self.routed_by = routed_by if routed_by in ("model", "agent", "fallback") else None
         self._apply_meta_fields(routed_by=self.routed_by)
 
     def set_sub_agent_params(self, slug: str, params: dict[str, str]) -> None:
