@@ -3851,10 +3851,16 @@ async def tokendance_signin(req: TokenDanceSigninRequest | None = None):
             detail={"code": "card_not_found",
                     "message": "That credential card no longer exists."},
         )
+    cancel = _begin_signin("tokendance")
     try:
-        key = await provision_api_key()
+        key = await provision_api_key(
+            cancel=cancel, on_url=_remember_signin_url("tokendance", cancel))
     except TokenDanceProvisioningError as exc:
+        if cancel.is_set():
+            raise _signin_error("signin_cancelled", "The sign-in was cancelled.", 499)
         raise HTTPException(status_code=502, detail=str(exc))
+    finally:
+        _end_signin("tokendance", cancel)
 
     default_model = (
         (_provider_registry.get_provider_data("tokendance") or {}).get("default_model")
@@ -3898,6 +3904,368 @@ async def tokendance_signin(req: TokenDanceSigninRequest | None = None):
     }
 
 
+# ---- Sign-in cards (spec 1123: Sign in with ChatGPT) ----------------------
+
+def _provider_data(provider: str) -> dict:
+    return (_provider_registry.get_provider_data(provider) or {}) if _provider_registry else {}
+
+
+def _is_signin_provider(provider: str | None) -> bool:
+    """Registry ``auth: "oauth"``: the card's secret is a token set from a
+    one-click sign-in, never a pasted key."""
+    return bool(provider) and _provider_data(provider).get("auth") == "oauth"
+
+
+async def _fresh_card_key(card) -> tuple[str, dict | None]:
+    """``(key, None)`` for a card, or ``("", failed_test)``.
+
+    An API-key card answers its stored key. A sign-in card answers an access
+    token fresh from the card's broker (refreshed when near expiry); a sign-in
+    that has ended answers the ``needs_signin`` verdict instead of a key.
+    """
+    from agent_os.agent.providers.types import LLMError
+
+    if card is None:
+        return "", {"ok": False, "status": None, "code": "card_not_found",
+                    "message": "That credential card no longer exists."}
+    if not _is_signin_provider(card.provider):
+        return _settings_store.key_for(card.id), None
+    tokens = getattr(_settings_store, "tokens", None)
+    if tokens is None:
+        return _settings_store.key_for(card.id), None
+    try:
+        return await tokens.access_token(card.id), None
+    except LLMError as e:
+        return "", {"ok": False, "status": e.status_code,
+                    "code": getattr(e, "code", None) or "provider_unreachable",
+                    "message": e.message}
+
+
+def _signin_error(code: str, message: str, status: int) -> HTTPException:
+    return HTTPException(status_code=status, detail={"code": code, "message": message})
+
+
+# The one-click sign-in waiting for its browser callback, per provider:
+# ``{"cancel": asyncio.Event, "url": str | None}`` (cancel / reopen routes).
+_PENDING_SIGNIN: dict[str, dict] = {}
+
+
+def _begin_signin(provider: str) -> asyncio.Event:
+    current = _PENDING_SIGNIN.get(provider)
+    if current is not None and not current["cancel"].is_set():
+        raise _signin_error("signin_in_progress",
+                            "A sign-in is already waiting in the browser.", 409)
+    cancel = asyncio.Event()
+    _PENDING_SIGNIN[provider] = {"cancel": cancel, "url": None}
+    return cancel
+
+
+def _remember_signin_url(provider: str, cancel: asyncio.Event):
+    def on_url(url: str) -> None:
+        entry = _PENDING_SIGNIN.get(provider)
+        if entry is not None and entry["cancel"] is cancel:
+            entry["url"] = url
+    return on_url
+
+
+def _end_signin(provider: str, cancel: asyncio.Event) -> None:
+    entry = _PENDING_SIGNIN.get(provider)
+    if entry is not None and entry["cancel"] is cancel:
+        _PENDING_SIGNIN.pop(provider, None)
+
+
+@router.post("/providers/{provider}/signin/cancel")
+async def signin_cancel(provider: str):
+    """Stop a one-click sign-in (chatgpt | tokendance) waiting for the
+    browser; the pending sign-in POST answers 499 ``signin_cancelled``."""
+    entry = _PENDING_SIGNIN.get(provider)
+    if entry is None or entry["cancel"].is_set():
+        return {"cancelled": False}
+    entry["cancel"].set()
+    return {"cancelled": True}
+
+
+@router.post("/providers/{provider}/signin/reopen")
+async def signin_reopen(provider: str):
+    """Open the system browser again on the SAME pending authorize URL
+    (the user closed the tab). The URL carries no secret."""
+    import webbrowser
+
+    entry = _PENDING_SIGNIN.get(provider)
+    if entry is None or entry["cancel"].is_set() or not entry.get("url"):
+        return {"reopened": False}
+    webbrowser.open(entry["url"])
+    return {"reopened": True}
+
+
+class ChatGPTSigninRequest(BaseModel):
+    # Sign in again on an existing ChatGPT card (keeps its id, model and
+    # every project that points at it). Omitted ⇒ a new card.
+    card_id: str | None = None
+
+
+def _pick_default_model(provider: str, live_ids: list[str]) -> str:
+    """Registry ``default_model`` when live, else the first live
+    ``suggested_models`` entry, else the first live id, else the registry's
+    own pick (no list)."""
+    data = _provider_data(provider)
+    default = data.get("default_model") or ""
+    suggested = list(data.get("suggested_models") or [])
+    if live_ids:
+        if default in live_ids:
+            return default
+        for mid in suggested:
+            if mid in live_ids:
+                return mid
+        return live_ids[0]
+    return default or (suggested[0] if suggested else "")
+
+
+@router.post("/providers/chatgpt/signin")
+async def chatgpt_signin(req: ChatGPTSigninRequest | None = None):
+    """One-click Sign in with ChatGPT (official open-source route).
+
+    Mirrors the TokenDance flow: blocking (system browser, up to 10 min),
+    stores the verified token set on a credential card daemon-side, runs the
+    connection test and returns the masked card. No token ever leaves the
+    daemon. The ``chatgpt.tokens.use.direct`` permission is required: a
+    sign-in without it stores nothing.
+    """
+    if _settings_store is None:
+        raise HTTPException(status_code=501, detail="Settings store not available")
+    from agent_os.providers_auth import chatgpt
+    from agent_os.providers_auth.token_cards import dump_bundle
+
+    card_id = req.card_id if req is not None else None
+    existing = _settings_store.resolve_card(card_id) if card_id else None
+    if card_id and existing is None:
+        raise _signin_error("card_not_found", "That credential card no longer exists.", 404)
+    if existing is not None and existing.provider != chatgpt.PROVIDER_KEY:
+        raise _signin_error("card_key_managed",
+                            "That card is not a ChatGPT card.", 400)
+    old = _settings_store.token_bundle(existing.id) if existing is not None else None
+    data_dir = getattr(_settings_store, "_data_dir", None) or os.path.join(
+        os.path.expanduser("~"), "orbital")
+    host_id = (old or {}).get("host_id") or chatgpt.load_or_create_host_id(data_dir)
+    cancel = _begin_signin(chatgpt.PROVIDER_KEY)
+    try:
+        bundle = await chatgpt.sign_in(
+            host_id=host_id, cancel=cancel,
+            on_url=_remember_signin_url(chatgpt.PROVIDER_KEY, cancel),
+            client_id=(old or {}).get("client_id") or None,
+            id_token_hint=(old or {}).get("id_token") or None,
+            expected_sub=(old or {}).get("sub") or None,
+        )
+    except chatgpt.ChatGPTAuthError as exc:
+        raise _signin_error(exc.code, exc.message, exc.status)
+    finally:
+        _end_signin(chatgpt.PROVIDER_KEY, cancel)
+
+    # The account's own model list decides the default model.
+    try:
+        entries = await _list_provider_models(
+            chatgpt.PROVIDER_KEY, bundle["access_token"], chatgpt.API_BASE,
+            "openai-responses")
+    except _ModelListError:
+        entries = []
+    live_ids = [m["id"] for m in entries]
+
+    secret = dump_bundle(bundle)
+    stored_default = _settings_store.stored_default_card()
+    default_usable = (stored_default is not None
+                      and bool(_settings_store.key_for(stored_default.id)))
+    try:
+        if existing is not None:
+            model = existing.model if (not live_ids or existing.model in live_ids) \
+                else _pick_default_model(chatgpt.PROVIDER_KEY, live_ids)
+            card = _settings_store.update_card(existing.id, api_key=secret, model=model)
+            if not default_usable and (stored_default is None
+                                       or stored_default.id != card.id):
+                _settings_store.set_default_card(card.id)
+        else:
+            card = _settings_store.create_card(
+                provider=chatgpt.PROVIDER_KEY,
+                model=_pick_default_model(chatgpt.PROVIDER_KEY, live_ids),
+                api_key=secret, make_default=not default_usable,
+            )
+    except (RuntimeError, ValueError) as exc:
+        raise _signin_error("keychain_error",
+                            f"Signed in, but the sign-in could not be stored: {exc}", 500)
+    tokens = getattr(_settings_store, "tokens", None)
+    if tokens is not None:
+        tokens.forget(card.id)
+
+    from agent_os import telemetry
+    telemetry.emit("key_set", {"provider": chatgpt.PROVIDER_KEY})
+    telemetry.latch("key_set")
+
+    test = await _test_and_record(card.id)
+    return {
+        "card": _settings_store.masked_card(_settings_store.get_card(card.id)),
+        "test": test,
+        "default_card_id": _settings_store.effective_default_card_id(),
+        "account": {"email": bundle.get("email") or ""},
+    }
+
+
+async def revoke_signin_card(card_id: str, store=None) -> tuple[bool | None, str | None]:
+    """Revoke a sign-in card's token at its provider before the card goes.
+
+    ``(None, None)`` for an API-key card; ``(True, None)`` when revoked;
+    ``(False, reason)`` when revocation was not confirmed (the caller still
+    removes the card — the docs say to tell the user, not to keep tokens).
+    """
+    store = store if store is not None else _settings_store
+    bundle = store.token_bundle(card_id) if store is not None else None
+    if bundle is None:
+        return None, None
+    if bundle.get("provider") == "chatgpt":
+        from agent_os.providers_auth import chatgpt
+
+        try:
+            await chatgpt.revoke(bundle)
+            return True, None
+        except chatgpt.ChatGPTAuthError as exc:
+            return False, exc.message
+    return False, "This sign-in type cannot be revoked from Orbital."
+
+
+_REGION_LABELS = {"global": "International", "china": "China"}
+
+
+def _catalog_entry(pid: str, data: dict) -> dict:
+    china = bool(data.get("china_base_url"))
+    base_console = data.get("console_url") or None
+    regions = []
+    if china and data.get("base_url") and not data.get("china_only"):
+        regions = [
+            {"id": "global", "label": _REGION_LABELS["global"],
+             "console_url": data.get("global_console_url") or base_console},
+            {"id": "china", "label": _REGION_LABELS["china"],
+             "console_url": data.get("china_console_url") or base_console},
+        ]
+    signin = data.get("signin") or None
+    auth = data.get("auth")
+    if auth == "oauth":
+        auth_kind = "signin"
+    elif pid == "custom":
+        auth_kind = "none"
+    else:
+        auth_kind = "api_key"
+    key_entry = data.get("key_entry")
+    return {
+        "id": pid,
+        "display_name": data.get("display_name") or pid,
+        "auth": auth_kind,
+        "signin": signin,
+        "key_entry": bool(key_entry) if key_entry is not None else auth_kind != "signin",
+        "regions": regions,
+        "default_region": "china" if data.get("china_only") else "global",
+        "console_url": (regions[0]["console_url"] if regions
+                        else data.get("global_console_url") or base_console),
+        "supports_model_list": bool(data.get("supports_model_list")),
+        "default_model": data.get("default_model")
+                         or (list(data.get("suggested_models") or []) or [None])[0],
+        "china_only": bool(data.get("china_only")),
+        "custom_endpoint": pid == "custom",
+    }
+
+
+@router.get("/providers/catalog")
+async def provider_catalog():
+    """The connect screen's view of the registry (CONTRACT §1)."""
+    providers = _provider_registry.all_providers() if _provider_registry else {}
+    return {"providers": [_catalog_entry(pid, data or {})
+                          for pid, data in providers.items()]}
+
+
+class ProviderCheckRequest(BaseModel):
+    provider: str = "custom"
+    region: str = "global"
+    api_key: str = ""
+    base_url: str | None = None
+    sdk: str | None = None
+    model: str | None = None
+    card_id: str | None = None
+
+
+@router.post("/providers/check")
+async def provider_check(req: ProviderCheckRequest):
+    """Test provider + region + key; on pass, the live models and the model
+    to preselect (CONTRACT §2). 200 for every provider verdict."""
+    from agent_os.daemon_v2.settings_store import CredentialCard, resolve_card_endpoint
+
+    if req.card_id:
+        card = _settings_store.resolve_card(req.card_id) if _settings_store else None
+        if card is None:
+            raise _signin_error("card_not_found",
+                                "That credential card no longer exists.", 404)
+        provider = card.provider
+        # Overrides for an edit form re-testing a saved card: another region
+        # (the key stays daemon-side), or a replacement key just pasted.
+        fields = req.model_fields_set
+        if "region" in fields and req.region and provider != "custom":
+            card = card.model_copy(update={"region": req.region})
+        if (req.api_key or "").strip() and not _is_signin_provider(provider):
+            api_key, failure = req.api_key, None
+        else:
+            api_key, failure = await _fresh_card_key(card)
+        base_url, sdk = resolve_card_endpoint(card)
+    else:
+        if _is_signin_provider(req.provider):
+            raise _signin_error(
+                "signin_required",
+                "ChatGPT connects through Sign in with ChatGPT, not a pasted key.", 400)
+        failure = None
+        provider = req.provider
+        api_key = req.api_key or ""
+        candidate = CredentialCard(
+            id="", provider=provider, region=req.region or "global",
+            base_url=(req.base_url or None) if provider == "custom" else None,
+            sdk=(req.sdk or None) if provider == "custom" else None)
+        base_url, sdk = resolve_card_endpoint(candidate)
+
+    empty = {"models": [], "model_details": [], "default_model": None,
+             "models_source": None}
+    if failure is not None:
+        return {**failure, **empty, "tested_model": None}
+
+    entries: list[dict] = []
+    source = None
+    list_error: _ModelListError | None = None
+    if _provider_data(provider).get("supports_model_list", provider == "custom"):
+        try:
+            entries = await _list_provider_models(provider, api_key, base_url, sdk)
+            source = "live"
+        except _ModelListError as e:
+            list_error = e
+    live_ids = [m["id"] for m in entries]
+    model = (req.model or "").strip() or _pick_default_model(provider, live_ids)
+    if not entries:
+        suggested = [m for m in (_provider_data(provider).get("suggested_models") or [])]
+        entries = [{"id": m, "display_name": None, "context_window": None}
+                   for m in suggested]
+        source = "suggested" if entries else None
+    if not model:
+        if list_error is not None and list_error.status in (401, 403):
+            return {"ok": False, "status": list_error.status,
+                    "code": "invalid_api_key", "message": "Invalid API key",
+                    **empty, "tested_model": None}
+        return {"ok": False, "status": None, "code": "missing_model",
+                "message": "Orbital could not find a model to test this key with. "
+                           "Type a model name.",
+                **empty, "tested_model": None}
+
+    result = await run_connection_test(provider, model, api_key, base_url, sdk or "")
+    _remember_test(_test_fingerprint(provider, model, api_key, base_url, sdk or ""), result)
+    if not result.get("ok"):
+        return {**result, **empty, "tested_model": model}
+    if model not in [m["id"] for m in entries]:
+        entries = [{"id": model, "display_name": None, "context_window": None}] + entries
+    return {**result, "models": [m["id"] for m in entries], "model_details": entries,
+            "default_model": model, "tested_model": model, "models_source": source}
+
+
 def _card_inputs(card, api_key: str) -> tuple:
     """``(provider, model, api_key, base_url, sdk)`` for a card's test."""
     from agent_os.daemon_v2.settings_store import resolve_card_endpoint
@@ -3914,6 +4282,10 @@ async def test_card_candidate(card, api_key: str) -> dict:
     produced for these exact inputs is used instead of calling the provider a
     second time; no remembered verdict ⇒ a real test.
     """
+    if card.id and _is_signin_provider(card.provider):
+        api_key, failure = await _fresh_card_key(card)
+        if failure is not None:
+            return failure
     inputs = _card_inputs(card, api_key)
     result = _take_recent_test(_test_fingerprint(*inputs))
     if result is None:
@@ -3932,8 +4304,9 @@ async def _test_and_record(card_id: str) -> dict:
     if card is None:
         return {"ok": False, "status": None, "code": "card_not_found",
                 "message": "That credential card no longer exists."}
-    result = await run_connection_test(
-        *_card_inputs(card, _settings_store.key_for(card.id)))
+    key, failure = await _fresh_card_key(card)
+    result = failure if failure is not None else await run_connection_test(
+        *_card_inputs(card, key))
     if result["ok"]:
         _settings_store.record_card_health(card.id, verified=True)
     else:
@@ -4005,11 +4378,43 @@ async def fetch_models(req: FetchModelsRequest):
         req.card_id, provider=req.provider, model="",
         api_key=req.api_key or "", base_url=req.base_url, sdk=req.sdk or "",
     )
+    if req.card_id and _is_signin_provider(provider):
+        api_key, failure = await _fresh_card_key(_settings_store.resolve_card(req.card_id))
+        if failure is not None:
+            raise HTTPException(status_code=failure["status"] or 401,
+                                detail=failure["message"])
+    try:
+        entries = await _list_provider_models(provider, api_key, base_url, sdk)
+    except _ModelListError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail)
+    return {"models": [m["id"] for m in entries], "details": entries}
+
+
+class _ModelListError(Exception):
+    def __init__(self, status: int, detail: str):
+        super().__init__(detail)
+        self.status = status
+        self.detail = detail
+
+
+async def _list_provider_models(provider: str, api_key: str, base_url: str | None,
+                                sdk: str | None) -> list[dict]:
+    """The provider's live chat models as ``[{id, display_name, context_window}]``.
+
+    Two list shapes: the OpenAI ``{"data": [{id}]}`` (every key provider;
+    sorted by id, as before) and ``{"models": [{slug, visibility,
+    context_window}]}`` (the Sign in with ChatGPT route; server order kept,
+    ``visibility == "list"`` only, and its per-account context windows are
+    recorded so the card's model limits follow the route, not the catalog).
+    Raises ``_ModelListError(status, detail)``.
+    """
+    import httpx
+
     provider_info = _provider_registry.get_provider_data(provider) if _provider_registry else None
     if not base_url:
         base_url = provider_info["base_url"] if provider_info else None
     if not base_url:
-        raise HTTPException(status_code=400, detail="No base_url for provider")
+        raise _ModelListError(400, "No base_url for provider")
 
     # Handle Anthropic (different models endpoint). Omit the auth header
     # entirely when there is no key — a keyless local server needs none, and an
@@ -4038,14 +4443,24 @@ async def fetch_models(req: FetchModelsRequest):
             resp = await client.get(models_url, headers=headers)
             resp.raise_for_status()
             data = resp.json()
-            # Normalize: extract chat-capable model IDs
-            return {"models": sorted(_chat_model_ids(data))}
         except httpx.HTTPStatusError as e:
-            raise HTTPException(status_code=e.response.status_code, detail=f"Provider returned {e.response.status_code}")
+            raise _ModelListError(e.response.status_code,
+                                  f"Provider returned {e.response.status_code}")
         except Exception as e:
             # str(httpx.ReadTimeout()) is "" — the most likely failure here is
             # exactly the one that would report nothing at all.
-            raise HTTPException(status_code=502, detail=str(e) or type(e).__name__)
+            raise _ModelListError(502, str(e) or type(e).__name__)
+    if isinstance(data, dict) and "data" not in data and isinstance(data.get("models"), list):
+        from agent_os.config.provider_registry import note_live_context_window
+        from agent_os.providers_auth.chatgpt import parse_model_list
+
+        entries = parse_model_list(data)
+        for m in entries:
+            note_live_context_window(provider, m["id"], m.get("context_window"))
+        return entries
+    # Normalize: extract chat-capable model IDs
+    return [{"id": mid, "display_name": None, "context_window": None}
+            for mid in sorted(_chat_model_ids(data))]
 
 
 _WIRE_PROTOCOL_NAMES = {
@@ -4182,6 +4597,8 @@ async def run_connection_test(provider: str, model: str, api_key: str,
             extra_headers=provider_info.get("extra_headers") if provider_info else None,
             session_header=provider_info.get("session_header") if provider_info else None,
             session_scope=provider_info.get("session_scope") if provider_info else None,
+            system_role=(provider_info or {}).get("system_role"),
+            stream_only=bool((provider_info or {}).get("stream_only")),
         )
         await client.complete(messages=[{"role": "user", "content": "hi"}])
         return {"ok": True, "status": 200, "code": None,
@@ -4191,6 +4608,10 @@ async def run_connection_test(provider: str, model: str, api_key: str,
                 "message": str(e)}
     except LLMError as e:
         status = e.status_code
+        if getattr(e, "code", None):
+            # Named by the provider layer (sign-in ended, plan usage refused).
+            return {"ok": False, "status": status, "code": e.code,
+                    "message": e.message}
         if status in (401, 403):
             code = "invalid_api_key" if is_rejected_credential(status, e.message) else "provider_error"
             return {"ok": False, "status": status, "code": code,

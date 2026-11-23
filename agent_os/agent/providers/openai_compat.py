@@ -31,6 +31,8 @@ from agent_os.agent.providers.types import (
     LLMResponse,
     ContextOverflowError,
     LLMError,
+    StreamAccumulator,
+    plan_usage_error,
 )
 from agent_os.agent.providers.think_splitter import InlineThinkSplitter
 from agent_os.agent.providers.responses_adapter import (
@@ -164,6 +166,20 @@ def _classify_error(exc: Exception) -> None:
 
     if status_code == 400 and ("context_length" in str(exc).lower() or "context length" in str(message).lower()):
         raise ContextOverflowError(str(message)) from exc
+
+    # Sign in with ChatGPT plan-usage refusals carry a structured
+    # ``error.code`` (the SDK exposes it as ``exc.code`` / ``exc.body``).
+    body = getattr(exc, "body", None)
+    err_code = getattr(exc, "code", None)
+    err_param = getattr(exc, "param", None)
+    if isinstance(body, dict):
+        err_code = err_code or body.get("code")
+        err_param = err_param or body.get("param")
+    if isinstance(err_code, str):
+        mapped = plan_usage_error(err_code, status=status_code,
+                                  param=err_param if isinstance(err_param, str) else None)
+        if mapped is not None:
+            raise mapped from exc
 
     hint = _recovery_hint(exc)
     if hint:
@@ -637,7 +653,10 @@ class LLMProvider:
                  max_output: int = 16384, capabilities=None, reasoning=None,
                  provider: str = "unknown", extra_headers: dict | None = None,
                  session_header: str | None = None,
-                 session_scope: str | None = None):
+                 session_scope: str | None = None,
+                 token_source=None,
+                 system_role: str | None = None,
+                 stream_only: bool = False):
         self.model = model
         self.api_key = api_key
         self.base_url = base_url
@@ -672,6 +691,16 @@ class LLMProvider:
         # ``[CACHE_AUDIT]`` line. The Memory session (spec 124 §3.7) sets
         # ``"memory"`` on its own client; everything else is ``main``.
         self.cache_audit_caller: str = "main"
+        # Sign-in cards (``providers_auth.token_cards``): an async
+        # ``(force=False, failed_token=None) -> access token`` consulted before
+        # every request, and once more (forced) after a 401. None for every
+        # API-key card, which keeps its static key.
+        self.token_source = token_source
+        # Registry route flags. ``system_role="developer"``: system rows go
+        # out as developer messages. ``stream_only``: the route refuses
+        # ``stream: false``, so ``complete()`` streams and assembles.
+        self.system_role = system_role or "system"
+        self.stream_only = bool(stream_only)
 
         if sdk == "anthropic":
             import anthropic
@@ -1175,7 +1204,7 @@ class LLMProvider:
             "model": self.model,
             "input": messages_to_responses_input(
                 rows, provider=self.provider, model=self.model,
-                replay_reasoning=replay),
+                replay_reasoning=replay, system_role=self.system_role),
         }
         if tools:
             body["tools"] = tools_to_responses(tools)
@@ -1222,6 +1251,7 @@ class LLMProvider:
                 "off": off}
         applied: set[str] = set()
         headers = self._request_headers()
+        await self._refresh_token()
         while True:
             body = self._responses_body(messages, tools, stream=stream, **opts)
             _dump_llm_request(self, body, path=path if not applied else f"{path}_retry",
@@ -1251,6 +1281,13 @@ class LLMProvider:
                       and input_has_images(body["input"])):
                     fix = "flatten"
                     opts["flatten"] = True
+                elif (self.token_source is not None and "auth" not in applied
+                      and getattr(exc, "status_code", None) == 401):
+                    # A sign-in card's token was refused: refresh once (the
+                    # broker skips the network when another request already
+                    # did) and retry once. A second 401 is classified.
+                    fix = "auth"
+                    await self._refresh_token(force=True)
                 if fix is None:
                     _classify_error(exc)
                 logging.getLogger(__name__).warning(
@@ -1275,9 +1312,41 @@ class LLMProvider:
         except Exception as exc:
             _classify_error(exc)
 
+    async def _refresh_token(self, *, force: bool = False) -> None:
+        """Swap in a fresh access token from a sign-in card's broker."""
+        if self.token_source is None:
+            return
+        failed = self.api_key if force else None
+        token = await self.token_source(force=force, failed_token=failed)
+        if token and token != self.api_key:
+            self.update_api_key(token)
+
+    async def _complete_responses_streamed(self, messages, tools=None, *,
+                                           disable_reasoning: bool = False) -> LLMResponse:
+        """``complete()`` on a stream-only route: stream, then assemble."""
+        stream = await self._create_responses(
+            messages, tools, stream=True, path="complete",
+            disable_reasoning=disable_reasoning)
+        state = ResponsesStreamState(provider=self.provider, model=self.model)
+        acc = StreamAccumulator()
+        try:
+            async for event in stream:
+                for chunk in state.handle(event):
+                    acc.add(chunk)
+        except (ContextOverflowError, LLMError):
+            raise
+        except Exception as exc:
+            _classify_error(exc)
+        result = acc.finalize()
+        _log_cache_audit(self.model, result.usage, caller=self.cache_audit_caller)
+        return result
+
     async def _complete_responses(self, messages, tools=None, *,
                                   disable_reasoning: bool = False) -> LLMResponse:
         """Responses non-streaming path."""
+        if self.stream_only:
+            return await self._complete_responses_streamed(
+                messages, tools, disable_reasoning=disable_reasoning)
         response = await self._create_responses(
             messages, tools, stream=False, path="complete",
             disable_reasoning=disable_reasoning)

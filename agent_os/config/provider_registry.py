@@ -207,6 +207,19 @@ def _parse_model_entry(entry: dict) -> ModelInfo:
 # Module-level default for unknown models
 _UNKNOWN_MODEL = ModelInfo()
 
+# Context windows a provider's own live model list reported, keyed
+# (provider, model). Process-wide (every ProviderRegistry instance reads it)
+# and only ever filled from a provider that publishes per-account limits (the
+# Sign in with ChatGPT route's ``/v1/models``): the live number wins over the
+# bundled catalog, which can disagree with what this account is served.
+_LIVE_CONTEXT_WINDOWS: dict[tuple[str, str], int] = {}
+
+
+def note_live_context_window(provider: str, model: str, context_window) -> None:
+    """Record the context window ``provider``'s live list gave ``model``."""
+    if isinstance(context_window, int) and context_window > 0 and model:
+        _LIVE_CONTEXT_WINDOWS[(provider, model)] = context_window
+
 
 class ProviderRegistry:
     """Read-only registry for provider and model metadata.
@@ -291,6 +304,9 @@ class ProviderRegistry:
         info = _parse_model_entry(entry)
         if not matched_exactly and (info.sdk or info.base_url):
             info = replace(info, sdk=None, base_url=None)
+        live = _LIVE_CONTEXT_WINDOWS.get((provider, model))
+        if live:
+            info = replace(info, context_window=live)
         return info
 
     def get_capabilities(self, provider: str, model: str) -> ModelCapabilities:

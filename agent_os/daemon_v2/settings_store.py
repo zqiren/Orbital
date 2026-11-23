@@ -35,6 +35,9 @@ from agent_os.utils.text_io import read_text_lenient
 logger = logging.getLogger(__name__)
 
 
+from agent_os.providers_auth.token_cards import parse_bundle  # noqa: E402
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -624,8 +627,43 @@ class SettingsStore:
         return card.id if card is not None else None
 
     def key_for(self, card_id: str | None) -> str:
-        """The raw key for ``card_id``, or "" — the ONE key lookup."""
+        """The key for ``card_id``, or "" — the ONE key lookup.
+
+        For a sign-in card (its secret is a token set) this is the CURRENT
+        access token — what every consumer of a key sends as the bearer. It
+        may be near expiry; a provider client built for the card refreshes it
+        through ``self.tokens`` before each call.
+        """
+        raw = self.secret_for(card_id)
+        bundle = parse_bundle(raw)
+        if bundle is not None:
+            return bundle.get("access_token") or ""
+        return raw
+
+    def secret_for(self, card_id: str | None) -> str:
+        """The card's raw stored secret (a key, or a serialized token set)."""
         return self._cards.get(card_id) or "" if card_id else ""
+
+    def token_bundle(self, card_id: str | None) -> dict | None:
+        """The token set of a sign-in card, or None for an API-key card."""
+        return parse_bundle(self.secret_for(card_id))
+
+    def set_card_secret(self, card_id: str, secret: str) -> dict:
+        """Replace a card's raw secret (the token broker's rotation write)."""
+        if card_id == ENV_CARD_ID:
+            raise ValueError("the environment card is read-only")
+        return self._cards.set(card_id, secret)
+
+    @property
+    def tokens(self):
+        """The per-store ``TokenBroker`` for sign-in cards (lazy)."""
+        broker = getattr(self, "_token_broker", None)
+        if broker is None:
+            from agent_os.providers_auth.token_cards import TokenBroker
+
+            broker = TokenBroker(self)
+            self._token_broker = broker
+        return broker
 
     def has_key(self, card_id: str | None) -> bool:
         """Whether ``card_id`` carries a non-empty key — cached.
@@ -677,14 +715,24 @@ class SettingsStore:
         """The wire shape of a card. The raw key is NEVER in it."""
         if default_id is None:
             default_id = self.effective_default_card_id()
-        key = self.key_for(card.id)
+        raw = self.secret_for(card.id)
+        bundle = parse_bundle(raw)
+        key = raw if bundle is None else (bundle.get("access_token") or "")
         data = card.model_dump()
+        needs_signin = bool(
+            bundle is not None and isinstance(card.last_error, dict)
+            and card.last_error.get("code") == "needs_signin")
         data.update({
             "key_set": bool(key),
-            "key_masked": mask_key(key),
+            # A sign-in card shows its account, not a token fragment.
+            "key_masked": mask_key(key) if bundle is None else "",
             "key_source": self.key_source(card.id),
             "is_default": card.id == default_id,
             "read_only": card.id == ENV_CARD_ID,
+            "auth": "signin" if bundle is not None else "api_key",
+            "account": ({"email": bundle.get("email") or ""}
+                        if bundle is not None else None),
+            "needs_signin": needs_signin,
         })
         return data
 

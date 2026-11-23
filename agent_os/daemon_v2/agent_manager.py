@@ -927,6 +927,12 @@ class AgentManager:
         def _session_scope_for(provider_key: str) -> str | None:
             return self._provider_registry.get_provider_data(provider_key).get("session_scope")
 
+        # Registry route flags + sign-in cards (spec 1123): a provider with
+        # ``auth: "oauth"`` gets the card's shared token source, so manager,
+        # utility and fallback clients on one card refresh through one lock.
+        def _route_kw(provider_key: str, card_id: str) -> dict:
+            return self._route_kwargs(provider_key, card_id)
+
         # Per-model endpoint override (registry ``sdk``/``base_url``). An
         # aggregator serves different models over different wire protocols
         # under one key — OpenCode Go puts minimax-m3 on Anthropic /messages
@@ -945,6 +951,7 @@ class AgentManager:
             extra_headers=_headers_for(config.provider),
             session_header=_session_header_for(config.provider),
             session_scope=_session_scope_for(config.provider),
+            **_route_kw(config.provider, getattr(config, "card_id", "")),
         )
 
         fallback_providers = []
@@ -963,7 +970,9 @@ class AgentManager:
                             provider=getattr(fb, 'provider', 'custom'),
                             extra_headers=_headers_for(getattr(fb, 'provider', 'custom')),
                             session_header=_session_header_for(getattr(fb, 'provider', 'custom')),
-                            session_scope=_session_scope_for(getattr(fb, 'provider', 'custom')))
+                            session_scope=_session_scope_for(getattr(fb, 'provider', 'custom')),
+                            **_route_kw(getattr(fb, 'provider', 'custom'),
+                                        getattr(fb, 'card_id', '')))
             )
 
         if config.utility_model:
@@ -977,6 +986,7 @@ class AgentManager:
                 extra_headers=_headers_for(config.provider),
                 session_header=_session_header_for(config.provider),
                 session_scope=_session_scope_for(config.provider),
+                **_route_kw(config.provider, getattr(config, "card_id", "")),
             )
         else:
             utility_provider = provider
@@ -1008,7 +1018,22 @@ class AgentManager:
                 af.provider).get("session_header"),
             session_scope=self._provider_registry.get_provider_data(
                 af.provider).get("session_scope"),
+            **self._route_kwargs(af.provider, getattr(af, "card_id", "")),
         )
+
+    def _route_kwargs(self, provider_key: str, card_id: str) -> dict:
+        """LLMProvider kwargs from the registry's route flags for a card."""
+        data = self._provider_registry.get_provider_data(provider_key) or {}
+        kw: dict = {}
+        if data.get("system_role"):
+            kw["system_role"] = data["system_role"]
+        if data.get("stream_only"):
+            kw["stream_only"] = True
+        if data.get("auth") == "oauth" and card_id and self._settings_store is not None:
+            tokens = getattr(self._settings_store, "tokens", None)
+            if tokens is not None:
+                kw["token_source"] = tokens.token_source(card_id)
+        return kw
 
     @staticmethod
     def _provider_config_changed(handle, cfg: AgentConfig) -> bool:
@@ -1659,10 +1684,13 @@ class AgentManager:
         # it in daemon.log. Nothing is disabled or switched (spec 072 D2).
         card_id_for_health = config.card_id
 
-        def record_credential_error(status: int, message: str) -> None:
+        def record_credential_error(status: int, message: str,
+                                    code: str | None = None) -> None:
             if not card_id_for_health or self._settings_store is None:
                 return
-            if is_rejected_credential(status, message):
+            if code:
+                pass  # the provider layer already named it (needs_signin, not_eligible)
+            elif is_rejected_credential(status, message):
                 code = "invalid_api_key"
             else:
                 code = "insufficient_credits" if status == 402 else "provider_error"

@@ -58,6 +58,7 @@ from agent_os.agent.providers.types import (
     LLMError,
     StreamChunk,
     TokenUsage,
+    plan_usage_error,
 )
 
 logger = logging.getLogger(__name__)
@@ -317,7 +318,8 @@ def _assistant_items(msg: dict, *, provider: str, model: str,
 
 
 def messages_to_responses_input(messages: list, *, provider: str, model: str,
-                                replay_reasoning: bool = True) -> list:
+                                replay_reasoning: bool = True,
+                                system_role: str = "system") -> list:
     """Prepared Chat-shaped rows -> Responses ``input`` items.
 
     ``messages`` must already be stripped of Orbital bookkeeping and repaired
@@ -326,11 +328,17 @@ def messages_to_responses_input(messages: list, *, provider: str, model: str,
     are dropped. ``replay_reasoning=False`` sends every assistant message as
     plain items (no reasoning, no ids) — the retry after the server could not
     decrypt old reasoning.
+
+    ``system_role="developer"`` (registry flag ``system_role``) sends system
+    rows as developer messages: the Sign in with ChatGPT route refuses
+    system-role items ("System messages are not allowed").
     """
     items: list = []
     for msg in messages:
         role = msg.get("role")
         if role in ("system", "developer"):
+            if role == "system" and system_role == "developer":
+                role = "developer"
             items.append({"role": role, "content": _message_content(msg.get("content"))})
         elif role == "user":
             items.append({"role": "user", "content": _message_content(msg.get("content"))})
@@ -384,6 +392,9 @@ def raise_response_error(code: str | None, message: str | None) -> None:
     """Raise the LLMError / ContextOverflowError for an in-stream failure
     (an ``error`` event, or ``response.failed``)."""
     message = message or "The model response failed"
+    mapped = plan_usage_error(code)
+    if mapped is not None:
+        raise mapped
     text = f"{code}: {message}" if code else message
     probe = f"{code or ''} {message}".lower()
     if "context_length" in probe or "context window" in probe or "context length" in probe:

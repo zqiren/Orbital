@@ -886,6 +886,331 @@
         "notes": "Auto-cache >=1024 tokens. Use prompt_cache_key for routing stickiness; ~15 RPM/engine ceiling. Responses API caches reasoning persists, Chat Completions does not — meaningful caching with o-series effectively requires Responses API. https://developers.openai.com/api/docs/guides/prompt-caching"
       }
     },
+    "chatgpt": {
+      "display_name": "ChatGPT",
+      "base_url": "https://api.openai.com/v1",
+      "console_url": null,
+      "no_china_endpoint": true,
+      "currency": "USD",
+      "supports_model_list": true,
+      "sdk": "openai-responses",
+      "auth": "oauth",
+      "signin": "chatgpt",
+      "key_entry": false,
+      "session_header": "session-id",
+      "system_role": "developer",
+      "stream_only": true,
+      "default_model": "gpt-6.2-sol",
+      "suggested_models": [
+        "gpt-6.2-sol",
+        "gpt-6.2-astra",
+        "gpt-6.1-terra",
+        "gpt-6-luna",
+        "gpt-5.6-sol"
+      ],
+      "notes": "Sign in with ChatGPT (official open-source token-sharing route, developers.openai.com/siwc/token-sharing-open-source): Orbital registers as the agent 'Orbital' and runs on the user's ChatGPT plan. Same public endpoint as the API (api.openai.com/v1, Responses API) but a different contract, so it is its own provider: OAuth token set instead of a key (auth=oauth, refreshed before each call), store:false + stream:true on every request (stream_only), system rows as developer messages (system_role), no temperature/max_output_tokens/hosted tools, and a session-id header that turns the prompt cache on (0% cached without it, ~90% with it, spike 2026-11-23). GET /v1/models answers {models:[{slug, visibility, context_window}]} per account. Usage is billed to the ChatGPT plan, so pricing is zero. OpenAI exposes no plan type or quota; the only signal is the subscription_sharing_* error codes.",
+      "pricing": {
+        "_default": {
+          "input_per_1m": 0.0,
+          "cached_input_per_1m": 0.0,
+          "output_per_1m": 0.0
+        }
+      },
+      "models": {
+        "gpt-6.2-sol": {
+          "display_name": "GPT-6.2 Sol",
+          "tier": "flagship",
+          "context_window": 500000,
+          "max_output": 128000,
+          "capabilities": {
+            "vision": true,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "none",
+            "enable": "param:reasoning_effort=medium",
+            "efforts": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max",
+              "ultra"
+            ],
+            "notes": "Sign in with ChatGPT route: Responses API only, reasoning cannot be turned off (no 'none' effort on this route); context window as the route's /v1/models reports it (2026-11-23)."
+          }
+        },
+        "gpt-6.2-astra": {
+          "display_name": "GPT-6.2 Astra",
+          "tier": "flagship",
+          "context_window": 272000,
+          "max_output": 128000,
+          "capabilities": {
+            "vision": true,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "none",
+            "enable": "param:reasoning_effort=medium",
+            "efforts": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max",
+              "ultra"
+            ],
+            "notes": "Sign in with ChatGPT route: Responses API only, reasoning cannot be turned off (no 'none' effort on this route); context window as the route's /v1/models reports it (2026-11-23)."
+          }
+        },
+        "gpt-6.1-terra": {
+          "display_name": "GPT-6.1 Terra",
+          "tier": "balanced",
+          "context_window": 500000,
+          "max_output": 128000,
+          "capabilities": {
+            "vision": true,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "none",
+            "enable": "param:reasoning_effort=medium",
+            "efforts": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max",
+              "ultra"
+            ],
+            "notes": "Sign in with ChatGPT route: Responses API only, reasoning cannot be turned off (no 'none' effort on this route); context window as the route's /v1/models reports it (2026-11-23)."
+          }
+        },
+        "gpt-6.1-sol": {
+          "display_name": "GPT-6.1 Sol",
+          "tier": "flagship",
+          "context_window": 500000,
+          "max_output": 128000,
+          "capabilities": {
+            "vision": true,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "none",
+            "enable": "param:reasoning_effort=medium",
+            "efforts": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max",
+              "ultra"
+            ],
+            "notes": "Sign in with ChatGPT route: Responses API only, reasoning cannot be turned off (no 'none' effort on this route); context window as the route's /v1/models reports it (2026-11-23)."
+          }
+        },
+        "gpt-6-astra": {
+          "display_name": "GPT-6 Astra",
+          "tier": "flagship",
+          "context_window": 272000,
+          "max_output": 128000,
+          "capabilities": {
+            "vision": true,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "none",
+            "enable": "param:reasoning_effort=medium",
+            "efforts": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max",
+              "ultra"
+            ],
+            "notes": "Sign in with ChatGPT route: Responses API only, reasoning cannot be turned off (no 'none' effort on this route); context window as the route's /v1/models reports it (2026-11-23)."
+          }
+        },
+        "gpt-6-sol": {
+          "display_name": "GPT-6 Sol",
+          "tier": "flagship",
+          "context_window": 272000,
+          "max_output": 128000,
+          "capabilities": {
+            "vision": true,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "none",
+            "enable": "param:reasoning_effort=medium",
+            "efforts": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max",
+              "ultra"
+            ],
+            "notes": "Sign in with ChatGPT route: Responses API only, reasoning cannot be turned off (no 'none' effort on this route); context window as the route's /v1/models reports it (2026-11-23)."
+          }
+        },
+        "gpt-6-luna": {
+          "display_name": "GPT-6 Luna",
+          "tier": "fast",
+          "context_window": 272000,
+          "max_output": 128000,
+          "capabilities": {
+            "vision": true,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "none",
+            "enable": "param:reasoning_effort=medium",
+            "efforts": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "notes": "Sign in with ChatGPT route: Responses API only, reasoning cannot be turned off (no 'none' effort on this route); context window as the route's /v1/models reports it (2026-11-23)."
+          }
+        },
+        "gpt-5.6-sol": {
+          "display_name": "GPT-5.6 Sol",
+          "tier": "flagship",
+          "context_window": 272000,
+          "max_output": 128000,
+          "capabilities": {
+            "streaming": true,
+            "tool_use": true,
+            "vision": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "none",
+            "enable": "param:reasoning_effort=medium",
+            "efforts": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max",
+              "ultra"
+            ],
+            "notes": "Sign in with ChatGPT route: Responses API only, reasoning cannot be turned off (no 'none' effort on this route); context window as the route's /v1/models reports it (2026-11-23)."
+          }
+        },
+        "gpt-5.6-terra": {
+          "display_name": "GPT-5.6 Terra",
+          "tier": "balanced",
+          "context_window": 272000,
+          "max_output": 128000,
+          "capabilities": {
+            "streaming": true,
+            "tool_use": true,
+            "vision": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "none",
+            "enable": "param:reasoning_effort=medium",
+            "efforts": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max",
+              "ultra"
+            ],
+            "notes": "Sign in with ChatGPT route: Responses API only, reasoning cannot be turned off (no 'none' effort on this route); context window as the route's /v1/models reports it (2026-11-23)."
+          }
+        },
+        "gpt-5.6-luna": {
+          "display_name": "GPT-5.6 Luna",
+          "tier": "fast",
+          "context_window": 272000,
+          "max_output": 128000,
+          "capabilities": {
+            "streaming": true,
+            "tool_use": true,
+            "vision": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "none",
+            "enable": "param:reasoning_effort=medium",
+            "efforts": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "notes": "Sign in with ChatGPT route: Responses API only, reasoning cannot be turned off (no 'none' effort on this route); context window as the route's /v1/models reports it (2026-11-23)."
+          }
+        },
+        "gpt-6*": {
+          "display_name": "GPT-6 (uncatalogued)",
+          "tier": "flagship",
+          "context_window": 272000,
+          "max_output": 128000,
+          "capabilities": {
+            "vision": true,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "none",
+            "enable": "param:reasoning_effort=medium",
+            "efforts": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "notes": "Served over the Responses API: from GPT-5.4 on, Chat Completions refuses function tools with reasoning on. Reasoning stays on; encrypted reasoning items are replayed (store:false) and summaries surface as thinking. https://developers.openai.com/api/docs/guides/migrate-to-responses Rejects reasoning effort 'none', so reasoning cannot be turned off. Family pattern (key ends in *, matches across versions): an uncatalogued gpt-6.x id resolves here, so it keeps the Responses endpoint instead of falling back to Chat Completions (flagship inheritance carries specs, never the endpoint). Effort list omits 'none' so the off switch is never sent to a model that may refuse it."
+          }
+        },
+        "_default": {
+          "context_window": 272000,
+          "max_output": 128000,
+          "capabilities": {
+            "vision": true,
+            "tool_use": true,
+            "streaming": true
+          }
+        }
+      }
+    },
     "anthropic": {
       "display_name": "Anthropic",
       "base_url": "https://api.anthropic.com",
@@ -1560,6 +1885,8 @@
       "base_url": "https://api.moonshot.ai/v1",
       "china_base_url": "https://api.moonshot.cn/v1",
       "console_url": "https://platform.moonshot.cn/console/api-keys",
+      "global_console_url": "https://platform.moonshot.ai/console/api-keys",
+      "china_console_url": "https://platform.moonshot.cn/console/api-keys",
       "currency": "CNY",
       "supports_model_list": true,
       "sdk": "openai",
@@ -1804,6 +2131,8 @@
       "base_url": "https://api.z.ai/v1",
       "china_base_url": "https://open.bigmodel.cn/api/paas/v4",
       "console_url": "https://open.bigmodel.cn/usercenter/apikeys",
+      "global_console_url": "https://z.ai/manage-apikey/apikey-list",
+      "china_console_url": "https://open.bigmodel.cn/usercenter/apikeys",
       "currency": "CNY",
       "supports_model_list": false,
       "sdk": "openai",
@@ -3840,6 +4169,8 @@
       "base_url": "https://api.minimax.io/v1",
       "china_base_url": "https://api.minimaxi.com/v1",
       "console_url": "https://platform.minimaxi.com/user-center/basic-information/interface-key",
+      "global_console_url": "https://platform.minimax.io/user-center/basic-information/interface-key",
+      "china_console_url": "https://platform.minimaxi.com/user-center/basic-information/interface-key",
       "currency": "USD",
       "supports_model_list": false,
       "sdk": "openai",
@@ -4054,6 +4385,7 @@
       "display_name": "TokenDance (词元跳动)",
       "base_url": "https://tokendance.space/gateway/v1",
       "console_url": "https://tokendance.space/keys",
+      "signin": "tokendance",
       "china_only": true,
       "currency": "CNY",
       "supports_model_list": true,

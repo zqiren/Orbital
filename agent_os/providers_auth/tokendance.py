@@ -67,6 +67,8 @@ async def provision_api_key(
     open_browser: Callable[[str], None] = webbrowser.open,
     host: str = "127.0.0.1",
     timeout: float = 300.0,
+    cancel: asyncio.Event | None = None,
+    on_url: Callable[[str], None] | None = None,
 ) -> str:
     """Run consent → code → key exchange → balance validation; return the key.
 
@@ -131,13 +133,25 @@ async def provision_api_key(
                 "TokenDance consent URL (open manually if no browser appeared): %s",
                 auth_url,
             )
+            if on_url is not None:
+                on_url(auth_url)  # the route keeps it for "reopen browser"
             open_browser(auth_url)
+            waiters = [asyncio.ensure_future(done.wait())]
+            if cancel is not None:
+                waiters.append(asyncio.ensure_future(cancel.wait()))
             try:
-                await asyncio.wait_for(done.wait(), timeout=timeout)
-            except asyncio.TimeoutError as exc:
+                await asyncio.wait(waiters, timeout=timeout,
+                                   return_when=asyncio.FIRST_COMPLETED)
+            finally:
+                for w in waiters:
+                    if not w.done():
+                        w.cancel()
+            if not done.is_set():
+                if cancel is not None and cancel.is_set():
+                    raise TokenDanceProvisioningError("sign-in was cancelled")
                 raise TokenDanceProvisioningError(
                     "sign-in timed out waiting for the browser redirect"
-                ) from exc
+                )
 
         if captured.get("error"):
             raise TokenDanceProvisioningError(

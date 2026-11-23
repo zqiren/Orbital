@@ -254,7 +254,10 @@ class TestAllProviders:
         strips it), so this also guards against a future strict response model
         dropping the field."""
         providers = registry.all_providers()
-        non_custom = [k for k in providers if k not in ("custom", "unknown_model")]
+        # Sign-in-only providers (spec 1123, ``key_entry: false``) have no key
+        # to get, so no "Get your API key" link.
+        non_custom = [k for k in providers if k not in ("custom", "unknown_model")
+                      and providers[k].get("key_entry", True)]
         assert non_custom, "expected at least one non-custom provider"
         for key in non_custom:
             assert providers[key].get("console_url"), f"{key} missing console_url"
@@ -268,7 +271,8 @@ class TestAllProviders:
         flag, and only these three providers should carry it."""
         providers = registry.all_providers()
         flagged = {k for k, v in providers.items() if v.get("no_china_endpoint")}
-        assert flagged == {"openai", "anthropic", "google"}
+        # chatgpt (spec 1123) is OpenAI's own endpoint, so it has none either.
+        assert flagged == {"openai", "anthropic", "google", "chatgpt"}
 
     def test_get_provider_data_includes_new_fields(self, registry):
         """get_provider_data is a raw passthrough — confirm it isn't stripped

@@ -38,7 +38,8 @@ def test_opencode_go_entry_declares_session_header_and_user_agent():
 def test_no_other_bundled_provider_gained_a_session_header_by_accident():
     reg = ProviderRegistry()
     with_header = {k for k, v in reg.all_providers().items() if v.get("session_header")}
-    assert with_header == {"opencode-go"}
+    # chatgpt (spec 1123): its ``session-id`` header turns the prompt cache on.
+    assert with_header == {"opencode-go", "chatgpt"}
 
 
 # ---- header value resolution ----

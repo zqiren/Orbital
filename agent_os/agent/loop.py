@@ -1399,7 +1399,11 @@ class AgentLoop:
                             and _current_idx == 0
                             and e.status_code in (401, 402, 403)):
                         try:
-                            self._on_credential_error(e.status_code, e.message)
+                            if getattr(e, "code", None):
+                                self._on_credential_error(
+                                    e.status_code, e.message, e.code)
+                            else:
+                                self._on_credential_error(e.status_code, e.message)
                         except Exception:
                             logger.warning(
                                 "on_credential_error callback failed",
@@ -1423,6 +1427,7 @@ class AgentLoop:
                         category == ErrorCategory.ABORT
                         and e.status_code == 400
                         and _current_idx in _answered
+                        and not getattr(e, "final", False)
                     ):
                         category = ErrorCategory.RETRY
 
@@ -1441,8 +1446,11 @@ class AgentLoop:
                     # about the request (OpenCode Go's region gate) leaves the
                     # key alone: another key would not be why it now works.
                     _auth_abort_note = None
+                    # A ``final`` refusal (ChatGPT sign-in ended, plan usage
+                    # refused) is the answer: never rotate to another card.
                     if (
                         category == ErrorCategory.ABORT
+                        and not getattr(e, "final", False)
                         and is_rejected_credential(e.status_code, e.message)
                     ):
                         dead_key = getattr(
@@ -1508,9 +1516,12 @@ class AgentLoop:
                     if category == ErrorCategory.ABORT:
                         self._llm_failed = True
                         self.last_llm_error = e
+                        _reason = unwrap_provider_message(e.message)
+                        if getattr(e, "final", False):
+                            _reason = _reason.rstrip(".")
                         abort_msg = (
                             "LLM error (non-recoverable): "
-                            f"{unwrap_provider_message(e.message)}."
+                            f"{_reason}."
                         )
                         if _auth_abort_note:
                             abort_msg += f" {_auth_abort_note}"

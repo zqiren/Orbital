@@ -215,6 +215,11 @@ def unwrap_provider_message(raw: str) -> str:
         msg = parsed.get("message")
         if isinstance(msg, str) and msg:
             return msg
+        # FastAPI-style admission refusals ({"detail": "..."}), e.g. the
+        # Sign in with ChatGPT route before a stream opens.
+        detail = parsed.get("detail")
+        if isinstance(detail, str) and detail:
+            return detail
         nxt = parsed.get("error")
         if nxt is None:
             break
@@ -234,12 +239,23 @@ def is_rejected_credential(status: int | None, message: str | None) -> bool:
 
 
 class LLMError(Exception):
-    """General LLM API error."""
+    """General LLM API error.
 
-    def __init__(self, message: str, status_code: int | None = None):
+    ``code``: a stable machine code when the provider gave one Orbital maps
+    (e.g. ``usage_limit_reached``, ``needs_signin``); None otherwise.
+    ``final``: the refusal is the answer — no retry, no rotation to a
+    fallback or auth-fallback card (ChatGPT plan-usage errors: OpenAI's
+    guidance is to stop and never switch billing paths silently).
+    """
+
+    def __init__(self, message: str, status_code: int | None = None, *,
+                 code: str | None = None, final: bool = False):
         self.message = message
         self.status_code = status_code
-        self.category = self._classify(status_code, message)
+        self.code = code
+        self.final = final
+        self.category = (ErrorCategory.ABORT if final
+                         else self._classify(status_code, message))
         super().__init__(message)
 
     @staticmethod
@@ -255,3 +271,74 @@ class LLMError(Exception):
         if any(kw in msg_lower for kw in ("timed out", "timeout", "connection failed", "dns")):
             return ErrorCategory.TRANSIENT
         return ErrorCategory.RETRY
+
+
+# Sign in with ChatGPT plan-usage refusals (developers.openai.com/siwc/
+# token-sharing-open-source/errors-and-recovery). Keyed by the Responses
+# ``error.code``; value = (orbital code, final, user-facing sentence). Final
+# ones stop the run: OpenAI asks clients not to repeat them, loop through
+# OAuth, or switch billing paths. The two ``*_unavailable`` codes are
+# temporary (bounded backoff on the same card, never a different one).
+_PLAN_USAGE_ERRORS = {
+    "subscription_sharing_usage_limit_exceeded": (
+        "usage_limit_reached", True,
+        "Your ChatGPT plan's usage limit for Orbital is reached. Orbital stopped "
+        "instead of switching to another key. See ChatGPT → Settings → Usage; "
+        "it frees up again on its own."),
+    "subscription_sharing_user_not_eligible": (
+        "not_eligible", True,
+        "This ChatGPT account, workspace or plan can't be used by other apps "
+        "like Orbital. Use an API key card instead."),
+    "subscription_sharing_invalid_user": (
+        "needs_signin", True,
+        "ChatGPT could not confirm this sign-in. Sign in with ChatGPT again."),
+    "subscription_sharing_unsupported_capability": (
+        "provider_error", True,
+        "ChatGPT plan usage does not support part of this request{param}."),
+    "subscription_sharing_route_not_supported": (
+        "provider_error", True,
+        "ChatGPT plan usage does not support this kind of request."),
+    "chatpass_v2_scope_not_authorized": (
+        "provider_error", True,
+        "This ChatGPT sign-in does not allow this request. Sign in with ChatGPT "
+        "again and allow plan usage."),
+    "chatpass_v2_invalid_authorization_context": (
+        "provider_error", True,
+        "This ChatGPT sign-in does not allow this request. Sign in with ChatGPT "
+        "again and allow plan usage."),
+    "subscription_sharing_usage_unavailable": (
+        "provider_error", False,
+        "ChatGPT could not check your plan usage just now. Try again in a moment."),
+    "subscription_sharing_user_unavailable": (
+        "provider_error", False,
+        "ChatGPT account information is temporarily unavailable. Try again in a "
+        "moment."),
+}
+
+_PLAN_USAGE_STATUS = {
+    "subscription_sharing_usage_limit_exceeded": 429,
+    "subscription_sharing_user_not_eligible": 403,
+    "subscription_sharing_invalid_user": 401,
+    "subscription_sharing_unsupported_capability": 400,
+    "subscription_sharing_route_not_supported": 403,
+    "chatpass_v2_scope_not_authorized": 403,
+    "chatpass_v2_invalid_authorization_context": 403,
+    "subscription_sharing_usage_unavailable": 503,
+    "subscription_sharing_user_unavailable": 503,
+}
+
+
+def plan_usage_error(code: str | None, *, status: int | None = None,
+                     param: str | None = None) -> "LLMError | None":
+    """The LLMError for a ChatGPT plan-usage ``error.code``, or None."""
+    entry = _PLAN_USAGE_ERRORS.get(code or "")
+    if entry is None:
+        return None
+    our_code, final, text = entry
+    text = text.replace("{param}", f" ({param})" if param else "")
+    status = status or _PLAN_USAGE_STATUS.get(code or "")
+    err = LLMError(text, status_code=status, code=our_code, final=final)
+    if not final:
+        # Same card, bounded retries — never a rotation to another card.
+        err.category = ErrorCategory.RETRY
+    return err

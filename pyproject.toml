@@ -12,6 +12,8 @@ dependencies = [
     "fastapi>=0.100",
     "uvicorn>=0.20",
     "httpx>=0.24",
+    # ChatGPT sign-in verifies the ID token signature (RS256).
+    "pyjwt[crypto]>=2.8",
     "trafilatura>=1.6",
     "keyring>=24.0",
     "python-multipart>=0.0.5",

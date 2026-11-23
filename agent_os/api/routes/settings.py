@@ -279,6 +279,20 @@ def _candidate_card(base=None, **fields):
     )
 
 
+def _is_signin_provider(provider: str | None) -> bool:
+    from agent_os.config.provider_registry import ProviderRegistry
+
+    return bool(provider) and (
+        ProviderRegistry().get_provider_data(provider) or {}).get("auth") == "oauth"
+
+
+_SIGNIN_REQUIRED = ("signin_required",
+                    "ChatGPT connects through Sign in with ChatGPT, not a pasted key.")
+_KEY_MANAGED = ("card_key_managed",
+                "This card signs in with ChatGPT; it has no key to edit. "
+                "Sign in again instead.")
+
+
 def _test_target(card) -> tuple:
     """What a connection test of ``card`` would call, key aside."""
     from agent_os.daemon_v2.settings_store import resolve_card_endpoint
@@ -331,6 +345,8 @@ async def create_card(req: CreateCardRequest):
     was one.
     """
     _validate_card_shape(req.provider, req.model, req.base_url)
+    if _is_signin_provider(req.provider):
+        raise _card_error(*_SIGNIN_REQUIRED)
     test = await _store_only_if_passed(
         _candidate_card(provider=req.provider, model=req.model,
                         region=req.region, base_url=req.base_url, sdk=req.sdk),
@@ -368,6 +384,14 @@ async def update_card(card_id: str, req: UpdateCardRequest):
               if k in req.model_fields_set}
     if "name" in fields and not (fields["name"] or "").strip():
         fields.pop("name")
+    # A sign-in card's secret is a token set only a sign-in can replace; and
+    # no card can be turned into (or out of) a sign-in card by an edit.
+    if _is_signin_provider(card.provider):
+        if fields.get("api_key") is not None or (
+                "provider" in fields and fields["provider"] != card.provider):
+            raise _card_error(*_KEY_MANAGED)
+    elif "provider" in fields and _is_signin_provider(fields["provider"]):
+        raise _card_error(*_SIGNIN_REQUIRED)
     provider = fields.get("provider", card.provider)
     model = fields.get("model", card.model)
     base_url = fields.get("base_url", card.base_url)
@@ -418,6 +442,14 @@ async def delete_card(card_id: str):
             "card_is_default",
             "This is the default card. Make another card the default first.",
         )
+    # Sign-out (spec 1123): a sign-in card's token is revoked at the provider
+    # first; the card and its secret go either way, and the answer says
+    # whether OpenAI confirmed the revocation.
+    revoked, revoke_error = None, None
+    if hasattr(_settings_store, "token_bundle"):
+        from agent_os.api.routes.agents_v2 import revoke_signin_card
+
+        revoked, revoke_error = await revoke_signin_card(card_id, _settings_store)
     reassigned = []
     if _project_store is not None:
         for project in _project_store.list_projects():
@@ -456,8 +488,12 @@ async def delete_card(card_id: str):
             # first-run gate (no key and not skipped) never shows the wizard
             # again.
             _settings_store.mutate(mark_skipped)
+    tokens = getattr(_settings_store, "tokens", None) if revoked is not None else None
+    if tokens is not None:
+        tokens.forget(card_id)
     _refresh_agents_in_background(_model_provider_slugs())
-    return {"id": card_id, "deleted": True, "reassigned_projects": reassigned}
+    return {"id": card_id, "deleted": True, "reassigned_projects": reassigned,
+            "revoked": revoked, "revoke_error": revoke_error}
 
 
 @router.put("/settings/cards/{card_id}/default")
