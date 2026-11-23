@@ -73,6 +73,64 @@ export interface CredentialCard {
   is_default: boolean;
   /** True only for the env card — it cannot be edited, re-keyed or deleted. */
   read_only: boolean;
+  /** 'signin' for a one-click sign-in card that holds no pasted key (ChatGPT). */
+  auth?: 'api_key' | 'signin';
+  /** The signed-in account (ChatGPT); null for key cards. */
+  account?: { email: string } | null;
+  /** The saved sign-in stopped working: the row offers "Sign in again". */
+  needs_signin?: boolean;
+}
+
+/** One region of a multi-region provider (GET /providers/catalog). */
+export interface CatalogRegion {
+  id: 'global' | 'china';
+  /** English chrome; the UI translates by `id`. */
+  label: string;
+  console_url: string | null;
+}
+
+/** The connect screen's view of one provider (GET /providers/catalog). */
+export interface CatalogProvider {
+  id: string;
+  display_name: string;
+  /** 'signin' = sign-in only; 'none' = a keyless local server is allowed. */
+  auth: 'api_key' | 'signin' | 'none';
+  /** A one-click sign-in exists: POST /providers/{signin}/signin. */
+  signin: 'tokendance' | 'chatgpt' | null;
+  /** The user may paste a key. */
+  key_entry: boolean;
+  /** [] for a one-endpoint provider; else both regions. */
+  regions: CatalogRegion[];
+  default_region: 'global' | 'china';
+  console_url: string | null;
+  supports_model_list: boolean;
+  default_model: string | null;
+  china_only: boolean;
+  /** Only Custom: the UI asks for a base URL and a protocol. */
+  custom_endpoint: boolean;
+  /** Wire protocol, when the catalog was derived from the raw registry. */
+  sdk?: LLMSdk;
+}
+
+/** POST /providers/check: 200 for a pass OR a fail. */
+export interface ProviderCheckResult {
+  ok: boolean;
+  status: number | null;
+  code: string | null;
+  message: string;
+  models: string[];
+  model_details?: { id: string; display_name: string | null; context_window: number | null }[];
+  default_model: string | null;
+  tested_model?: string | null;
+  models_source?: 'live' | 'suggested' | null;
+}
+
+/** POST /providers/chatgpt/signin. */
+export interface ChatgptSigninResponse {
+  card: CredentialCard;
+  test?: CardTestResult | null;
+  default_card_id?: string | null;
+  account?: { email: string } | null;
 }
 
 /** Result of the connection test a card save / edit / Test runs (spec 082 §3.2). */

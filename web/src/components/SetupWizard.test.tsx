@@ -20,7 +20,8 @@
  *    widget; agent browser sign-in; skipping the key (keyless onboarding).
  *
  * The api client (web/src/config.ts `api`) is mocked — no network. The
- * LLMProviderSettings form is stubbed out (it has its own coverage).
+ * connect panel is stubbed out (ConnectPanel.test.tsx covers it): the stub
+ * draws the wizard's footer with a context the test controls.
  */
 
 import { render, screen, waitFor, cleanup, fireEvent, act } from '@testing-library/react';
@@ -43,21 +44,34 @@ const MockApiError = vi.hoisted(() => {
   };
 });
 vi.mock('../config', () => ({ api: apiMock, ApiError: MockApiError }));
-const stubSave = vi.hoisted(() => ({ fn: null as (() => Promise<boolean>) | null }));
-vi.mock('./LLMProviderSettings', async () => {
-  const { useEffect } = await import('react');
-  return {
-    default: ({ saveRef }: {
-      saveRef?: { current: (() => Promise<boolean>) | null };
-    }) => {
-      // The real form's save: true only when its key passed and was stored.
-      useEffect(() => {
-        if (saveRef) saveRef.current = stubSave.fn;
-      });
-      return <div data-testid="llm-provider-settings-stub" />;
-    },
-  };
-});
+const panel = vi.hoisted(() => ({
+  canSubmit: true,
+  busy: false,
+  error: null as string | null,
+  /** What Next does; default = the card was stored and is ready. */
+  submit: null as null | ((done: (card: Record<string, unknown>) => void) => void),
+  replaceCardId: undefined as string | null | undefined,
+}));
+const STORED_CARD = { id: 'card_new', provider: 'deepseek', model: 'deepseek-v4-pro', is_default: false };
+vi.mock('./connect/ConnectPanel', () => ({
+  default: ({ footer, onDone, replaceCardId }: {
+    footer: (ctx: { canSubmit: boolean; busy: boolean; submit: () => void; error: string | null }) => React.ReactNode;
+    onDone: (card: Record<string, unknown>) => void;
+    replaceCardId?: string | null;
+  }) => {
+    panel.replaceCardId = replaceCardId;
+    return (
+      <div data-testid="connect-panel-stub">
+        {footer({
+          canSubmit: panel.canSubmit,
+          busy: panel.busy,
+          error: panel.error,
+          submit: () => (panel.submit ? panel.submit(onDone) : onDone(STORED_CARD)),
+        })}
+      </div>
+    );
+  },
+}));
 
 type WsHandler = (event: unknown) => void;
 const wsHandlers = vi.hoisted(() => new Map<string, Set<(event: unknown) => void>>());
@@ -222,6 +236,7 @@ async function renderAtKey(ui = <SetupWizard onComplete={vi.fn()} />) {
 beforeEach(() => {
   apiMock.mockReset();
   wsHandlers.clear();
+  Object.assign(panel, { canSubmit: true, busy: false, error: null, submit: null, replaceCardId: undefined });
   telemetry.length = 0;
   localStorage.removeItem(TOUR_STORAGE_KEY);
 });
@@ -318,47 +333,85 @@ describe('SetupWizard — spec 138 step flow', () => {
     expect(screen.queryByText('The Orbital agent')).toBeNull();
   });
 
-  it('Next on the key step advances to accounts once the key is saved', async () => {
+  it('Next on the key step advances to accounts once the panel stored the card', async () => {
     mockApi({ apiKeySet: false });
     await renderAtKey();
     mockApi({ apiKeySet: true });
-    fireEvent.click(screen.getByText('Next →'));
+    fireEvent.click(screen.getByTestId('wizard-key-next'));
     await waitFor(() => expect(screen.getByText('Connect Your Accounts')).toBeTruthy());
   });
 
-  it('Next stays on the key step when the form refuses the key (its test failed), with no second line', async () => {
+  it('Next is enabled only when the panel says so (no provider, no key → disabled)', async () => {
+    panel.canSubmit = false;
     mockApi({ apiKeySet: false });
-    const save = vi.fn(async () => false);
-    stubSave.fn = save;
     await renderAtKey();
-    try {
-      fireEvent.click(screen.getByText('Next →'));
-      await waitFor(() => expect(save).toHaveBeenCalled());
-      await new Promise((r) => setTimeout(r, 20));
-      // The form draws the test's verdict; the wizard adds nothing over it.
-      expect(screen.getByTestId('llm-provider-settings-stub')).toBeTruthy();
-      expect(screen.queryByText('Connect Your Accounts')).toBeNull();
-      expect(screen.queryByTestId('wizard-next-error')).toBeNull();
-      expect(screen.getByText('Next →')).toBeTruthy();
-    } finally {
-      stubSave.fn = null;
-    }
+    expect((screen.getByTestId('wizard-key-next') as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it('one Next during a running test waits for the form, then advances on a pass', async () => {
+  it('Next stays on the key step when the panel refuses the key (its test failed), with no second line', async () => {
     mockApi({ apiKeySet: false });
-    let pass: (ok: boolean) => void = () => {};
-    stubSave.fn = () => new Promise<boolean>((r) => { pass = r; });
+    panel.submit = () => { /* the panel draws the verdict under the key and stores nothing */ };
     await renderAtKey();
-    try {
-      fireEvent.click(screen.getByText('Next →'));
-      await screen.findByText('Checking...');
-      mockApi({ apiKeySet: true });
-      pass(true);
-      await waitFor(() => expect(screen.getByText('Connect Your Accounts')).toBeTruthy());
-    } finally {
-      stubSave.fn = null;
-    }
+    fireEvent.click(screen.getByTestId('wizard-key-next'));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.queryByText('Connect Your Accounts')).toBeNull();
+    expect(screen.queryByTestId('wizard-next-error')).toBeNull();
+    expect(screen.getByTestId('wizard-key-next')).toBeTruthy();
+  });
+
+  it('a save the panel could not finish (not a key verdict) is drawn under Next', async () => {
+    mockApi({ apiKeySet: false });
+    panel.error = 'Keychain refused';
+    await renderAtKey();
+    expect(screen.getByTestId('wizard-next-error').textContent).toBe('Keychain refused');
+  });
+
+  it('a stored card that still is not what runs says so instead of a dead Next', async () => {
+    mockApi({ apiKeySet: false });
+    await renderAtKey();
+    fireEvent.click(screen.getByTestId('wizard-key-next'));
+    await waitFor(() => expect(screen.getByTestId('wizard-next-error').textContent)
+      .toMatch(/That key was not saved/));
+  });
+
+  it('a one-click sign-in card that is the default advances even with no API key of its own', async () => {
+    mockApi({ apiKeySet: false });
+    panel.submit = (done) => done({ ...STORED_CARD, provider: 'chatgpt', is_default: true });
+    await renderAtKey();
+    fireEvent.click(screen.getByTestId('wizard-key-next'));
+    await waitFor(() => expect(screen.getByText('Connect Your Accounts')).toBeTruthy());
+  });
+
+  it('a connected card that landed beside another default is made the default, then Next advances', async () => {
+    mockApi({ apiKeySet: false });
+    const base = apiMock.getMockImplementation()!;
+    apiMock.mockImplementation(async (path: string, options?: RequestInit) => {
+      if (path === '/api/v2/settings/cards/card_new/default') return { default_card_id: 'card_new', applied: true };
+      return base(path, options);
+    });
+    await renderAtKey();
+    fireEvent.click(screen.getByTestId('wizard-key-next'));
+    await waitFor(() => expect(screen.getByText('Connect Your Accounts')).toBeTruthy());
+    expect(apiMock).toHaveBeenCalledWith('/api/v2/settings/cards/card_new/default', { method: 'PUT' });
+  });
+
+  it('while the panel tests before saving, Next shows it is busy', async () => {
+    mockApi({ apiKeySet: false });
+    panel.busy = true;
+    await renderAtKey();
+    expect(screen.getByTestId('wizard-key-next').getAttribute('aria-busy')).toBe('true');
+  });
+
+  it('a keyless default card (migrated install) is saved onto, not beside', async () => {
+    mockApi({
+      apiKeySet: false,
+      settingsExtra: {
+        credential_cards: [{ id: 'card_old', provider: 'custom', key_set: false, read_only: false, model: '' }],
+        default_card_id: 'card_old',
+      },
+    });
+    await renderAtKey();
+    await waitFor(() => expect(panel.replaceCardId).toBe('card_old'));
   });
 
   it('reports each step reached once, and done at Finish', async () => {
@@ -756,19 +809,17 @@ describe('SetupWizard — agent browser sign-in group', () => {
 // ---------------------------------------------------------------------------
 
 describe('SetupWizard — skip the key step', () => {
-  it('says what the key is for, and offers Skip with its hint under Next', async () => {
+  it('keeps what the key is for behind the title sign, and offers Skip beside Next', async () => {
     mockApi({ apiKeySet: false });
     await renderAtKey();
-    expect(
-      screen.getByText(/Add an API key for the Orbital agent/),
-    ).toBeTruthy();
+    // No explanation sentence on screen; the sign holds it.
+    expect(screen.queryByText(/Connect a model for the Orbital agent/)).toBeNull();
+    fireEvent.click(screen.getByTestId('wizard-title-hint'));
+    expect(screen.getByText(/Connect a model for the Orbital agent/)).toBeTruthy();
     const skip = screen.getByTestId('wizard-skip-key');
-    expect(skip.textContent).toBe('Skip for now — use my existing agents');
-    expect(screen.getByTestId('wizard-skip-key-hint').textContent).toMatch(
-      /Add a key later in Settings\./,
-    );
-    // Next is still there and still the primary action.
-    expect(screen.getByText('Next →')).toBeTruthy();
+    expect(skip.textContent).toBe('Skip for now');
+    expect(skip.nextElementSibling).toBe(screen.getByTestId('wizard-key-next'));
+    expect(screen.queryByTestId('wizard-skip-key-hint')).toBeNull();
   });
 
   it('batch 1114: no read sign beside Next or Skip, even when an older daemon reports waiting imports', async () => {
@@ -778,7 +829,8 @@ describe('SetupWizard — skip the key step', () => {
     });
     await renderAtKey();
     expect(screen.queryByTestId('token-cost-sign')).toBeNull();
-    expect(screen.getByTestId('wizard-skip-key').previousElementSibling).toBeNull();
+    // Beside Skip there is only Back, before it.
+    expect(screen.getByTestId('wizard-skip-key').previousElementSibling).toBe(screen.getByTestId('wizard-key-back'));
   });
 
   it('Skip persists setup_api_key_skipped only (no read) and advances to the accounts step', async () => {
@@ -803,13 +855,13 @@ describe('SetupWizard — skip the key step', () => {
     await renderAtKey();
 
     fireEvent.click(screen.getByTestId('wizard-skip-key'));
-    await waitFor(() => expect(screen.getByTestId('wizard-skip-error')).toBeTruthy());
-    expect(screen.getByTestId('wizard-skip-error').textContent).toMatch(/Couldn’t save\. Try again\./);
+    await waitFor(() => expect(screen.getByTestId('wizard-next-error')).toBeTruthy());
+    expect(screen.getByTestId('wizard-next-error').textContent).toMatch(/Couldn’t save\. Try again\./);
     expect(screen.queryByText('Connect Your Accounts')).toBeNull();
     expect(screen.getByText('The Orbital agent')).toBeTruthy();
   });
 
-  it('zh: the Skip button and hint follow the contract copy', async () => {
+  it('zh: the Skip button follows the approved copy', async () => {
     window.localStorage.setItem(LOCALE_STORAGE_KEY, 'zh');
     try {
       mockApi({ apiKeySet: false });
@@ -820,10 +872,8 @@ describe('SetupWizard — skip the key step', () => {
       );
       await continueFromAgents();
       await waitFor(() => expect(screen.getByTestId('wizard-skip-key')).toBeTruthy());
-      expect(screen.getByTestId('wizard-skip-key').textContent).toBe('暂时跳过，使用已有 Agent');
-      expect(screen.getByTestId('wizard-skip-key-hint').textContent).toBe(
-        '之后可在设置中添加。',
-      );
+      expect(screen.getByTestId('wizard-skip-key').textContent).toBe('暂时跳过');
+      expect(screen.getByTestId('wizard-key-next').textContent).toBe('下一步 →');
     } finally {
       window.localStorage.removeItem(LOCALE_STORAGE_KEY);
     }

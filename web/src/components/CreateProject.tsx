@@ -359,7 +359,7 @@ export default function CreateProject({
           </div>
 
           {/* LLM info: renders only the no-api-key warning; nothing otherwise */}
-          <LLMProviderSettings mode="wizard" />
+          <LLMProviderSettings />
 
           {/* Safe mode (spec 117 D2) — the last row of the always-visible
               form, NOT inside Advanced: the user's decision was a toggle on

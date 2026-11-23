@@ -15,19 +15,13 @@
  * ABOVE the list: the intro and "Add provider". Selecting a provider here
  * sets the global default; `CardList` makes that call.
  *
- * TokenDance one-click is deliberately NOT here. It is a provider like the
- * seventeen others, so it belongs inside the Add flow next to the key field
- * it replaces (`LLMProviderSettings`, provider === 'tokendance'), where it is
- * invisible to everyone who cannot use it instead of being a top-level button
- * they must first understand in order to ignore. Prominence for the market
- * that wants it is a RANKING decision, not a visibility one: `orderProviders`
- * sorts TokenDance first for the zh locale. A wrong locale guess then costs a
- * scroll, not a dead end.
+ * One-click sign-ins (TokenDance, ChatGPT) are deliberately NOT here. They
+ * are providers like the others, so they live inside the Add flow as tiles
+ * (`connect/ConnectPanel`), next to the key field they replace, instead of
+ * top-level buttons everyone must first understand in order to ignore.
  *
- * "Add provider" opens the existing provider form as a modal. Save needs Test
- * Connection to have run on the inputs on screen, and the daemon records that
- * verdict on the card — a failed test still saves, shown red on the row, so a
- * provider outage never blocks saving (D9).
+ * "Add provider" opens the connect panel as a dialog. A key is saved only when
+ * its connection test passes; a one-click sign-in stores its card itself.
  */
 import { useState } from 'react';
 import { Plus } from 'lucide-react';
@@ -78,6 +72,7 @@ export default function CredentialCards({ providers }: CredentialCardsProps) {
           card={null}
           onClose={() => setAdding(false)}
           onSaved={() => refresh()}
+          onRemoved={() => { void refresh(); }}
         />
       )}
     </div>

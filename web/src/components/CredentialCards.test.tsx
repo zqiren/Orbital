@@ -22,9 +22,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { CredentialCard, ProviderRegistry } from '../types';
 
 const apiMock = vi.hoisted(() => vi.fn());
-vi.mock('../config', () => ({ api: apiMock }));
+vi.mock('../config', async (orig) => ({ ...(await orig<typeof import('../config')>()), api: apiMock }));
 
 import CredentialCards from './CredentialCards';
+import { resetCatalogCache } from './connect/connectApi';
 import CardList from './CardList';
 
 afterEach(() => cleanup());
@@ -93,6 +94,35 @@ const PROVIDERS: ProviderRegistry = {
   },
 };
 
+const cat = (id: string, display_name: string, extra: Record<string, unknown> = {}) => ({
+  id, display_name, auth: 'api_key', signin: null, key_entry: true, regions: [], default_region: 'global',
+  console_url: null, supports_model_list: true, default_model: null, china_only: false, custom_endpoint: false, ...extra,
+});
+const CATALOG = [
+  cat('deepseek', 'DeepSeek', { default_model: 'deepseek-chat' }),
+  cat('opencode-go', 'OpenCode Go'),
+  cat('openrouter', 'OpenRouter'),
+  cat('moonshot', 'Moonshot (Kimi)', {
+    regions: [
+      { id: 'global', label: 'International', console_url: null },
+      { id: 'china', label: 'China', console_url: null },
+    ],
+  }),
+  cat('chatgpt', 'ChatGPT', { auth: 'signin', signin: 'chatgpt', key_entry: false }),
+];
+
+/** A passing check with this list, or a failing one with this sentence. */
+const checkPass = (models = ['deepseek-chat']) => ({ ok: true, status: 200, code: null, message: '', models, default_model: models[0] });
+const checkFail = (message: string, status = 401) => ({ ok: false, status, code: 'invalid_api_key', message, models: [], default_model: null });
+
+/** In the open Add dialog: pick a tile, type a key, press Save. */
+async function addWithKey(provider: string, key: string) {
+  fireEvent.click(await screen.findByTestId(`connect-tile-${provider}`));
+  const field = screen.getByTestId('connect-key');
+  fireEvent.change(field, { target: { value: key } });
+  fireEvent.click(screen.getByTestId('card-save'));
+}
+
 /** GET /settings serves the card list; every other route is per-test. */
 function mockCards(cards: CredentialCard[], extra?: (path: string, opts?: RequestInit) => unknown) {
   apiMock.mockImplementation(async (path: string, opts?: RequestInit) => {
@@ -106,6 +136,7 @@ function mockCards(cards: CredentialCard[], extra?: (path: string, opts?: Reques
       };
     }
     if (path === '/api/v2/providers') return PROVIDERS;
+    if (path === '/api/v2/providers/catalog') return { providers: CATALOG };
     return {};
   });
 }
@@ -116,6 +147,7 @@ function renderList() {
 
 beforeEach(() => {
   apiMock.mockReset();
+  resetCatalogCache();
   vi.spyOn(window, 'confirm').mockReturnValue(true);
 });
 
@@ -361,29 +393,20 @@ describe('CredentialCards — row actions', () => {
 describe('CredentialCards — Add card', () => {
   it('a failing test in the Add dialog stores nothing; the reason stays in the dialog (2026-11-12)', async () => {
     mockCards([DEFAULT_CARD], (path) => {
-      if (path === '/api/v2/settings/api-key/status') return { configured: true, source: 'keychain' };
-      if (path === '/api/v2/providers/test') return { status: 'error', error: 'Invalid API key' };
+      if (path === '/api/v2/providers/check') return checkFail('Invalid API key');
       return undefined;
     });
     renderList();
     fireEvent.click(await screen.findByTestId('cards-add'));
     await screen.findByTestId('card-modal');
-
-    // A new card is saved only after its own key PASSED Test Connection —
-    // the Add form never borrows the default card's key (8.png).
-    fireEvent.change(await screen.findByPlaceholderText(/sk-/), {
-      target: { value: 'sk-new-key' },
-    });
-    fireEvent.change(await screen.findByPlaceholderText(/model name/), {
-      target: { value: 'deepseek-chat' },
-    });
-    fireEvent.click(screen.getByTestId('card-test'));
-    const modal = screen.getByTestId('card-modal');
-    await waitFor(() => expect(modal.textContent).toContain('Invalid API key'));
-    expect((screen.getByTestId('card-save') as HTMLButtonElement).disabled).toBe(true);
+    // A new card is saved only after its own key PASSED — Save tests first.
+    await addWithKey('deepseek', 'sk-new-key');
+    await waitFor(() => expect(screen.getByTestId('connect-key-error')).toBeTruthy());
     const posts = apiMock.mock.calls.filter(([p, o]) => p === '/api/v2/settings/cards' && (o as RequestInit)?.method === 'POST');
     expect(posts).toHaveLength(0);
     expect(screen.getByTestId('card-modal')).toBeTruthy();
+    // Never a dead end: Save stays live for the next try.
+    expect((screen.getByTestId('card-save') as HTMLButtonElement).disabled).toBe(false);
   });
 
   it('a Save the daemon refuses (its own test failed) shows that verdict and keeps the dialog open', async () => {
@@ -395,27 +418,21 @@ describe('CredentialCards — Add card', () => {
           test: { ok: false, status: 402, code: 'insufficient_credits', message: 'Insufficient balance' },
         }));
       }
-      if (path === '/api/v2/providers/test') return { status: 'ok' };
+      if (path === '/api/v2/providers/check') return checkPass();
       return undefined;
     });
     renderList();
     fireEvent.click(await screen.findByTestId('cards-add'));
     await screen.findByTestId('card-modal');
-    fireEvent.change(await screen.findByPlaceholderText(/sk-/), { target: { value: 'sk-new-key' } });
-    fireEvent.change(await screen.findByPlaceholderText(/model name/), { target: { value: 'deepseek-chat' } });
-    fireEvent.click(screen.getByTestId('card-test'));
-    await waitFor(() =>
-      expect((screen.getByTestId('card-save') as HTMLButtonElement).disabled).toBe(false),
-    );
-    fireEvent.click(screen.getByTestId('card-save'));
+    await addWithKey('deepseek', 'sk-new-key');
 
-    // The refusal is the form's verdict now: red, under Test Connection, and
-    // Save locks again until something changes and passes.
-    await waitFor(() => expect(screen.getByTestId('card-modal').textContent).toContain('Insufficient balance'));
+    // The refusal is the panel's verdict now, under the key; the sentence is
+    // behind its sign and never raw JSON.
+    await waitFor(() => expect(screen.getByTestId('connect-key-error')).toBeTruthy());
     expect(screen.getByTestId('card-modal').textContent).not.toContain('{');
-    expect((screen.getByTestId('card-save') as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.queryByTestId('card-save-test')).toBeNull();
-    expect(screen.queryByTestId('card-modal-done')).toBeNull();
+    fireEvent.click(screen.getByTestId('connect-key-error-sign'));
+    expect(screen.getByTestId('card-modal').textContent).toContain('Insufficient balance');
+    expect(screen.getByTestId('card-modal')).toBeTruthy();
   });
 
   it('a successful save closes the modal by itself — Save means saved and done', async () => {
@@ -426,22 +443,17 @@ describe('CredentialCards — Add card', () => {
           test: { ok: true, status: null, code: null, message: 'Connected to DeepSeek using deepseek-chat' },
         };
       }
-      if (path === '/api/v2/providers/test') return { status: 'ok' };
+      if (path === '/api/v2/providers/check') return checkPass();
       return undefined;
     });
     renderList();
     fireEvent.click(await screen.findByTestId('cards-add'));
     await screen.findByTestId('card-modal');
-    fireEvent.change(await screen.findByPlaceholderText(/sk-/), { target: { value: 'sk-new-key' } });
-    fireEvent.change(await screen.findByPlaceholderText(/model name/), { target: { value: 'deepseek-chat' } });
-    fireEvent.click(screen.getByTestId('card-test'));
-    await waitFor(() =>
-      expect((screen.getByTestId('card-save') as HTMLButtonElement).disabled).toBe(false),
-    );
-    fireEvent.click(screen.getByTestId('card-save'));
+    await addWithKey('deepseek', 'sk-new-key');
     // No Done step: the dialog is gone and the list refreshed.
     await waitFor(() => expect(screen.queryByTestId('card-modal')).toBeNull());
-    expect(screen.queryByTestId('card-modal-done')).toBeNull();
+    const post = apiMock.mock.calls.find(([p, o]) => p === '/api/v2/settings/cards' && (o as RequestInit)?.method === 'POST');
+    expect(JSON.parse(String((post![1] as RequestInit).body))).toMatchObject({ provider: 'deepseek', model: 'deepseek-chat', api_key: 'sk-new-key' });
   });
 
   it('after a refused Save, fixing the key and saving creates exactly one card and closes the dialog (F4)', async () => {
@@ -454,24 +466,19 @@ describe('CredentialCards — Add card', () => {
         }
         return { card: saved, test: { ok: true, status: 200, code: null, message: 'ok' } };
       }
-      if (path === '/api/v2/providers/test') return { status: 'ok' };
+      if (path === '/api/v2/providers/check') return checkPass();
       return undefined;
     });
     renderList();
     fireEvent.click(await screen.findByTestId('cards-add'));
     await screen.findByTestId('card-modal');
-    fireEvent.change(await screen.findByPlaceholderText(/sk-/), { target: { value: 'sk-new-key-9999' } });
-    fireEvent.change(await screen.findByPlaceholderText(/model name/), { target: { value: 'deepseek-chat' } });
-    fireEvent.click(screen.getByTestId('card-test'));
-    await waitFor(() => expect((screen.getByTestId('card-save') as HTMLButtonElement).disabled).toBe(false));
-    fireEvent.click(screen.getByTestId('card-save'));
-    await waitFor(() => expect(screen.getByTestId('card-modal').textContent).toContain('Invalid API key'));
+    await addWithKey('deepseek', 'sk-new-key-9999');
+    await waitFor(() => expect(screen.getByTestId('connect-key-error')).toBeTruthy());
 
     // Fix the key and save again: the refused attempt stored nothing, so this
     // is the one card, and a passing save closes the dialog.
-    fireEvent.change(screen.getByPlaceholderText(/sk-|key/i), { target: { value: 'sk-fixed-0000' } });
-    fireEvent.click(screen.getByTestId('card-test'));
-    await waitFor(() => expect((screen.getByTestId('card-save') as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.change(screen.getByTestId('connect-key'), { target: { value: 'sk-fixed-0000' } });
+    expect(screen.queryByTestId('connect-key-error')).toBeNull();
     fireEvent.click(screen.getByTestId('card-save'));
     await waitFor(() => expect(screen.queryByTestId('card-modal')).toBeNull());
     const posts = apiMock.mock.calls.filter(([p, o]) => p === '/api/v2/settings/cards' && (o as RequestInit)?.method === 'POST');
@@ -479,6 +486,48 @@ describe('CredentialCards — Add card', () => {
     expect(posts).toHaveLength(2);
     expect(JSON.parse(String((posts[1][1] as RequestInit).body)).api_key).toBe('sk-fixed-0000');
     expect(puts).toHaveLength(0);
+  });
+
+  it('Edit opens the same panel already connected, the provider logo and name as its title', async () => {
+    const kimi = makeCard({ id: 'card_km', name: 'Moonshot (Kimi) · kimi-k3', provider: 'moonshot', region: 'china', model: 'kimi-k3' });
+    mockCards([DEFAULT_CARD, kimi], (path) => {
+      if (path === '/api/v2/providers/models') return { models: ['kimi-k3', 'kimi-k2.6'] };
+      return undefined;
+    });
+    renderList();
+    fireEvent.click(await screen.findByTestId('card-edit-card_km'));
+    const modal = await screen.findByTestId('card-modal');
+    await screen.findByTestId('connect-model-list');
+    expect(modal.querySelector('h2')!.textContent).toBe('Moonshot (Kimi)');
+    expect(screen.queryByTestId('connect-tile-deepseek')).toBeNull();
+    expect(screen.getByTestId('connect-region-china').getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('a revoked sign-in row shows the red mark and "Sign in again", which opens the dialog signing in', async () => {
+    const cg = makeCard({
+      id: 'card_cg', name: 'ChatGPT · gpt-6.2-sol', provider: 'chatgpt', model: 'gpt-6.2-sol', key_set: false, key_masked: '',
+      auth: 'signin', account: { email: 'a@example.com' }, needs_signin: true,
+      last_error: { status: 401, code: 'needs_signin', message: 'Disconnected on OpenAI\u2019s side.', at: '2026-11-23T10:00:00+00:00' },
+    });
+    mockCards([DEFAULT_CARD, cg], (path) => {
+      if (path === '/api/v2/providers/chatgpt/signin') return new Promise(() => {});
+      return undefined;
+    });
+    renderList();
+    await screen.findByTestId('card-row-card_cg');
+    expect(screen.getByTestId('card-health-card_cg').getAttribute('aria-label')).toContain('Disconnected');
+    fireEvent.click(screen.getByTestId('card-resignin-card_cg'));
+    await screen.findByTestId('connect-signin-waiting');
+    expect(apiMock).toHaveBeenCalledWith('/api/v2/providers/chatgpt/signin', expect.objectContaining({ body: JSON.stringify({ card_id: 'card_cg' }) }));
+  });
+
+  it('rows lead with the provider logo and show a region chip for two-region providers', async () => {
+    const kimi = makeCard({ id: 'card_km', name: 'Moonshot (Kimi) · kimi-k3', provider: 'moonshot', region: 'global', model: 'kimi-k3' });
+    mockCards([DEFAULT_CARD, kimi]);
+    renderList();
+    await screen.findByTestId('card-region-card_km');
+    expect(screen.getByTestId('card-region-card_km').textContent).toBe('Global');
+    expect(screen.queryByTestId('card-region-card_default')).toBeNull();
   });
 
   it('offers no vendor-specific sign-in of its own — only "Add provider"', async () => {
@@ -507,7 +556,7 @@ describe('CardList — the Add dialog inside a host form (project settings)', ()
       if (path === '/api/v2/settings/cards' && opts?.method === 'POST') {
         return { card: created, test: { ok: true, status: 200, code: null, message: 'Connected' } };
       }
-      if (path === '/api/v2/providers/test') return { status: 'ok' };
+      if (path === '/api/v2/providers/check') return checkPass(['glm-5.3']);
       return undefined;
     });
     const hostSubmit = vi.fn((e: React.FormEvent) => e.preventDefault());
@@ -533,13 +582,7 @@ describe('CardList — the Add dialog inside a host form (project settings)', ()
     // dialog's own submit event instead of swallowing it.
     expect(screen.getByTestId('host-form').contains(modal)).toBe(false);
 
-    fireEvent.change(await screen.findByPlaceholderText(/sk-/), { target: { value: 'sk-same-key' } });
-    fireEvent.change(await screen.findByPlaceholderText(/model name/), { target: { value: 'glm-5.3' } });
-    fireEvent.click(screen.getByTestId('card-test'));
-    await waitFor(() =>
-      expect((screen.getByTestId('card-save') as HTMLButtonElement).disabled).toBe(false),
-    );
-    fireEvent.click(screen.getByTestId('card-save'));
+    await addWithKey('deepseek', 'sk-same-key');
 
     await waitFor(() => expect(screen.queryByTestId('card-modal')).toBeNull());
     expect(apiMock).toHaveBeenCalledWith('/api/v2/settings/cards', expect.objectContaining({ method: 'POST' }));

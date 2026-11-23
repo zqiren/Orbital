@@ -40,8 +40,9 @@ import { useState, useEffect, useCallback, useRef, type ReactNode } from 'react'
 import { Loader2, Globe, Plug } from 'lucide-react';
 import { api, ApiError } from '../config';
 import { useCredentialCards } from '../hooks/useCredentialCards';
-import type { Connector, ConnectorListResponse, Project } from '../types';
-import LLMProviderSettings from './LLMProviderSettings';
+import type { Connector, ConnectorListResponse, CredentialCard, Project } from '../types';
+import ConnectPanel from './connect/ConnectPanel';
+import HintSign from './HintSign';
 import ImportProjectsStep from './ImportProjectsStep';
 import WizardAgentsStep from './WizardAgentsStep';
 import { useSubAgentList } from '../hooks/useSubAgentList';
@@ -143,21 +144,32 @@ function WizardCard({
   step,
   title,
   intro,
+  titleHint,
   children,
 }: {
   step: WizardStep;
   title: string;
-  intro: string;
+  /** A visible intro paragraph. */
+  intro?: string;
+  /** The intro kept behind a sign beside the title instead (the key step). */
+  titleHint?: { label: string; text: string };
   children: ReactNode;
 }) {
   return (
     <div className="surface-float-static p-8 max-md:p-5">
       <StepIndicator current={step} />
-      <div className="flex items-start justify-between gap-4 mb-3">
-        <h1 className="text-heading font-semibold text-primary">{title}</h1>
+      <div className={`flex items-start justify-between gap-4 ${intro ? 'mb-3' : 'mb-[22px]'}`}>
+        <div className="flex min-w-0 items-center gap-2">
+          <h1 className="text-heading font-semibold text-primary">{title}</h1>
+          {titleHint && (
+            <HintSign label={titleHint.label} testId="wizard-title-hint">
+              {titleHint.text}
+            </HintSign>
+          )}
+        </div>
         <LocaleToggle />
       </div>
-      <p className="text-secondary text-body mb-6">{intro}</p>
+      {intro && <p className="text-secondary text-body mb-6">{intro}</p>}
       {children}
     </div>
   );
@@ -175,8 +187,6 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
   // branch is right, and the new provider becomes the default by being first.
   const { cards, defaultCardId, refresh: refreshCards } = useCredentialCards();
   const defaultCard = cards.find((c) => c.id === defaultCardId) ?? undefined;
-  const [checkingKey, setCheckingKey] = useState(false);
-  const saveRef = useRef<(() => Promise<boolean>) | null>(null);
 
   // Accounts step — API connector cards. null = fetch not resolved yet;
   // fetch failure resolves to [] so the browser group renders alone.
@@ -306,40 +316,41 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
     (c) => c.featured && c.status === 'available',
   );
 
-  // Save settings then advance to the accounts step.
+  // The connect panel tested and stored a card (or a sign-in stored one
+  // daemon-side): advance once it is the one Orbital runs on.
   //
-  // The form saves the DEFAULT provider (see the `card` prop below), so the
-  // key it just wrote is the key `llm.api_key_set` reports. Before that it
-  // minted a NEW provider on every press: a new one only becomes the default
-  // when there is none, so with a default already present (any migrated
-  // install) `api_key_set` stayed false, Next did nothing at all, and each
-  // press leaked another provider. Five accumulated on the reporting user's
-  // machine before they gave up.
-  const handleNext = useCallback(async () => {
-    setCheckingKey(true);
+  // The panel saves onto the keyless DEFAULT card when there is one
+  // (`replaceCardId` below), so the key it just wrote is the key
+  // `llm.api_key_set` reports. Minting a new card instead leaked one per
+  // press on migrated installs: a new card only becomes the default when
+  // there is none, so Next did nothing visible (five leaked on one machine).
+  const handleConnected = useCallback(async (card: CredentialCard) => {
     setNextError(null);
+    void refreshCards();
     try {
-      if (saveRef.current) {
-        const ok = await saveRef.current();
-        if (!ok) {
-          // The form renders its own reason; do not also advance.
-          return;
-        }
+      // What the user connected here is what Orbital runs on: a card that
+      // landed beside an earlier one (a sign-in tried first, say) is made
+      // the default rather than left behind it.
+      let isDefault = card.is_default;
+      if (!isDefault) {
+        const res = await api<{ default_card_id: string | null }>(
+          `/api/v2/settings/cards/${encodeURIComponent(card.id)}/default`,
+          { method: 'PUT' },
+        ).catch(() => null);
+        isDefault = res?.default_card_id === card.id;
       }
       const data = await api<{ llm: { api_key_set: boolean } }>('/api/v2/settings');
-      if (data.llm.api_key_set) {
+      // A signed-in default card may carry no API key of its own.
+      if (data.llm.api_key_set || isDefault) {
         setStep('accounts');
       } else {
-        // Saved, yet still no usable key. Silence here is what made this look
-        // like a dead button rather than a failure.
+        // Saved, yet still not what runs. Silence here would read as a dead button.
         setNextError(t('wizard.apiKey.notSaved'));
       }
     } catch (err: unknown) {
       setNextError(err instanceof Error && err.message ? err.message : t('wizard.apiKey.notSaved'));
-    } finally {
-      setCheckingKey(false);
     }
-  }, [t]);
+  }, [t, refreshCards]);
 
   // Skip the key: persist the choice so the first-run gate stops showing the
   // wizard, then continue to the accounts step exactly as Next does. Nothing
@@ -501,112 +512,93 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
         )}
 
         {step === 'api_key' && (
-          <WizardCard step="api_key" title={t('wizard.apiKey.title')} intro={t('wizard.intro')}>
-            {/* `card` = the default provider, so Save PUTs it. Without this the
-                form takes its "create a new one" branch every press. */}
-            <LLMProviderSettings
-              mode="global"
-              card={defaultCard}
-              hideSaveButton
-              saveRef={saveRef}
-              providerPicker="cards"
-              // One-click sign-in creates (or re-keys) a card on the daemon;
-              // re-read so "Adjust settings" edits THAT card, not the one
-              // that happened to be default at mount.
-              onCardSaved={() => { void refreshCards(); }}
-            />
-
-            {/* First-run telemetry disclosure (spec 046 §6) — one sentence,
-                non-blocking; the full inspectable payload lives in Global
-                Settings → Data & privacy. */}
-            <p
-              className="mt-4 text-caption text-secondary"
-              data-testid="wizard-telemetry-disclosure"
-            >
-              {t('telemetry.wizard.disclosure')}
-            </p>
-
-            <div className="mt-6 flex flex-col items-end">
-              <div className="flex w-full items-center gap-2.5">
-                {/* Back: the Projects step's own control and wording. To
-                    Projects when that step had something to offer, else to
-                    Agents. Nothing is kept across a reload, by choice. */}
-                <button
-                  type="button"
-                  onClick={() => setStep(nothingToImport ? 'agents' : 'projects')}
-                  disabled={checkingKey || skippingKey}
-                  data-testid="wizard-key-back"
-                  className="mr-auto text-body font-medium text-secondary transition-colors duration-150 hover:text-primary disabled:opacity-50 max-md:min-h-[44px]"
-                >
-                  {t('global.back')}
-                </button>
-                <button
-                  onClick={handleNext}
-                  disabled={checkingKey || skippingKey}
-                  className="bg-accent text-white text-body font-medium rounded-lg px-5 py-2.5 hover:bg-accent/90 transition-all duration-150 disabled:opacity-50 inline-flex items-center gap-2"
-                >
-                  {checkingKey ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      {t('wizard.checking')}
-                    </>
-                  ) : (
-                    t('wizard.next')
+          <WizardCard
+            step="api_key"
+            title={t('wizard.apiKey.title')}
+            titleHint={{ label: t('connect.wizard.introLabel'), text: t('connect.wizard.intro') }}
+          >
+            {/* A keyless default card (a migrated install) is saved onto, not
+                beside: see handleConnected. A one-click sign-in stores its
+                card daemon-side, and Next then only writes a changed model. */}
+            <ConnectPanel
+              replaceCardId={defaultCard && !defaultCard.key_set && !defaultCard.read_only ? defaultCard.id : null}
+              onCardStored={() => { void refreshCards(); }}
+              onCardRemoved={() => { void refreshCards(); }}
+              onDone={(card) => { void handleConnected(card); }}
+              footer={({ canSubmit, busy, submit, error }) => (
+                <>
+                  <div className="mt-6 flex w-full items-center gap-2.5">
+                    {/* Back: to Projects when that step had something to
+                        offer, else to Agents. */}
+                    <button
+                      type="button"
+                      onClick={() => setStep(nothingToImport ? 'agents' : 'projects')}
+                      disabled={busy || skippingKey}
+                      data-testid="wizard-key-back"
+                      className="mr-auto text-body font-medium text-secondary transition-colors duration-150 hover:text-primary disabled:opacity-50 max-md:min-h-[44px]"
+                    >
+                      {t('global.back')}
+                    </button>
+                    {/* Keyless path, beside Next. Not offered when the user
+                        continued without any coding agent. */}
+                    {!keyCompulsory && (
+                      <button
+                        type="button"
+                        onClick={handleSkipKey}
+                        disabled={busy || skippingKey}
+                        data-testid="wizard-skip-key"
+                        className="text-body font-medium text-secondary transition-colors duration-150 hover:text-primary disabled:opacity-50 max-md:min-h-[44px]"
+                      >
+                        {t('connect.wizard.skip')}
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={submit}
+                      disabled={!canSubmit || skippingKey}
+                      data-testid="wizard-key-next"
+                      aria-busy={busy || undefined}
+                      className="inline-flex h-10 items-center gap-2 whitespace-nowrap rounded-[10px] bg-accent px-5 text-body font-medium text-white transition-all duration-150 hover:bg-accent/90 disabled:opacity-45 max-md:min-h-[44px]"
+                    >
+                      {busy ? (
+                        <>
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                          {t('connect.wizard.nextBusy')}
+                        </>
+                      ) : (
+                        t('wizard.next')
+                      )}
+                    </button>
+                  </div>
+                  {(error || nextError || skipError) && (
+                    <p className="mt-2 text-right text-caption text-error-text" role="alert" data-testid="wizard-next-error">
+                      {error || nextError || skipError}
+                    </p>
                   )}
-                </button>
-              </div>
-              {nextError && (
-                <p className="text-caption text-error mt-2" data-testid="wizard-next-error">
-                  {nextError}
-                </p>
-              )}
-            </div>
-
-            {/* Keyless path: a quiet secondary action under Next, with the
-                consequence spelled out right beside it. Not offered when the
-                user continued without any coding agent — the key is then the
-                only way anything gets done. */}
-            {keyCompulsory ? (
-              <div
-                className="mt-5 rounded-lg border border-warning/30 bg-warning-surface px-3.5 py-3 text-caption text-warning-text"
-                data-testid="wizard-key-compulsory"
-              >
-                {t('wizard.apiKey.compulsory')}{' '}
-                <button
-                  type="button"
-                  onClick={() => setStep('agents')}
-                  data-testid="wizard-key-back-to-agents"
-                  className="font-medium underline underline-offset-2 hover:no-underline"
-                >
-                  {t('wizard.apiKey.compulsoryBack')}
-                </button>
-              </div>
-            ) : (
-              <div className="mt-5 pt-4 border-t border-border flex flex-col items-end text-right">
-                <div className="flex items-center gap-2.5">
-                  <button
-                    type="button"
-                    onClick={handleSkipKey}
-                    disabled={checkingKey || skippingKey}
-                    data-testid="wizard-skip-key"
-                    className="text-body font-medium text-secondary hover:text-primary underline-offset-2 hover:underline transition-colors duration-150 disabled:opacity-50 max-md:min-h-[44px]"
-                  >
-                    {t('wizard.skipKey')}
-                  </button>
-                </div>
-                <p
-                  className="mt-1 text-caption text-secondary max-w-[380px]"
-                  data-testid="wizard-skip-key-hint"
-                >
-                  {t('wizard.skipKey.hint')}
-                </p>
-                {skipError && (
-                  <p className="text-caption text-error mt-2" role="alert" data-testid="wizard-skip-error">
-                    {skipError}
+                  {keyCompulsory && (
+                    <div
+                      className="mt-5 rounded-lg border border-warning/30 bg-warning-surface px-3.5 py-3 text-caption text-warning-text"
+                      data-testid="wizard-key-compulsory"
+                    >
+                      {t('wizard.apiKey.compulsory')}{' '}
+                      <button
+                        type="button"
+                        onClick={() => setStep('agents')}
+                        data-testid="wizard-key-back-to-agents"
+                        className="font-medium underline underline-offset-2 hover:no-underline"
+                      >
+                        {t('wizard.apiKey.compulsoryBack')}
+                      </button>
+                    </div>
+                  )}
+                  {/* First-run telemetry disclosure (spec 046 §6): one
+                      sentence; the payload lives in Settings → Data & privacy. */}
+                  <p className="mt-4 text-caption text-muted" data-testid="wizard-telemetry-disclosure">
+                    {t('telemetry.wizard.disclosure')}
                   </p>
-                )}
-              </div>
-            )}
+                </>
+              )}
+            />
           </WizardCard>
         )}
 

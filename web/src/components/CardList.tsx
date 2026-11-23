@@ -57,7 +57,10 @@ import type { StringKey } from '../i18n/strings';
 import type { CardHealth } from '../utils/cardHealth';
 import { useT, translate } from '../i18n/useT';
 import { useLocale } from '../i18n/LocaleContext';
-import LLMProviderSettings from './LLMProviderSettings';
+import ConnectPanel from './connect/ConnectPanel';
+import { useCatalog } from './connect/useCatalog';
+import ProviderLogo from './connect/ProviderLogo';
+import { CHATGPT, hasRegions } from './connect/providerMeta';
 
 /** Card-route refusals a user can reach from the list, in the UI language. */
 const CARD_ERROR_KEY: Record<string, StringKey> = {
@@ -153,6 +156,9 @@ export default function CardList({
   const [rowNote, setRowNote] = useState<{ id: string; message: string } | null>(null);
   const [editing, setEditing] = useState<CredentialCard | null>(null);
   const [adding, setAdding] = useState(false);
+  /** "Sign in again" on a revoked sign-in row: the edit dialog, signing in. */
+  const [resigning, setResigning] = useState(false);
+  const catalog = useCatalog();
 
   function errorText(err: unknown): string {
     // Card routes answer {code, message}: show the catalog line for a code
@@ -285,6 +291,7 @@ export default function CardList({
           <CardFormModal
             card={null}
             onClose={() => setAdding(false)}
+            onRemoved={() => { void onRefresh(); }}
             onSaved={(res) => {
               onCardUpdated(res.card);
               void onRefresh();
@@ -339,6 +346,7 @@ export default function CardList({
           const providerName = registry[card.provider]?.display_name || card.provider;
           const isSelected = card.id === selectedId && !(mode === 'project' && dangling);
           const rowBusy = busy?.id === card.id ? busy.kind : null;
+          const signinRow = card.auth === 'signin' || card.provider === CHATGPT;
           return (
             <li key={card.id} data-testid={`card-row-${card.id}`}>
               <div
@@ -349,6 +357,7 @@ export default function CardList({
                 }`}
               >
                 <div className="flex items-start gap-3 px-3 py-2.5">
+                  <div className="min-w-0 flex-1">
                   {/* The tile body is the selector. */}
                   <button
                     type="button"
@@ -357,14 +366,18 @@ export default function CardList({
                     disabled={rowBusy === 'select'}
                     data-testid={`card-select-${card.id}`}
                     onClick={() => select(card)}
-                    className="min-w-0 flex-1 text-left disabled:cursor-wait"
+                    className="block w-full min-w-0 text-left disabled:cursor-wait"
                   >
-                    <span className="flex items-center gap-2 flex-wrap">
-                      {rowBusy === 'select' ? (
-                        <Loader2 className="w-4 h-4 shrink-0 animate-spin text-accent" />
-                      ) : (
-                        <SelectionDot selected={isSelected} />
-                      )}
+                    <span className="flex items-start gap-2">
+                      {/* The mark stays beside the name: the chips wrap, not the logo. */}
+                      <span className="mt-px shrink-0">
+                        {rowBusy === 'select' ? (
+                          <Loader2 className="w-[18px] h-[18px] animate-spin text-accent" />
+                        ) : (
+                          <ProviderLogo id={card.provider} name={providerName} size={18} />
+                        )}
+                      </span>
+                      <span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
                       <span className="text-body font-medium text-primary truncate min-w-0">
                         {card.name}
                       </span>
@@ -385,14 +398,20 @@ export default function CardList({
                           {t('cards.badge.env')}
                         </span>
                       )}
-                      {card.region === 'china' && (
-                        <span className="shrink-0 text-micro rounded-full px-2 py-0.5 bg-card border border-border text-secondary">
-                          {t('llm.region.china')}
+                      {(hasRegions(catalog?.find((p) => p.id === card.provider))
+                        || (!catalog && card.region === 'china')) && (
+                        <span
+                          data-testid={`card-region-${card.id}`}
+                          className="shrink-0 text-micro rounded-full px-2 py-0.5 bg-card border border-border text-secondary"
+                        >
+                          {card.region === 'china' ? t('connect.region.china') : t('connect.region.global')}
                         </span>
                       )}
+                      </span>
                     </span>
 
-                    <span className="block text-caption text-secondary mt-1 truncate pl-6">
+                    {!signinRow && (
+                    <span className="block text-caption text-secondary mt-1 truncate pl-[26px]">
                       {/* A card's default name IS "<Provider> · <model>", so
                           repeating it here was pure noise. Show it only when
                           the card has been renamed and the name no longer
@@ -413,8 +432,30 @@ export default function CardList({
                         t('cards.noKey')
                       )}
                     </span>
-
+                    )}
+                    {signinRow && !card.needs_signin && (
+                      <span className="block text-caption text-secondary mt-1 truncate pl-[26px]" data-testid={`card-account-${card.id}`}>
+                        {card.account?.email || card.name}
+                      </span>
+                    )}
                   </button>
+                  {/* A sign-in that stopped working: the red mark says why on
+                      hover; this is the way back. */}
+                  {signinRow && card.needs_signin && (
+                    <button
+                      type="button"
+                      data-testid={`card-resignin-${card.id}`}
+                      onClick={() => {
+                        clearRow();
+                        setResigning(true);
+                        setEditing(card);
+                      }}
+                      className="mt-1 ml-[26px] text-caption font-medium text-accent-text hover:underline max-md:min-h-[44px]"
+                    >
+                      {t('connect.signin.again')}
+                    </button>
+                  )}
+                  </div>
 
                   {/* Exactly three actions. Never a fourth. */}
                   <div className="flex items-center gap-1 shrink-0">
@@ -478,10 +519,13 @@ export default function CardList({
       {(editing || adding) && (
         <CardFormModal
           card={editing}
+          autoSignIn={resigning}
           onClose={() => {
             setEditing(null);
             setAdding(false);
+            setResigning(false);
           }}
+          onRemoved={() => { void onRefresh(); }}
           onSaved={(res) => {
             onCardUpdated(res.card);
             // A provider added from a project is a global provider — that is
@@ -529,7 +573,7 @@ function HealthMark({ health, cardId }: { health: CardHealth; cardId: string }) 
       <span
         aria-hidden="true"
         data-testid={`card-health-tip-${cardId}`}
-        className="pointer-events-none absolute left-1/2 top-full z-30 mt-1.5 hidden w-64 -translate-x-1/2 rounded-md border border-border bg-card px-2.5 py-1.5 text-caption text-primary shadow-lg group-hover/health:block"
+        className="pointer-events-none absolute -left-2 top-full z-30 mt-1.5 hidden w-64 max-w-[calc(100vw-48px)] rounded-md border border-border bg-card px-2.5 py-1.5 text-caption text-primary shadow-lg group-hover/health:block"
       >
         {health.text}
       </span>
@@ -623,38 +667,50 @@ function IconAction({
 }
 
 /**
- * The Add/Edit dialog. It wraps the existing provider form unchanged. Save
- * is the last step and only lands on a passing connection test (a failing
- * one stores nothing and the form shows why), so a successful save simply
- * closes the dialog and the card appears in the list. It stays open only
- * when a one-click sign-in stored its card with a failing verdict, so the
- * red line the form renders is readable; the user closes it when done.
+ * The Add/Edit dialog around the connect panel. Save is the last step and
+ * only lands on a passing connection test (a failing one stores nothing and
+ * the panel shows why under the key), so a successful save closes the dialog
+ * and the card appears in the list. A one-click sign-in stores its card
+ * daemon-side at once; the list is refreshed then, and Save afterwards only
+ * writes a changed model.
+ *
+ * Editing shows the provider's logo and name as the title instead of the
+ * tiles: the provider of a saved card is fixed.
  *
  * Portaled to <body>: project settings is one big <form>, and a <form>
  * nested inside another never reaches React — WebKit and Chromium stop a
  * nested form's submit event at the ancestor form, so nothing called
  * preventDefault, the browser did a native GET submit and reloaded the app
- * to "Select a project" with the card never POSTed (2026-09-19).
+ * to "Select a project" with the card never POSTed (2026-09-19). The panel
+ * itself has no <form> either.
  */
 export function CardFormModal({
   card,
+  autoSignIn,
   onClose,
   onSaved,
+  onRemoved,
 }: {
   card: CredentialCard | null;
+  /** Open signing in again (a revoked sign-in row's action). */
+  autoSignIn?: boolean;
   onClose: () => void;
   onSaved: (result: CardMutationResponse) => void;
+  /** A signed-in card was signed out (deleted) from inside the dialog. */
+  onRemoved?: () => void;
 }) {
   const t = useT();
-  const [savedOnce, setSavedOnce] = useState(false);
-  // The card as it stands after the last save in this dialog. The dialog
-  // stays open on a failed verdict, and editing the stale prop kept showing
-  // the old "Current key" (and an Add dialog saved twice made two cards).
-  const [current, setCurrent] = useState<CredentialCard | null>(card);
+  const catalog = useCatalog();
+  const editName = card
+    ? (card.provider === CHATGPT
+        ? 'ChatGPT'
+        : catalog?.find((p) => p.id === card.provider)?.display_name
+          ?? (card.provider === 'custom' ? t('llm.provider.custom') : card.provider))
+    : '';
 
   return createPortal(
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+      className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 pt-16 max-md:items-stretch max-md:pt-0"
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
@@ -662,13 +718,14 @@ export function CardFormModal({
       <div
         role="dialog"
         aria-modal="true"
-        aria-label={card ? t('cards.modal.editTitle') : t('cards.modal.addTitle')}
+        aria-label={card ? editName : t('cards.modal.addTitle')}
         data-testid="card-modal"
         className="surface-float-pop w-full max-w-[560px] max-h-[85vh] flex flex-col mx-4 max-md:max-w-full max-md:max-h-full max-md:h-full max-md:mx-0 max-md:rounded-none"
       >
-        <div className="flex items-center justify-between px-5 py-3.5 border-b border-border shrink-0">
-          <h2 className="text-title font-semibold text-primary">
-            {card ? t('cards.modal.editTitle') : t('cards.modal.addTitle')}
+        <div className="flex items-center justify-between gap-3 px-5 py-3.5 border-b border-border shrink-0">
+          <h2 className="flex min-w-0 items-center gap-2 text-title font-semibold text-primary">
+            {card && <ProviderLogo id={card.provider} name={editName} size={20} />}
+            <span className="truncate">{card ? editName : t('cards.modal.addTitle')}</span>
           </h2>
           <button
             type="button"
@@ -681,38 +738,37 @@ export function CardFormModal({
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto min-h-0 px-5 py-4">
-          <LLMProviderSettings
-            mode="global"
-            card={current}
-            onCardSaved={(result) => {
-              setCurrent(result.card);
-              onSaved(result);
-              if (!result.test || result.test.ok) {
-                onClose();
-              } else {
-                setSavedOnce(true);
-              }
-            }}
+        <div className="flex-1 overflow-y-auto min-h-0 px-5 pt-[18px] pb-5">
+          <ConnectPanel
+            card={card}
+            autoSignIn={autoSignIn}
+            onCardStored={(stored) => onSaved({ card: stored, test: null })}
+            onCardRemoved={() => onRemoved?.()}
+            onDone={() => onClose()}
+            footer={({ canSubmit, busy, submit, error }) => (
+              <div className="mt-5">
+                <div className="flex items-center justify-end gap-3">
+                  <button
+                    type="button"
+                    data-testid="card-save"
+                    onClick={submit}
+                    disabled={!canSubmit || !!card?.read_only}
+                    aria-busy={busy || undefined}
+                    className="inline-flex h-10 items-center justify-center gap-2 rounded-[10px] bg-accent px-5 text-body font-medium text-white transition-all duration-150 hover:bg-accent/90 disabled:opacity-45 max-md:w-full max-md:min-h-[44px]"
+                  >
+                    {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />}
+                    {t('settings.save')}
+                  </button>
+                </div>
+                {error && (
+                  <p className="mt-2 text-right text-caption text-error-text" role="alert" data-testid="card-save-error">
+                    {error}
+                  </p>
+                )}
+              </div>
+            )}
           />
         </div>
-
-        {savedOnce && (
-          <div className="px-5 py-3 border-t border-border shrink-0 flex items-center justify-between gap-3">
-            <span className="flex items-center gap-1.5 text-caption text-secondary">
-              <Check className="w-3.5 h-3.5 text-success" />
-              {t('cards.modal.savedHint')}
-            </span>
-            <button
-              type="button"
-              data-testid="card-modal-done"
-              onClick={onClose}
-              className="text-body font-medium text-secondary border border-border rounded-lg px-4 py-1.5 hover:text-primary transition-all duration-150"
-            >
-              {t('cards.modal.done')}
-            </button>
-          </div>
-        )}
       </div>
     </div>,
     document.body,
