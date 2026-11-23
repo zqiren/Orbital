@@ -8,9 +8,9 @@ every reply is a refusal. Run part C on a US, Japan or Singapore exit, or on no 
 excluded regions. Parts A and B need no special network.
 
 **Build under test:** branch `test/1124-welcome-antigravity` (`feat/1123-one-page-welcome` with
-`feat/antigravity-worker` merged in), commit `<COMMIT>`, CI run `<RUN>`.
+`feat/antigravity-worker` merged in), commit `dd1fc782`, CI run `45220698491`.
 Installer: the `Orbital-Windows-installer` artifact of that run, `Orbital-Setup-0.24.1.exe`,
-sha256 `<SHA256>`.
+sha256 `351ae6cd4fe864c25b6c632fb82b33becfe7f40c0ff4a6efb7dc15f6ec04ae4a`.
 Test this CI-built `.exe` only, never a local build. It still says version 0.24.1 (same as the
 published release); identify it by the sha256.
 
