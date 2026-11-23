@@ -765,12 +765,24 @@ type SubAgentActivity = Extract<DisplayItem, { type: 'sub_agent_activity' }>;
  * `update_needed` renders the translated update sentence instead of the
  * backend's English error (backend text is never translated; a reason enum
  * is data the UI may map). Any other reason, or no meta, keeps the content.
+ *
+ * Spec 193: likewise a worker's error row (`sub_agent_terminal`) whose
+ * reason is `region_unavailable` — a vendor refusal its manifest declares —
+ * reads "{name} isn't available in your region" instead of the vendor text.
  */
 function applyDispatchFailureReason(
   activity: SubAgentActivity,
   meta: Record<string, unknown> | undefined,
   tr: ActivityTranslate,
 ): SubAgentActivity {
+  if (
+    meta?.event === 'sub_agent_terminal'
+    && meta.reason === 'region_unavailable'
+    && activity.action === 'error'
+  ) {
+    const name = typeof meta.name === 'string' && meta.name ? meta.name : activity.handle;
+    return { ...activity, error: tr('chat.subAgentRegionUnavailable', { name }) };
+  }
   if (!meta || meta.event !== 'sub_agent_dispatch_failed') return activity;
   if (meta.reason !== 'update_needed') return activity;
   const name = typeof meta.name === 'string' ? meta.name : activity.handle;

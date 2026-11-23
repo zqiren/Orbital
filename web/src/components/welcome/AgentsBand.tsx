@@ -21,6 +21,7 @@ import type { SubAgentListEntry } from '../../hooks/useSubAgentList';
 import { useAgentLogin } from '../../hooks/useAgentLogin';
 import { useT } from '../../i18n/useT';
 import { sendTelemetry } from '../../utils/telemetry';
+import LoginCodeField from '../LoginCodeField';
 import NotDetectedRow from '../NotDetectedRow';
 import AgentGlyph from './AgentGlyph';
 import { agentStateOf, isReady, type AgentState } from './welcomeModel';
@@ -87,6 +88,9 @@ function AgentTile({ entry, state, emphasis, onChanged }: {
           {t('subAgentCard.loginOpenLink')}
         </a>
       )}
+      {/* A login that asks for the code its browser page shows (Antigravity):
+          renders nothing until the CLI asks, and nothing for other agents. */}
+      {login.busy && <LoginCodeField slug={entry.slug} className="mt-1.5" />}
       {login.failed && (
         <p className="mt-1 px-1 text-caption text-error-text" role="alert">{login.failed}</p>
       )}

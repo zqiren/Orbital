@@ -56,9 +56,22 @@ vi.mock('../connect/ConnectPanel', async () => {
     },
   };
 });
+type WsHandler = (event: unknown) => void;
+const wsHandlers = vi.hoisted(() => new Map<string, Set<(event: unknown) => void>>());
 vi.mock('../../hooks/useWebSocket', () => ({
-  useWebSocket: () => ({ on: vi.fn(), off: vi.fn(), connectionState: 'connected', subscribe: vi.fn() }),
+  useWebSocket: () => ({
+    on: (type: string, fn: WsHandler) => {
+      if (!wsHandlers.has(type)) wsHandlers.set(type, new Set());
+      wsHandlers.get(type)!.add(fn);
+    },
+    off: (type: string, fn: WsHandler) => { wsHandlers.get(type)?.delete(fn); },
+    connectionState: 'connected',
+    subscribe: vi.fn(),
+  }),
 }));
+function emit(type: string, payload: Record<string, unknown>) {
+  act(() => { wsHandlers.get(type)?.forEach((fn) => fn({ type, ...payload })); });
+}
 
 import WelcomePage from './WelcomePage';
 import { getBackgroundImport, resetBackgroundImportForTests } from '../../utils/backgroundImport';
@@ -117,6 +130,7 @@ const startBtn = () => screen.getByTestId('welcome-start') as HTMLButtonElement;
 
 beforeEach(() => {
   apiMock.mockReset();
+  wsHandlers.clear();
   resetBackgroundImportForTests();
   telemetry.length = 0;
   Object.assign(panel, { connected: false, canSubmit: false, busy: false, error: null, submit: null });
@@ -331,5 +345,83 @@ describe('WelcomePage — bands', () => {
     fireEvent.keyDown(window, { key: 'Escape' });
     expect(screen.queryByTestId('welcome-review-list')).toBeNull();
     expect(screen.getByTestId('welcome-agent-list')).toBeTruthy();
+  });
+});
+
+describe('WelcomePage — Antigravity (paste-the-code sign-in)', () => {
+  const AGY_OUT: Agent = { slug: 'antigravity', name: 'Antigravity', installed: true, credentials_configured: false, supports_login: true };
+  const AGY_IN: Agent = { ...AGY_OUT, credentials_configured: true };
+  const AGY_MISSING: Agent = { ...AGY_OUT, installed: false };
+  const CODEX_OUT: Agent = { slug: 'codex', name: 'Codex', installed: true, credentials_configured: false, supports_login: true };
+
+  it('not installed: behind "add another agent", with its locate chip', async () => {
+    mockApi({ agents: [READY, AGY_MISSING] });
+    render(<WelcomePage onComplete={vi.fn()} />);
+    await waitFor(() => expect(screen.getByTestId('welcome-agent-ready-claude-code')).toBeTruthy());
+    expect(screen.queryByTestId('welcome-agent-antigravity')).toBeNull();
+    fireEvent.click(screen.getByTestId('welcome-agents-add'));
+    expect(screen.getByTestId('welcome-locate-chip-antigravity')).toBeTruthy();
+  });
+
+  it('signed in: a quiet check, and it opens Start on its own', async () => {
+    mockApi({ agents: [AGY_IN, MISSING] });
+    render(<WelcomePage onComplete={vi.fn()} />);
+    await waitFor(() => expect(screen.getByTestId('welcome-agent-ready-antigravity')).toBeTruthy());
+    expect(startBtn().disabled).toBe(false);
+  });
+
+  it('signed out: Sign in starts the job; the code field shows only once the CLI asks, posts the code, and the row turns ready', async () => {
+    const routes: Routes = { agents: [AGY_OUT, MISSING] };
+    mockApi(routes);
+    render(<WelcomePage onComplete={vi.fn()} />);
+    const signIn = await waitFor(() => screen.getByTestId('welcome-agent-login-antigravity'));
+    expect(startBtn().disabled).toBe(true);
+    fireEvent.click(signIn);
+    await waitFor(() => expect(calls('/api/v2/settings/sub-agents/antigravity/login', 'POST')).toHaveLength(1));
+    // The job runs, but the CLI has not asked for a code yet.
+    expect(screen.queryByTestId('login-code-antigravity')).toBeNull();
+
+    emit('login.input_needed', { slug: 'antigravity', job_id: 'job7', kind: 'login' });
+    const row = screen.getByTestId('welcome-agent-antigravity');
+    const input = screen.getByTestId('login-code-input-antigravity') as HTMLInputElement;
+    expect(row.contains(input)).toBe(true);
+    expect(input.placeholder).toBe('Paste the code');
+    fireEvent.change(input, { target: { value: ' 4/0AbC ' } });
+    fireEvent.click(screen.getByTestId('login-code-submit-antigravity'));
+    await waitFor(() => expect(calls('/api/v2/settings/sub-agents/antigravity/login-jobs/job7/input', 'POST')).toHaveLength(1));
+    const [, init] = calls('/api/v2/settings/sub-agents/antigravity/login-jobs/job7/input', 'POST')[0];
+    expect(JSON.parse(init.body)).toEqual({ value: '4/0AbC' });
+    await waitFor(() => expect(screen.queryByTestId('login-code-antigravity')).toBeNull());
+    // Still signed out until the job reports it finished.
+    expect(startBtn().disabled).toBe(true);
+
+    routes.agents = [AGY_IN, MISSING];
+    emit('login.complete', { slug: 'antigravity', job_id: 'job7', kind: 'login' });
+    await waitFor(() => expect(screen.getByTestId('welcome-agent-ready-antigravity')).toBeTruthy());
+    expect(startBtn().disabled).toBe(false);
+  });
+
+  it('a failed login hides the code field and says so', async () => {
+    mockApi({ agents: [AGY_OUT, MISSING] });
+    render(<WelcomePage onComplete={vi.fn()} />);
+    fireEvent.click(await waitFor(() => screen.getByTestId('welcome-agent-login-antigravity')));
+    await waitFor(() => expect(calls('/api/v2/settings/sub-agents/antigravity/login', 'POST')).toHaveLength(1));
+    emit('login.input_needed', { slug: 'antigravity', job_id: 'job8', kind: 'login' });
+    expect(screen.getByTestId('login-code-antigravity')).toBeTruthy();
+    emit('login.failed', { slug: 'antigravity', job_id: 'job8', kind: 'login' });
+    expect(screen.queryByTestId('login-code-antigravity')).toBeNull();
+    expect(screen.getByTestId('welcome-agent-login-antigravity')).toBeTruthy();
+    expect(screen.getByRole('alert').textContent).toBeTruthy();
+  });
+
+  it('a login that needs no code (Codex) never shows the field, and another agent\'s prompt is not its own', async () => {
+    mockApi({ agents: [CODEX_OUT, AGY_OUT] });
+    render(<WelcomePage onComplete={vi.fn()} />);
+    fireEvent.click(await waitFor(() => screen.getByTestId('welcome-agent-login-codex')));
+    await waitFor(() => expect(calls('/api/v2/settings/sub-agents/codex/login', 'POST')).toHaveLength(1));
+    emit('login.input_needed', { slug: 'antigravity', job_id: 'other', kind: 'login' });
+    expect(screen.queryByTestId('login-code-codex')).toBeNull();
+    // Antigravity's own job was never started from here: no field for it either.
+    expect(screen.queryByTestId('login-code-antigravity')).toBeNull();
   });
 });

@@ -20,6 +20,7 @@ import threading
 from datetime import datetime, timezone
 
 from agent_os.agent import blob_store
+from agent_os.agents.retired import current_slug
 from agent_os.daemon_v2.session_index import is_user_row
 from agent_os.agent.token_utils import estimate_message_tokens
 from agent_os.utils.file_lock import session_lock
@@ -501,8 +502,10 @@ class Session:
                                 session.pinned = bool(msg["pinned"])
                             # Pinned worker target (spec 074). Same
                             # no-migration default: absent/null reads as None.
+                            # A retired slug reads as its successor, in
+                            # memory only (the file keeps the old one).
                             if msg.get("pinned_target"):
-                                session.pinned_target = msg["pinned_target"]
+                                session.pinned_target = current_slug(msg["pinned_target"])
                             if isinstance(msg.get("sub_agent_params"), dict):
                                 session.sub_agent_params = {
                                     str(slug): {str(k): str(v) for k, v in p.items() if v}

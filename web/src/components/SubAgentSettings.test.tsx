@@ -78,6 +78,7 @@ interface Entry {
   credentials_configured: boolean;
   missing_credentials: string[];
   supports_login?: boolean;
+  supports_logout?: boolean;
   setup_actions: unknown[];
   config: Record<string, string>;
   param_schema: Record<string, {
@@ -153,8 +154,8 @@ describe('SubAgentSettings', () => {
     api.mockResolvedValueOnce([
       makeEntry({ slug: 'claude-code', name: 'Claude Code', installed: true }),
       makeEntry({
-        slug: 'gemini-cli',
-        name: 'Gemini CLI',
+        slug: 'antigravity',
+        name: 'Antigravity',
         installed: false,
         binary_path: null,
       }),
@@ -167,13 +168,13 @@ describe('SubAgentSettings', () => {
     });
     // The not-installed agent used to vanish; now it is the locate card:
     // the paste flow, with no login / config controls.
-    const row = screen.getByTestId('sub-agent-not-detected-gemini-cli');
-    expect(row).toHaveTextContent('Gemini CLI');
+    const row = screen.getByTestId('sub-agent-not-detected-antigravity');
+    expect(row).toHaveTextContent('Antigravity');
     expect(row).toHaveTextContent('Not detected');
-    expect(row).toHaveTextContent('Copy a prompt into Gemini CLI and paste its answer below.');
+    expect(row).toHaveTextContent('Copy a prompt into Antigravity and paste its answer below.');
     expect(within(row).queryByRole('combobox')).not.toBeInTheDocument();
     expect(within(row).queryByText('Login')).not.toBeInTheDocument();
-    expect(within(row).getByTestId('sub-agent-locate-answer-gemini-cli')).toBeInTheDocument();
+    expect(within(row).getByTestId('sub-agent-locate-answer-antigravity')).toBeInTheDocument();
   });
 
   it('keeps the install helper out of the embedded view, and on the standalone page', async () => {
@@ -218,6 +219,36 @@ describe('SubAgentSettings', () => {
       expect(screen.getByText('API Key Only')).toBeInTheDocument();
     });
     expect(screen.queryByRole('button', { name: /^login$/i })).not.toBeInTheDocument();
+  });
+
+  // Spec 193: Antigravity signs in but has no logout command, so the card
+  // must not offer a Logout the route would refuse.
+  it('hides Logout when supports_logout is false', async () => {
+    api.mockResolvedValueOnce([
+      makeEntry({
+        slug: 'no-logout-cli',
+        name: 'No Logout CLI',
+        credentials_configured: true,
+        missing_credentials: [],
+        supports_logout: false,
+      }),
+    ]);
+    render(<SubAgentSettings />);
+    await waitFor(() => expect(screen.getByText('No Logout CLI')).toBeInTheDocument());
+    expect(screen.getByText('Logged in')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^logout$/i })).not.toBeInTheDocument();
+  });
+
+  it('keeps Logout when supports_logout is true or absent (older daemon)', async () => {
+    api.mockResolvedValueOnce([
+      makeEntry({ slug: 'a', name: 'With Flag', credentials_configured: true,
+        missing_credentials: [], supports_logout: true }),
+      makeEntry({ slug: 'b', name: 'Without Flag', credentials_configured: true,
+        missing_credentials: [] }),
+    ]);
+    render(<SubAgentSettings />);
+    await waitFor(() => expect(screen.getByText('Without Flag')).toBeInTheDocument());
+    expect(screen.getAllByRole('button', { name: /^logout$/i })).toHaveLength(2);
   });
 
   it('shows the Login button when supports_login is true and not logged in', async () => {
@@ -901,8 +932,8 @@ describe('SubAgentSettings — Orbital-managed install', () => {
     mockList([
       makeEntry({ slug: 'claude-code', name: 'Claude Code', installed: true }),
       makeDshEntry({
-        slug: 'gemini-cli',
-        name: 'Gemini CLI',
+        slug: 'antigravity',
+        name: 'Antigravity',
         // Bring-your-own everywhere: no platform list to be excluded from.
         install: { supported: false, state: 'not_installed', platforms: [] },
       }),
@@ -912,9 +943,9 @@ describe('SubAgentSettings — Orbital-managed install', () => {
 
     await waitFor(() => expect(screen.getByText('Claude Code')).toBeInTheDocument());
     // Spec 115 D4: the compact row, not the full card — so no Install.
-    expect(screen.getByTestId('sub-agent-not-detected-gemini-cli')).toHaveTextContent('Not detected');
+    expect(screen.getByTestId('sub-agent-not-detected-antigravity')).toHaveTextContent('Not detected');
     expect(screen.queryByRole('button', { name: 'Install' })).not.toBeInTheDocument();
-    expect(screen.queryByTestId('sub-agent-install-unsupported-gemini-cli')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('sub-agent-install-unsupported-antigravity')).not.toBeInTheDocument();
   });
 
   it('explains an unsupported platform instead of offering the button', async () => {

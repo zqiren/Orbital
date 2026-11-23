@@ -17,6 +17,7 @@ import contextlib
 import json
 import logging
 import os
+import re
 import uuid
 from asyncio import subprocess as aio_subprocess
 from collections.abc import AsyncIterator, Mapping
@@ -156,6 +157,8 @@ class ACPSDKTransport(AgentTransport):
         config_options: Mapping[str, str | bool] | None = None,
         auth_method_id: str | None = None,
         dispatch_mcp: dict | None = None,
+        refusal_patterns: list[dict] | None = None,
+        agent_name: str | None = None,
     ) -> None:
         if permission_mode not in _VALID_PERMISSION_MODES:
             raise ValueError(
@@ -178,6 +181,12 @@ class ACPSDKTransport(AgentTransport):
         # whether the agent took it (it must advertise HTTP MCP).
         self.dispatch_mcp: dict | None = dispatch_mcp
         self.dispatch_mounted = False
+        # The manifest's ``runtime.refusal_patterns``: a vendor's soft refusal
+        # that arrives as an ordinary end_turn reply (Antigravity outside its
+        # regions). Compiled once; a broken regex is dropped with a warning
+        # rather than failing the spawn.
+        self._refusal_patterns = _compile_refusal_patterns(refusal_patterns)
+        self._agent_name = agent_name
 
         self._workspace = ""
         self._session_id: str | None = None
@@ -203,6 +212,9 @@ class ACPSDKTransport(AgentTransport):
         self._event_queue: asyncio.Queue[TransportEvent] = asyncio.Queue()
         self._turn_text_parts: list[str] = []
         self._turn_message_emitted = False
+        # Tool calls opened this turn: a turn that ran a tool is real work,
+        # never a refusal, whatever its text says.
+        self._turn_tool_calls = 0
         # The SDK dispatcher runs notifications concurrently with response
         # handling. Raw-wire observation lets us wait until every preceding
         # session/update handler has finished before treating prompt response
@@ -486,6 +498,7 @@ class ACPSDKTransport(AgentTransport):
             raise RuntimeError("ACP prompt already in progress; queue the follow-up")
         self._turn_text_parts = []
         self._turn_message_emitted = False
+        self._turn_tool_calls = 0
         self._turn_open = True
         self._prompt_task = asyncio.create_task(
             self._run_prompt(message), name=f"acp-prompt-{self._session_id}"
@@ -533,8 +546,29 @@ class ACPSDKTransport(AgentTransport):
                 session_id=self._session_id, prompt=[text_block(message)]
             )
             await self._wait_for_session_updates()
-            await self._emit_accumulated_message()
             stop_reason = response.stop_reason
+            refusal = self._turn_refusal()
+            if refusal is not None:
+                # The whole turn was the vendor's refusal: an error, not a
+                # reply. The session is untouched, so the next message (after
+                # a network change, say) runs normally.
+                text = "".join(self._turn_text_parts).strip()
+                self._turn_message_emitted = True
+                await self._event_queue.put(self._refusal_event(refusal, text))
+                await self._event_queue.put(
+                    TransportEvent(
+                        "turn_complete",
+                        {
+                            "cause": "error",
+                            "stop_reason": stop_reason,
+                            "reason": refusal,
+                            "session_id": self._session_id,
+                            "model": self._effective_config_value("model") or self._model,
+                        },
+                    )
+                )
+                return
+            await self._emit_accumulated_message()
             if stop_reason == "cancelled":
                 cause = "stopped" if self._stopping else "interrupted"
             elif stop_reason == "refusal":
@@ -557,9 +591,13 @@ class ACPSDKTransport(AgentTransport):
         except Exception as exc:
             if not self._stopping:
                 await self._emit_accumulated_message()
-                await self._event_queue.put(
-                    TransportEvent("error", {"error": str(exc)}, f"Error: {exc}")
-                )
+                refusal = self._match_refusal(str(exc), whole=False)
+                if refusal is not None:
+                    error_event = self._refusal_event(refusal, str(exc))
+                else:
+                    error_event = TransportEvent(
+                        "error", {"error": str(exc)}, f"Error: {exc}")
+                await self._event_queue.put(error_event)
                 await self._event_queue.put(
                     TransportEvent(
                         "turn_complete",
@@ -572,6 +610,40 @@ class ACPSDKTransport(AgentTransport):
                 )
         finally:
             self._turn_open = False
+
+    def _match_refusal(self, text: str, *, whole: bool) -> str | None:
+        """The ``reason`` of the first refusal pattern ``text`` matches.
+
+        ``whole``: the pattern must match the entire (stripped) text — a
+        reply that merely quotes the refusal is a reply. An error raised by
+        the agent is already an error, so there a search is enough.
+        """
+        text = (text or "").strip()
+        if not text:
+            return None
+        for pattern, reason in self._refusal_patterns:
+            hit = pattern.fullmatch(text) if whole else pattern.search(text)
+            if hit:
+                return reason
+        return None
+
+    def _turn_refusal(self) -> str | None:
+        """A refusal reason when this turn's entire output is one refusal
+        message and it made no tool call; else None."""
+        if not self._refusal_patterns or self._turn_tool_calls:
+            return None
+        return self._match_refusal("".join(self._turn_text_parts), whole=True)
+
+    def _refusal_event(self, reason: str, text: str) -> TransportEvent:
+        """The error a refusal becomes. ``error`` keeps the vendor's own words
+        (the log and the manager read them); the UI shows its own sentence
+        for ``reason``, naming the agent by ``name``."""
+        logger.info("ACPSDKTransport: turn refused by %s (%s): %r",
+                    self._agent_name or "agent", reason, text[:300])
+        data = {"error": text, "reason": reason}
+        if self._agent_name:
+            data["name"] = self._agent_name
+        return TransportEvent("error", data, text)
 
     async def read_stream(self) -> AsyncIterator[TransportEvent]:
         while self.is_alive() or not self._event_queue.empty():
@@ -665,6 +737,7 @@ class ACPSDKTransport(AgentTransport):
                 return None
             return TransportEvent("thinking", {"text": text, "delta": True}, text)
         if isinstance(update, ToolCallStart):
+            self._turn_tool_calls += 1
             return TransportEvent(
                 "tool_use",
                 {
@@ -1049,6 +1122,24 @@ class ACPSDKTransport(AgentTransport):
 
 class _ResumeUnsupported(Exception):
     pass
+
+
+def _compile_refusal_patterns(
+    patterns: list[dict] | None,
+) -> list[tuple[re.Pattern[str], str]]:
+    """``[(compiled regex, reason)]`` from manifest ``refusal_patterns``."""
+    compiled: list[tuple[re.Pattern[str], str]] = []
+    for entry in patterns or []:
+        regex = (entry or {}).get("regex")
+        reason = (entry or {}).get("reason")
+        if not regex or not reason:
+            continue
+        try:
+            compiled.append((re.compile(regex), str(reason)))
+        except re.error as exc:
+            logger.warning("ACPSDKTransport: ignoring refusal pattern %r: %s",
+                           regex, exc)
+    return compiled
 
 
 def _content_text(content: Any) -> str:

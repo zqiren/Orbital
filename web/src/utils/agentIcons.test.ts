@@ -93,6 +93,12 @@ describe('getAgentIcon', () => {
     expect(i.src).toBe('/agents/codebuddy.svg');
   });
 
+  it('gives antigravity the Gemini mark under its own monogram', () => {
+    const i = getAgentIcon('antigravity');
+    expect(i.src).toBe('/agents/gemini.svg');
+    expect(i.monogram).toBe('AG');
+  });
+
   it('resolves the kimi-code and minimax-code slugs to their vendor marks', () => {
     // The manifest slugs carry a `-code` suffix; prefix matching lands them
     // on the vendor entry the same way `gemini-cli` lands on `gemini`.

@@ -6,7 +6,7 @@ from __future__ import annotations
 import asyncio
 import json
 
-from acp import PROTOCOL_VERSION, run_agent, text_block
+from acp import PROTOCOL_VERSION, RequestError, run_agent, text_block
 from acp.schema import (
     AgentCapabilities,
     AgentMessageChunk,
@@ -26,6 +26,7 @@ from acp.schema import (
     SessionConfigSelectOption,
     SessionResumeCapabilities,
     SetSessionConfigOptionResponse,
+    ToolCallStart,
     ToolCallUpdate,
 )
 
@@ -192,6 +193,21 @@ class DummyAgent:
                     ),
                 )
             return PromptResponse(stop_reason="end_turn")
+        elif text.startswith("say:"):
+            # Spec 193: reply with exactly this text (a vendor refusal).
+            text = text[len("say:"):]
+        elif text.startswith("tool-then-say:"):
+            # A turn that ran a tool before its text: real work.
+            await self.connection.session_update(
+                session_id=session_id,
+                update=ToolCallStart(
+                    session_update="tool_call", tool_call_id="tool-9",
+                    title="Read file", kind="read", status="completed",
+                ),
+            )
+            text = text[len("tool-then-say:"):]
+        elif text.startswith("raise:"):
+            raise RequestError(-32603, text[len("raise:"):])
         else:
             text = f"Echo: {text}; model={self.model}; mode={self.mode}"
 

@@ -439,7 +439,8 @@ def test_index_version_is_bumped_for_the_reply_fields():
     # "3" (session import, 2026-10-21) added imported_from / imported.
     # "4" (spec 154 §5.3): bookkeeping rows never set last_user_at; ask_ids.
     # "5" (spec 180): routed_by.
-    assert si.INDEX_VERSION == "5"
+    # "6" (spec 193): a pin to a retired slug reads as its successor.
+    assert si.INDEX_VERSION == "6"
 
 
 # ── Spec 154 §5.3: bookkeeping rows and ask_ids ──────────────────────────

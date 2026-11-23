@@ -4,10 +4,21 @@
 
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
+const wsHandlers = vi.hoisted(() => new Map<string, Set<(event: unknown) => void>>());
 vi.mock('../hooks/useWebSocket', () => ({
-  useWebSocket: () => ({ on: vi.fn(), off: vi.fn(), connectionState: 'connected', subscribe: vi.fn() }),
+  useWebSocket: () => ({
+    on: (type: string, fn: (event: unknown) => void) => {
+      if (!wsHandlers.has(type)) wsHandlers.set(type, new Set());
+      wsHandlers.get(type)!.add(fn);
+    },
+    off: (type: string, fn: (event: unknown) => void) => { wsHandlers.get(type)?.delete(fn); },
+    connectionState: 'connected',
+    subscribe: vi.fn(),
+  }),
 }));
+const apiMock = vi.hoisted(() => vi.fn());
+vi.mock('../config', async (orig) => ({ ...(await orig<object>()), api: apiMock }));
 import AgentErrorNotice from './AgentErrorNotice';
 
 describe('AgentErrorNotice', () => {
@@ -159,5 +170,36 @@ describe('AgentErrorNotice — a signed-out agent (batch 1123)', () => {
     expect(screen.getByTestId('agent-error-notice').textContent).toContain('Claude Code is signed out');
     expect(screen.getByTestId('agent-error-notice-signin')).toHaveTextContent('Sign in');
     expect(screen.queryByTestId('agent-error-notice-settings')).toBeNull();
+  });
+});
+
+describe('AgentErrorNotice — a signed-out agent whose login asks for a code (Antigravity)', () => {
+  it('Sign in shows the paste-the-code field once the CLI asks, under the buttons, and posts the code to the job', async () => {
+    apiMock.mockReset();
+    apiMock.mockResolvedValue({});
+    render(
+      <AgentErrorNotice
+        code="agent_signed_out"
+        message="Antigravity is signed out"
+        agent="antigravity"
+        agentName="Antigravity"
+        onOpenSettings={vi.fn()}
+        onDismiss={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByTestId('agent-error-notice-signin'));
+    await waitFor(() => expect(apiMock).toHaveBeenCalledWith(
+      '/api/v2/settings/sub-agents/antigravity/login', expect.objectContaining({ method: 'POST' })));
+    expect(screen.queryByTestId('login-code-antigravity')).toBeNull();
+    act(() => {
+      wsHandlers.get('login.input_needed')?.forEach((fn) =>
+        fn({ type: 'login.input_needed', slug: 'antigravity', job_id: 'j1', kind: 'login' }));
+    });
+    const input = screen.getByTestId('login-code-input-antigravity');
+    fireEvent.change(input, { target: { value: 'abc' } });
+    fireEvent.click(screen.getByTestId('login-code-submit-antigravity'));
+    await waitFor(() => expect(apiMock).toHaveBeenCalledWith(
+      '/api/v2/settings/sub-agents/antigravity/login-jobs/j1/input',
+      expect.objectContaining({ method: 'POST', body: JSON.stringify({ value: 'abc' }) })));
   });
 });

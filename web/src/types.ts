@@ -1221,6 +1221,16 @@ export interface LoginFailedEvent {
   kind?: 'login' | 'update';
 }
 
+// Spec 193: the login CLI printed its manifest-declared prompt and now waits
+// on stdin for a pasted value (agy's authorization code). The card shows one
+// field; POST .../login-jobs/{job_id}/input writes it to the CLI.
+export interface LoginInputNeededEvent {
+  type: 'login.input_needed';
+  slug: string;
+  job_id: string;
+  kind?: 'login' | 'update';
+}
+
 // Spec 136: a background sub-agent sweep (reason "status") or a late live
 // model list (reason "models") changed what Settings shows. Daemon-global;
 // open Settings screens refetch. Settings reads serve the previous sweep at
@@ -1458,6 +1468,7 @@ export type WebSocketEvent =
   | LoginProgressEvent
   | LoginCompleteEvent
   | LoginFailedEvent
+  | LoginInputNeededEvent
   | SubAgentsUpdatedEvent
   | QuotaUpdatedEvent
   | UpdateAvailableEvent;

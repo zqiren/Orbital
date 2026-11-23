@@ -59,9 +59,12 @@ def _count(value: object) -> int:
 # built in is reported as ``other``; fanout workers (``worker:<id>-<i>``) as
 # ``native``. A parity test fails when a manifest is added without a row here.
 SUBAGENT_SLUGS = (
-    "aider", "claude-code", "cline", "codebuddy", "codex", "continue-cli",
-    "copilot-cli", "cursor", "dsh", "gemini-cli", "goose", "kimi-code",
-    "minimax-code", "pi",
+    "aider", "antigravity", "claude-code", "cline", "codebuddy", "codex",
+    "continue-cli", "copilot-cli", "cursor", "dsh",
+    # Retired manifest (spec 193); kept so rows from older installs still
+    # aggregate under their own name.
+    "gemini-cli",
+    "goose", "kimi-code", "minimax-code", "pi",
 )
 
 

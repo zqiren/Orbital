@@ -112,6 +112,26 @@ def test_only_sdk_and_codex_app_server_can_ask_once():
         assert mgr.can_ask_once(slug) is False
 
 
+def test_the_bundled_registry_never_lets_antigravity_route():
+    """Merge check (Welcome × Antigravity, 2026-11-24): with the real
+    manifests, keyless routing can still only ask Claude Code or Codex.
+    Antigravity runs on ACP (session/new writes into agy's own history), so
+    it is skipped wherever it sits in the registry order."""
+    import os
+    from agent_os.agents.registry import AgentRegistry
+    registry = AgentRegistry()
+    registry.load_directory(os.path.normpath(os.path.join(
+        os.path.dirname(__file__), os.pardir, os.pardir, "agent_os", "agents", "manifests")))
+    setup = MagicMock()
+    setup.check_all_cached.return_value = []
+    mgr = SubAgentManager(process_manager=MagicMock(), registry=registry, setup_engine=setup)
+    assert registry.get("antigravity") is not None
+    assert registry.get("gemini-cli") is None
+    assert mgr.can_ask_once("antigravity") is False
+    assert mgr.can_ask_once("claude-code") is True
+    assert mgr.can_ask_once("codex") is True
+
+
 def test_an_agent_whose_login_expired_cannot_ask_once():
     expired = SimpleNamespace(slug="claude-code", auth_expired=True)
     fine = SimpleNamespace(slug="codex", auth_expired=False)

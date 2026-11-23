@@ -2574,6 +2574,44 @@ describe('transformChatHistory — sub_agent_dispatch_failed rows (spec 116)', (
   });
 });
 
+// --------------------------------------------------------------------------
+// Spec 193 — a worker turn its manifest marks as a region refusal ends with
+// an error row tagged reason=region_unavailable; the UI says it plainly.
+// --------------------------------------------------------------------------
+
+describe('transformChatHistory — region_unavailable error rows (spec 193)', () => {
+  const VENDOR = '⚠ You do not have a valid license of this product. Please contact your administrator to request a license. (#3501)';
+  const RAW = `[Sub-agent] antigravity stopped with error: ${VENDOR}. Transcript: /ws/orbital/sub_agents/antigravity.jsonl`;
+  const row = (meta?: Record<string, unknown>): ChatMessage => ({
+    role: 'system', source: 'daemon', content: RAW, timestamp: TS,
+    ...(meta ? { _meta: meta } : {}),
+  });
+  const errorItem = (items: ReturnType<typeof transformChatHistory>) => {
+    const item = items.find(i => i.type === 'sub_agent_activity');
+    if (!item || item.type !== 'sub_agent_activity') throw new Error('no activity row');
+    return item;
+  };
+  const META = { event: 'sub_agent_terminal', kind: 'error', reason: 'region_unavailable', name: 'Antigravity', suppress_wake: true };
+
+  it('renders the region sentence in English, naming the agent', () => {
+    const item = errorItem(transformChatHistory([row(META)]));
+    expect(item.action).toBe('error');
+    expect(item.handle).toBe('antigravity');
+    expect(item.error).toBe("Antigravity isn't available in your region");
+  });
+
+  it('renders the region sentence in Chinese', () => {
+    const zh: ActivityTranslate = (key, vars) => translate('zh', key, vars);
+    const item = errorItem(transformChatHistory([row(META)], undefined, zh));
+    expect(item.error).toBe('Antigravity 在你所在的地区不可用');
+  });
+
+  it('an error row without the reason keeps the vendor text', () => {
+    const item = errorItem(transformChatHistory([row({ event: 'sub_agent_terminal', kind: 'error' })]));
+    expect(item.error).toContain('(#3501)');
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Keyless onboarding + session import: the two new daemon rows, and imported
 // assistant turns (sub_agent_terminal completed rows carrying `reply`).

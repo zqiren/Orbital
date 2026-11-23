@@ -1,0 +1,115 @@
+# -----------------------------------------------------------------------
+# Google Antigravity CLI — Research Notes (probed 2026-11-20/22, v1.5.13)
+# -----------------------------------------------------------------------
+# CLI command: agy   (one ~227 MB closed-source Go binary, no Node; the
+#   successor to Gemini CLI, which stopped serving consumer accounts on
+#   2026-06-18 — its old `gemini-cli` seed manifest was retired with this one)
+# Install: macOS/Linux `curl -fsSL https://antigravity.google/cli/install.sh
+#   | bash` (no sudo; writes $HOME/.local/bin/agy, strips quarantine, then
+#   runs `agy install` for the shell PATH). Windows `irm
+#   https://antigravity.google/cli/install.ps1 | iex` (read, not run, on
+#   2026-11-22: writes %LOCALAPPDATA%\agy\bin\agy.exe, then `agy.exe install`).
+# ACP: `agy acp` speaks Agent Client Protocol over stdio; Orbital's
+#   ACPSDKTransport drives it unchanged. initialize: loadSession=true,
+#   sessionCapabilities resume/list/close/additionalDirectories, prompt image
+#   + embeddedContext, mcpCapabilities {http: false, sse: false} — so the
+#   pinned seat's `dispatch` tool cannot mount (the daemon says so on the
+#   first turn). Session config options: model (bare ids, e.g.
+#   gemini-3.8-flash, claude-sonnet-4-6; account-dependent), thought_level
+#   (low/medium/high), mode (default/accept-edits/plan). Resume verified: a
+#   second spawn given the session id reports "resumed" via session/resume.
+# Model flag: `agy --model <id> acp` — a global flag before the subcommand;
+#   the ACP transport lifts Orbital's `--model` there and also applies it as
+#   the session's model option.
+# Auth: `agy acp --login` prints a Google OAuth URL (PKCE), opens the browser
+#   ITSELF, then prints "Then paste the authorization code, or the full URL of
+#   the page you land on, and press Enter:" and reads stdin. Success prints
+#   "Logged in as <email>." and exits 0; closed stdin exits 1 "login
+#   cancelled". Orbital must never open the URL too: a code from a second tab
+#   fails with "Invalid code verifier". Credentials stay agy's own.
+# Auth probe: `agy models` — signed in it lists the models and exits 0 (also
+#   on an account refused by region); signed out it prints "Please sign in to
+#   view available models." and exits 1 (probed with a scratch $HOME, so the
+#   owner's sign-in was never touched). It makes one network call (~3 s).
+# Region: outside Google's regions the first prompt "succeeds" (end_turn)
+#   with a single message "⚠ You do not have a valid license of this product.
+#   … (#3501)" (probed from a Hong Kong exit). Print mode says "Eligibility
+#   check failed: Your current account is not eligible for Antigravity,
+#   because it is not currently available in your location." The
+#   refusal_patterns below turn either into an honest error.
+# Headless fallback: `agy -p --output-format stream-json` — not used; it
+#   cannot round-trip approvals and ACP is the maintained path.
+# -----------------------------------------------------------------------
+
+manifest_version: "1"
+name: "Antigravity"
+slug: "antigravity"
+description: "Google's Antigravity coding agent, driven over ACP"
+author: "google"
+version: "1.0.0"
+
+runtime:
+  adapter: cli
+  command: "agy"
+  transport: acp-sdk
+  mode: pipe
+  interactive: false
+  args: ["acp"]
+  # Whole-message patterns (the transport fullmatches the stripped turn
+  # output, and only when the turn made no tool call), so a real reply that
+  # quotes the code is never taken for the refusal.
+  refusal_patterns:
+    - regex: '(?s)\W*You do not have a valid license of this product\b.*\(#3501\)\W*'
+      reason: region_unavailable
+    - regex: '(?s).{0,200}\bnot (?:eligible for Antigravity|currently available in your location)\b.{0,200}'
+      reason: region_unavailable
+
+setup:
+  install_command:
+    macos: "curl -fsSL https://antigravity.google/cli/install.sh | bash"
+    linux: "curl -fsSL https://antigravity.google/cli/install.sh | bash"
+    windows: "irm https://antigravity.google/cli/install.ps1 | iex"
+  check_command: "agy --version"
+  credentials:
+    - key: "antigravity_auth"
+      label: "Google account"
+      type: oauth_cli
+      required: true
+      # Exit-code mode (no check_field): 0 signed in, 1 signed out.
+      check_command: "agy models"
+      setup_command: "agy acp --login"
+      setup_label: "Log in to Antigravity"
+      setup_input_prompt: "paste the authorization code"
+  auto_detect:
+    windows:
+      - "%LOCALAPPDATA%\\agy\\bin\\agy.exe"
+    macos:
+      - "$HOME/.local/bin/agy"
+      - "/usr/local/bin/agy"
+      - "/opt/homebrew/bin/agy"
+    linux:
+      - "$HOME/.local/bin/agy"
+      - "/usr/local/bin/agy"
+
+capabilities:
+  skills:
+    - code_generation
+    - code_review
+    - debugging
+    - testing
+    - refactoring
+    - documentation
+  input_types: [text, files]
+  output_types: [text, files]
+  file_extensions: [.py, .js, .ts, .jsx, .tsx, .rs, .go, .java, .rb, .c, .cpp, .h]
+  routing_hint: "Use for coding tasks on Google's Gemini models (and the other models its plan offers) via Antigravity"
+  needs_shell: true
+  needs_network: true
+
+permissions:
+  # network_domains deliberately omitted: transport-backed sub-agents spawn
+  # outside the project sandbox/proxy, so an entry here would be a claim
+  # Orbital cannot enforce (see the dsh manifest for the full note).
+  shell: true
+  workspace_access: read_write
+  autonomy_recommended: hands_off

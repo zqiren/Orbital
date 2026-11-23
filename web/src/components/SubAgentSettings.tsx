@@ -14,6 +14,7 @@ import { LabelWithHint } from './SettingsSection';
 import type { WebSocketEvent } from '../types';
 import Select from './Select';
 import { pickLoginUrl } from '../utils/loginUrl';
+import LoginCodeField from './LoginCodeField';
 import { SendDiagnosticsLink } from './SendFeedback';
 
 // ---------------------------------------------------------------------------
@@ -98,6 +99,9 @@ interface SubAgentEntry {
    *  false, the agent only accepts an API key — hide the Login button so it
    *  can't 400. Optional for backward-compat with older daemon payloads. */
   supports_login?: boolean;
+  /** False when the agent has no logout command (Antigravity): the card then
+   *  offers no Logout, which would 400. Absent (older daemon) = offered. */
+  supports_logout?: boolean;
   /** Spec 116 D4: the installed CLI is older than `min_version`, the oldest
    *  version Orbital can drive. The card then shows the Update button
    *  (`supports_update`: the manifest declares an updater) instead of Login. */
@@ -602,6 +606,7 @@ function SubAgentCard({ entry, onChanged, onChangeLocation }: CardProps) {
   // daemon payloads keep the previous behavior. The API-key flow has its own
   // "Set API Key" button below, so it's never affected by this gate.
   const supportsLogin = entry.supports_login !== false;
+  const supportsLogout = entry.supports_logout !== false;
 
   const credentialFields = useMemo(() => credentialFieldsFor(entry), [entry]);
   // Orbital holds the key itself for agents with no login flow and no CLI
@@ -1157,7 +1162,7 @@ function SubAgentCard({ entry, onChanged, onChangeLocation }: CardProps) {
         )}
         {/* Logout drives the agent's own CLI logout command; agents whose key
             Orbital holds have a per-credential Remove instead. */}
-        {entry.credentials_configured && !authExpired && !usesManagedCredentials && !credentialState && (
+        {entry.credentials_configured && !authExpired && supportsLogout && !usesManagedCredentials && !credentialState && (
           <button
             onClick={handleLogout}
             disabled={logoutBusy}
@@ -1184,6 +1189,7 @@ function SubAgentCard({ entry, onChanged, onChangeLocation }: CardProps) {
           </a>
         </p>
       )}
+      <LoginCodeField slug={entry.slug} className="mb-3" />
       {loginNotice && (
         <p
           data-testid={`sub-agent-login-notice-${entry.slug}`}

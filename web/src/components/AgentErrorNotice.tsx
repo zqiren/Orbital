@@ -29,6 +29,7 @@ import { useT } from '../i18n/useT';
 import { useAgentLogin } from '../hooks/useAgentLogin';
 import { refreshAgentAvailability } from '../hooks/useAgentAvailability';
 import { isInternalError, providerErrorKey, readableProviderDetail } from '../utils/providerError';
+import LoginCodeField from './LoginCodeField';
 import { SendFeedbackDialog } from './SendFeedback';
 
 export interface AgentErrorNoticeProps {
@@ -66,6 +67,9 @@ function SignInButton({ agent, onSignedIn }: { agent: string; onSignedIn: () => 
         </a>
       )}
       {login.failed && <span className="self-center text-caption text-error-text" role="alert">{login.failed}</span>}
+      {/* A login that asks for the code its browser page shows (Antigravity):
+          its own line under the buttons; nothing for other agents. */}
+      {login.busy && <LoginCodeField slug={agent} className="order-last basis-full" />}
     </>
   );
 }
@@ -110,7 +114,7 @@ export default function AgentErrorNotice({
           )}
         </div>
       </div>
-      <div className="mt-3 flex gap-2">
+      <div className="mt-3 flex flex-wrap gap-2">
         {signedOut ? (
           <SignInButton agent={agent} onSignedIn={onSignedIn} />
         ) : internal ? (
