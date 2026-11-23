@@ -62,8 +62,9 @@ Recorded for the Antigravity note:
 - Status sweep with agy installed: 2.3–2.8 s for 10 agents (agy 1.6–2.0 s; `agy models` exits 1
   with "Please sign in to view available models").
 - Console windows: one `agy.exe` console window appeared during the first sweep after the install
-  (06:22:54.9, pid 22828). Three later sweeps and the login job showed none. Cause not pinned down
-  (the first `agy` run after install, or one probe without the no-window flag).
+  (06:22:54.9, pid 22828). Three later sweeps and the login job showed none. Every spawn in
+  `agent_os/agents/*.py` and `api/routes/settings.py` passes `win_no_window_flags()`, so the window
+  was probably opened by agy itself (a child it starts on its first run); that is an inference.
 - The login job tail shows the URL's "…" as `â€¦` (UTF-8 read as cp1252).
 - After "重新检测" the space where the Antigravity card had been stayed as an empty gap under the chips.
 
