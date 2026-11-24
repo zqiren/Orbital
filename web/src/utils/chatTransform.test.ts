@@ -1102,6 +1102,18 @@ describe('transformChatHistory — FE-A2 sub-agent lifecycle markers', () => {
     }
   });
 
+  it('spec 195: a question the user answers on its card draws no line in the chat', () => {
+    const row: ChatMessage = {
+      ...sys('[Sub-agent] dsh requires input (cursor/ask_question): 颜色 The user answers this on its card; do not respond to it.', TS),
+      _meta: {
+        event: 'interaction_required', handle: 'dsh', interaction_id: 'q-1', kind: 'cursor/ask_question',
+        suppress_wake: true, answerer: 'user',
+        display_content: '[Sub-agent] dsh requires input (cursor/ask_question): 颜色',
+      },
+    };
+    expect(transformChatHistory([row])).toEqual([]);
+  });
+
   it('#27: a stop-by-user marker is never mistaken for the stopped-with-error shape', () => {
     // Both open "[Sub-agent] <handle> stopped …" — the rules must stay
     // disjoint or a user stop would render as a red error row.
@@ -2837,20 +2849,22 @@ describe('transformChatHistory — worker onboarding hides its setup-instruction
     expect(items[1]).toMatchObject({ type: 'agent_message', source: 'codex', content: 'Hi! What is this project for?' });
   });
 
+  // Spec 195: an ordinary dispatch marker (no initiator, no suppress_wake)
+  // renders as its dispatch card, no longer as a one-line "sent" row.
   it('a marker for a different worker after the onboarding row still renders', () => {
     const items = transformChatHistory([onboarding, marker('claude-code')]);
-    expect(items.map((it) => it.type)).toEqual(['daemon_row', 'sub_agent_activity']);
+    expect(items.map((it) => it.type)).toEqual(['daemon_row', 'dispatch_card']);
   });
 
   it('a marker that does not directly follow the onboarding row still renders', () => {
     const user: ChatMessage = { role: 'user', source: 'user', content: 'hello', timestamp: TS2 } as ChatMessage;
     const items = transformChatHistory([onboarding, user, marker('codex', TS3)]);
-    expect(items.map((it) => it.type)).toEqual(['daemon_row', 'user_message', 'sub_agent_activity']);
+    expect(items.map((it) => it.type)).toEqual(['daemon_row', 'user_message', 'dispatch_card']);
   });
 
-  it('an ordinary dispatch marker is unchanged', () => {
+  it('an ordinary dispatch marker is its card', () => {
     const items = transformChatHistory([marker('codex')]);
-    expect(items.map((it) => it.type)).toEqual(['sub_agent_activity']);
+    expect(items.map((it) => it.type)).toEqual(['dispatch_card']);
   });
 });
 
@@ -3176,7 +3190,7 @@ describe('transformChatHistory — spec 161 worker result delivery (_kind: worke
         _meta: { dispatch_id: 'd3', handle: 'pi', transcript_path: '/p.jsonl' },
       },
     ]);
-    expect(items.some((i) => i.type === 'sub_agent_activity' && i.action === 'sent'
-      && i.handle === 'pi')).toBe(true);
+    // Spec 195: rendered as its dispatch card.
+    expect(items.some((i) => i.type === 'dispatch_card' && i.handle === 'pi')).toBe(true);
   });
 });

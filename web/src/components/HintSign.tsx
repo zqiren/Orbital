@@ -10,7 +10,7 @@
  */
 
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
-import { Info } from 'lucide-react';
+import { Info, type LucideIcon } from 'lucide-react';
 
 interface HintSignProps {
   /** Accessible name of the sign, already translated. */
@@ -20,9 +20,13 @@ interface HintSignProps {
   /** Which edge of the sign the bubble lines up with. */
   align?: 'left' | 'right';
   testId?: string;
+  /** The sign's glyph (default ⓘ) — a clock on a waiting message (spec 195). */
+  icon?: LucideIcon;
+  /** Glyph size class (default h-3.5 w-3.5). */
+  iconClassName?: string;
 }
 
-export default function HintSign({ label, children, align = 'left', testId }: HintSignProps) {
+export default function HintSign({ label, children, align = 'left', testId, icon: Icon = Info, iconClassName = 'h-3.5 w-3.5' }: HintSignProps) {
   const [open, setOpen] = useState(false);
   const popId = useId();
   const closeTimer = useRef<number | undefined>(undefined);
@@ -75,7 +79,7 @@ export default function HintSign({ label, children, align = 'left', testId }: Hi
         }}
         className="inline-flex shrink-0 items-center rounded-full p-1 -m-1 text-muted transition-colors duration-150 hover:text-primary aria-expanded:text-primary focus-visible:outline-2 focus-visible:outline-accent/45 [-webkit-tap-highlight-color:transparent]"
       >
-        <Info aria-hidden="true" className="h-3.5 w-3.5" strokeWidth={1.75} />
+        <Icon aria-hidden="true" className={iconClassName} strokeWidth={1.75} />
       </button>
       {open && (
         <span

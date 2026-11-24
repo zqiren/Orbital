@@ -188,6 +188,17 @@ class _WorkerLive:
         self.last_flush = 0.0
         self.timer: "asyncio.TimerHandle | None" = None
         self.last_kind = ""
+        # Spec 195: the dispatch this turn belongs to and who started it,
+        # stamped on every live event (absent on a self-initiated turn).
+        self.dispatch_id: str | None = None
+        self.initiator: str | None = None
+
+    def stamp(self, event: dict) -> dict:
+        if self.dispatch_id:
+            event["dispatch_id"] = self.dispatch_id
+            if self.initiator:
+                event["initiator"] = self.initiator
+        return event
 
 
 def _describe_tool(tool_name: str, args: dict) -> str:
@@ -396,7 +407,8 @@ class ActivityTranslator:
 
     def on_worker_chunk(self, chunk_type: str, display: dict, text: str,
                         project_id: str, *, session_id: str | None,
-                        handle: str) -> None:
+                        handle: str, dispatch_id: str | None = None,
+                        initiator: str | None = None) -> None:
         """Broadcast one worker ``tool_activity`` / ``tool_result`` /
         ``thinking`` chunk (``display`` = ``worker_display_meta``).
 
@@ -412,6 +424,10 @@ class ActivityTranslator:
         state = self._workers.get(key)
         if state is None:
             state = self._workers[key] = _WorkerLive(project_id, session_id, handle)
+        if dispatch_id != state.dispatch_id:
+            # Pending thinking belongs to the dispatch it was produced under.
+            self._flush_worker_thinking(key)
+            state.dispatch_id, state.initiator = dispatch_id, initiator
         if chunk_type == "thinking":
             if text:
                 # Whole blocks back to back are separate paragraphs (the
@@ -473,7 +489,7 @@ class ActivityTranslator:
             event["arguments"] = args
         if extra:
             event.update(extra)
-        self._ws.broadcast(state.project_id, event)
+        self._ws.broadcast(state.project_id, state.stamp(event))
 
     def _schedule_worker_thinking(self, key: tuple, state: _WorkerLive) -> None:
         elapsed = time.monotonic() - state.last_flush
@@ -502,7 +518,7 @@ class ActivityTranslator:
             return
         text, state.thinking = state.thinking, ""
         state.last_flush = time.monotonic()
-        self._ws.broadcast(state.project_id, {
+        self._ws.broadcast(state.project_id, state.stamp({
             "type": "chat.stream_delta",
             "project_id": state.project_id,
             "session_id": state.session_id,
@@ -511,7 +527,7 @@ class ActivityTranslator:
             "source": state.handle,
             "is_final": False,
             "worker": True,
-        })
+        }))
 
     def on_network_blocked(self, project_id: str, domain: str, method: str,
                            *, session_id: str | None = None) -> None:

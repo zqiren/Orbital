@@ -9,6 +9,8 @@ import { useLocale } from '../i18n/LocaleContext';
 import { describeLiveActivity } from '../utils/chatTransform';
 import { allowlistExecutable } from './UnsandboxedRunsSection';
 import type { UnsandboxedRunDecision } from '../types';
+import AgentGlyph from './welcome/AgentGlyph';
+import { MAIN_AGENT_HANDLE } from '../utils/agentIcons';
 
 type TFunc = ReturnType<typeof useT>;
 
@@ -36,6 +38,11 @@ interface ApprovalCardProps {
   sessionId?: string;
   resolved?: 'approved' | 'denied';
   onResolve?: (toolCallId: string, resolution: 'approved' | 'denied') => void;
+  /** Spec 195: who asks — a worker's handle; absent = Orbital. Its mark sits
+   *  in the header, so two agents asking at once are told apart. */
+  asker?: string;
+  /** The asker's name: the mark's tooltip and accessible label. */
+  askerName?: string;
 }
 
 function renderToolArgs(toolName: string, toolArgs: Record<string, unknown>, t: TFunc) {
@@ -108,12 +115,18 @@ export default function ApprovalCard({
   sessionId,
   resolved,
   onResolve,
+  asker,
+  askerName,
 }: ApprovalCardProps) {
   const t = useT();
   const { locale } = useLocale();
   // Spec 117: a sandbox denial the agent may run outside the sandbox. Not a
   // separate card — same chrome, same deny, different answers.
   const isUnsandboxedRun = approval.kind === 'unsandboxed_run';
+  // Spec 195: a worker's question the user answers. Same card, same routes:
+  // the answer is the approve route's reply text (or an option id as its
+  // response payload), Deny declines it.
+  const isQuestion = approval.kind === 'question';
   const unsandboxedCommand = approval.command ?? String(approval.tool_args?.command ?? '');
   const alwaysAllowExe = allowlistExecutable(unsandboxedCommand, approval.executable);
   // approval.what is backend-authored English; the payload carries the
@@ -143,6 +156,23 @@ export default function ApprovalCard({
   const { approveToolCall, denyToolCall } = useAgent();
 
   const resolution = resolved ?? localResolution;
+
+  if (isQuestion) {
+    return (
+      <QuestionCard
+        approval={approval}
+        projectId={projectId}
+        sessionId={sessionId}
+        resolution={resolution}
+        onResolved={(r) => {
+          setLocalResolution(r);
+          onResolve?.(approval.tool_call_id, r);
+        }}
+        asker={asker}
+        askerName={askerName}
+      />
+    );
+  }
 
   if (resolution) {
     const isApproved = resolution === 'approved';
@@ -214,7 +244,10 @@ export default function ApprovalCard({
 
   return (
     <div className="mb-3 shrink-0 rounded-lg border border-warning/50 border-l-[3px] border-l-warning bg-warning-surface overflow-hidden">
-      <div className="px-4 py-1.5 border-b border-warning/20 flex items-center justify-between">
+      <div className="px-4 py-1.5 border-b border-warning/20 flex items-center gap-2">
+        <span data-testid="approval-asker" data-agent={asker ?? MAIN_AGENT_HANDLE} className="inline-flex">
+          <AgentGlyph slug={asker ?? MAIN_AGENT_HANDLE} size={16} title={askerName ?? asker ?? 'Orbital'} />
+        </span>
         <span className="type-label text-warning-text">{t('approval.header')}</span>
       </div>
 
@@ -406,6 +439,165 @@ export default function ApprovalCard({
         {error && (
           <p className="text-caption text-error mt-1">{error}</p>
         )}
+      </div>
+    </div>
+  );
+}
+
+type QuestionOption = { id: string; label: string };
+
+/** The questions a worker's interaction carries (`tool_args.options`): a list
+ *  of questions, each with its own prompt and options (ACP ask_question), or
+ *  one flat list of options. Option buttons are offered only for a single
+ *  question, since a chosen id answers the first question. */
+function questionParts(toolArgs: Record<string, unknown>): { prompts: string[]; options: QuestionOption[] } {
+  const raw = Array.isArray(toolArgs.options) ? (toolArgs.options as unknown[]) : [];
+  const asRecord = (v: unknown) => (v && typeof v === 'object' ? (v as Record<string, unknown>) : null);
+  const optionOf = (v: unknown): QuestionOption | null => {
+    const o = asRecord(v);
+    if (!o || typeof o.id !== 'string' || !o.id) return null;
+    const label = [o.label, o.name, o.title].find((x) => typeof x === 'string' && x) as string | undefined;
+    return { id: o.id, label: label ?? o.id };
+  };
+  const nested = raw.map(asRecord).filter((q): q is Record<string, unknown> => !!q && Array.isArray(q.options));
+  if (nested.length > 0) {
+    const prompts = nested
+      .map((q) => [q.prompt, q.question, q.title].find((x) => typeof x === 'string' && x) as string | undefined)
+      .filter((p): p is string => !!p);
+    const options = nested.length === 1
+      ? (nested[0].options as unknown[]).map(optionOf).filter((o): o is QuestionOption => !!o)
+      : [];
+    return { prompts, options };
+  }
+  return { prompts: [], options: raw.map(optionOf).filter((o): o is QuestionOption => !!o) };
+}
+
+function QuestionCard({
+  approval,
+  projectId,
+  sessionId,
+  resolution,
+  onResolved,
+  asker,
+  askerName,
+}: {
+  approval: ApprovalCardProps['approval'];
+  projectId: string;
+  sessionId?: string;
+  resolution: 'approved' | 'denied' | null | undefined;
+  onResolved: (r: 'approved' | 'denied') => void;
+  asker?: string;
+  askerName?: string;
+}) {
+  const t = useT();
+  const { approveToolCall, denyToolCall } = useAgent();
+  const [answer, setAnswer] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const prompt = typeof approval.tool_args?.prompt === 'string' ? approval.tool_args.prompt : '';
+  const { prompts, options } = questionParts(approval.tool_args ?? {});
+  const title = prompt || prompts[0] || '';
+
+  if (resolution) {
+    const answered = resolution === 'approved';
+    return (
+      <div className="mb-3 shrink-0 px-4 py-2 rounded-lg bg-sidebar text-body">
+        <span className={answered ? 'text-success' : 'text-error'}>
+          {answered ? t('approval.question.answered') : t('approval.denied')}:
+        </span>{' '}
+        <span className="text-secondary">{title}</span>
+      </div>
+    );
+  }
+
+  async function send(text?: string, optionId?: string) {
+    setSubmitting(true);
+    setError(null);
+    try {
+      await approveToolCall(projectId, approval.tool_call_id, text, undefined, sessionId, optionId);
+      onResolved('approved');
+    } catch {
+      setSubmitting(false);
+      setError(t('approval.submitError'));
+    }
+  }
+
+  async function decline() {
+    setSubmitting(true);
+    setError(null);
+    try {
+      await denyToolCall(projectId, approval.tool_call_id, t('approval.deniedByUser'), sessionId);
+      onResolved('denied');
+    } catch {
+      setSubmitting(false);
+      setError(t('approval.submitError'));
+    }
+  }
+
+  const typed = answer.trim();
+  return (
+    <div className="mb-3 shrink-0 rounded-lg border border-warning/50 border-l-[3px] border-l-warning bg-warning-surface overflow-hidden">
+      <div className="px-4 py-1.5 border-b border-warning/20 flex items-center gap-2">
+        <span data-testid="approval-asker" data-agent={asker ?? MAIN_AGENT_HANDLE} className="inline-flex">
+          <AgentGlyph slug={asker ?? MAIN_AGENT_HANDLE} size={16} title={askerName ?? asker ?? 'Orbital'} />
+        </span>
+        <span className="type-label text-warning-text">{t('approval.question.header')}</span>
+      </div>
+      <div className="px-4 py-3 space-y-3">
+        {prompt && (
+          <p className="text-body font-medium text-primary whitespace-pre-wrap break-words">{prompt}</p>
+        )}
+        {prompts.map((p, i) => (
+          <p key={i} className="text-body text-primary whitespace-pre-wrap break-words">{p}</p>
+        ))}
+        {options.length > 0 && (
+          <div className="flex flex-wrap gap-2">
+            {options.map((o) => (
+              <button
+                key={o.id}
+                type="button"
+                onClick={() => send(undefined, o.id)}
+                disabled={submitting}
+                className="border border-border bg-background text-primary rounded-sm text-caption px-3 py-1.5 hover:bg-card-hover transition-colors duration-150 disabled:opacity-50 cursor-pointer min-h-[44px] md:min-h-0"
+              >
+                {o.label}
+              </button>
+            ))}
+          </div>
+        )}
+        <input
+          type="text"
+          placeholder={t('approval.question.placeholder')}
+          value={answer}
+          onChange={(e) => setAnswer(e.target.value)}
+          onKeyDown={(e) => {
+            // IME guard: Enter that commits a composition is not a send.
+            if (e.key === 'Enter' && !e.nativeEvent.isComposing && typed && !submitting) {
+              e.preventDefault();
+              void send(typed);
+            }
+          }}
+          className="w-full text-body px-3 py-1.5 rounded-lg border border-border bg-sidebar focus:outline-none focus:border-accent max-md:min-h-[44px]"
+        />
+        <div className="flex flex-col md:flex-row gap-2 md:justify-end pt-2 md:pt-0 pb-1 md:pb-0">
+          <button
+            type="button"
+            onClick={decline}
+            disabled={submitting}
+            className="border border-error/40 text-error bg-background rounded-sm text-micro px-2.5 py-1 font-medium hover:bg-error/5 transition-colors duration-150 disabled:opacity-50 cursor-pointer w-full md:w-auto min-h-[44px]"
+          >
+            {t('credCard.deny')}
+          </button>
+          <button
+            type="button"
+            onClick={() => send(typed)}
+            disabled={submitting || !typed}
+            className="bg-primary text-card rounded-sm text-caption font-medium px-3.5 py-1.5 hover:opacity-90 transition-opacity duration-150 disabled:opacity-50 cursor-pointer w-full md:w-auto min-h-[44px]"
+          >
+            {t('chat.send')}
+          </button>
+        </div>
+        {error && <p className="text-caption text-error mt-1">{error}</p>}
       </div>
     </div>
   );

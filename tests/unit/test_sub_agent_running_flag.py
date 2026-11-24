@@ -195,6 +195,10 @@ class TestDispatchBroadcast:
             "session_id": SID_A,
             "handle": "codex",
             "initiator": initiator,
+            # Spec 195: the id that clears a waiting message's clock, and
+            # the card title.
+            "dispatch_id": f"{SID_A}:abcd1234",
+            "preview": "do the thing",
         }]
         assert ws.broadcast.call_args_list[0].args[0] == PID
         # The marker row still lands exactly as before.

@@ -33,6 +33,8 @@ def _sam():
                                           agents=("claude-code", "codex", "pi"))}
     sam.dispatch_context = lambda token: tokens.get(token)
     sam._dispatch_url = None
+    # Spec 195: the caller's current turn is a pinned one (top of session).
+    sam._lifecycle_observer.initiator_of.return_value = "user_pinned"
     return sam
 
 

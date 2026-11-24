@@ -88,10 +88,13 @@ class TestLifecycleObserver:
 
         am.inject_system_message.assert_awaited_once()
         kwargs = am.inject_system_message.await_args.kwargs
+        # Spec 195: every marker also says who started the dispatch, so the
+        # chat can tell Orbital's dispatch (a card) from the user's own turn.
         assert kwargs.get("meta") == {
             "dispatch_id": "sess_X:aaaa1111",
             "handle": "claude-code",
             "transcript_path": "/path/t.jsonl",
+            "initiator": "management_agent",
         }
         # Human-readable prose is untouched — the migration script and old
         # UIs still rely on its exact shape.
@@ -99,9 +102,10 @@ class TestLifecycleObserver:
         assert "Message sent to claude-code" in content
 
     @pytest.mark.asyncio
-    async def test_on_message_routed_without_dispatch_id_omits_meta(self):
-        """Back-compat: a caller that doesn't pass dispatch_id gets the old
-        behavior — no ``meta`` kwarg at all (never a bare ``None`` id)."""
+    async def test_on_message_routed_without_dispatch_id_carries_only_the_initiator(self):
+        """A caller that doesn't pass dispatch_id gets no join keys (never a
+        bare ``None`` id) — only the spec-195 initiator, which every marker
+        carries."""
         am = MagicMock()
         am.inject_system_message = AsyncMock(return_value="delivered")
         ws = MagicMock()
@@ -113,7 +117,7 @@ class TestLifecycleObserver:
         )
 
         kwargs = am.inject_system_message.await_args.kwargs
-        assert "meta" not in kwargs
+        assert kwargs.get("meta") == {"initiator": "management_agent"}
 
     @pytest.mark.asyncio
     async def test_on_error_injects_system_message(self):

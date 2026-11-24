@@ -151,12 +151,35 @@ def no_dispatch_note() -> str:
             "that agent, or to Orbital, in the agent picker.")
 
 
+#: What a worker reads when it may not hand work on (below the seat).
+NO_DISPATCH_TEXT = ("Error: this agent cannot hand tasks to other agents. Do the "
+                    "task yourself or tell the user.")
+
+
+def _holds_seat_now(sub_agent_manager, ctx: DispatchContext) -> bool:
+    """Spec 195: the tool is fixed when the worker spawns and lives as long
+    as the adapter, so a worker pinned earlier keeps it after Orbital takes
+    it back. Whether it may dispatch is decided by the turn it is running
+    NOW: only a top-of-session turn (the user's pin, a queue item) may. A
+    worker Orbital or another worker dispatched is below the seat, so cards
+    never nest. No observer wired (a standalone manager) reads as allowed."""
+    observer = getattr(sub_agent_manager, "_lifecycle_observer", None)
+    initiator_of = getattr(observer, "initiator_of", None)
+    if not callable(initiator_of):
+        return True
+    return initiator_of(ctx.project_id, ctx.handle, ctx.session_id) in TOP_INITIATORS
+
+
 async def dispatch(sub_agent_manager, ctx: DispatchContext, agent: str, task: str,
                    fresh: bool = False) -> str:
     """Send ``task`` to ``agent`` on behalf of the seat-holder ``ctx``."""
     agent = (agent or "").strip()
     if agent == ctx.handle:
         return f"You are {agent}; do this task yourself."
+    if not _holds_seat_now(sub_agent_manager, ctx):
+        logger.info("dispatch from %s/%s refused: its current turn is not the "
+                    "top of the session", ctx.project_id, ctx.handle)
+        return NO_DISPATCH_TEXT
     ack = await sub_agent_manager.send(
         ctx.project_id, agent, task, session_id=ctx.session_id, depth=1,
         fresh=fresh, initiator=f"{WORKER_INITIATOR_PREFIX}{ctx.handle}")
@@ -215,8 +238,7 @@ class DispatchServer:
                 ctx = server_self._context_of(self.get_context())
                 if name == TOOL_NAME and ctx is not None and not ctx.can_dispatch:
                     return CallToolResult(isError=True, content=[TextContent(
-                        type="text", text="Error: this agent cannot hand tasks to "
-                        "other agents. Do the task yourself or tell the user.")])
+                        type="text", text=NO_DISPATCH_TEXT)])
                 if name != TOOL_NAME and ctx is not None and ctx.connectors:
                     result = await server_self._connectors.call(
                         ctx, name, arguments, request=_request_of(self.get_context()))

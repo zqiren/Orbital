@@ -50,7 +50,10 @@ interface SubAgentDrillInProps {
   sessionId?: string;
   handle: string;
   displayName: string;
-  onBack: () => void;
+  onBack?: () => void;
+  /** Spec 195: inside the docked worker panel, whose header names the worker
+   *  and closes it — no back row of its own. */
+  embedded?: boolean;
 }
 
 const POLL_MS = 3000;
@@ -92,7 +95,7 @@ function WorkerCapsule({ capsule, t }: { capsule: WorkerCapsuleItem; t: Translat
   );
 }
 
-export default function SubAgentDrillIn({ projectId, sessionId, handle, displayName, onBack }: SubAgentDrillInProps) {
+export default function SubAgentDrillIn({ projectId, sessionId, handle, displayName, onBack, embedded = false }: SubAgentDrillInProps) {
   const t = useT();
   const { getSubAgentTranscript } = useAgent();
   const [transcript, setTranscript] = useState<SubAgentTranscriptResult | null>(null);
@@ -259,6 +262,7 @@ export default function SubAgentDrillIn({ projectId, sessionId, handle, displayN
 
   return (
     <div className="flex flex-col h-full min-h-0">
+      {!embedded && (
       <div className="shrink-0 flex items-center gap-2 px-4 py-2 border-b border-border">
         <button
           type="button"
@@ -271,6 +275,7 @@ export default function SubAgentDrillIn({ projectId, sessionId, handle, displayN
         </button>
         <span className="text-body font-medium text-primary truncate">{headerName}</span>
       </div>
+      )}
 
       <div className="flex-1 overflow-y-auto px-6 py-4 flex flex-col gap-3">
         {loading && (

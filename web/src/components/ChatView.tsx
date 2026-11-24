@@ -29,6 +29,19 @@ import {
 } from '../utils/chatTransform';
 import type { DisplayItem, ResultTotals } from '../utils/chatTransform';
 import { isWorkerHandle } from '../utils/subAgentHandle';
+import {
+  applyWorkerEvent,
+  endCard,
+  ensureLiveCard,
+  findCardIndex,
+  hasDispatchCards,
+  isCardedInitiator,
+  unwrapCard,
+  type DispatchCardItem,
+  type WorkerEventRoute,
+} from '../utils/dispatchCards';
+import { publishDispatchCards, type WorkerPanelTarget } from '../utils/dispatchCardsStore';
+import DispatchCard from './DispatchCard';
 import { createFrameTextBuffer, type FrameTextBuffer } from '../utils/frameTextBuffer';
 import type { ChatMessage as ChatMessageRow, AgentStatusEvent } from '../types';
 import AgentErrorNotice from './AgentErrorNotice';
@@ -167,10 +180,16 @@ function getLiveRunningCapsule(
   items: DisplayItem[],
   owner?: string,
 ): { idx: number; capsule: AgentRunItem } | null {
-  if (items.length === 0) return null;
-  const last = items[items.length - 1];
+  // Spec 195: dispatch cards opened at the tail do not end the running
+  // capsule before them. Orbital's sends land in its capsule first and their
+  // cards follow it, as a reload draws them (the capsule, then each marker's
+  // card) even when a card opened between two of its tool rows.
+  let k = items.length - 1;
+  while (k >= 0 && items[k].type === 'dispatch_card') k--;
+  if (k < 0) return null;
+  const last = items[k];
   if (last.type === 'agent_run' && last.status === 'running' && last.source === owner) {
-    return { idx: items.length - 1, capsule: last };
+    return { idx: k, capsule: last };
   }
   return null;
 }
@@ -562,6 +581,53 @@ const AgentRunCapsule = memo(function AgentRunCapsule({
   );
 });
 
+/**
+ * Spec 195: a dispatched agent's steps — the same header, capsules and
+ * bubbles its run renders inline — read-only. The docked panel shows them
+ * (WorkerPanel); without a panel the card opens them in place. A running
+ * capsule is open, a finished one opens on click, as in the conversation.
+ */
+export function WorkerSteps({
+  steps,
+  workspace,
+  onOpenPath,
+}: {
+  steps: DisplayItem[];
+  workspace?: string;
+  onOpenPath?: (path: string) => void;
+}): React.ReactNode {
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const toggle = useCallback((id: string) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+  return (
+    <>
+      {steps.map((step, i) => {
+        if (step.type === 'agent_message' || step.type === 'sub_agent_message') {
+          return <MemoChatMessage key={`ws-${i}`} message={step} workspace={workspace} onOpenPath={onOpenPath} />;
+        }
+        if (step.type === 'agent_run') {
+          return (
+            <AgentRunCapsule
+              key={`ws-${step.capsule_id}`}
+              item={step}
+              derivedStatus={step.status}
+              isExpanded={step.status === 'running' || expanded.has(step.capsule_id)}
+              onToggle={toggle}
+            />
+          );
+        }
+        return null;
+      })}
+    </>
+  );
+}
+
 // A live tool_result event, as far as the capsule row needs it. Newer
 // daemons send the tool_call_id plus the part of the result the row shows
 // (activity_translator.py `_result_preview`); older ones send neither — only
@@ -653,6 +719,15 @@ export function markWorkerResult(
   return prev;
 }
 
+/** Spec 195: the terminal broadcasts that end a dispatch card, and how. */
+const CARD_END_BY_EVENT: Partial<Record<string, Exclude<DispatchCardItem['status'], 'running'>>> = {
+  'sub_agent.completed': 'completed',
+  'sub_agent.error': 'error',
+  'sub_agent.failed': 'error',
+  'sub_agent.stopped': 'stopped',
+  'sub_agent.turn_interrupted': 'stopped',
+};
+
 // Spec 100: worker thinking reaches the pane at most once per frame.
 function requestFrame(fn: () => void): number {
   return typeof requestAnimationFrame === 'function'
@@ -735,6 +810,7 @@ import type {
   ApprovalResolvedEvent,
   SubAgentMessageEvent,
   SubAgentLifecycleEvent,
+  SubAgentQueueDroppedEvent,
   UserMessageEvent,
   AgentNotifyEvent,
   StateRefreshLifecycleEvent,
@@ -840,7 +916,30 @@ interface ChatViewProps {
   /** Spec 180: the daemon delivered a send into another project (the
    *  session had moved): the open chat follows it there. */
   onSessionMoved?: (sessionId: string, toProjectId: string) => void;
+  /**
+   * Spec 195: open a dispatched agent's steps (or a fanout worker's) in the
+   * docked panel ChatTab owns. Absent (the Workbench reading pane): a card
+   * opens its steps in place under it, a fanout row the full-area drill-in.
+   */
+  onOpenWorker?: (target: WorkerPanelTarget) => void;
+  /** What the panel shows now, so its card reads as selected. */
+  openWorker?: WorkerPanelTarget | null;
 }
+
+/** Spec 195: a pinned message waiting in a worker's queue (the clock). */
+interface QueuedSend {
+  dispatchId: string;
+  handle: string;
+  sessionId: string;
+  content: string;
+}
+
+/**
+ * Spec 195 item 7: the worker tiles under the session title repeat each
+ * card's dot and stop, so they hide while cards are in the conversation.
+ * One switch, to revert this alone.
+ */
+const HIDE_WORKER_TILES_WITH_CARDS = true;
 
 interface StreamState {
   text: string;
@@ -928,9 +1027,19 @@ interface PendingApproval {
   command?: string;
   executable?: string;
   reason?: string;
+  /** Spec 195: the asking agent's handle (a worker's approval), for its logo. */
+  source?: string;
 }
 
-export default function ChatView({ projectId, project, agentStatus, statusTick, agents, sessionId, initialAskReply, initialDraft, initialSkill, onDraftConsumed, onRefreshProject, onOpenSession, onUndoTurn, checksOnView = true, onUserSend, onSessionMoved }: ChatViewProps) {
+/** The asking worker of an approval: the payload's `source`, else the handle
+ *  in the daemon's own "Sub-agent <handle> requests approval" line. */
+function approvalSource(source: unknown, what: string | undefined): string | undefined {
+  if (typeof source === 'string' && source && source !== 'management') return source;
+  const m = (what ?? '').match(/^Sub-agent ([\w.-]+) requests approval/);
+  return m ? m[1] : undefined;
+}
+
+export default function ChatView({ projectId, project, agentStatus, statusTick, agents, sessionId, initialAskReply, initialDraft, initialSkill, onDraftConsumed, onRefreshProject, onOpenSession, onUndoTurn, checksOnView = true, onUserSend, onSessionMoved, onOpenWorker, openWorker = null }: ChatViewProps) {
   const t = useT();
   const { locale } = useLocale();
   // Chrome-only translator for the annotation chip's fallback label (the
@@ -940,7 +1049,11 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   // read the live locale through a ref (same staleness fix as sessionIdRef).
   const localeRef = useRef(locale);
   // Spec 100: worker thinking waiting for the next frame, per worker handle.
-  const workerReasoningRef = useRef(new Map<string, string>());
+  const workerReasoningRef = useRef(new Map<string, { text: string; route: WorkerEventRoute }>());
+  // Spec 195: each handle's last `sub_agent.dispatched` initiator, until its
+  // turn ends — how an event from a daemon that does not stamp its own
+  // initiator finds its card.
+  const liveInitiatorRef = useRef(new Map<string, string>());
   const workerFrameRef = useRef<number | null>(null);
   // Spec 171 A7: the manager's reply text waiting for the next frame. Lives
   // as long as the component (not the WS effect, which can re-run mid-stream);
@@ -1191,6 +1304,17 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   // `chat.pending_dispatched` (sole clear trigger) / `chat.pending_cancelled`,
   // and rebuilt from GET /pending on session load + WS reconnect.
   const [pendingInputs, setPendingInputs] = useState<Map<string, PendingInputEntry>>(new Map());
+  // Spec 195: pinned messages waiting behind a worker's current task. In
+  // memory only (gone after a reload); cleared by the dispatch that sends it
+  // (`sub_agent.dispatched`) or by its drop (`sub_agent.queue_dropped`).
+  const [queuedSends, setQueuedSends] = useState<QueuedSend[]>([]);
+  const clearQueuedClock = useCallback((dispatchId: string) => {
+    setQueuedSends((prev) => (prev.some((q) => q.dispatchId === dispatchId)
+      ? prev.filter((q) => q.dispatchId !== dispatchId)
+      : prev));
+  }, []);
+  // Cards opened in place (no docked panel: the Workbench reading pane).
+  const [inPlaceCards, setInPlaceCards] = useState<Set<string>>(new Set());
   // Workspace CLAUDE.md interference banner: latest unhandled warning
   // for this project (cleared on dismiss).
   const [claudemdWarning, setClaudemdWarning] = useState<ClaudemdWarning | null>(null);
@@ -1386,6 +1510,45 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     (agentStatus === 'running' || agentStatus === 'waiting' || agentStatus === 'pending_approval');
   // Each turn's last capsule → the turn's span (user row to next user row).
   const turnSpans = useMemo(() => lastCapsuleOfTurns(items), [items]);
+  // Spec 195: the conversation's dispatch cards, for the docked panel.
+  const dispatchCards = useMemo(
+    () => items.filter((it): it is DispatchCardItem => it.type === 'dispatch_card'),
+    [items],
+  );
+  useEffect(() => {
+    publishDispatchCards(sessionMessagesKey(projectId, sessionId), dispatchCards);
+  }, [projectId, sessionId, dispatchCards]);
+  const showWorkerTiles = !(HIDE_WORKER_TILES_WITH_CARDS && hasDispatchCards(dispatchCards));
+  // A card's amber dot: its agent waits on the user's approval.
+  const needsYouHandles = useMemo(() => {
+    const out = new Set<string>();
+    for (const a of subAgentStatus.agents) if (a.awaiting_approval === true) out.add(a.handle);
+    for (const a of approvals.values()) if (!a.resolved && a.source) out.add(a.source);
+    return out;
+  }, [subAgentStatus.agents, approvals]);
+  const agentNameOf = useCallback(
+    (handle: string) => agents.find((a) => a.slug === handle)?.name ?? handle,
+    [agents],
+  );
+  const queuedHintFor = (item: Extract<DisplayItem, { type: 'user_message' }>): string | undefined => {
+    if (!item.target || queuedSends.length === 0) return undefined;
+    const q = queuedSends.find(
+      (x) => x.sessionId === sessionId && x.handle === item.target && x.content === item.content,
+    );
+    return q ? t('chat.queuedBehind', { agent: agentNameOf(q.handle) }) : undefined;
+  };
+  const handleOpenCard = useCallback((card: DispatchCardItem) => {
+    if (onOpenWorker) {
+      onOpenWorker({ kind: 'card', cardId: card.card_id, dispatchId: card.dispatch_id, handle: card.handle });
+      return;
+    }
+    setInPlaceCards((prev) => {
+      const next = new Set(prev);
+      if (next.has(card.card_id)) next.delete(card.card_id);
+      else next.add(card.card_id);
+      return next;
+    });
+  }, [onOpenWorker]);
   // Spec 096: `showThinking` follows the viewed session's status (this
   // instance outlives session switches). Not isActivelyRunning: the spinner
   // stays through running → waiting on purpose.
@@ -1691,6 +1854,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       command?: string;
       executable?: string;
       reason?: string;
+      source?: string;
     }>(`/api/v2/agents/${encodeURIComponent(projectId)}/pending-approval${qs}`)
       .then((result) => {
         if (!result.pending || !result.tool_call_id) return;
@@ -1723,6 +1887,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
             command: result.command,
             executable: result.executable,
             reason: result.reason,
+            source: approvalSource(result.source, result.what),
           });
           return next;
         });
@@ -2665,14 +2830,28 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       pending.clear();
       const ts = new Date().toISOString();
       setItems((prev) =>
-        entries.reduce((acc, [owner, text]) => appendLiveReasoning(acc, text, ts, owner, owner), prev),
+        entries.reduce(
+          (acc, [owner, { text, route }]) =>
+            applyWorkerEvent(acc, owner, route, (list) => appendLiveReasoning(list, text, ts, owner, owner)),
+          prev,
+        ),
       );
       scrollToBottom();
     }
 
-    function queueWorkerReasoning(owner: string, text: string) {
+    // Spec 195: where a worker event goes — its card, or inline.
+    function routeOf(owner: string, e: { initiator?: string; dispatch_id?: string }): WorkerEventRoute {
+      return {
+        initiator: e.initiator || undefined,
+        dispatchId: e.dispatch_id || undefined,
+        fallbackInitiator: liveInitiatorRef.current.get(owner),
+      };
+    }
+
+    function queueWorkerReasoning(owner: string, text: string, route: WorkerEventRoute) {
       const pending = workerReasoningRef.current;
-      pending.set(owner, (pending.get(owner) ?? '') + text);
+      const held = pending.get(owner);
+      pending.set(owner, { text: (held?.text ?? '') + text, route });
       if (workerFrameRef.current === null) {
         workerFrameRef.current = requestFrame(flushWorkerReasoning);
       }
@@ -2689,7 +2868,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       if (e.worker) {
         const reasoning = e.reasoning_content ?? '';
         if (reasoning && e.source && e.source !== 'management' && !isWorkerHandle(e.source)) {
-          queueWorkerReasoning(e.source, reasoning);
+          queueWorkerReasoning(e.source, reasoning, routeOf(e.source, e));
         }
         return;
       }
@@ -2783,17 +2962,21 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
             e.result_total_chars !== undefined && e.result_total_lines !== undefined
               ? { chars: e.result_total_chars, lines: e.result_total_lines }
               : undefined;
+          const route = routeOf(owner, e);
           setItems((prev) =>
-            markWorkerResult(prev, owner, e.timestamp, {
-              toolCallId: e.tool_call_id || undefined,
-              content: e.result_preview ?? '',
-              totals,
-            }),
+            applyWorkerEvent(prev, owner, route, (list) =>
+              markWorkerResult(list, owner, e.timestamp, {
+                toolCallId: e.tool_call_id || undefined,
+                content: e.result_preview ?? '',
+                totals,
+              }),
+            ),
           );
         } else {
           const toolName = e.tool_name || 'tool';
+          const route = routeOf(owner, e);
           setItems((prev) =>
-            upsertWorkerToolRow(prev, owner, {
+            applyWorkerEvent(prev, owner, route, (list) => upsertWorkerToolRow(list, owner, {
               type: 'tool_call_row',
               tool_name: toolName,
               target_description: describeWorkerTool(
@@ -2807,7 +2990,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
               timestamp: e.timestamp,
               result_content: null,
               result_status: 'pending',
-            }),
+            })),
           );
         }
         scrollToBottom();
@@ -2905,6 +3088,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
           command: e.command,
           executable: e.executable,
           reason: e.reason,
+          source: approvalSource(e.source, e.what),
         });
         return next;
       });
@@ -2958,17 +3142,20 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       if (!cleaned || cleaned === '(no response)') return;
 
       flushWorkerReasoning();
-      setItems((prev) => [
-        // Spec 100: the worker's text closes its live capsule, as the
-        // manager's visible text closes its own.
-        ...finalizeLiveCapsule(prev, 'completed', e.source),
-        {
-          type: 'sub_agent_message',
-          content: cleaned,
-          source: e.source,
-          timestamp: e.timestamp,
-        },
-      ]);
+      const route = routeOf(e.source, e);
+      setItems((prev) =>
+        applyWorkerEvent(prev, e.source, route, (list) => [
+          // Spec 100: the worker's text closes its live capsule, as the
+          // manager's visible text closes its own.
+          ...finalizeLiveCapsule(list, 'completed', e.source),
+          {
+            type: 'sub_agent_message',
+            content: cleaned,
+            source: e.source,
+            timestamp: e.timestamp,
+          },
+        ]),
+      );
       scrollToBottom();
     }
 
@@ -2993,7 +3180,61 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       const e = event as SubAgentLifecycleEvent;
       if (e.project_id !== projectId) return;
       if (!e.session_id || e.session_id !== sessionIdRef.current) return;
+      // Spec 195: the handle's turn is over — close its card now (the
+      // refetch below replaces it with the persisted one once nothing else
+      // in the session is in flight). A spec-129 own turn has no card.
+      if (e.handle) liveInitiatorRef.current.delete(e.handle);
+      const end = CARD_END_BY_EVENT[e.type];
+      if (e.handle && end) {
+        const handle = e.handle;
+        const summary = typeof e.summary === 'string' && e.summary.trim() && e.summary.trim() !== '(no output)'
+          ? e.summary : undefined;
+        flushWorkerReasoning();
+        setItems((prev) => {
+          const idx = findCardIndex(prev, { handle });
+          if (idx < 0) return prev;
+          return endCard(prev, idx, end, new Date().toISOString(),
+            (steps, status) => finalizeLiveCapsule(steps, status === 'completed' ? 'completed' : status, handle),
+            summary);
+        });
+      }
       refreshRawMessages();
+    }
+
+    // Spec 195: Orbital (or the pinned worker) sent a worker a task — its
+    // card opens now, titled with the brief. The user's own pinned send
+    // stays inline (a card an early event opened for it is unwrapped).
+    function handleSubAgentDispatched(event: WebSocketEvent) {
+      const e = event as SubAgentLifecycleEvent;
+      if (e.project_id !== projectId) return;
+      if (e.dispatch_id) clearQueuedClock(e.dispatch_id);
+      if (!e.session_id || e.session_id !== sessionIdRef.current) return;
+      if (!e.handle || !e.initiator || isWorkerHandle(e.handle)) return;
+      const { handle, initiator } = e;
+      liveInitiatorRef.current.set(handle, initiator);
+      if (isCardedInitiator(initiator)) {
+        setItems((prev) => ensureLiveCard(prev, {
+          handle,
+          dispatchId: e.dispatch_id,
+          initiator,
+          brief: e.preview,
+          timestamp: new Date().toISOString(),
+        }).items);
+        scrollToBottom();
+        return;
+      }
+      setItems((prev) => {
+        const idx = findCardIndex(prev, { handle });
+        if (idx < 0) return prev;
+        const card = prev[idx] as DispatchCardItem;
+        return card.dispatch_id && card.dispatch_id !== e.dispatch_id ? prev : unwrapCard(prev, idx);
+      });
+    }
+
+    function handleQueueDropped(event: WebSocketEvent) {
+      const e = event as SubAgentQueueDroppedEvent;
+      if (e.project_id !== projectId) return;
+      if (e.dispatch_id) clearQueuedClock(e.dispatch_id);
     }
 
     function handleUserMessage(event: WebSocketEvent) {
@@ -3263,6 +3504,8 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     on('sub_agent.failed', handleSubAgentTerminal);
     on('sub_agent.stopped', handleSubAgentTerminal);
     on('sub_agent.turn_interrupted', handleSubAgentTerminal);
+    on('sub_agent.dispatched', handleSubAgentDispatched);
+    on('sub_agent.queue_dropped', handleQueueDropped);
     on('chat.user_message', handleUserMessage);
     on('agent.notify', handleAgentNotify);
     on('state_refresh.lifecycle', handleStateRefresh);
@@ -3292,6 +3535,8 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       off('sub_agent.failed', handleSubAgentTerminal);
       off('sub_agent.stopped', handleSubAgentTerminal);
       off('sub_agent.turn_interrupted', handleSubAgentTerminal);
+      off('sub_agent.dispatched', handleSubAgentDispatched);
+      off('sub_agent.queue_dropped', handleQueueDropped);
       off('chat.user_message', handleUserMessage);
       off('agent.notify', handleAgentNotify);
       off('state_refresh.lifecycle', handleStateRefresh);
@@ -3302,7 +3547,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       off('fanout.task_update', handleFanoutTaskUpdate);
       off('fanout.completed', handleFanoutCompleted);
     };
-  }, [projectId, project.name, on, off, scrollToBottom, removeOptimisticBubble, refreshRawMessages]);
+  }, [projectId, project.name, on, off, scrollToBottom, removeOptimisticBubble, refreshRawMessages, clearQueuedClock]);
 
   // Credential-error surfacing: agent.status error events for the viewed
   // session feed the AgentErrorNotice. Events without a meaningful session
@@ -3381,6 +3626,11 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     }
     if (item.type === 'session_moved') {
       return `session_moved:${item.timestamp}:${item.toProjectId ?? item.to}`;
+    }
+    if (item.type === 'dispatch_card') {
+      // A card's steps grow in the panel, not in the conversation: only its
+      // own opening and its end move the conversation.
+      return `dispatch_card:${item.card_id}:${item.status}`;
     }
     // user_message, agent_message, sub_agent_message — use timestamp +
     // first 32 chars of content as a stable-enough fingerprint.
@@ -3842,6 +4092,23 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       ) {
         persistPin(sid, target);
       }
+      // Spec 195: the pinned message waits behind the worker's current task
+      // (Orbital's, a worker's, or the user's own earlier one): a clock on it.
+      if (
+        result &&
+        typeof result === 'object' &&
+        result.status === 'queued_behind' &&
+        result.dispatch_id &&
+        sid !== undefined
+      ) {
+        const queued: QueuedSend = {
+          dispatchId: result.dispatch_id,
+          handle: result.handle ?? target ?? '',
+          sessionId: sid,
+          content: wireContent,
+        };
+        setQueuedSends((prev) => [...prev.filter((q) => q.dispatchId !== queued.dispatchId), queued]);
+      }
       // Pending-input queue (spec 006 v3 §11d.4): the same-session 200. The
       // backend ACCEPTED + queued this message behind the VIEWED session's own
       // in-flight turn (`session._queue`); it drains automatically when that
@@ -4109,7 +4376,9 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         />
       )}
       {/* Piece 3 Part D: honest sub-agent status badge + user stop control */}
-      <SubAgentStatusBar projectId={projectId} sessionId={sessionId} live={subAgentStatus} />
+      {showWorkerTiles && (
+        <SubAgentStatusBar projectId={projectId} sessionId={sessionId} live={subAgentStatus} />
+      )}
       {drillIn ? (
         <SubAgentDrillIn
           projectId={projectId}
@@ -4235,7 +4504,30 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                   onEditCancel={onEditCancel}
                   onEditSend={onEditSend}
                   onRetry={onRetryMessage}
+                  queuedHint={queuedHintFor(item)}
                 />
+              );
+            } else if (item.type === 'dispatch_card') {
+              const open =
+                openWorker?.kind === 'card' &&
+                (openWorker.cardId === item.card_id ||
+                  (!!item.dispatch_id && openWorker.dispatchId === item.dispatch_id));
+              const inPlace = !onOpenWorker && inPlaceCards.has(item.card_id);
+              rendered = (
+                <div key={`card-${item.card_id}`} className="flex flex-col gap-2">
+                  <DispatchCard
+                    card={item}
+                    name={agentNameOf(item.handle)}
+                    needsYou={needsYouHandles.has(item.handle)}
+                    open={open || inPlace}
+                    onOpen={handleOpenCard}
+                  />
+                  {inPlace && (
+                    <div className="ml-9 pl-3 flex flex-col gap-3" data-testid="dispatch-card-inplace">
+                      <WorkerSteps steps={item.steps} workspace={project.workspace} onOpenPath={onOpenPath} />
+                    </div>
+                  )}
+                </div>
               );
             } else if (item.type === 'agent_message' || item.type === 'sub_agent_message') {
               rendered = (
@@ -4557,7 +4849,8 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                   statuses={mergedStatuses}
                   startedAtMs={tsToMsSafe(item.timestamp)}
                   completedAtMs={mergedCompletedAtMs}
-                  onSelectTask={(handle, label) => setDrillIn({ handle, label })}
+                  onSelectTask={(handle, label) =>
+                    onOpenWorker ? onOpenWorker({ kind: 'fanout', handle, label }) : setDrillIn({ handle, label })}
                 />
               );
             } else if (item.type === 'fanout_summary') {
@@ -4603,6 +4896,8 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
               ) : (
                 <ApprovalCard
                   key={`apr-${item.tool_call_id}`}
+                  asker={approvals.get(item.tool_call_id)?.source}
+                  askerName={(() => { const h = approvals.get(item.tool_call_id)?.source; return h ? agentNameOf(h) : undefined; })()}
                   approval={item}
                   projectId={projectId}
                   sessionId={sessionId}
@@ -4668,6 +4963,8 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
               ) : (
                 <ApprovalCard
                   key={`rt-apr-${a.tool_call_id}`}
+                  asker={a.source}
+                  askerName={a.source ? agentNameOf(a.source) : undefined}
                   approval={a}
                   projectId={projectId}
                   sessionId={sessionId}

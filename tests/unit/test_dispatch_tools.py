@@ -25,6 +25,8 @@ CTX = DispatchContext(project_id="p1", session_id="s1", handle="claude-code")
 def _sam(ack="Message sent to codex. Transcript: /ws/t.jsonl"):
     sam = MagicMock()
     sam.send = AsyncMock(return_value=ack)
+    # Spec 195: the caller's current turn is a pinned one (top of session).
+    sam._lifecycle_observer.initiator_of.return_value = "user_pinned"
     return sam
 
 

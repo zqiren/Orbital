@@ -4,7 +4,8 @@
 
 import { parseAskAnswer, stripTurnNote } from '../utils/askAnswer';
 import { useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
-import { Pencil, RotateCw } from 'lucide-react';
+import { Clock, Pencil, RotateCw } from 'lucide-react';
+import HintSign from './HintSign';
 import type { DisplayItem } from '../utils/chatTransform';
 import { parseAttachmentsBlock } from '../lib/attachment-parsing';
 import { parseTriggerHeader } from '../lib/trigger-parsing';
@@ -66,6 +67,9 @@ interface ChatMessageProps {
   onEditSend?: (message: MessageItem, body: string) => void;
   /** Resolves when the resend's request has answered (the button waits). */
   onRetry?: (message: MessageItem) => Promise<unknown> | void;
+  /** Spec 195: this message waits in a worker's queue behind another task —
+   *  a small clock by the time, this reason on hover (tap on a phone). */
+  queuedHint?: string;
 }
 
 /**
@@ -365,6 +369,7 @@ export default function ChatMessage({
   onEditCancel,
   onEditSend,
   onRetry,
+  queuedHint,
 }: ChatMessageProps) {
   const t = useT();
   const time = formatTime(message.timestamp);
@@ -427,6 +432,11 @@ export default function ChatMessage({
         <div className="font-mono text-micro mb-1 flex items-center gap-1.5">
           <span className="text-secondary">{senderLabel}</span>
           {time && <span className="text-secondary">· {time}</span>}
+          {queuedHint && (
+            <HintSign label={queuedHint} icon={Clock} iconClassName="h-3 w-3" align="right" testId="queued-clock">
+              <span className="font-sans">{queuedHint}</span>
+            </HintSign>
+          )}
         </div>
         {askQuestion && (
           <p className="m-0 mb-1 max-w-[84%] text-caption text-secondary line-clamp-2" data-testid="user-message-ask">
@@ -534,7 +544,7 @@ export default function ChatMessage({
     <div
       className="group flex gap-[10px]"
       title={message.timestamp}
-      data-testid={isHeaderOnly ? 'agent-header' : undefined}
+      data-testid={isHeaderOnly ? 'agent-header' : 'agent-message'}
     >
       <MessageAvatar variant="agent" agentHandle={isSubAgent ? message.source : undefined} />
       <div className="relative flex-1 min-w-0">

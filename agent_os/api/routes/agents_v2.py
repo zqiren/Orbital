@@ -2035,7 +2035,21 @@ async def inject_message(project_id: str, req: InjectRequest):
                 })
             raise HTTPException(status_code=404, detail=f"Failed to dispatch to {req.target}: {result}")
 
-        return {"status": result}
+        # Spec 195: a message waiting behind another task to this worker
+        # (Orbital's, another worker's, the user's own earlier one) gets a
+        # structured status so the chat can show it waiting. Asked right
+        # after send() returned, with no await between, so the answer is the
+        # queue send() left; send()'s text (also the manager's tool result) is
+        # neither parsed nor changed. The clock clears on the
+        # ``sub_agent.dispatched`` / ``sub_agent.queue_dropped`` broadcast
+        # carrying this dispatch_id.
+        position_of = getattr(_sub_agent_manager, "queued_position", None)
+        position = (position_of(project_id, mention_session_id, req.target, dispatch_id)
+                    if callable(position_of) else None)
+        if isinstance(position, int) and position > 0:
+            return {"status": "queued_behind", "handle": req.target,
+                    "dispatch_id": dispatch_id, "position": position}
+        return {"status": result, "dispatch_id": dispatch_id}
     else:
         # Route to management agent (auto-starts if no session).
         # The prefix is part of effective_content; agent_manager.inject_message
@@ -2494,7 +2508,27 @@ async def patch_session(project_id: str, session_id: str, req: SessionPatchReque
                 project_id, session_id,
                 reason="retarget" if req.pinned_target else "unpin",
             )
+        # Spec 195: back to Orbital. What arrived for it while the user
+        # talked to the worker was held (a result, a question, a job ending);
+        # one Orbital turn reads all of it now. A retarget to another worker
+        # keeps holding. Detached: the PATCH never waits on a turn start.
+        if previous and req.pinned_target is None:
+            wake = getattr(_agent_manager, "wake_if_unread", None)
+            if callable(wake):
+                _spawn_unpin_wake(wake(project_id, session_id))
     return result
+
+
+_unpin_wakes: set = set()
+
+
+def _spawn_unpin_wake(coro) -> None:
+    """Run the unpin wake detached, holding a reference until it ends."""
+    if not asyncio.iscoroutine(coro):
+        return  # a stubbed manager (tests) answers with a plain value
+    task = asyncio.ensure_future(coro)
+    _unpin_wakes.add(task)
+    task.add_done_callback(_unpin_wakes.discard)
 
 
 class SubAgentParamsRequest(BaseModel):
@@ -3208,6 +3242,8 @@ async def approve(project_id: str, req: ApproveRequest):
                 session_id=req.session_id,
                 reply_text=req.reply_text,
                 approve_all=req.approve_all,
+                # Spec 195: a worker question's chosen option id.
+                response_payload=req.response_payload,
             )
             if not routed:
                 raise HTTPException(status_code=404, detail="No pending approval found")

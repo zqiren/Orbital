@@ -32,8 +32,8 @@ from agent_os.utils.file_lock import FileLockError
 
 P, S, PARENT, CHILD = "p1", "s1", "claude-code", "codex"
 TEXT = ("Your dispatched worker codex finished. Its reply is in the conversation above "
-        "(labelled assistant). The user already sees it; do not repeat it. Verify or "
-        "continue, then reply only with what is new.")
+        "(labelled assistant). The user has not seen it, so after checking the work, "
+        "tell the user what it did or found.")
 
 
 def _manager(tmp_path, *, parent_initiator="user_pinned"):

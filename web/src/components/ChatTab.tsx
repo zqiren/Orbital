@@ -70,6 +70,8 @@ import BrowserView from './panel/BrowserView';
 import PanelHandle from './panel/PanelHandle';
 import FileExplorer from './FileExplorer';
 import TurnUndoSheet, { type TurnRef } from './history/TurnUndoSheet';
+import { WorkerPanelBody, WorkerPanelHeader } from './WorkerPanel';
+import type { WorkerPanelTarget } from '../utils/dispatchCardsStore';
 import { OpenPathContext } from './filePreviewContext';
 import { bumpFileHistory, requestHistoryFocus, SETTLE_MS } from '../hooks/useFileHistory';
 import { useT } from '../i18n/useT';
@@ -346,6 +348,50 @@ export default function ChatTab({
     },
     [projectId, setRoute, setUndoTurn, docked, openPath],
   );
+  // ── Spec 195: a dispatched agent's steps, opened from its card ─────────
+  // Same slot as the undo sheet: the docked panel's place while open (the
+  // panel's own state comes back on close), the bottom sheet below the dock
+  // threshold. Stored with its session key, so a session switch drops it.
+  const [heldWorker, setHeldWorker] = useState<{ key: string; target: WorkerPanelTarget } | null>(null);
+  const workerTarget = heldWorker && heldWorker.key === sessionKey ? heldWorker.target : null;
+  const openWorker = useCallback(
+    (target: WorkerPanelTarget) => {
+      setHeldUndo(null);
+      setHeldWorker((prev) => {
+        const cur = prev && prev.key === sessionKey ? prev.target : null;
+        const same = !!cur && cur.kind === target.kind && cur.handle === target.handle &&
+          (cur.kind === 'fanout' || (target.kind === 'card' && (cur.cardId === target.cardId ||
+            (!!target.dispatchId && cur.dispatchId === target.dispatchId))));
+        return same ? null : { key: sessionKey, target };
+      });
+    },
+    [sessionKey],
+  );
+  const closeWorker = useCallback(() => setHeldWorker(null), []);
+  const workerHeader = workerTarget && (
+    <WorkerPanelHeader projectId={projectId} sessionId={routeSessionId} target={workerTarget} agents={agents} />
+  );
+  const workerBody = workerTarget && (
+    <WorkerPanelBody
+      projectId={projectId}
+      sessionId={routeSessionId}
+      target={workerTarget}
+      agents={agents}
+      workspace={project.workspace}
+      onOpenPath={(path) => {
+        // The file takes the slot the steps held (the steps reopen from the card).
+        setHeldWorker(null);
+        if (!docked && openPath) {
+          openPath(path);
+          return;
+        }
+        setRoute((prev) =>
+          prev.name === 'project' && prev.projectId === projectId ? { ...prev, previewPath: path } : prev,
+        );
+      }}
+    />
+  );
+
   const handleUndoRestored = useCallback(
     (n: number, undo: () => Promise<void>, done: boolean) => {
       if (done) setUndoTurn(null);
@@ -620,6 +666,8 @@ export default function ChatTab({
             onOpenSession={selectSession}
             onSessionMoved={sessionMoved}
             onUndoTurn={setUndoTurn}
+            onOpenWorker={openWorker}
+            openWorker={workerTarget}
           />
         </div>
       </div>
@@ -627,7 +675,20 @@ export default function ChatTab({
           edge handle when collapsed. Only above the push threshold. Spec
           137: a full-height sibling with a left edge only; maximized, it
           takes the whole right area (the project column stays). */}
-      {docked && undoTurn ? (
+      {docked && workerTarget && !undoTurn ? (
+        <FilePreviewDrawer
+          docked
+          open
+          selectedPath={null}
+          fileContent={null}
+          loading={false}
+          onClose={closeWorker}
+          header={workerHeader}
+          closeIcon="close"
+        >
+          {workerBody}
+        </FilePreviewDrawer>
+      ) : docked && undoTurn ? (
         <FilePreviewDrawer
           docked
           open
@@ -674,6 +735,20 @@ export default function ChatTab({
           header={panelBar}
         >
           {overlayUsed ? panelBody : <div />}
+        </FilePreviewDrawer>
+      )}
+      {!docked && (
+        <FilePreviewDrawer
+          open={workerTarget !== null}
+          selectedPath={null}
+          fileContent={null}
+          loading={false}
+          onClose={closeWorker}
+          header={workerHeader}
+          raised
+          closeLabel={t('turn.close')}
+        >
+          {workerBody ?? <div />}
         </FilePreviewDrawer>
       )}
       {!docked && (

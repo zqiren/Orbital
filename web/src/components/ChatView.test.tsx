@@ -358,6 +358,7 @@ import { markFreshSession } from '../utils/freshSession';
 import { __resetForkSendsForTests } from '../utils/editMessage';
 import { useAgent } from '../hooks/useAgent';
 import type { DisplayItem } from '../utils/chatTransform';
+import type { WorkerPanelTarget } from '../utils/dispatchCardsStore';
 import type { Project } from '../types';
 import { OpenPathContext } from './filePreviewContext';
 // Producer↔renderer parity fixture (backlog #23 D2 / #27) — the same file the
@@ -711,6 +712,7 @@ function renderChat(props: {
   agents?: Array<{ slug: string; name: string }>;
   project?: Project;
   onRefreshProject?: (id: string) => void;
+  onOpenWorker?: (target: WorkerPanelTarget) => void;
 }) {
   return act(async () => {
     root.render(
@@ -718,6 +720,7 @@ function renderChat(props: {
         projectId="p1"
         project={props.project ?? project}
         onRefreshProject={props.onRefreshProject}
+        onOpenWorker={props.onOpenWorker}
         agentStatus={(props.agentStatus ?? 'idle') as never}
         agents={props.agents ?? []}
         sessionId={props.sessionId}
@@ -6602,5 +6605,297 @@ describe('Spec 185: a send while a worker is mid-turn keeps that turn on screen'
     expect(container.textContent ?? '').toContain('s2-only-185');
     expect(container.textContent ?? '').not.toContain('live-reply-one');
     expect(container.textContent ?? '').not.toContain('first-task-185');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Spec 195: dispatched agents as cards, their live steps out of the column.
+// ---------------------------------------------------------------------------
+describe('Spec 195: dispatch cards (live)', () => {
+  const NOW = () => new Date().toISOString();
+  function dispatched(handle: string, dispatchId: string, initiator = 'management_agent', preview?: string) {
+    emitWs('sub_agent.dispatched', {
+      type: 'sub_agent.dispatched', project_id: 'p1', session_id: 's1', handle, initiator,
+      dispatch_id: dispatchId, ...(preview ? { preview } : {}),
+    });
+  }
+  function tool(handle: string, dispatchId: string | undefined, id: string, file: string, initiator: string | undefined = 'management_agent') {
+    emitWs('agent.activity', workerTool({
+      source: handle, tool_call_id: id, arguments: { file_path: file },
+      ...(dispatchId ? { dispatch_id: dispatchId } : {}), ...(initiator ? { initiator } : {}),
+    }));
+  }
+  function said(handle: string, dispatchId: string | undefined, content: string, initiator: string | undefined = 'management_agent') {
+    emitWs('chat.sub_agent_message', {
+      type: 'chat.sub_agent_message', project_id: 'p1', session_id: 's1', content, source: handle,
+      timestamp: NOW(), ...(dispatchId ? { dispatch_id: dispatchId } : {}), ...(initiator ? { initiator } : {}),
+    });
+  }
+  function completed(handle: string) {
+    emitWs('sub_agent.completed', { type: 'sub_agent.completed', project_id: 'p1', session_id: 's1', handle, summary: '' });
+  }
+  const cards = () => Array.from(container.querySelectorAll('[data-testid="dispatch-card"]'));
+  /** The conversation's top-level rows, as a signature: cards by handle, bubbles by speaker. */
+  function signature(): string[] {
+    const out: string[] = [];
+    container.querySelectorAll('[data-testid="dispatch-card"], [data-testid="user-message"], [data-testid="agent-message"], [data-testid="agent_run"]').forEach((el) => {
+      if (el.closest('[data-testid="dispatch-card-inplace"]')) return;
+      const id = el.getAttribute('data-testid');
+      if (id === 'dispatch-card') out.push(`card:${el.getAttribute('data-handle')}:${el.getAttribute('data-status')}`);
+      else out.push(id ?? '?');
+    });
+    return out;
+  }
+
+  it('two agents streaming at once: two cards, no worker rows in the conversation', async () => {
+    await renderChat({ sessionId: 's1' });
+    await flushEffects();
+    await act(async () => {
+      dispatched('claude-code', 'd1', 'management_agent', '统计三家品牌在华东的门店数和近一年增速');
+      dispatched('codex', 'd2', 'management_agent', '汇总小红书和大众点评上关于三家品牌的口碑关键词');
+      tool('claude-code', 'd1', 'a1', 'stores.csv');
+      tool('codex', 'd2', 'b1', 'buzz.csv');
+      tool('claude-code', 'd1', 'a2', 'stores2.csv');
+      tool('codex', 'd2', 'b2', 'buzz2.csv');
+    });
+    expect(cards()).toHaveLength(2);
+    expect(cards().map((c) => c.getAttribute('data-status'))).toEqual(['running', 'running']);
+    expect(container.textContent).toContain('统计三家品牌在华东的门店数和近一年增速');
+    // No worker capsule, header or row anywhere in the column.
+    expect(capsules()).toHaveLength(0);
+    expect(container.querySelectorAll('[data-testid="tool-call-row"]')).toHaveLength(0);
+    expect(container.textContent).not.toContain('stores.csv');
+  });
+
+  it('an event that beats its dispatched event opens the card; the event then names it', async () => {
+    await renderChat({ sessionId: 's1' });
+    await flushEffects();
+    await act(async () => {
+      tool('codex', 'd9', 'b1', 'early.csv');
+      dispatched('codex', 'd9', 'management_agent', 'brief title');
+    });
+    expect(cards()).toHaveLength(1);
+    expect(cards()[0].getAttribute('data-card-id')).toBe('d9');
+    expect(container.textContent).toContain('brief title');
+  });
+
+  it('the reply lands right under its own card, before the next card', async () => {
+    await renderChat({ sessionId: 's1' });
+    await flushEffects();
+    await act(async () => {
+      dispatched('claude-code', 'd1');
+      dispatched('codex', 'd2');
+      tool('claude-code', 'd1', 'a1', 'a.csv');
+      said('claude-code', 'd1', 'stores are counted');
+      completed('claude-code');
+    });
+    await flushEffects();
+    expect(signature()).toEqual(['card:claude-code:completed', 'agent-message', 'card:codex:running']);
+    expect(container.textContent).toContain('stores are counted');
+  });
+
+  it('a worker\'s own dispatch keeps its reply folded in the card', async () => {
+    await renderChat({ sessionId: 's1' });
+    await flushEffects();
+    await act(async () => {
+      dispatched('codex', 'd3', 'worker:claude-code', 'run the tests');
+      said('codex', 'd3', 'all green', 'worker:claude-code');
+      completed('codex');
+    });
+    await flushEffects();
+    expect(signature()).toEqual(['card:codex:completed']);
+    expect(container.textContent).not.toContain('all green');
+  });
+
+  it('the user\'s own pinned chat stays inline', async () => {
+    await renderChat({ sessionId: 's1' });
+    await flushEffects();
+    await act(async () => {
+      dispatched('codex', 'd4', 'user_pinned');
+      tool('codex', 'd4', 'c1', 'pinned.csv', 'user_pinned');
+    });
+    expect(cards()).toHaveLength(0);
+    expect(capsules()).toHaveLength(1);
+  });
+
+  it('a worker\'s own turn (no dispatch on the event) after its card ended renders inline', async () => {
+    await renderChat({ sessionId: 's1' });
+    await flushEffects();
+    await act(async () => {
+      dispatched('claude-code', 'd5');
+      said('claude-code', 'd5', 'started the build');
+      completed('claude-code');
+    });
+    await act(async () => {
+      tool('claude-code', undefined, 'z1', 'build.log', '');
+    });
+    expect(cards()).toHaveLength(1);
+    expect(capsules()).toHaveLength(1);
+  });
+
+  it('opening a card hands the panel its target; without a panel it opens in place', async () => {
+    const opened: WorkerPanelTarget[] = [];
+    await renderChat({ sessionId: 's1', onOpenWorker: (t) => opened.push(t) });
+    await flushEffects();
+    await act(async () => {
+      dispatched('codex', 'd6');
+      tool('codex', 'd6', 'c1', 'x.csv');
+    });
+    await act(async () => {
+      (container.querySelector('[data-testid="dispatch-card-row"]') as HTMLButtonElement).click();
+    });
+    expect(opened).toEqual([{ kind: 'card', cardId: 'd6', dispatchId: 'd6', handle: 'codex' }]);
+    expect(container.querySelector('[data-testid="dispatch-card-inplace"]')).toBeNull();
+
+    root.unmount();
+    root = createRoot(container);
+    await renderChat({ sessionId: 's1' });
+    await flushEffects();
+    await act(async () => {
+      dispatched('codex', 'd7');
+      tool('codex', 'd7', 'c1', 'inplace.csv');
+    });
+    await act(async () => {
+      (container.querySelector('[data-testid="dispatch-card-row"]') as HTMLButtonElement).click();
+    });
+    expect(container.querySelector('[data-testid="dispatch-card-inplace"]')).not.toBeNull();
+    expect(container.textContent).toContain('inplace.csv');
+  });
+
+  it('the worker tiles hide while a card is in the conversation', async () => {
+    subAgentStatusBySession.set('s1', new Map([['codex', { handle: 'codex', display_name: 'Codex', status: 'running', background_commands: [] }]]));
+    await renderChat({ sessionId: 's1' });
+    await flushEffects();
+    expect(container.querySelector('[data-testid="sub-agent-status-bar"]')).not.toBeNull();
+    await act(async () => {
+      dispatched('codex', 'd8');
+    });
+    expect(container.querySelector('[data-testid="sub-agent-status-bar"]')).toBeNull();
+  });
+
+  it('a worker\'s approval shows that worker\'s mark, and its card turns amber', async () => {
+    await renderChat({ sessionId: 's1', agents: [{ slug: 'codex', name: 'Codex' }] });
+    await flushEffects();
+    await act(async () => {
+      dispatched('codex', 'd10');
+      emitWs('approval.request', {
+        type: 'approval.request', project_id: 'p1', session_id: 's1', what: 'Sub-agent codex requests approval',
+        tool_name: 'shell', tool_call_id: 'perm1', tool_args: { command: 'pip install x' }, recent_activity: [],
+        source: 'codex',
+      });
+    });
+    const asker = container.querySelector('[data-testid="approval-asker"]');
+    expect(asker?.getAttribute('data-agent')).toBe('codex');
+    expect(container.querySelector('[data-testid="dispatch-card-mark"]')?.getAttribute('data-dot')).toBe('needs-you');
+  });
+
+  const QUESTION = {
+    what: 'Sub-agent codex asks: 用哪个分支？', tool_name: 'question', tool_call_id: 'ask-1',
+    tool_args: { prompt: '用哪个分支？' }, recent_activity: [], source: 'codex', kind: 'question',
+  };
+
+  it('a worker\'s question arrives live as the answer card, with its mark, and its card turns amber', async () => {
+    await renderChat({ sessionId: 's1', agents: [{ slug: 'codex', name: 'Codex' }] });
+    await flushEffects();
+    await act(async () => {
+      dispatched('codex', 'd11');
+      emitWs('approval.request', { type: 'approval.request', project_id: 'p1', session_id: 's1', ...QUESTION });
+    });
+    expect(container.textContent).toContain('用哪个分支？');
+    expect(container.querySelector('input[placeholder="Your answer"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="approval-asker"]')?.getAttribute('data-agent')).toBe('codex');
+    expect(container.querySelector('[data-testid="dispatch-card-mark"]')?.getAttribute('data-dot')).toBe('needs-you');
+  });
+
+  it('a worker\'s open question comes back after a reload', async () => {
+    pendingApprovalResponder = (path) =>
+      path.includes('session_id=s1') ? { pending: true, ...QUESTION } : { pending: false };
+    await renderChat({ sessionId: 's1', agents: [{ slug: 'codex', name: 'Codex' }] });
+    await flushEffects();
+    await flushEffects();
+    expect(container.textContent).toContain('用哪个分支？');
+    expect(container.querySelector('input[placeholder="Your answer"]')).not.toBeNull();
+    pendingApprovalResponder = () => ({ pending: false });
+  });
+
+  it('a pinned message queued behind a task shows a clock until its dispatch goes out', async () => {
+    injectMessageMock = async () => ({ status: 'queued_behind', handle: 'codex', dispatch_id: 'q1', position: 1 });
+    await renderChat({ sessionId: 's1', project: { ...project, effective_pinned_target: 'codex' } as Project, agents: [{ slug: 'codex', name: 'Codex' }] });
+    await flushEffects();
+    await act(async () => { typeInComposer('footer page numbers'); });
+    await act(async () => {
+      (container.querySelector('button[aria-label="Send"]') as HTMLButtonElement).click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await flushEffects();
+    expect(container.querySelector('[data-testid="queued-clock"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="queued-clock"]')?.getAttribute('aria-label')).toContain('Codex');
+    await act(async () => { dispatched('codex', 'q1', 'user_pinned'); });
+    expect(container.querySelector('[data-testid="queued-clock"]')).toBeNull();
+  });
+
+  it('a queue drop clears the clock too', async () => {
+    injectMessageMock = async () => ({ status: 'queued_behind', handle: 'codex', dispatch_id: 'q2', position: 1 });
+    await renderChat({ sessionId: 's1', project: { ...project, effective_pinned_target: 'codex' } as Project });
+    await flushEffects();
+    await act(async () => { typeInComposer('second'); });
+    await act(async () => {
+      (container.querySelector('button[aria-label="Send"]') as HTMLButtonElement).click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await flushEffects();
+    expect(container.querySelector('[data-testid="queued-clock"]')).not.toBeNull();
+    await act(async () => {
+      emitWs('sub_agent.queue_dropped', { type: 'sub_agent.queue_dropped', project_id: 'p1', session_id: 's1', handle: 'codex', dispatch_id: 'q2' });
+    });
+    expect(container.querySelector('[data-testid="queued-clock"]')).toBeNull();
+  });
+
+  it('the live view and the reloaded view agree on a parallel run', async () => {
+    await renderChat({ sessionId: 's1' });
+    await flushEffects();
+    await act(async () => {
+      dispatched('claude-code', 's1:aa', 'management_agent', 'stores');
+      dispatched('codex', 's1:bb', 'management_agent', 'buzz');
+      tool('claude-code', 's1:aa', 'a1', 'a.csv');
+      tool('codex', 's1:bb', 'b1', 'b.csv');
+      said('claude-code', 's1:aa', 'stores done');
+      completed('claude-code');
+    });
+    await flushEffects();
+    const live = signature();
+
+    root.unmount();
+    root = createRoot(container);
+    __clearChatHistoryCacheForTests();
+    const T = '2026-11-24T10:00:00Z';
+    const marker = (h: string, id: string, preview: string) => ({
+      role: 'system', source: 'daemon', timestamp: T,
+      content: `[Sub-agent] Message sent to ${h}: "${preview}". Transcript: /t/${h}.jsonl`,
+      _meta: { dispatch_id: id, handle: h, transcript_path: `/t/${h}.jsonl`, initiator: 'management_agent' },
+    });
+    const runRow = (h: string, reply: string, inFlight: boolean) => ({
+      role: 'assistant', source: 'sub_agent', sub_agent_handle: h, timestamp: T, content: inFlight ? '' : reply,
+      sub_agent_tool_rows: [], sub_agent_stream: [
+        { kind: 'tool', name: 'Read', timestamp: T, duration_seconds: 1, tool_call_id: `${h}-1` },
+        ...(inFlight ? [] : [{ kind: 'message', content: reply, timestamp: T }]),
+      ], ...(inFlight ? { sub_agent_in_flight: true } : {}),
+    });
+    chatInitialResponse = {
+      data: [
+        marker('claude-code', 's1:aa', 'stores'), runRow('claude-code', 'stores done', false),
+        marker('codex', 's1:bb', 'buzz'), runRow('codex', '', true),
+        { role: 'system', source: 'daemon', timestamp: T,
+          content: '[Sub-agent] claude-code completed. Summary: stores done. Transcript: /t.jsonl.',
+          _meta: { event: 'sub_agent_terminal', kind: 'completed', reply: 'stores done' } },
+      ],
+      total: 5,
+    };
+    await renderChat({ sessionId: 's1' });
+    await flushEffects();
+    expect(signature()).toEqual(live);
+    expect(live).toEqual(['card:claude-code:completed', 'agent-message', 'card:codex:running']);
   });
 });

@@ -2464,6 +2464,19 @@ class SubAgentManager:
 
         return f"Message sent to {handle}{spawn_clause}. Transcript: {transcript_path}"
 
+    def queued_position(self, project_id: str, session_id: str | None,
+                        handle: str, dispatch_id: str) -> int | None:
+        """1-based place of ``dispatch_id`` in this worker's waiting queue, or
+        None when it is not waiting (it went out, or was never queued).
+        Spec 195: the pinned-send route asks this right after ``send()``
+        returns, with no await between, instead of reading send's text."""
+        session_id = self._resolve_session_id(session_id)
+        queue = self._prompt_queues.get((project_id, session_id, handle)) or ()
+        for i, prompt in enumerate(queue, start=1):
+            if getattr(prompt, "dispatch_id", None) == dispatch_id:
+                return i
+        return None
+
     async def _dispatch_prompt_locked(
         self, adapter, prompt: _QueuedPrompt, project_id: str,
         session_id: str, handle: str,
@@ -2769,6 +2782,7 @@ class SubAgentManager:
                 await self._lifecycle_observer.on_queue_dropped(
                     project_id, handle, why=why, session_id=session_id,
                     initiator=getattr(_prompt, "initiator", None),
+                    dispatch_id=getattr(_prompt, "dispatch_id", None),
                 )
             except Exception:
                 logger.exception(
@@ -2973,9 +2987,14 @@ class SubAgentManager:
     async def respond_to_interaction(
         self, project_id: str, handle: str, interaction_id: str, *,
         session_id: str | None = None, text: str | None = None,
-        selection=None,
+        selection=None, accepted: bool | None = None,
     ) -> bool:
-        """Resolve a blocked provider request without opening another turn."""
+        """Resolve a blocked provider request without opening another turn.
+
+        The one answer path for a worker's question, whoever answers it:
+        Orbital's ``agent_message(respond)`` and the user's card (spec 195,
+        through ``resolve_sub_agent_approval``). ``accepted=False`` is the
+        card's deny."""
         session_id = self._resolve_session_id(session_id)
         adapter = self._adapters.get(
             make_session_key(project_id, session_id), {}).get(handle)
@@ -2990,8 +3009,41 @@ class SubAgentManager:
             responder = getattr(transport, "resolve_interaction", None)
         if responder is None:
             return False
-        await responder(interaction_id, text=text, selection=selection)
+        await responder(interaction_id, text=text, selection=selection,
+                        **({} if accepted is None else {"accepted": accepted}))
         return True
+
+    # Spec 195: the user's questions, as the lifecycle observer recorded them.
+
+    def _observer_user_question(self, interaction_id: str) -> dict | None:
+        observer = getattr(self, "_lifecycle_observer", None)
+        lookup = getattr(observer, "user_question", None)
+        if not callable(lookup) or not isinstance(interaction_id, str):
+            return None
+        entry = lookup(interaction_id)
+        return entry if isinstance(entry, dict) else None
+
+    def _user_question_entries(self) -> list:
+        observer = getattr(self, "_lifecycle_observer", None)
+        entries = getattr(observer, "user_questions", None)
+        if not callable(entries):
+            return []
+        result = entries()
+        return result if isinstance(result, list) else []
+
+    def _open_user_question(self, interaction_id: str, entry: dict):
+        """The transport still waiting on this question, else None (and the
+        stale entry is dropped: the worker stopped, or it was answered)."""
+        pid, sid, handle = entry["key"]
+        adapter = self._adapters.get(make_session_key(pid, sid), {}).get(handle)
+        transport = getattr(adapter, "_transport", None) if adapter else None
+        pending = getattr(transport, "_pending_interactions", None)
+        item = pending.get(interaction_id) if isinstance(pending, dict) else None
+        future = item.get("future") if isinstance(item, dict) else None
+        if item is None or (isinstance(future, asyncio.Future) and future.done()):
+            self._lifecycle_observer.forget_user_question(interaction_id)
+            return None
+        return transport
 
     async def dispatch_fanout(self, project_id: str, tasks: list[dict], *,
                               session_id: str, max_runtime_s: int = 3600,
@@ -3778,6 +3830,10 @@ class SubAgentManager:
         if any(e["key"] == key and not e["future"].done()
                for e in self._connector_waits().values()):
             return True
+        if any(entry["key"] == key
+               and self._open_user_question(iid, entry) is not None
+               for iid, entry in self._user_question_entries()):
+            return True
         transport = getattr(adapter, "_transport", None)
         pending = getattr(transport, "_pending_approvals", None)
         if not isinstance(pending, dict) or not pending:
@@ -3917,6 +3973,13 @@ class SubAgentManager:
         connector = self._pending_connector_approval(project_id, session_id)
         if connector is not None:
             return connector
+        for interaction_id, entry in self._user_question_entries():
+            pid, sid, _handle = entry["key"]
+            if pid != project_id or (session_id is not None and sid != session_id):
+                continue
+            if self._open_user_question(interaction_id, entry) is not None:
+                return {k: v for k, v in entry["card"].items()
+                        if k not in ("type", "project_id")}
         if session_id is None:
             slates = [
                 adapters for (pid, _sid), adapters in self._adapters.items()
@@ -3980,7 +4043,8 @@ class SubAgentManager:
                                          session_id: str | None = None,
                                          decision: str | None = None,
                                          reply_text: str | None = None,
-                                         approve_all: bool = False) -> bool:
+                                         approve_all: bool = False,
+                                         response_payload: str | None = None) -> bool:
         """Try to resolve a permission request on any sub-agent transport.
 
         Returns True if the approval was routed to a sub-agent, False if not found.
@@ -4005,7 +4069,33 @@ class SubAgentManager:
 
         A worker's connector write (``request_connector_approval``) is
         answered here too, by the same id.
+
+        Spec 195: so is a question the user answers (a pinned or
+        worker-dispatched turn asked it; ``LifecycleObserver`` put its card
+        up): ``reply_text`` is the typed answer, ``response_payload`` a chosen
+        option id, a deny cancels it. It goes through
+        ``respond_to_interaction``, the call Orbital's own respond makes. A
+        question already answered is not found (False: the route's 404).
         """
+        question = self._observer_user_question(tool_call_id)
+        if question is not None:
+            pid, sid, handle = question["key"]
+            if pid != project_id or (session_id is not None and sid != session_id):
+                return False
+            if self._open_user_question(tool_call_id, question) is None:
+                return False
+            self._lifecycle_observer.forget_user_question(tool_call_id)
+            answered = await self.respond_to_interaction(
+                pid, handle, tool_call_id, session_id=sid,
+                text=(reply_text or None) if approved else None,
+                selection=(response_payload or None) if approved else None,
+                **({} if approved else {"accepted": False}),
+            )
+            adapter = self._adapters.get(make_session_key(pid, sid), {}).get(handle)
+            listener = getattr(adapter, "_on_status_change", None)
+            if callable(listener):
+                listener()
+            return bool(answered)
         entry = self._connector_waits().get(tool_call_id)
         if entry is not None:
             pid, sid, handle = entry["key"]

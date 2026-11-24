@@ -5,6 +5,16 @@
 import type { ChatMessage, ToolCall, ActivityCategory, FanoutTaskStatus, JobRef, SubAgentToolRow } from '../types';
 import { translate } from '../i18n/useT';
 import type { StringKey } from '../i18n/strings';
+import {
+  absorbDispatchRow,
+  cardLabel,
+  isCardedInitiator,
+  isFoldedInitiator,
+  lastReplyOf,
+  parseDispatchMarker,
+  placeReplyUnderCard,
+  type DispatchCardItem,
+} from './dispatchCards';
 
 /**
  * Locale-aware translator for activity descriptions. Defaults to English so
@@ -298,6 +308,34 @@ export type DisplayItem =
        */
       statuses?: Record<string, FanoutTaskStatus>;
       completedAtMs?: number;
+    }
+  | {
+      /**
+       * Spec 195: one agent Orbital (or the pinned worker) dispatched, as one
+       * row in the conversation. Built from the dispatch marker (and the
+       * /chat endpoint's run summary right after it) on reload, and from the
+       * live worker events while it runs; both fill `steps` with the same
+       * items an inline worker run renders (header, capsules, its messages),
+       * which the docked panel shows. An Orbital dispatch's final reply is a
+       * bubble right after the card; a worker's dispatch (`folded`) keeps it
+       * in the steps only.
+       */
+      type: 'dispatch_card';
+      /** The dispatch id when known; a live card opened before it is known
+       *  carries `live:<handle>:<ms>`. */
+      card_id: string;
+      dispatch_id?: string;
+      handle: string;
+      /** First line of the brief. Empty when unknown (the agent's name shows). */
+      label: string;
+      initiator?: string;
+      folded?: boolean;
+      status: 'running' | 'completed' | 'error' | 'stopped';
+      started_at: number;
+      ended_at: number | null;
+      steps: DisplayItem[];
+      timestamp: string;
+      isHistorical?: boolean;
     }
   | {
       /**
@@ -760,6 +798,11 @@ function parseJobGroup(meta: Record<string, unknown> | undefined): JobGroupMeta 
 
 type SubAgentActivity = Extract<DisplayItem, { type: 'sub_agent_activity' }>;
 
+/** Spec 195: the terminal kinds that end a dispatch card. `continued` (spec
+ *  129, the worker's own turn) and `queue_dropped` (never dispatched) do not. */
+const CARD_END_KINDS = new Set(['completed', 'error', 'failed', 'stopped', 'interrupted']);
+const STARTED_BY_RE = /\(initiated by:\s*([\w:.-]+)\)/;
+
 /**
  * Spec 116 D5: a `sub_agent_dispatch_failed` row whose `_meta.reason` is
  * `update_needed` renders the translated update sentence instead of the
@@ -1103,6 +1146,12 @@ export function transformChatHistory(
   // branch below) or an unrelated later boundary (next assistant/user
   // message, session boundary, end of stream) finalizes it first.
   let deferredFanoutCards: Extract<DisplayItem, { type: 'fanout_card' }>[] = [];
+  // Spec 195: each handle's card still waiting for its terminal row (a handle
+  // runs one dispatch at a time per session, so the handle is the key).
+  const openCards = new Map<string, DispatchCardItem>();
+  // An Orbital card's reply from its run summary, placed when the terminal
+  // row says the turn completed (or at the end, if no terminal row came yet).
+  const cardReplies = new Map<DispatchCardItem, { text: string; timestamp: string }>();
 
   // Spec 134 Part B: the card of background job group `groupId`, wherever it
   // is (still deferred behind its capsule, or already emitted).
@@ -1128,6 +1177,26 @@ export function transformChatHistory(
     };
     if (deferred) deferredFanoutCards.push(fresh);
     else items.push(fresh);
+  }
+
+  // Spec 195: a carded dispatch marker for `handle` among the next few rows
+  // (the "started" row then says nothing the card does not).
+  function cardMarkerFollows(at: number, handle: string): boolean {
+    for (let k = at + 1; k < Math.min(messages.length, at + 4); k++) {
+      const m = messages[k];
+      if (m.role !== 'system') continue;
+      const meta = m._meta;
+      if (!meta || typeof meta.dispatch_id !== 'string' || !meta.dispatch_id) continue;
+      const text = typeof meta.display_content === 'string' ? meta.display_content : (m.content ?? '');
+      const parsed = parseDispatchMarker(text);
+      const h = typeof meta.handle === 'string' && meta.handle ? meta.handle : parsed?.handle;
+      if (!parsed || h !== handle) continue;
+      return isCardedInitiator(
+        typeof meta.initiator === 'string' ? meta.initiator : undefined,
+        meta.suppress_wake === true,
+      );
+    }
+    return false;
   }
 
   function tsToMs(ts: string): number {
@@ -1187,6 +1256,199 @@ export function transformChatHistory(
       for (const card of deferredFanoutCards) items.push(card);
       deferredFanoutCards = [];
     }
+  }
+
+  // The worker run the /chat endpoint joins after a dispatch marker (source
+  // === 'sub_agent'), as the items an inline run renders, pushed into `out`:
+  // the conversation for a pinned chat, a card's steps for a dispatch (spec 195).
+  function renderSubAgentRun(msg: ChatMessage, out: DisplayItem[]): void {
+    const handle = msg.sub_agent_handle ?? 'sub-agent';
+    const startedAtMs = tsToMs(msg.timestamp);
+    const toolRows = msg.sub_agent_tool_rows ?? [];
+    const thinking = (msg.sub_agent_thinking ?? []).filter((b) => b.content.trim());
+    const inFlight = !!msg.sub_agent_in_flight;
+    const stream = msg.sub_agent_stream ?? [];
+
+    // Shared row builders (spec 104 §3.5): the stream path and the legacy
+    // fallback build the same tool_call_row / reasoning_block for a given
+    // row, so a turn looks the same whichever path rendered it. `r` is the
+    // row's index among the turn's tool rows (its synthetic id).
+    const toolCallRow = (row: SubAgentToolRow, r: number): CapsuleChild => {
+      const name = row.name || 'tool';
+      const hasResult = row.result_preview !== undefined;
+      return {
+        type: 'tool_call_row',
+        tool_name: name,
+        // With arguments: the same detail the live row showed. Without
+        // (older transcripts): the per-tool duration ("Write · 1.2s").
+        target_description: row.arguments
+          ? describeWorkerTool(name, row.arguments, workspace, tr)
+          : `${(row.duration_seconds ?? 0).toFixed(1)}s`,
+        tool_call_id: row.tool_call_id || `sub:${handle}:${msg.timestamp}:${r}`,
+        category: workerToolCategory(name),
+        timestamp: row.timestamp || msg.timestamp,
+        result_content: hasResult ? (row.result_preview ?? '') : null,
+        // A call of a finished turn with no result recorded still
+        // expands ("no result"); in flight it is still pending.
+        result_status: hasResult || !inFlight ? 'received' : 'pending',
+        ...(row.result_total_chars !== undefined && row.result_total_lines !== undefined
+          ? { result_totals: { chars: row.result_total_chars, lines: row.result_total_lines } }
+          : {}),
+      };
+    };
+    const reasoningBlock = (content: string, afterTool: number): CapsuleChild => ({
+      type: 'reasoning_block',
+      content,
+      timestamp: msg.timestamp,
+      turn_id: `sub:${handle}:${msg.timestamp}:${afterTool}`,
+    });
+    const headerAnchor = (): DisplayItem => ({
+      type: 'agent_message',
+      content: '',
+      source: handle,
+      timestamp: msg.timestamp,
+      isHeaderOnly: true,
+    });
+
+    if (stream.length > 0) {
+      // Spec 104 stream path. Contiguous tool / thinking rows buffer into
+      // one capsule; a message row flushes the buffer and becomes a bubble
+      // (D1: an `agent_message` under the handle, like the final bubble).
+      // Rows after the last message are a trailing capsule (D2), running
+      // when the dispatch is still in flight. The stream's last message IS
+      // msg.content (last wins), so no separate final bubble is pushed.
+      let buf: CapsuleChild[] = [];
+      let counts: Record<string, number> = {};
+      let bufHasThinking = false;
+      let bufStartTs = '';
+      let bufStartMs = 0;
+      let bufEndMs = 0;
+      let toolIdx = 0;
+      const note = (ts: string, endMs: number) => {
+        if (buf.length === 0) {
+          bufStartTs = ts;
+          bufStartMs = tsToMs(ts);
+          bufEndMs = bufStartMs;
+        }
+        bufEndMs = Math.max(bufEndMs, endMs);
+      };
+      const flushTools = (running: boolean) => {
+        if (buf.length === 0) return;
+        // D1 anchor rule: the capsule needs the worker's header unless the
+        // item before it is already this worker's bubble or capsule.
+        const last = out[out.length - 1];
+        const anchored =
+          !!last &&
+          (last.type === 'agent_message' ||
+            last.type === 'sub_agent_message' ||
+            last.type === 'agent_run') &&
+          last.source === handle;
+        if (!anchored) out.push(headerAnchor());
+        out.push({
+          type: 'agent_run',
+          capsule_id: `sub_agent:${handle}:${bufStartTs}:${capsuleCounter++}`,
+          status: running ? 'running' : 'completed',
+          items: buf,
+          tool_call_count_by_name: counts,
+          has_thinking: bufHasThinking,
+          started_at: bufStartMs,
+          ended_at: running ? null : bufEndMs,
+          defaultExpanded: false,
+          source: handle,
+        });
+        buf = [];
+        counts = {};
+        bufHasThinking = false;
+      };
+      for (const row of stream) {
+        if (row.kind === 'tool') {
+          const ts = row.timestamp || msg.timestamp;
+          note(ts, tsToMs(ts) + Math.round((row.duration_seconds ?? 0) * 1000));
+          const name = row.name || 'tool';
+          counts[name] = (counts[name] ?? 0) + 1;
+          buf.push(toolCallRow(row, toolIdx++));
+        } else if (row.kind === 'thinking') {
+          if (!row.content.trim()) continue;
+          const ts = row.timestamp || msg.timestamp;
+          note(ts, tsToMs(ts));
+          bufHasThinking = true;
+          buf.push(reasoningBlock(row.content, toolIdx));
+        } else if (row.kind === 'message') {
+          flushTools(false);
+          const cleaned = (row.content ?? '').replace(/\x1b\[[0-9;]*m/g, '').trim();
+          if (!cleaned || cleaned === '(no response)') continue;
+          out.push({
+            type: 'agent_message',
+            content: cleaned,
+            source: handle,
+            timestamp: row.timestamp || msg.timestamp,
+          });
+        }
+        // Any other kind (a newer daemon): ignored.
+      }
+      flushTools(inFlight);
+      return;
+    }
+
+    // Legacy / version-skew fallback (no stream: an older daemon): header +
+    // ONE capsule of every row + the final bubble.
+    // 1 & 2. Header + tool capsule, emitted together: the header only
+    // exists to anchor the capsule that follows, so no capsule means no
+    // header either (D1 — an empty header-only anchor with the response
+    // bubble's own identical header right after it was rendering as two
+    // adjacent headers for the same turn). The response bubble (step 3)
+    // always carries its own header regardless.
+    if (toolRows.length > 0 || thinking.length > 0) {
+      out.push(headerAnchor());
+
+      const counts: Record<string, number> = {};
+      const capsuleItems: CapsuleChild[] = [];
+      const pushThinking = (afterTool: number) => {
+        for (const block of thinking) {
+          if (block.after_tool !== afterTool) continue;
+          capsuleItems.push(reasoningBlock(block.content, afterTool));
+        }
+      };
+      for (let r = 0; r < toolRows.length; r++) {
+        pushThinking(r);
+        const row = toolRows[r];
+        const name = row.name || 'tool';
+        counts[name] = (counts[name] ?? 0) + 1;
+        capsuleItems.push(toolCallRow(row, r));
+      }
+      pushThinking(toolRows.length);
+      // A block placed past the last row (a mismatched count) still shows.
+      for (const block of thinking) {
+        if (block.after_tool > toolRows.length) {
+          capsuleItems.push(reasoningBlock(block.content, block.after_tool));
+        }
+      }
+      const durationMs = Math.round((msg.sub_agent_duration ?? 0) * 1000);
+      out.push({
+        type: 'agent_run',
+        capsule_id: `sub_agent:${handle}:${msg.timestamp}:${capsuleCounter++}`,
+        status: inFlight ? 'running' : 'completed',
+        items: capsuleItems,
+        tool_call_count_by_name: counts,
+        has_thinking: thinking.length > 0,
+        started_at: startedAtMs,
+        ended_at: inFlight ? null : startedAtMs + durationMs,
+        defaultExpanded: false,
+        source: handle,
+      });
+    }
+
+    // 3. Response bubble (same as a management agent_message), if non-empty.
+    const respText = (msg.content ?? '').trim();
+    if (respText) {
+      out.push({
+        type: 'agent_message',
+        content: msg.content ?? '',
+        source: handle,
+        timestamp: msg.timestamp,
+      });
+    }
+
   }
 
   while (i < messages.length) {
@@ -1362,194 +1624,7 @@ export function transformChatHistory(
     // of every row followed by the final text only.
     if (msg.source === 'sub_agent') {
       finalizeCapsule();
-      const handle = msg.sub_agent_handle ?? 'sub-agent';
-      const startedAtMs = tsToMs(msg.timestamp);
-      const toolRows = msg.sub_agent_tool_rows ?? [];
-      const thinking = (msg.sub_agent_thinking ?? []).filter((b) => b.content.trim());
-      const inFlight = !!msg.sub_agent_in_flight;
-      const stream = msg.sub_agent_stream ?? [];
-
-      // Shared row builders (spec 104 §3.5): the stream path and the legacy
-      // fallback build the same tool_call_row / reasoning_block for a given
-      // row, so a turn looks the same whichever path rendered it. `r` is the
-      // row's index among the turn's tool rows (its synthetic id).
-      const toolCallRow = (row: SubAgentToolRow, r: number): CapsuleChild => {
-        const name = row.name || 'tool';
-        const hasResult = row.result_preview !== undefined;
-        return {
-          type: 'tool_call_row',
-          tool_name: name,
-          // With arguments: the same detail the live row showed. Without
-          // (older transcripts): the per-tool duration ("Write · 1.2s").
-          target_description: row.arguments
-            ? describeWorkerTool(name, row.arguments, workspace, tr)
-            : `${(row.duration_seconds ?? 0).toFixed(1)}s`,
-          tool_call_id: row.tool_call_id || `sub:${handle}:${msg.timestamp}:${r}`,
-          category: workerToolCategory(name),
-          timestamp: row.timestamp || msg.timestamp,
-          result_content: hasResult ? (row.result_preview ?? '') : null,
-          // A call of a finished turn with no result recorded still
-          // expands ("no result"); in flight it is still pending.
-          result_status: hasResult || !inFlight ? 'received' : 'pending',
-          ...(row.result_total_chars !== undefined && row.result_total_lines !== undefined
-            ? { result_totals: { chars: row.result_total_chars, lines: row.result_total_lines } }
-            : {}),
-        };
-      };
-      const reasoningBlock = (content: string, afterTool: number): CapsuleChild => ({
-        type: 'reasoning_block',
-        content,
-        timestamp: msg.timestamp,
-        turn_id: `sub:${handle}:${msg.timestamp}:${afterTool}`,
-      });
-      const headerAnchor = (): DisplayItem => ({
-        type: 'agent_message',
-        content: '',
-        source: handle,
-        timestamp: msg.timestamp,
-        isHeaderOnly: true,
-      });
-
-      if (stream.length > 0) {
-        // Spec 104 stream path. Contiguous tool / thinking rows buffer into
-        // one capsule; a message row flushes the buffer and becomes a bubble
-        // (D1: an `agent_message` under the handle, like the final bubble).
-        // Rows after the last message are a trailing capsule (D2), running
-        // when the dispatch is still in flight. The stream's last message IS
-        // msg.content (last wins), so no separate final bubble is pushed.
-        let buf: CapsuleChild[] = [];
-        let counts: Record<string, number> = {};
-        let bufHasThinking = false;
-        let bufStartTs = '';
-        let bufStartMs = 0;
-        let bufEndMs = 0;
-        let toolIdx = 0;
-        const note = (ts: string, endMs: number) => {
-          if (buf.length === 0) {
-            bufStartTs = ts;
-            bufStartMs = tsToMs(ts);
-            bufEndMs = bufStartMs;
-          }
-          bufEndMs = Math.max(bufEndMs, endMs);
-        };
-        const flushTools = (running: boolean) => {
-          if (buf.length === 0) return;
-          // D1 anchor rule: the capsule needs the worker's header unless the
-          // item before it is already this worker's bubble or capsule.
-          const last = items[items.length - 1];
-          const anchored =
-            !!last &&
-            (last.type === 'agent_message' ||
-              last.type === 'sub_agent_message' ||
-              last.type === 'agent_run') &&
-            last.source === handle;
-          if (!anchored) items.push(headerAnchor());
-          items.push({
-            type: 'agent_run',
-            capsule_id: `sub_agent:${handle}:${bufStartTs}:${capsuleCounter++}`,
-            status: running ? 'running' : 'completed',
-            items: buf,
-            tool_call_count_by_name: counts,
-            has_thinking: bufHasThinking,
-            started_at: bufStartMs,
-            ended_at: running ? null : bufEndMs,
-            defaultExpanded: false,
-            source: handle,
-          });
-          buf = [];
-          counts = {};
-          bufHasThinking = false;
-        };
-        for (const row of stream) {
-          if (row.kind === 'tool') {
-            const ts = row.timestamp || msg.timestamp;
-            note(ts, tsToMs(ts) + Math.round((row.duration_seconds ?? 0) * 1000));
-            const name = row.name || 'tool';
-            counts[name] = (counts[name] ?? 0) + 1;
-            buf.push(toolCallRow(row, toolIdx++));
-          } else if (row.kind === 'thinking') {
-            if (!row.content.trim()) continue;
-            const ts = row.timestamp || msg.timestamp;
-            note(ts, tsToMs(ts));
-            bufHasThinking = true;
-            buf.push(reasoningBlock(row.content, toolIdx));
-          } else if (row.kind === 'message') {
-            flushTools(false);
-            const cleaned = (row.content ?? '').replace(/\x1b\[[0-9;]*m/g, '').trim();
-            if (!cleaned || cleaned === '(no response)') continue;
-            items.push({
-              type: 'agent_message',
-              content: cleaned,
-              source: handle,
-              timestamp: row.timestamp || msg.timestamp,
-            });
-          }
-          // Any other kind (a newer daemon): ignored.
-        }
-        flushTools(inFlight);
-        i++;
-        continue;
-      }
-
-      // Legacy / version-skew fallback (no stream: an older daemon): header +
-      // ONE capsule of every row + the final bubble.
-      // 1 & 2. Header + tool capsule, emitted together: the header only
-      // exists to anchor the capsule that follows, so no capsule means no
-      // header either (D1 — an empty header-only anchor with the response
-      // bubble's own identical header right after it was rendering as two
-      // adjacent headers for the same turn). The response bubble (step 3)
-      // always carries its own header regardless.
-      if (toolRows.length > 0 || thinking.length > 0) {
-        items.push(headerAnchor());
-
-        const counts: Record<string, number> = {};
-        const capsuleItems: CapsuleChild[] = [];
-        const pushThinking = (afterTool: number) => {
-          for (const block of thinking) {
-            if (block.after_tool !== afterTool) continue;
-            capsuleItems.push(reasoningBlock(block.content, afterTool));
-          }
-        };
-        for (let r = 0; r < toolRows.length; r++) {
-          pushThinking(r);
-          const row = toolRows[r];
-          const name = row.name || 'tool';
-          counts[name] = (counts[name] ?? 0) + 1;
-          capsuleItems.push(toolCallRow(row, r));
-        }
-        pushThinking(toolRows.length);
-        // A block placed past the last row (a mismatched count) still shows.
-        for (const block of thinking) {
-          if (block.after_tool > toolRows.length) {
-            capsuleItems.push(reasoningBlock(block.content, block.after_tool));
-          }
-        }
-        const durationMs = Math.round((msg.sub_agent_duration ?? 0) * 1000);
-        items.push({
-          type: 'agent_run',
-          capsule_id: `sub_agent:${handle}:${msg.timestamp}:${capsuleCounter++}`,
-          status: inFlight ? 'running' : 'completed',
-          items: capsuleItems,
-          tool_call_count_by_name: counts,
-          has_thinking: thinking.length > 0,
-          started_at: startedAtMs,
-          ended_at: inFlight ? null : startedAtMs + durationMs,
-          defaultExpanded: false,
-          source: handle,
-        });
-      }
-
-      // 3. Response bubble (same as a management agent_message), if non-empty.
-      const respText = (msg.content ?? '').trim();
-      if (respText) {
-        items.push({
-          type: 'agent_message',
-          content: msg.content ?? '',
-          source: handle,
-          timestamp: msg.timestamp,
-        });
-      }
-
+      renderSubAgentRun(msg, items);
       i++;
       continue;
     }
@@ -1681,6 +1756,106 @@ export function transformChatHistory(
         i++;
         continue;
       }
+      // Spec 195: a dispatch Orbital or the pinned worker started is ONE
+      // card. The run summary the /chat endpoint put right after the marker
+      // becomes the card's steps; an Orbital dispatch's final reply is the
+      // bubble right under the card (the order a live view builds too).
+      const markerMeta = msg._meta;
+      if (markerMeta && typeof markerMeta.dispatch_id === 'string' && markerMeta.dispatch_id) {
+        const markerText =
+          typeof markerMeta.display_content === 'string' ? markerMeta.display_content : (msg.content ?? '');
+        const parsed = parseDispatchMarker(markerText);
+        const initiator = typeof markerMeta.initiator === 'string' ? markerMeta.initiator : undefined;
+        if (parsed && isCardedInitiator(initiator, markerMeta.suppress_wake === true)) {
+          finalizeCapsule();
+          const handle =
+            typeof markerMeta.handle === 'string' && markerMeta.handle ? markerMeta.handle : parsed.handle;
+          const startedAt = tsToMs(msg.timestamp);
+          const folded = isFoldedInitiator(initiator);
+          const card: DispatchCardItem = {
+            type: 'dispatch_card',
+            card_id: markerMeta.dispatch_id,
+            dispatch_id: markerMeta.dispatch_id,
+            handle,
+            label: cardLabel(parsed.preview),
+            ...(initiator ? { initiator } : {}),
+            ...(folded ? { folded: true } : {}),
+            status: 'running',
+            started_at: startedAt,
+            ended_at: null,
+            steps: [],
+            timestamp: msg.timestamp,
+          };
+          items.push(card);
+          openCards.set(handle, card);
+          // The capsule's agent_message row for this send: the card says it.
+          const absorbed = absorbDispatchRow(items, items.length - 1);
+          if (absorbed.items !== items) items.splice(0, items.length, ...absorbed.items);
+          const run = messages[i + 1];
+          if (run && run.source === 'sub_agent' && (run.sub_agent_handle ?? '') === handle) {
+            renderSubAgentRun(run, card.steps);
+            if (!run.sub_agent_in_flight) {
+              // The transcript closed the turn; the terminal row that follows
+              // refines the outcome and the end time.
+              card.status = 'completed';
+              card.ended_at = startedAt + Math.round((run.sub_agent_duration ?? 0) * 1000);
+              // The reply goes under the card once the terminal row says the
+              // turn COMPLETED: a stopped or failed turn's last message is
+              // not its answer (it stays in the steps).
+              const reply = (run.content ?? '').trim() ? (run.content ?? '') : '';
+              if (reply && !folded) cardReplies.set(card, { text: reply, timestamp: run.timestamp });
+            }
+            i += 2;
+            continue;
+          }
+          i++;
+          continue;
+        }
+      }
+      // Spec 195: the end of a carded dispatch updates its card. A completion
+      // and a plain stop say nothing the card's dot does not; an error, a
+      // failure or an interruption keep their line (its text is the news).
+      if (markerMeta?.event === 'sub_agent_terminal' && CARD_END_KINDS.has(String(markerMeta.kind))) {
+        const endText =
+          typeof markerMeta.display_content === 'string' ? markerMeta.display_content : (msg.content ?? '');
+        const endActivity = parseSubAgentSystemMessage(endText, msg.timestamp);
+        const endHandle = endActivity?.handle ?? (typeof markerMeta.handle === 'string' ? markerMeta.handle : '');
+        const card = endHandle ? openCards.get(endHandle) : undefined;
+        if (card) {
+          openCards.delete(endHandle);
+          finalizeCapsule();
+          const kind = String(markerMeta.kind);
+          card.status = kind === 'completed' ? 'completed' : kind === 'stopped' || kind === 'interrupted' ? 'stopped' : 'error';
+          card.ended_at = tsToMs(msg.timestamp);
+          const held = cardReplies.get(card);
+          cardReplies.delete(card);
+          if (kind === 'completed' && held) {
+            const at = items.lastIndexOf(card);
+            if (at >= 0) items.splice(0, items.length, ...placeReplyUnderCard(items, at, held.text, held.timestamp));
+          }
+          if (kind === 'completed') {
+            const metaReply = typeof markerMeta.reply === 'string' && markerMeta.reply.trim() && markerMeta.reply.trim() !== '(no output)'
+              ? markerMeta.reply : undefined;
+            if (!lastReplyOf(card) && metaReply) {
+              card.steps.push({ type: 'agent_message', content: metaReply, source: card.handle, timestamp: msg.timestamp });
+              const at = items.lastIndexOf(card);
+              if (at >= 0 && !card.folded) {
+                const placed = placeReplyUnderCard(items, at, metaReply, msg.timestamp);
+                items.splice(0, items.length, ...placed);
+              }
+            }
+          }
+          const keepLine =
+            !!endActivity &&
+            (endActivity.action === 'error' ||
+              endActivity.action === 'failed' ||
+              endActivity.action === 'interrupted' ||
+              (endActivity.action === 'stopped' && !!endActivity.count));
+          if (keepLine && endActivity) items.push(applyDispatchFailureReason(endActivity, markerMeta, tr));
+          i++;
+          continue;
+        }
+      }
       // A completed terminal row that carries the worker's whole reply, when
       // no bubble from that worker has been drawn since the user's last
       // message: the reply IS the bubble. This is every turn of an imported
@@ -1720,11 +1895,28 @@ export function transformChatHistory(
         i++;
         continue;
       }
+      // Spec 195: a worker's question the user answers has its card (the
+      // approval card, live and restored while open); its row is Orbital's
+      // record, not a chat line.
+      if (msg._meta?.event === 'interaction_required' && msg._meta?.answerer === 'user') {
+        i++;
+        continue;
+      }
       const activityContent =
         typeof msg._meta?.display_content === 'string'
           ? (msg._meta.display_content as string)
           : (msg.content ?? '');
       const activity = parseSubAgentSystemMessage(activityContent, msg.timestamp);
+      if (activity && activity.action === 'started') {
+        // Spec 195: the card that follows already says the agent started.
+        const startedBy = typeof msg._meta?.initiator === 'string'
+          ? msg._meta.initiator
+          : activityContent.match(STARTED_BY_RE)?.[1];
+        if (startedBy && isCardedInitiator(startedBy) && cardMarkerFollows(i, activity.handle)) {
+          i++;
+          continue;
+        }
+      }
       if (activity) {
         finalizeCapsule();
         items.push(applyDispatchFailureReason(activity, msg._meta, tr));
@@ -2015,6 +2207,12 @@ export function transformChatHistory(
   // the live agentStatus + viewingHolder, so this stays a pure transform.
   finalizeCapsule('completed');
   flushCompletionReplies();
+  // A turn the transcript closed whose terminal row is not written yet.
+  for (const [card, held] of cardReplies) {
+    if (card.status !== 'completed') continue;
+    const at = items.lastIndexOf(card);
+    if (at >= 0) items.splice(0, items.length, ...placeReplyUnderCard(items, at, held.text, held.timestamp));
+  }
 
   // Mark items from historical sessions
   let lastSepIndex = -1;

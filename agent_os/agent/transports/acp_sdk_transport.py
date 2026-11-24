@@ -1269,7 +1269,16 @@ def _interaction_response(
     if kind == "elicitation/create":
         if accepted is False:
             return {"action": "cancel"}
-        return {"action": "accept", "content": selection if isinstance(selection, dict) else {}}
+        if isinstance(selection, dict):
+            return {"action": "accept", "content": selection}
+        # A typed answer to a one-field form fills that field (spec 195: the
+        # user's card has one answer box; before, text was dropped and the
+        # form came back empty).
+        schema = (data.get("params", {}).get("mode") or {}).get("requestedSchema") or {}
+        fields = schema.get("properties") if isinstance(schema, dict) else None
+        if text and isinstance(fields, dict) and len(fields) == 1:
+            return {"action": "accept", "content": {next(iter(fields)): text}}
+        return {"action": "accept", "content": {}}
     return {"text": text, "selection": selection, "accepted": accepted}
 
 

@@ -31,6 +31,11 @@ export interface InjectResult extends ActionResult {
   /** Spec 180: present only when the session had moved and the daemon
    *  delivered the message into this other project. */
   project_id?: string;
+  /** Spec 195 (contract §3): a pinned send's dispatch. With `status:
+   *  "queued_behind"` the message waits in `handle`'s queue at `position`. */
+  dispatch_id?: string;
+  handle?: string;
+  position?: number;
 }
 
 /**

@@ -19,7 +19,7 @@
 // REPORT-piece3-child-classification.md).
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
+import StopWorkerConfirm from './StopWorkerConfirm';
 import { api } from '../config';
 import { useT } from '../i18n/useT';
 import {
@@ -195,52 +195,14 @@ export default function SubAgentStatusBar({ projectId, sessionId, live }: Props)
           dialog itself off-strip), and elsewhere the heading stayed undimmed
           above it. React context (i18n) carries through the portal; theme
           tokens live on :root. */}
-      {confirming && createPortal(
-        <div
-          data-testid="sub-agent-stop-confirm"
-          className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4"
-          onClick={() => setConfirming(null)}
-        >
-          <div
-            className="w-full max-w-sm surface-float-pop p-4 text-body text-primary"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="font-medium mb-2">{t('subAgentBar.confirm.title', { name: confirming.display_name })}</div>
-            <p className="text-secondary mb-2">
-              {confirming.status === 'running'
-                ? t('subAgentBar.confirm.running')
-                : t('subAgentBar.confirm.background')}
-            </p>
-            {confirming.status === 'background-running' &&
-              confirming.background_commands.length > 0 && (
-              <ul className="mb-2 max-h-24 overflow-y-auto rounded bg-background p-2 font-mono text-micro text-warning-text">
-                {confirming.background_commands.map((c, i) => (
-                  <li key={i} className="truncate">{c}</li>
-                ))}
-              </ul>
-            )}
-            <p data-testid="sub-agent-stop-warning" className="text-micro text-secondary mb-3">
-              {t('subAgentBar.confirm.warning')}
-            </p>
-            <div className="flex justify-end gap-2">
-              <button
-                data-testid="sub-agent-stop-cancel"
-                onClick={() => setConfirming(null)}
-                className="rounded px-3 py-1.5 text-secondary hover:bg-card-hover"
-              >
-                {t('subAgentBar.confirm.cancel')}
-              </button>
-              <button
-                data-testid="sub-agent-stop-confirm-button"
-                onClick={() => doStop(confirming)}
-                className="rounded bg-error px-3 py-1.5 text-white hover:opacity-90"
-              >
-                {t('subAgentBar.confirm.stop')}
-              </button>
-            </div>
-          </div>
-        </div>,
-        document.body,
+      {confirming && (
+        <StopWorkerConfirm
+          name={confirming.display_name}
+          running={confirming.status === 'running'}
+          backgroundCommands={confirming.status === 'background-running' ? confirming.background_commands : []}
+          onCancel={() => setConfirming(null)}
+          onConfirm={() => doStop(confirming)}
+        />
       )}
     </div>
   );

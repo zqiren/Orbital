@@ -83,6 +83,16 @@ class LifecycleObserver:
         # ``(project_id, session_id, parent, *, child, kind, content) -> None``,
         # wired at app assembly to ``AgentManager._deliver_worker_result``.
         self.worker_terminal_hook = None
+        # Spec 195: every key that ever had a dispatch, so
+        # ``dispatch_initiator`` can tell "the manager dispatched it" from
+        # "never seen". Bounded by (session, agent) pairs, like the sets above.
+        self._dispatched_keys: set[tuple[str, str | None, str]] = set()
+        # Spec 195: questions the USER answers (a pinned or worker-dispatched
+        # turn asked them): interaction id -> {"key": (project, session,
+        # handle), "card": the approval.request payload}. Read by
+        # SubAgentManager's approval lookups; an entry goes when answered, or
+        # when a lookup finds the transport no longer waits on it.
+        self._user_questions: dict[str, dict] = {}
 
     def set_dispatch_initiator(self, project_id: str, handle: str,
                                initiator: str, *,
@@ -96,6 +106,7 @@ class LifecycleObserver:
         latest turn's initiator when its terminal event fires.
         """
         key = (project_id, session_id, handle)
+        self._dispatched_keys.add(key)
         if initiator == "user_pinned":
             self._pinned_dispatches.add(key)
         else:
@@ -130,6 +141,34 @@ class LifecycleObserver:
         if key in self._pinned_dispatches:
             return "user_pinned"
         return "management_agent"
+
+    def dispatch_initiator(self, project_id: str, handle: str,
+                           session_id: str | None) -> str | None:
+        """The initiator of this handle's CURRENT dispatch, exactly as it was
+        dispatched (``worker:<parent>`` included), or None when the registries
+        have never seen the key. Spec 195: stamped on the worker's live
+        events so the chat can route them to the dispatch's card before the
+        marker row exists."""
+        key = (project_id, session_id, handle)
+        if key in self._worker_dispatches:
+            return f"{_WORKER_PREFIX}{self._worker_dispatches[key]}"
+        if key in self._queue_dispatches:
+            return "queue_item"
+        if key in self._pinned_dispatches:
+            return "user_pinned"
+        if key in self._dispatched_keys:
+            return "management_agent"
+        return None
+
+    def user_question(self, interaction_id: str) -> dict | None:
+        """``{"key", "card"}`` for a question the user answers, else None."""
+        return self._user_questions.get(interaction_id)
+
+    def user_questions(self) -> list[tuple[str, dict]]:
+        return list(self._user_questions.items())
+
+    def forget_user_question(self, interaction_id: str) -> None:
+        self._user_questions.pop(interaction_id, None)
 
     def _parent_for(self, project_id: str, handle: str, session_id: str | None,
                     initiator: str | None = None) -> str | None:
@@ -317,7 +356,10 @@ class LifecycleObserver:
             )
         else:
             content = display_content
-        meta: dict = {}
+        # Spec 195: who started this dispatch, so the chat draws a card for
+        # one Orbital or a worker started and keeps the user's own turn
+        # inline. Additive; rows written before it have none.
+        meta: dict = {"initiator": initiator}
         if dispatch_id:
             meta["dispatch_id"] = dispatch_id
             meta["handle"] = handle
@@ -340,7 +382,7 @@ class LifecycleObserver:
             # stops it from starting a loop.
             meta["suppress_wake"] = True
         await self._inject(project_id, content, session_id=session_id,
-                           meta=meta or None)
+                           meta=meta)
         # Every physical dispatch passes through here, including a queued
         # prompt drained into an already-warm worker, which gets neither a
         # ``sub_agent.started`` nor the inject route's ack. The project list
@@ -351,6 +393,11 @@ class LifecycleObserver:
             "session_id": session_id,
             "handle": handle,
             "initiator": initiator,
+            # Spec 195: clears the clock on the user's message that waited
+            # in this worker's queue (the inject route returned this id).
+            "dispatch_id": dispatch_id,
+            # The card's title: exactly the text the marker row stores.
+            "preview": preview,
         })
 
     async def on_interaction_required(
@@ -400,8 +447,49 @@ class LifecycleObserver:
             "interaction_id": interaction_id,
             "kind": kind,
         }
+        # Spec 195: a question from the user's own turn with the worker
+        # (pinned) or from a worker another worker dispatched is not Orbital's
+        # to answer, by the same rule the terminals use. Stamped here, before
+        # the event counts as a wake event (agent_manager._WAKE_EVENTS).
+        # The USER answers it, on the approval route: the card goes up as an
+        # ``approval.request`` (kind "question"), comes back from
+        # ``/pending-approval`` after a reload, and ``/approve`` / ``/deny``
+        # resolve it through ``SubAgentManager.respond_to_interaction``.
+        card = None
+        if (self._is_pinned_dispatch(project_id, handle, session_id)
+                or self._parent_for(project_id, handle, session_id)):
+            meta["suppress_wake"] = True
+            # The card is this question's surface (live, and after a reload
+            # while it is open); the chat draws no line for the row.
+            meta["answerer"] = "user"
+            meta["display_content"] = (
+                f"[Sub-agent] {handle} requires input ({kind}): {prompt or kind}")
+            content = (meta["display_content"]
+                       + " The user answers this on its card; do not respond to it.")
+            card = {
+                "type": "approval.request",
+                "project_id": project_id,
+                "session_id": session_id,
+                "kind": "question",
+                "what": f"Sub-agent {handle} asks: {prompt or kind}",
+                "tool_name": "question",
+                "tool_call_id": interaction_id,
+                "tool_args": {
+                    # A transport with nothing better names the request kind
+                    # as its prompt; that is not words for the user.
+                    "prompt": prompt if prompt and prompt != kind else "",
+                    **({"options": options} if options else {}),
+                    **({"plan": plan} if plan else {}),
+                },
+                "source": handle,
+                "recent_activity": [],
+            }
+            self._user_questions[interaction_id] = {
+                "key": (project_id, session_id, handle), "card": card}
         await self._inject(
             project_id, content, session_id=session_id, meta=meta)
+        if card is not None:
+            self._ws.broadcast(project_id, card)
         self._ws.broadcast(project_id, {
             "type": "sub_agent.interaction_required",
             "project_id": project_id,
@@ -438,7 +526,17 @@ class LifecycleObserver:
             f"[Sub-agent] {handle} completed. Summary: {reply_text}. "
             f"Transcript: {transcript_path}."
         )
-        if summary and summary.strip():
+        pinned = self._is_pinned_dispatch(project_id, handle, session_id)
+        parent = self._parent_for(project_id, handle, session_id)
+        if parent:
+            # Spec 195: a worker's own dispatch folds the child's reply inside
+            # its card; the chat shows no bubble for it, and the parent (not
+            # Orbital) reports to the user. Never claim the user saw it.
+            guidance = (
+                f" {parent} dispatched this task and was given its result to "
+                "report to the user; the user has not seen the result in chat."
+            )
+        elif summary and summary.strip():
             # The sub-agent's full final message is already shown to the user as
             # its own chat bubble (subagent-last-message-display). Re-summarizing
             # it here would duplicate what the user already sees, so steer the
@@ -456,8 +554,6 @@ class LifecycleObserver:
                 "the user — briefly tell the user the outcome yourself."
             )
         content = llm_content + guidance
-        pinned = self._is_pinned_dispatch(project_id, handle, session_id)
-        parent = self._parent_for(project_id, handle, session_id)
         # An assigned queue item closes on its worker's finish, not on a
         # manager verdict turn (2026-09-05). The row below still lands so the
         # session reads honestly; only the wake is spared.
@@ -490,9 +586,9 @@ class LifecycleObserver:
         if parent:
             delivered = (
                 f"Your dispatched worker {handle} finished. Its reply is in the "
-                "conversation above (labelled assistant). The user already sees "
-                "it; do not repeat it. Verify or continue, then reply only with "
-                "what is new."
+                "conversation above (labelled assistant). The user has not seen "
+                "it, so after checking the work, tell the user what it did or "
+                "found."
                 if summary and summary.strip() else
                 f"Your dispatched worker {handle} finished without a reply. "
                 "Check its work, then tell the user the outcome.")
@@ -681,7 +777,8 @@ class LifecycleObserver:
     async def on_queue_dropped(self, project_id: str, handle: str, *,
                                why: str,
                                session_id: str | None = None,
-                               initiator: str | None = None) -> None:
+                               initiator: str | None = None,
+                               dispatch_id: str | None = None) -> None:
         """A queued prompt was discarded before it ever reached the sub-agent.
 
         Backlog #35a. These rows used to be written through ``on_failed``,
@@ -721,11 +818,10 @@ class LifecycleObserver:
         if not absorbed:
             # Same wake tag the terminal above carries (backlog #23 D1): the
             # management agent may be awaiting this very message, and a drop
-            # it never hears about is the silent-hang class again. No WS
-            # broadcast — the drop always rides along with an event that
-            # already broadcast the handle's new state (stop, send failure,
-            # transport end), and the handle's live status is unchanged by
-            # it either way.
+            # it never hears about is the silent-hang class again. The
+            # handle's state is broadcast by the event the drop rides along
+            # with (stop, send failure, transport end); the only broadcast
+            # here is the dispatch id below (spec 195).
             await self._inject(
                 project_id, content, session_id=session_id,
                 meta={"event": "sub_agent_terminal", "kind": "queue_dropped",
@@ -737,6 +833,17 @@ class LifecycleObserver:
             self._fire_worker_terminal_hook(
                 project_id, session_id, parent, child=handle, kind="queue_dropped",
                 content=_did_not_finish(handle, f"queued message dropped: {why}"))
+        if dispatch_id:
+            # Spec 195: the message that waited never went out; the chat
+            # clears the clock it drew from the inject route's queued status.
+            self._ws.broadcast(project_id, {
+                "type": "sub_agent.queue_dropped",
+                "project_id": project_id,
+                "session_id": session_id,
+                "handle": handle,
+                "dispatch_id": dispatch_id,
+                "why": why,
+            })
 
     async def on_user_stopped(self, project_id: str, handle: str, *,
                               terminated: list[str] | None = None,

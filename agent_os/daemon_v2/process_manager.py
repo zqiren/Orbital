@@ -167,6 +167,24 @@ class ProcessManager:
         if not dq:
             self._active_dispatch_id.pop(key, None)
 
+    def _live_dispatch_ids(self, project_id: str, handle: str,
+                           session_id: "str | None",
+                           dispatch_id: "str | None") -> dict:
+        """``{"dispatch_id", "initiator"}`` for a dispatched turn's live
+        events, ``{}`` for a turn nobody dispatched (spec 195)."""
+        if not dispatch_id:
+            return {}
+        ids = {"dispatch_id": dispatch_id}
+        reader = getattr(self._lifecycle, "dispatch_initiator", None)
+        if callable(reader):
+            try:
+                initiator = reader(project_id, handle, session_id)
+            except Exception:  # noqa: BLE001 — a label must never stop the stream
+                initiator = None
+            if isinstance(initiator, str) and initiator:
+                ids["initiator"] = initiator
+        return ids
+
     def _current_dispatch(self, key: str) -> "str | None":
         """The dispatch_id of the turn in flight on ``key`` (the OLDEST queued
         id — the one the next boundary will pop), or None."""
@@ -431,6 +449,12 @@ class ProcessManager:
                                 plan=metadata.get("plan"),
                                 session_id=session_id,
                             )
+                        # Spec 195: a question the user answers is a wait on
+                        # the user, like a permission card; the adapter's own
+                        # status listener pushes it (and the answer clears it).
+                        listener = getattr(adapter, "_on_status_change", None)
+                        if callable(listener):
+                            listener()
                         continue
                     entry = {
                         "source": handle,
@@ -463,6 +487,12 @@ class ProcessManager:
                         "dispatch_pending", None)
                     if current_dispatch and pending is not False:
                         entry["dispatch_id"] = current_dispatch
+                    # Spec 195: the live events below carry the dispatch this
+                    # chunk belongs to and who started it, so the chat can put
+                    # it in that dispatch's card the moment it arrives (before
+                    # the marker row exists). None on a self-initiated turn.
+                    live_ids = self._live_dispatch_ids(
+                        project_id, handle, session_id, entry.get("dispatch_id"))
                     # Write to sub-agent transcript (v5: never to management session)
                     if transcript is not None:
                         transcript.append(entry)
@@ -520,6 +550,7 @@ class ProcessManager:
                             "content": chunk.text,
                             "source": handle,
                             "timestamp": entry["timestamp"],
+                            **live_ids,
                         })
 
                     if chunk.chunk_type == "approval_request":
@@ -562,7 +593,7 @@ class ProcessManager:
                         # the agent_output echo every frontend drops.
                         on_worker_chunk(
                             chunk.chunk_type, display, chunk.text, project_id,
-                            session_id=session_id, handle=handle,
+                            session_id=session_id, handle=handle, **live_ids,
                         )
                     else:
                         self._activity_translator.on_message(

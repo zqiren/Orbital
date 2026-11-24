@@ -149,7 +149,8 @@ function JobRow({ task, job, status, elapsedMs }: {
   );
 }
 
-function formatElapsed(ms: number): string {
+/** "2m 41s" — also the dispatch card's time (spec 195). */
+export function formatElapsed(ms: number): string {
   if (ms < 1000) return '<1s';
   const s = Math.round(ms / 1000);
   if (s < 60) return `${s}s`;

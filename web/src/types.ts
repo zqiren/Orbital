@@ -798,6 +798,10 @@ export interface StreamDeltaEvent {
   /** Spec 100: a sub-agent's thinking (reasoning only, `source` = its
    * handle). Never part of the manager's streamed turn. */
   worker?: boolean;
+  /** Spec 195 (contract §2): the worker turn's dispatch and who started it.
+   *  Absent on a worker's own turn (spec 129) and from older daemons. */
+  dispatch_id?: string;
+  initiator?: string;
 }
 
 export type ActivityCategory =
@@ -844,6 +848,9 @@ export interface ActivityEvent {
    * drop on arrival. */
   worker_event?: 'tool_call' | 'tool_result';
   is_error?: boolean;
+  /** Spec 195 (contract §2): with `worker_event`, the dispatch it belongs to. */
+  dispatch_id?: string;
+  initiator?: string;
   source: string;
   timestamp: string;
 }
@@ -874,6 +881,8 @@ export interface ApprovalRequestEvent {
    *  `""` when it cannot be allowlisted. Absent from older daemons. */
   executable?: string;
   reason?: string;
+  /** The asking agent's handle on a worker's approval (absent: Orbital's). */
+  source?: string;
 }
 
 export interface ApprovalResolvedEvent {
@@ -892,6 +901,9 @@ export interface SubAgentMessageEvent {
   content: string;
   source: string;
   timestamp: string;
+  /** Spec 195 (contract §2). */
+  dispatch_id?: string;
+  initiator?: string;
 }
 
 /**
@@ -915,10 +927,24 @@ export interface SubAgentLifecycleEvent {
   session_id?: string | null;
   handle: string;
   initiator?: string;
+  /** Spec 195: `sub_agent.dispatched` — the dispatch, and the first 100
+   *  characters of its brief (the card's title; absent from older daemons). */
+  dispatch_id?: string;
+  preview?: string;
   summary?: string;
   error?: string;
   reason?: string;
   background_terminated?: string[];
+}
+
+/** Spec 195 (contract §4): a queued pinned message was dropped before it went out. */
+export interface SubAgentQueueDroppedEvent {
+  type: 'sub_agent.queue_dropped';
+  project_id: string;
+  session_id?: string | null;
+  handle: string;
+  dispatch_id?: string;
+  why?: string;
 }
 
 /** Spec 099 — one subscription rate-limit window. `used_pct` is 0..100;
@@ -1439,6 +1465,7 @@ export type WebSocketEvent =
   | ApprovalResolvedEvent
   | SubAgentMessageEvent
   | SubAgentLifecycleEvent
+  | SubAgentQueueDroppedEvent
   | SubAgentStatusEvent
   | UserMessageEvent
   | AgentNotifyEvent

@@ -76,8 +76,20 @@ from agent_os.daemon_v2.models import (
 # the user let run outside the sandbox is an answer the agent is waiting on.
 # Spec 134 Part B: a background job group ending (``job_terminal``) or its
 # 15-minute check-in (``job_checkin``) wakes the session the same way.
+# Spec 195: a worker's question (``interaction_required``) wakes a mid-turn
+# manager too; the observer stamps ``suppress_wake`` on questions from a
+# pinned or worker-dispatched turn, which are not the manager's to answer.
 _WAKE_EVENTS = frozenset({"sub_agent_terminal", "unsandboxed_run",
-                          "job_terminal", "job_checkin"})
+                          "job_terminal", "job_checkin",
+                          "interaction_required"})
+
+
+def _pinned_now(session) -> bool:
+    """Spec 195: the session is pinned to a worker right now (the user is
+    talking to it), so Orbital takes no turn. ``isinstance``: a stray
+    non-str attribute (a mock) never reads as pinned."""
+    target = getattr(session, "pinned_target", None)
+    return isinstance(target, str) and bool(target)
 
 # Spec 112 A6 (pinned workers): transports whose event stream reports tool
 # names AND paths, so the daemon can list what the turn changed. Pipe / PTY
@@ -2691,6 +2703,11 @@ class AgentManager:
                 # Pinned dispatch (spec 074): the row is durably on disk; the
                 # management LLM takes ZERO turns — no start_agent.
                 return "suppressed"
+            if _pinned_now(loaded):
+                # Spec 195: the user is talking to a worker. The row stays
+                # wake-eligible and waits; the switch back wakes Orbital
+                # (wake_if_unread).
+                return "held"
             try:
                 config = await self._abuild_agent_config_from_project(project_id)
                 await self.start_agent(
@@ -2724,6 +2741,9 @@ class AgentManager:
                 # Pinned dispatch (spec 074): append only, never start a
                 # management turn.
                 return "suppressed"
+            if _pinned_now(handle.session):
+                # Spec 195: held while pinned (see the hydrated branch).
+                return "held"
             # Spec 155: a wake starts its own session's loop now, whatever
             # the project's other sessions are doing.
             try:
@@ -2745,9 +2765,11 @@ class AgentManager:
         handle.session.defer_message(content, role="system", source="daemon",
                                      meta=meta, kind=row_kind)
         if (meta and meta.get("event") in _WAKE_EVENTS
-                and not suppress_wake):
+                and not suppress_wake and not _pinned_now(handle.session)):
             # Decide the wake now (spec 091 §4): by the time _on_loop_done
             # runs, the loop's own finally has already drained this row.
+            # Spec 195: not while pinned; an unpin before this turn ends sets
+            # the flag itself (wake_if_unread).
             handle.wake_after_turn = True
         return "deferred"
 
@@ -7212,6 +7234,75 @@ class AgentManager:
                 return True
         return False
 
+    async def wake_if_unread(self, project_id: str, session_id: str) -> str:
+        """Spec 195: the user switched the session back to Orbital. Rows held
+        while it was pinned (``_pinned_now`` in ``inject_system_message`` and
+        ``_on_loop_done``) are durable and still wake-eligible; start ONE turn
+        when one is unread, so every held result is read in one round.
+
+        - loop running (it was mid-turn through the pin): set the turn's wake
+          flag; ``_on_loop_done`` honours it only while a row is still unread;
+        - live and idle: ``_start_loop`` when ``_terminal_unread``;
+        - evicted: hydrate and start, the same way the inject path does.
+        Returns ``"pinned" | "running" | "nothing" | "delivered" |
+        "no_session" | "persisted"``. Never raises.
+        """
+        try:
+            live_sid, handle = await self._live_handle_for(project_id, session_id)
+            if handle is not None:
+                if _pinned_now(handle.session):
+                    return "pinned"
+                if handle.task is not None and not handle.task.done():
+                    handle.wake_after_turn = True
+                    return "running"
+                if not self._terminal_unread(handle.session):
+                    return "nothing"
+                logger.info("wake_if_unread(%s/%s): unpinned with a held row; "
+                            "waking Orbital", project_id, live_sid)
+                await self._start_loop(project_id, session_id=live_sid)
+                return "delivered"
+            loaded = await self._hydrate_session(project_id, session_id)
+            if (await self._live_handle_for(project_id, session_id))[1] is not None:
+                return await self.wake_if_unread(project_id, session_id)
+            if loaded is None:
+                return "no_session"
+            if _pinned_now(loaded):
+                return "pinned"
+            if not self._terminal_unread(loaded):
+                return "nothing"
+            logger.info("wake_if_unread(%s/%s): unpinned with a held row; "
+                        "hydrating and waking Orbital", project_id, session_id)
+            config = await self._abuild_agent_config_from_project(project_id)
+            await self.start_agent(
+                project_id, config, initial_message=None,
+                session_id=loaded.session_uuid, session=loaded,
+            )
+            return "delivered"
+        except Exception as exc:
+            logger.warning("wake_if_unread(%s/%s) failed; the held rows stay "
+                           "in the session", project_id, session_id, exc_info=True)
+            self._note_wake_failed(project_id, session_id, exc)
+            return "persisted"
+
+    async def _live_handle_for(self, project_id: str, session_id: str):
+        """``(handle key's session id, handle)`` for a session addressed by
+        F1 or F2 (the PATCH route's id), or ``(None, None)``. Matches the way
+        ``patch_session`` finds the live handle."""
+        handle = self._handles.get(make_session_key(project_id, session_id))
+        if handle is not None:
+            return session_id, handle
+        resolved = await asyncio.to_thread(
+            self._resolve_session_uuid_on_disk, project_id, session_id)
+        if resolved is None:
+            return None, None
+        session_uuid = resolved[0]
+        for (pid, sid), live in list(self._handles.items()):
+            if pid == project_id and (
+                    sid == session_uuid
+                    or getattr(live.session, "session_uuid", None) == session_uuid):
+                return sid, live
+        return None, None
+
     def _on_loop_done(self, project_id: str, *,
                       session_id: str | None = None):
         """Returns done-callback for the loop asyncio.Task.
@@ -7314,6 +7405,10 @@ class AgentManager:
             if (wake_after_turn and not wake_on_deferred_terminal
                     and self._terminal_unread(handle.session)):
                 wake_on_deferred_terminal = True
+            if _pinned_now(handle.session):
+                # Spec 195: pinned during this turn. What it drained stays
+                # unread and wake-eligible; the switch back wakes it.
+                wake_on_deferred_terminal = False
 
             # Check if paused for approval FIRST — don't drain the queue
             # or broadcast idle while a tool call is awaiting user decision.

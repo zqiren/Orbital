@@ -211,7 +211,9 @@ async def test_omitted_agent_uses_the_minted_pinned_target(rig):
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["agent"] == "codex"
-    assert body["inject"] == {"status": "Message sent to codex."}
+    # Spec 195: the pinned send's answer also names its dispatch.
+    assert body["inject"] == {"status": "Message sent to codex.",
+                              "dispatch_id": subs.sent[0][3]["dispatch_id"]}
     assert mgr.log == [("mint", "proj_app"), ("persist", "proj_app")]
     (pid, sid, row), = mgr.persisted
     assert (pid, sid) == ("proj_app", "s_1")

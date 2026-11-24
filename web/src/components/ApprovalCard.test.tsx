@@ -209,3 +209,103 @@ describe('ApprovalCard — unsandboxed_run uses the backend executable', () => {
     expect(screen.getByRole('button', { name: 'Always allow cmd in this project' })).toBeTruthy();
   });
 });
+
+// Spec 195: a worker's question the user answers (its turn was the user's
+// pinned send or another worker's dispatch) rides the approval card as
+// `kind: "question"`: the asking agent's words, an answer box, its options
+// when it offers some, Send and Deny. Same chrome and routes as an approval.
+describe('ApprovalCard — question kind (spec 195)', () => {
+  const question = {
+    what: 'Sub-agent dsh asks: 颜色',
+    tool_name: 'question',
+    tool_call_id: 'q-1',
+    tool_args: {
+      prompt: '颜色',
+      options: [{ id: 'q1', prompt: '用哪种颜色？', options: [{ id: 'red', label: '红' }, { id: 'blue', label: '蓝' }] }],
+    },
+    recent_activity: [],
+    kind: 'question',
+  };
+
+  it('shows the question, its options, an answer box, Send and Deny, and nothing of an approval', () => {
+    render(<ApprovalCard approval={question} projectId="p1" sessionId="s1" asker="dsh" />);
+    expect(screen.getByText('颜色')).toBeTruthy();
+    expect(screen.getByText('用哪种颜色？')).toBeTruthy();
+    expect(screen.getByRole('button', { name: '红' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '蓝' })).toBeTruthy();
+    expect(screen.getByRole('textbox')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Send' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Deny' })).toBeTruthy();
+    expect(screen.getByText('Question')).toBeTruthy();
+    expect(screen.getByTestId('approval-asker').getAttribute('data-agent')).toBe('dsh');
+    expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Auto-approve 10 min' })).toBeNull();
+    expect(screen.queryByText('Action details')).toBeNull();
+  });
+
+  it('Send stays off until there is an answer, then sends it as the reply text', async () => {
+    approveMock.mockClear();
+    approveMock.mockResolvedValue({});
+    const onResolve = vi.fn();
+    render(<ApprovalCard approval={question} projectId="p1" sessionId="s1" onResolve={onResolve} />);
+    const send = screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement;
+    expect(send.disabled).toBe(true);
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: '蓝绿色' } });
+    expect(send.disabled).toBe(false);
+    fireEvent.click(send);
+    await waitFor(() =>
+      expect(approveMock).toHaveBeenCalledWith('p1', 'q-1', '蓝绿色', undefined, 's1', undefined),
+    );
+    await waitFor(() => expect(onResolve).toHaveBeenCalledWith('q-1', 'approved'));
+  });
+
+  it('Enter in the answer box sends it', async () => {
+    approveMock.mockClear();
+    approveMock.mockResolvedValue({});
+    render(<ApprovalCard approval={question} projectId="p1" sessionId="s1" />);
+    const box = screen.getByRole('textbox');
+    fireEvent.change(box, { target: { value: '红色' } });
+    fireEvent.keyDown(box, { key: 'Enter' });
+    await waitFor(() =>
+      expect(approveMock).toHaveBeenCalledWith('p1', 'q-1', '红色', undefined, 's1', undefined),
+    );
+  });
+
+  it('an option answers with its id', async () => {
+    approveMock.mockClear();
+    approveMock.mockResolvedValue({});
+    render(<ApprovalCard approval={question} projectId="p1" sessionId="s1" />);
+    fireEvent.click(screen.getByRole('button', { name: '蓝' }));
+    await waitFor(() =>
+      expect(approveMock).toHaveBeenCalledWith('p1', 'q-1', undefined, undefined, 's1', 'blue'),
+    );
+  });
+
+  it('Deny declines the question in one click', async () => {
+    denyMock.mockClear();
+    denyMock.mockResolvedValue({});
+    const onResolve = vi.fn();
+    render(<ApprovalCard approval={question} projectId="p1" sessionId="s1" onResolve={onResolve} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Deny' }));
+    await waitFor(() => expect(denyMock).toHaveBeenCalledWith('p1', 'q-1', 'Denied by user', 's1'));
+    await waitFor(() => expect(onResolve).toHaveBeenCalledWith('q-1', 'denied'));
+  });
+
+  it('once answered it collapses to one line', () => {
+    render(<ApprovalCard approval={question} projectId="p1" sessionId="s1" resolved="approved" />);
+    expect(screen.getByText(/Answered/)).toBeTruthy();
+    expect(screen.queryByRole('textbox')).toBeNull();
+  });
+
+  it('a question offering no options shows no option buttons', () => {
+    render(
+      <ApprovalCard
+        approval={{ ...question, tool_args: { prompt: '你的名字？' } }}
+        projectId="p1"
+        sessionId="s1"
+      />,
+    );
+    expect(screen.getByText('你的名字？')).toBeTruthy();
+    expect(screen.getAllByRole('button').map((b) => b.textContent)).toEqual(['Deny', 'Send']);
+  });
+});

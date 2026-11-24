@@ -97,9 +97,10 @@ async def _fire(obs, kind):
 
 
 EXPECTED = {
+    # Spec 195: the child's reply is folded in its card, so the user has not seen it.
     "completed": ("Your dispatched worker codex finished. Its reply is in the conversation "
-                  "above (labelled assistant). The user already sees it; do not repeat it. "
-                  "Verify or continue, then reply only with what is new."),
+                  "above (labelled assistant). The user has not seen it, so after checking "
+                  "the work, tell the user what it did or found."),
     "error": "Your dispatched worker codex did not finish: rate limited. Decide what to do next.",
     "failed": "Your dispatched worker codex did not finish: transport died. Decide what to do next.",
     "queue_dropped": ("Your dispatched worker codex did not finish: queued message dropped: "
