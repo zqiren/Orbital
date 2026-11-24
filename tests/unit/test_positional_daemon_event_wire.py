@@ -191,6 +191,27 @@ class TestEventRowRemap:
         assert row[0]["role"] == "user"
         assert row[0]["content"] == f"{_RUNTIME_MARKER}\n{nudge}"
 
+    def test_files_restored_row_lands_at_the_tail_and_keeps_the_prefix(self, tmp_path):
+        """Spec 196 D2: the 'files put back' row is a framed runtime turn at
+        its own place; every message before it goes out byte-identical, so
+        the cached prefix is untouched and only the tail is new."""
+        rows = [
+            {"role": "user", "content": "rewrite notes.md", "source": "user"},
+            {"role": "assistant", "content": "done, notes.md rewritten"},
+        ]
+        note = ("The user put these files back to how they were before 2026-11-24 10:02 UTC: "
+                "notes.md. Re-read them before relying on earlier edits.")
+        before, _ = _remap_mgr(tmp_path / "a", rows)
+        after, _ = _remap_mgr(tmp_path / "b", rows + [{
+            "role": "system", "content": note, "source": "daemon",
+            "_meta": {"event": "files_restored", "suppress_wake": True, "paths": ["notes.md"]},
+        }])
+        p0, p1 = before.prepare(), after.prepare()
+        assert _shape(p1[:len(p0)]) == _shape(p0)
+        assert len(p1) == len(p0) + 1
+        assert p1[-1]["role"] == "user" and p1[-1]["content"] == f"{_RUNTIME_MARKER}\n{note}"
+        assert note not in str(p1[0].get("content"))  # never in the system prompt
+
     def test_meta_without_event_tag_is_framed_not_raw(self, tmp_path):
         """A `_meta` that carries no `event` key is not one of the three raw
         positional events: it rides framed (spec 171 B1)."""

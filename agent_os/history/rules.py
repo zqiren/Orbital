@@ -37,6 +37,9 @@ LAYER1_FILES: dict[str, str] = {
 
 TEXT_MAX_BYTES = 1 * 1024 * 1024
 OFFICE_MAX_BYTES = 20 * 1024 * 1024
+# Spec 196 D3: a created file without history is undoable up to this size
+# (the whole file is hashed and, on undo, moved into the store).
+CREATED_MAX_BYTES = OFFICE_MAX_BYTES
 OFFICE_EXTENSIONS = frozenset({".docx", ".xlsx", ".pptx"})
 _SNIFF_BYTES = 8192
 

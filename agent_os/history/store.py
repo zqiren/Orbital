@@ -11,7 +11,11 @@ Plain files under ``{workspace}/orbital/history/``:
   ``{v, ts, path, sha, prev_sha, kind, size, added, removed, attrib}`` with
   ``kind`` ∈ baseline | create | modify | delete | restore (a ``delete`` has
   ``sha: null``), plus ``{kind: "name", ts, path, sha, name}`` lines for
-  named versions (latest wins; an empty name clears).
+  named versions (latest wins; an empty name clears), plus metadata-only
+  ``{kind: "seen", v, ts, path, sha, size, mtime_ns, attrib}`` lines for a
+  file without history (image, PDF, video, text over 1 MB, up to 20 MB) that
+  a session CREATED (spec 196 D3): no blob, not a version, not in the index.
+  An older Orbital ignores those lines on read; its prune rewrite drops them.
 - ``index.json`` — current state per path ``{sha, size, mtime_ns}``;
   rebuilt from ``versions.jsonl`` when missing or corrupt.
 
@@ -41,6 +45,8 @@ STORE_CAP_BYTES = 500 * 1024 * 1024
 PRUNE_TARGET_FRACTION = 0.9
 
 VERSION_KINDS = ("baseline", "create", "modify", "delete", "restore")
+# Spec 196 D3: a created file without history, noted without a blob.
+SEEN_KIND = "seen"
 
 
 def now_iso() -> str:
@@ -114,6 +120,7 @@ class HistoryStore:
         self.total_bytes = 0
         self._next_v = 1
         self._name_lines: list[dict] = []
+        self.seen: list[dict] = []
 
     # ── load ──────────────────────────────────────────────────────────
 
@@ -122,7 +129,7 @@ class HistoryStore:
 
     def load(self) -> None:
         with self.lock:
-            self.versions, self._name_lines, self.names = [], [], {}
+            self.versions, self._name_lines, self.names, self.seen = [], [], {}, []
             if os.path.isfile(self.versions_path):
                 with open(self.versions_path, "rb") as f:
                     for raw in f:
@@ -134,7 +141,8 @@ class HistoryStore:
                         if not isinstance(rec, dict):
                             continue
                         self._ingest(rec)
-            self._next_v = max((int(v.get("v") or 0) for v in self.versions), default=0) + 1
+            self._next_v = max((int(v.get("v") or 0) for v in self.versions + self.seen),
+                               default=0) + 1
             self.index = self._read_index()
             if self.index is None:
                 self.index = self._rebuild_index()
@@ -152,6 +160,8 @@ class HistoryStore:
                 self.names.pop(key, None)
         elif kind in VERSION_KINDS and rec.get("path"):
             self.versions.append(rec)
+        elif kind == SEEN_KIND and rec.get("path"):
+            self.seen.append(rec)
 
     def _read_index(self) -> dict | None:
         try:
@@ -257,17 +267,25 @@ class HistoryStore:
                     kind = "modify" if cur is not None else "create"
                 self.put_blob(data, new_sha)
             added = removed = None
+            whole = False
             if not rules.is_office(path):
                 prev_data = self._safe_blob(prev_sha) if prev_sha else None
-                if kind == "baseline":
-                    added, removed = 0, 0
-                else:
-                    added, removed = diffing.count_changes(prev_data, data)
+                # Spec 196 D3: content without history (a created image moved
+                # in by an undo) is kept whole, never line-diffed.
+                whole = any(b is not None and rules.classify_bytes(path, b) is not None
+                            for b in (data, prev_data))
+                if not whole:
+                    if kind == "baseline":
+                        added, removed = 0, 0
+                    else:
+                        added, removed = diffing.count_changes(prev_data, data)
             rec = {
                 "v": self._next_v, "ts": ts or now_iso(), "path": path,
                 "sha": new_sha, "prev_sha": prev_sha, "kind": kind, "size": size,
                 "added": added, "removed": removed, "attrib": attrib,
             }
+            if whole:
+                rec["whole_file"] = True
             if extra:
                 rec.update(extra)
             self._next_v += 1
@@ -288,6 +306,22 @@ class HistoryStore:
             return self.get_blob(sha)
         except (OSError, zlib.error):
             return None
+
+    def record_seen(self, path: str, *, sha: str, size: int, mtime_ns: int | None,
+                    attrib: dict, ts: str | None = None) -> dict:
+        """Spec 196 D3: note that a session created ``path`` (a file
+        without history), with the hash undo checks against. No blob."""
+        with self.lock:
+            rec = {"v": self._next_v, "ts": ts or now_iso(), "path": path, "sha": sha,
+                   "kind": SEEN_KIND, "size": size, "mtime_ns": mtime_ns, "attrib": attrib}
+            self._next_v += 1
+            self._append_line(rec)
+            self.seen.append(rec)
+            return rec
+
+    def seen_for(self, path: str) -> list[dict]:
+        with self.lock:
+            return [r for r in self.seen if r["path"] == path]
 
     def set_name(self, path: str, sha: str, name: str) -> dict:
         with self.lock:
@@ -319,21 +353,28 @@ class HistoryStore:
             return any(
                 v.get("kind") != "baseline"
                 and (v.get("attrib") or {}).get("kind") != "orbital"
-                for v in self.versions
+                for v in self.versions + self.seen
             )
 
     # ── retention ─────────────────────────────────────────────────────
 
     def prune_if_needed(self) -> int:
-        """Size cap (§6): over the cap, drop the oldest versions first —
-        never a file's current version or a named version — and delete
-        blobs no remaining line references. Returns versions dropped."""
+        """Size cap (§6): over the cap, drop first the versions that stopped
+        being current earliest (by the ts of the same file's next version;
+        spec 196 D4) — never a file's current version or a named version —
+        and delete blobs no remaining line references. Append order would
+        drop a file's baseline first, which is the 'before' of its newest
+        turn. Returns versions dropped."""
         with self.lock:
             if self.total_bytes <= self.cap_bytes:
                 return 0
             target = int(self.cap_bytes * PRUNE_TARGET_FRACTION)
             latest: dict[str, int] = {}
+            superseded_at: dict[int, float] = {}
             for i, rec in enumerate(self.versions):
+                prev = latest.get(rec["path"])
+                if prev is not None:
+                    superseded_at[prev] = iso_to_epoch(rec.get("ts")) or 0.0
                 latest[rec["path"]] = i
             protected = set(latest.values())
             for i, rec in enumerate(self.versions):
@@ -348,11 +389,12 @@ class HistoryStore:
             drop: set[int] = set()
             freed: list[str] = []
             est = self.total_bytes
-            for i, rec in enumerate(self.versions):
+            order = sorted((i for i in superseded_at if i not in protected),
+                           key=lambda i: (superseded_at[i], i))
+            for i in order:
                 if est <= target:
                     break
-                if i in protected:
-                    continue
+                rec = self.versions[i]
                 drop.add(i)
                 est -= 200  # its jsonl line, roughly
                 sha = rec.get("sha")
@@ -370,7 +412,9 @@ class HistoryStore:
             kept_keys = {(v["path"], v.get("sha")) for v in self.versions}
             self._name_lines = [n for n in self._name_lines
                                 if (n.get("path"), n.get("sha")) in kept_keys]
-            lines = self.versions + self._name_lines
+            # Spec 196 D3: seen lines are carried through (a few hundred bytes
+            # each, one per created file; no blob to free).
+            lines = self.versions + self._name_lines + self.seen
             lines.sort(key=lambda r: (iso_to_epoch(r.get("ts")) or 0.0))
             body = b"".join(
                 (json.dumps(r, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")

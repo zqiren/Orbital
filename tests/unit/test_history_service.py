@@ -342,6 +342,28 @@ class TestRestore:
         assert res[0]["status"] == "ok" and not (ws / "made.md").exists()
         assert svc.get_project("p1").store.get_blob(sha256(b"by the turn\n")) == b"by the turn\n"
 
+    async def test_undo_latest_turn_at_the_cap(self, ws, svc):
+        """Spec 196 D4, end to end: a store pruned at its cap still undoes
+        the newest turn on a file whose 'before' is its baseline."""
+        from agent_os.history import views
+        store = svc.get_project("p1").store
+        base = versions(svc, "p1", "notes.md")[0]
+        assert base["kind"] == "baseline"
+        for _ in range(10):  # another file churned, all of it superseded earlier
+            write_and_record(str(ws / "draft.md"), os.urandom(800).hex().encode(), {"kind": "outside"})
+        t0 = time.time()
+        write_and_record(str(ws / "notes.md"), b"the turn's rewrite\n", tool_attrib("sess-T", "codex"))
+        with store.lock:  # the store reaches its cap; the next flush prunes
+            store.cap_bytes = int(store.total_bytes * 0.8)
+            assert store.prune_if_needed() > 0
+        res = views.turn_files(store, views.SessionIndex(str(ws)), "sess-T", t0 - 1, None)
+        row = next(f for f in res["files"] if f["path"] == "notes.md")
+        assert row["before_sha"] == base["sha"]
+        out = await asyncio.to_thread(svc.restore, "p1", [
+            {"path": "notes.md", "sha": row["before_sha"], "expect_sha": row["current_sha"]}])
+        assert out[0]["status"] == "ok", out[0]
+        assert (ws / "notes.md").read_bytes() == b"# notes\nline one\n"
+
     async def test_busy_when_replace_is_denied(self, ws, svc, monkeypatch):
         base = versions(svc, "p1", "notes.md")[0]
         (ws / "notes.md").write_text("locked\n", newline="\n")
@@ -486,3 +508,130 @@ class TestLifecycle:
             assert not versions(s, "outer", "inner/own.md")
         finally:
             await s.stop()
+
+
+class TestCreatedBinaries:
+    """Spec 196 D3: a file the agent CREATED of a type without history
+    (image, PDF, video, text over 1 MB), up to 20 MB, becomes undoable. A
+    metadata-only "seen" line notes the creation (no blob); undoing it moves
+    the file into the store before removing it, so the delete is itself
+    undoable. Overwrites and deletes of such files stay out."""
+
+    PNG = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR" + os.urandom(40_000)
+
+    @staticmethod
+    def turn(svc, sid, t0):
+        from agent_os.history import views
+        proj = svc.get_project("p1")
+        return views.turn_files(proj.store, views.SessionIndex(str(proj.workspace)), sid, t0, None,
+                                list(proj.skip_events))
+
+    async def test_agent_created_image_is_listed_undone_and_kept(self, ws, svc):
+        t0 = time.time() - 1
+        svc.running.now["p1"] = [("sess-A", ["codex"])]
+        (ws / "charts").mkdir()
+        (ws / "charts" / "价格对比.png").write_bytes(self.PNG)
+        store = svc.get_project("p1").store
+        assert await until(lambda: store.seen_for("charts/价格对比.png"))
+        assert not store.has_blob(sha256(self.PNG))  # nothing copied at creation
+        res = self.turn(svc, "sess-A", t0)
+        row = next(f for f in res["files"] if f["path"] == "charts/价格对比.png")
+        assert row["kind"] == "create" and row["before_sha"] is None
+        assert row["turn_sha"] == row["current_sha"] == sha256(self.PNG) and row["clean"]
+        assert row["whole_file_only"] and row["lines"] is None
+        assert res["no_history"] == 0  # listed, so not counted as "no history"
+        assert store.has_changes()
+        svc.running.now["p1"] = []
+        out = await asyncio.to_thread(svc.restore, "p1", [
+            {"path": row["path"], "sha": None, "expect_sha": row["current_sha"]}])
+        assert out[0]["status"] == "ok"
+        assert not (ws / "charts" / "价格对比.png").exists()
+        # moved into the store first: the delete is undoable, byte-identical
+        assert store.get_blob(sha256(self.PNG)) == self.PNG
+        vs = versions(svc, "p1", "charts/价格对比.png")
+        assert [v["kind"] for v in vs] == ["create", "delete"]
+        assert vs[1]["prev_sha"] == sha256(self.PNG) and vs[0].get("whole_file") is True
+        back = await asyncio.to_thread(svc.restore, "p1", [
+            {"path": row["path"], "sha": sha256(self.PNG), "expect_sha": None}])
+        assert back[0]["status"] == "ok"
+        assert (ws / "charts" / "价格对比.png").read_bytes() == self.PNG
+
+    async def test_a_preexisting_binary_changed_by_the_agent_is_not_a_creation(self, ws, svc):
+        t0 = time.time() - 1
+        svc.running.now["p1"] = [("sess-A", ["codex"])]
+        (ws / "pic.png").write_bytes(b"\x89PNG\x00overwritten" * 100)  # existed at baseline
+        proj = svc.get_project("p1")
+        assert await until(lambda: any(e["path"] == "pic.png" for e in proj.skip_events))
+        await asyncio.sleep(QUIET * 2)
+        assert not proj.store.seen_for("pic.png")
+        res = self.turn(svc, "sess-A", t0)
+        assert not [f for f in res["files"] if f["path"] == "pic.png"]
+        assert res["no_history"] == 1  # the honest footer, as before
+
+    async def test_over_20mb_creation_stays_out(self, ws, svc):
+        t0 = time.time() - 1
+        svc.running.now["p1"] = [("sess-A", ["codex"])]
+        (ws / "render.mp4").write_bytes(b"\x00\x00\x00\x18ftypmp42" + b"\x00" * (rules.OFFICE_MAX_BYTES + 1))
+        proj = svc.get_project("p1")
+        assert await until(lambda: any(e["path"] == "render.mp4" for e in proj.skip_events), timeout=12)
+        assert not proj.store.seen_for("render.mp4")
+        res = self.turn(svc, "sess-A", t0)
+        assert not res["files"] and res["no_history"] == 1
+        # the restore route never deletes it either (no conflict check possible)
+        out = await asyncio.to_thread(svc.restore, "p1", [
+            {"path": "render.mp4", "sha": None, "expect_sha": None}])
+        assert out[0]["status"] == "refused" and out[0]["reason"] == "too_large"
+        assert (ws / "render.mp4").exists()
+
+    async def test_a_creation_overwritten_later_comes_up_changed_and_is_refused(self, ws, svc):
+        t0 = time.time() - 1
+        svc.running.now["p1"] = [("sess-A", ["codex"])]
+        (ws / "logo.png").write_bytes(self.PNG)
+        store = svc.get_project("p1").store
+        assert await until(lambda: store.seen_for("logo.png"))
+        svc.running.now["p1"] = [("sess-B", ["claude-code"])]
+        later = b"\x89PNG\x00redrawn" * 500
+        (ws / "logo.png").write_bytes(later)
+        await asyncio.sleep(QUIET * 3)
+        row = next(f for f in self.turn(svc, "sess-A", t0)["files"] if f["path"] == "logo.png")
+        assert not row["clean"] and row["current_sha"] == sha256(later)
+        assert row["later_editor"] is not None
+        out = await asyncio.to_thread(svc.restore, "p1", [
+            {"path": "logo.png", "sha": None, "expect_sha": row["turn_sha"]}])
+        assert out[0]["status"] == "conflict"
+        assert (ws / "logo.png").read_bytes() == later
+        # the second session's overwrite is not its creation
+        assert not [f for f in self.turn(svc, "sess-B", t0)["files"] if f["path"] == "logo.png"]
+
+    async def test_deleted_then_made_again_is_a_creation_again(self, ws, svc):
+        t0 = time.time() - 1
+        svc.running.now["p1"] = [("sess-A", ["codex"])]
+        store = svc.get_project("p1").store
+        (ws / "a.pdf").write_bytes(b"%PDF-1.7\x00one" * 100)
+        assert await until(lambda: len(store.seen_for("a.pdf")) == 1)
+        os.remove(ws / "a.pdf")
+        await asyncio.sleep(QUIET * 3)
+        svc.running.now["p1"] = [("sess-B", ["codex"])]
+        (ws / "a.pdf").write_bytes(b"%PDF-1.7\x00two" * 100)
+        assert await until(lambda: len(store.seen_for("a.pdf")) == 2)
+        row = next(f for f in self.turn(svc, "sess-B", t0)["files"] if f["path"] == "a.pdf")
+        assert row["kind"] == "create" and row["clean"]
+
+    async def test_seen_lines_survive_restart(self, ws):
+        running = Running()
+        s = FileHistory(FakeProjects(p1=ws), running, quiet=QUIET, max_wait=3.0, reconcile_every=0)
+        await s.start()
+        await s.wait_ready("p1")
+        running.now["p1"] = [("sess-A", ["codex"])]
+        (ws / "shot.png").write_bytes(self.PNG)
+        assert await until(lambda: s.get_project("p1").store.seen_for("shot.png"))
+        await s.stop()
+        s2 = FileHistory(FakeProjects(p1=ws), Running(), quiet=QUIET, reconcile_every=0)
+        await s2.start()
+        await s2.wait_ready("p1")
+        try:
+            assert s2.get_project("p1").store.seen_for("shot.png")
+            # the restart's reconcile found it as an existing file: no second line
+            assert len(s2.get_project("p1").store.seen_for("shot.png")) == 1
+        finally:
+            await s2.stop()

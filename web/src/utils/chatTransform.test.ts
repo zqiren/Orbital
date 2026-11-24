@@ -2691,6 +2691,32 @@ describe('transformChatHistory — import and worker-onboarding rows', () => {
     }]);
   });
 
+  it('spec 196 D2: the files_restored row is for the agent only: nothing drawn, no capsule split', () => {
+    const note = daemon(
+      'The user put these files back to how they were before 2026-11-24 10:02 UTC: notes.md. Re-read them before relying on earlier edits.',
+      { event: 'files_restored', suppress_wake: true, paths: ['notes.md'], to_before: TS },
+      TS2,
+    );
+    const tc = (id: string) => ({ id, type: 'function', function: { name: 'read', arguments: '{"path":"a.md"}' } });
+    const rows = (withNote: boolean) => [
+      user('edit notes', TS),
+      { role: 'assistant', source: 'management', content: null, timestamp: TS, tool_calls: [tc('c1')] } as unknown as ChatMessage,
+      { role: 'tool', source: 'management', content: 'ok', timestamp: TS, tool_call_id: 'c1' } as ChatMessage,
+      // deferred mid-run: lands between two tool batches
+      ...(withNote ? [note] : []),
+      { role: 'assistant', source: 'management', content: null, timestamp: TS2, tool_calls: [tc('c2')] } as unknown as ChatMessage,
+      { role: 'tool', source: 'management', content: 'ok', timestamp: TS2, tool_call_id: 'c2' } as ChatMessage,
+      { role: 'assistant', source: 'management', content: 'done', timestamp: TS3 } as ChatMessage,
+      // appended while idle: after the reply
+      ...(withNote ? [note] : []),
+      user('next', TS3),
+    ];
+    const withNote = transformChatHistory(rows(true));
+    expect(withNote).toEqual(transformChatHistory(rows(false)));
+    expect(withNote.filter((it) => it.type === 'agent_run')).toHaveLength(1);
+    expect(JSON.stringify(withNote)).not.toContain('put these files back');
+  });
+
   it('spec 180: a session moved twice keeps both dividers in place', () => {
     const items = transformChatHistory([
       daemon('moved', { event: 'session_moved', from: { project_id: 'a', name: 'A' }, to: { project_id: 'b', name: 'B' } }, TS),

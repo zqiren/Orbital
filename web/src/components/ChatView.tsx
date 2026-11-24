@@ -86,7 +86,7 @@ import { publishSessionMessages, sessionMessagesKey } from '../utils/sessionMess
 import { budgetTimelineText } from '../budget/timelineText';
 import TurnChangedLine from './history/TurnChangedLine';
 import { isMemoryFile, lastCapsuleOfTurns, stripFileEditCounts } from './history/historyModel';
-import { historyApi, requestHistoryFocus, useCapsuleTurn, useSeenOnce } from '../hooks/useFileHistory';
+import { historyApi, historyVisible, requestHistoryFocus, useCapsuleTurn, useHistoryStatus, useSeenOnce } from '../hooks/useFileHistory';
 import type { TurnRef } from './history/TurnUndoSheet';
 import { classifySessionName } from '../lib/sessionLabel';
 import { parseTriggerHeader } from '../lib/trigger-parsing';
@@ -2334,6 +2334,13 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   // Edit opens a fork (it navigates) and may offer 065's sheet (the parent
   // mounts it): both must be wired. The Workbench pane wires neither.
   const editWired = sessionId !== undefined && onOpenSession !== undefined && onUndoTurn !== undefined;
+  // Spec 196 D1: 撤销这条消息之后的修改 under the user's own messages, by the
+  // same gates as 修改 (idle, persisted human input), once the project's
+  // history is watching and has recorded a change. Opens 065's sheet for the
+  // message to now; no age or session limit, no rewind, no second dialog.
+  const undoWired = sessionId !== undefined && onUndoTurn !== undefined;
+  const historyStatus = useHistoryStatus(undoWired ? projectId : undefined);
+  const undoSinceOk = undoWired && historyStatus?.status === 'watching' && historyVisible(projectId, historyStatus);
 
   // The latest turn: the last user row in the loaded items, when it is a
   // persisted human input (not optimistic or queued, not an automation run or
@@ -2375,11 +2382,13 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     cancel: () => void;
     send: (m: MessageRow, body: string) => void;
     retry: () => Promise<unknown>;
+    undoSince: (m: MessageRow) => void;
   } | null>(null);
   const onEditMessage = useCallback((m: MessageRow) => actionHandlersRef.current?.edit(m), []);
   const onEditCancel = useCallback(() => actionHandlersRef.current?.cancel(), []);
   const onEditSend = useCallback((m: MessageRow, body: string) => actionHandlersRef.current?.send(m, body), []);
   const onRetryMessage = useCallback(() => actionHandlersRef.current?.retry(), []);
+  const onUndoSinceMessage = useCallback((m: MessageRow) => actionHandlersRef.current?.undoSince(m), []);
   // An edit whose 065 sheet is open: cancelling the editor closes it too.
   const editSheetOpenRef = useRef(false);
 
@@ -2470,6 +2479,10 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         }
         go();
       })();
+    },
+    undoSince: (m) => {
+      if (sessionId === undefined || actionStateRef.current.sessionBusy) return;
+      onUndoTurn?.({ sessionId, fromTs: m.timestamp, toTs: null, since: true });
     },
     retry: async () => {
       // 164 §2.3: re-checked at click time; the latest input, raw, to its
@@ -4505,6 +4518,8 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                   onEditSend={onEditSend}
                   onRetry={onRetryMessage}
                   queuedHint={queuedHintFor(item)}
+                  canUndoSince={undoSinceOk && !sessionBusy && isPersistedHumanInput(item, optimisticTsRef.current)}
+                  onUndoSince={onUndoSinceMessage}
                 />
               );
             } else if (item.type === 'dispatch_card') {

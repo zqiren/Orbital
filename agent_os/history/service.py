@@ -505,17 +505,59 @@ class FileHistory:
         store = proj.store
         abs_path = os.path.join(proj.workspace, rel)
         if not os.path.isfile(abs_path):
-            if not os.path.lexists(abs_path) and store.current(rel) is not None:
-                store.record(rel, None, attrib=attrib, ts=ts, save_index=False)
+            if not os.path.lexists(abs_path):
+                # a file without history that is gone: making it again is a
+                # creation again (spec 196 D3)
+                proj.skipped.pop(rel, None)
+                proj.skip_cache.pop(rel, None)
+                if store.current(rel) is not None:
+                    store.record(rel, None, attrib=attrib, ts=ts, save_index=False)
             return
         if not self._is_member(proj, rel, relisted):
             return
         data, st = self._read_settled(abs_path)
         reason = rules.classify_bytes(rel, data)
         if reason:
-            proj.note_skip(rel, reason, ts, attrib)
+            self._note_skip(proj, rel, reason, ts, attrib, abs_path, st)
             return
         store.record(rel, data, attrib=attrib, ts=ts, mtime_ns=st.st_mtime_ns, save_index=False)
+
+    @staticmethod
+    def _note_skip(proj: _Project, rel: str, reason: str, ts: str, attrib: dict,
+                   abs_path: str, st) -> None:
+        """A live change to a file without history. Spec 196 D3: when a
+        session CREATED it (no record, not known as skipped from a listing
+        or an earlier event) and it is at most 20 MB, a seen line notes its
+        hash so undo can remove it (moving it into the store first). A file
+        that already existed, or anything over 20 MB, stays the honest
+        footer count. Under the store lock (the caller holds it)."""
+        known = rel in proj.skipped
+        proj.note_skip(rel, reason, ts, attrib)
+        if (known or proj.store is None or proj.store.current(rel) is not None
+                or not attrib.get("sessions") or st.st_size > rules.CREATED_MAX_BYTES):
+            return
+        sha = FileHistory._hash_settled(abs_path, st)
+        if sha is None:
+            return  # still changing: the next settle sees it as known (an overwrite)
+        proj.store.record_seen(rel, sha=sha, size=st.st_size, mtime_ns=st.st_mtime_ns,
+                               attrib=attrib, ts=ts)
+
+    @staticmethod
+    def _hash_settled(abs_path: str, st) -> str | None:
+        """sha256 of the whole file, streamed; None when it changed while
+        being read."""
+        import hashlib
+        h = hashlib.sha256()
+        try:
+            with open(abs_path, "rb") as f:
+                for chunk in iter(lambda: f.read(1 << 20), b""):
+                    h.update(chunk)
+            st2 = os.stat(abs_path)
+        except OSError:
+            return None
+        if (st.st_size, st.st_mtime_ns) != (st2.st_size, st2.st_mtime_ns):
+            return None
+        return h.hexdigest()
 
     @staticmethod
     def _read_settled(abs_path: str):
@@ -641,7 +683,7 @@ class FileHistory:
             return  # the watcher's flush records it
         reason = rules.classify_bytes(rel, data)
         if reason:
-            proj.note_skip(rel, reason, now_iso(), attrib)
+            self._note_skip(proj, rel, reason, now_iso(), attrib, abs_path, st)
             return
         store.record(rel, data, attrib=attrib, mtime_ns=st.st_mtime_ns)
 
@@ -692,6 +734,15 @@ class FileHistory:
         if rules.is_denied(rel, proj.nested):
             return {**out, "status": "refused", "reason": "not_tracked"}
         with store.lock:
+            if store.current(rel) is None:
+                # Spec 196 D3: a file without history is read whole into
+                # memory below (hash check, then moved into the store); over
+                # 20 MB that is refused rather than done blind.
+                try:
+                    if os.path.getsize(abs_path) > rules.CREATED_MAX_BYTES:
+                        return {**out, "status": "refused", "reason": "too_large"}
+                except OSError:
+                    pass
             try:
                 cur = self._read_current(abs_path)
             except PermissionError:

@@ -203,15 +203,17 @@ def version_view(store: HistoryStore, rel: str, idx: SessionIndex, *, sha: str |
     if target.get("kind") == "baseline" and base_rec is None:
         base_rec, chain_recs = target, []
     editors = [editor_of(r, idx) for r in chain_recs]
+    # Spec 196 D3: an image an undo moved into the store is whole, like Office.
+    whole = rules.is_office(rel) or any(r.get("whole_file") for r in (target, base_rec) if r)
     out = {
         "path": rel, "v": target.get("v"), "sha": target.get("sha"),
         "from_v": base_rec.get("v") if base_rec else None,
         "from_sha": base_rec.get("sha") if base_rec else None,
-        "editors": editors, "whole_file_only": rules.is_office(rel),
+        "editors": editors, "whole_file_only": whole,
         "size": target.get("size"),
         "from_size": base_rec.get("size") if base_rec else None,
     }
-    if rules.is_office(rel):
+    if whole:
         out.update({"lines": [], "first_change": None})
         return out
     base = _blob(store, base_rec.get("sha")) if base_rec else None
@@ -281,6 +283,7 @@ def turn_files(store: HistoryStore, idx: SessionIndex, session_id: str, from_ts:
             "first_v": first.get("v"), "last_v": last.get("v"),
             "editor": editor_of(last, idx),
         })
+    seen_paths = _seen_rows(store, idx, session_id, from_ts, end, recs, index, by_path, files)
     files.sort(key=lambda f: f["first_v"] or 0)
     no_history = set()
     for ev in skip_events:
@@ -289,6 +292,74 @@ def turn_files(store: HistoryStore, idx: SessionIndex, session_id: str, from_ts:
             continue
         if any(s.get("session_id") == session_id for s in (ev.get("attrib") or {}).get("sessions") or []):
             no_history.add(ev["path"])
+    no_history -= seen_paths
     return {"session_id": session_id, "session_name": idx.name(session_id),
             "from_ts": from_ts, "to_ts": to_ts, "files": files,
             "no_history": len(no_history)}
+
+
+# ── spec 196 D3: created files without history ─────────────────────────
+
+_CHANGED_LATER = {"v": None, "ts": None, "kind": "outside", "agents": [], "ambiguous": False,
+                  "session_id": None, "session_name": None, "neutral": True}
+
+
+def _seen_rows(store: HistoryStore, idx: SessionIndex, session_id: str, from_ts: float,
+               end: float, recs: list[dict], index: dict, by_path: dict, files: list) -> set:
+    """Rows for files the session created in the span that have no history
+    (an image, a PDF, a video up to 20 MB): kind ``create``, unchecked in the
+    sheet, restore = remove (the restore moves it into the store first).
+    ``current_sha`` comes from the file itself: its stat when unchanged since
+    the seen line, else its hash. Returns the paths listed."""
+    with store.lock:
+        seen = list(store.seen)
+    last: dict[str, dict] = {}
+    for rec in seen:
+        t = iso_to_epoch(rec.get("ts"))
+        if t is None or t < from_ts or t >= end:
+            continue
+        if not any(s.get("session_id") == session_id for s in sessions_of(rec)):
+            continue
+        if rec["path"] in by_path:
+            continue  # it has versions in the span: those rows tell it
+        last[rec["path"]] = rec
+    for path, rec in last.items():
+        seen_t = iso_to_epoch(rec.get("ts")) or 0.0
+        later = [r for r in recs if r["path"] == path and (iso_to_epoch(r.get("ts")) or 0.0) >= seen_t]
+        if later or path in index:
+            current_sha = (index.get(path) or {}).get("sha")  # an undo already took it in
+        else:
+            current_sha = _current_sha(store.workspace, path, rec)
+        clean = current_sha == rec.get("sha")
+        files.append({
+            "path": path, "kind": "create", "added": None, "removed": None, "lines": None,
+            "before_sha": None, "turn_sha": rec.get("sha"), "current_sha": current_sha,
+            "before_size": None, "turn_size": rec.get("size"),
+            "clean": clean,
+            "later_editor": (editor_of(later[-1], idx) if later else dict(_CHANGED_LATER)) if not clean else None,
+            "ambiguous": is_ambiguous(rec), "whole_file_only": True, "no_blob": True,
+            "first_v": rec.get("v"), "last_v": rec.get("v"),
+            "editor": editor_of(rec, idx),
+        })
+    return set(last)
+
+
+def _current_sha(workspace: str, rel: str, rec: dict) -> str | None:
+    import hashlib
+    abs_path = os.path.join(workspace, rel)
+    try:
+        st = os.stat(abs_path)
+    except OSError:
+        return None
+    if st.st_size == rec.get("size") and st.st_mtime_ns == rec.get("mtime_ns"):
+        return rec.get("sha")
+    if st.st_size > rules.CREATED_MAX_BYTES:
+        return f"size:{st.st_size}"  # never equal to a hash: a conflict, not a guess
+    h = hashlib.sha256()
+    try:
+        with open(abs_path, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
+    except OSError:
+        return None
+    return h.hexdigest()
