@@ -11,6 +11,7 @@ prefix and transcript path.
 
 import logging
 import json
+from datetime import datetime, timezone
 
 from agent_os import telemetry
 from agent_os.telemetry.diagnostics import classify_stderr
@@ -20,6 +21,21 @@ logger = logging.getLogger(__name__)
 # Spec 161: ``initiator`` prefix of a dispatch the top-of-session worker made
 # (mirrors dispatch_tools.WORKER_INITIATOR_PREFIX).
 _WORKER_PREFIX = "worker:"
+
+
+def _limit_clause(resets_at: str | None) -> str:
+    """Spec 197: the one normalised clause the manager reads on a worker's
+    usage-limit row (the row lands at the conversation tail, so nothing
+    cached changes). The time is this machine's local clock."""
+    if resets_at:
+        try:
+            at = datetime.fromisoformat(resets_at.replace("Z", "+00:00")).astimezone()
+        except ValueError:
+            at = None
+        if at is not None:
+            return (f"Usage limit reached; back at {at:%H:%M} local time "
+                    f"({at:%Y-%m-%d}).")
+    return "Usage limit reached; reset time unknown."
 
 
 def _did_not_finish(child: str, reason: str) -> str:
@@ -420,6 +436,10 @@ class LifecycleObserver:
         """Sub-agent finished its current task."""
         from agent_os.daemon_v2.recap import REPLY_CAP_CHARS
 
+        # Spec 197: a finished turn is the agent's own word that it is not
+        # limited (a no-op unless it is).
+        from agent_os.daemon_v2.quota_store import note_turn_success
+        note_turn_success(handle)
         summary_text = summary[:500] if summary else "(no output)"
         # The chat is one conversation: the manager (and, through the recap
         # block, every later worker) reads the worker's FULL reply off this
@@ -527,6 +547,9 @@ class LifecycleObserver:
         """
         from agent_os.daemon_v2.recap import REPLY_CAP_CHARS
 
+        if cause == "success":
+            from agent_os.daemon_v2.quota_store import note_turn_success
+            note_turn_success(handle)
         summary_text = summary[:500] if summary else "(no output)"
         reply_text = summary.strip()[:REPLY_CAP_CHARS] if summary and summary.strip() else "(no output)"
         display_content = (
@@ -574,6 +597,15 @@ class LifecycleObserver:
         """
         extra = {k: v for k, v in (detail or {}).items()
                  if k in ("reason", "name") and isinstance(v, str) and v}
+        # Spec 197: a failure on the agent's usage limit records the one
+        # limited fact (quota store) and gives the row the reset, computed
+        # here once from the reading or the vendor's sentence. The row keeps
+        # the vendor's words; the manager gets one short clause ahead of them.
+        from agent_os.daemon_v2.quota_store import note_turn_failure
+        limit = note_turn_failure(handle, error, reason=extra.get("reason"),
+                                  at=datetime.now(timezone.utc).isoformat())
+        if limit is not None:
+            extra.update(limit)
         # Spec 113 A2/A3: the reason enum for the ping, and one local log
         # line (the on_failed call sites already log; this path never did).
         telemetry.emit("subagent_failed", {
@@ -582,7 +614,9 @@ class LifecycleObserver:
         })
         logger.warning("sub-agent %s stopped with error in %s/%s: %s",
                        handle, project_id, session_id, error)
-        content = f"[Sub-agent] {handle} stopped with error: {error}. Transcript: {transcript_path}"
+        clause = f"{_limit_clause(limit['resets_at'])} " if limit is not None else ""
+        content = (f"[Sub-agent] {handle} stopped with error: {clause}{error}. "
+                   f"Transcript: {transcript_path}")
         pinned = self._is_pinned_dispatch(project_id, handle, session_id)
         parent = self._parent_for(project_id, handle, session_id)
         # A worker that errored out IS the assigned item's outcome: the

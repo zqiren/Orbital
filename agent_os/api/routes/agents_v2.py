@@ -2011,6 +2011,15 @@ async def inject_message(project_id: str, req: InjectRequest):
                 k: start_meta[k] for k in ("reason", "min_version", "version")
                 if start_meta.get(k) is not None
             })
+            # Spec 197: a start refused on the agent's usage limit. Text only
+            # (nothing structured reaches this site); same helper and same
+            # row fields as a turn that failed on the limit.
+            if not start_meta.get("reason"):
+                from agent_os.daemon_v2.quota_store import note_turn_failure
+                limit = note_turn_failure(req.target, result,
+                                          at=failure_row["timestamp"])
+                if limit is not None:
+                    failure_row["_meta"].update(limit)
             try:
                 await _retry_session_lock(
                     lambda: _agent_manager.persist_mention_message(

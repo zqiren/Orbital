@@ -327,6 +327,25 @@ describe('PinTargetSelect — usage + availability (spec 099)', () => {
     expect(dot('claude-code')?.dataset.color).toBe('red');
   });
 
+  it('any agent that hit its limit gets the red dot and the reset (spec 197)', () => {
+    act(() => setAgentAvailability([
+      { slug: 'cursor', name: 'Cursor', installed: true, ready: true,
+        quota: { agent: 'cursor', observed_at: ago(1), plan: null, limited: true,
+          windows: [], resets_at: inH(3) } },
+      { slug: 'kimi-code', name: 'Kimi Code', installed: true, ready: true,
+        quota: { agent: 'kimi-code', observed_at: ago(1), plan: null, limited: true,
+          windows: [], resets_at: inH(-1) } },
+    ]));
+    render(<PinTargetSelect agents={[{ slug: 'cursor', name: 'Cursor' }, { slug: 'kimi-code', name: 'Kimi Code' }]}
+      value="cursor" onChange={() => {}} />);
+    open();
+    expect(line('cursor').textContent).toBe('Limit reached · 22:00');
+    expect(dot('cursor')?.dataset.color).toBe('red');
+    // A passed reset is void: no mark at all.
+    expect(screen.queryByTestId('pin-quota-kimi-code')).toBeNull();
+    expect(dot('kimi-code')).toBeNull();
+  });
+
   it('claude-code with no snapshot says so; a not-ready agent gets the grey dot', () => {
     act(() => setAgentAvailability([{ ...FOUR[0], quota: undefined }, FOUR[3]]));
     render(<PinTargetSelect agents={[ROWS[0], ROWS[3]]} value={null} onChange={() => {}} />);

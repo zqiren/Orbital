@@ -26,6 +26,19 @@ usage capture), and the store's change hook broadcasts
 ``agent.quota_updated``. Neither payload is a stable public contract, so
 every parse is defensive: a malformed field drops that window and nothing
 here ever raises into a turn.
+
+Spec 197 adds ONE limited fact per agent, for every agent, not only these
+two: ``limited`` plus a top-level ``resets_at`` (ISO-8601 UTC, or None when
+unknown) on the agent's entry. Newest observation wins: a reading writes it
+(claude ``rejected`` without paid overage; codex ``rateLimitReachedType``),
+and so does a turn that failed on the limit (:func:`note_turn_failure`, called
+at the one terminal route every transport ends in). It is void once
+``resets_at`` has passed (checked on read, no timer), and it clears on the
+agent's next successful turn, on a fresh not-limited reading, and on an
+account switch. Only a KNOWN future reset changes Orbital's own picks
+(:func:`prefer_not_limited`); an unknown one shows, but never keeps an agent
+out. An agent outside claude-code/codex holds a limit-only entry
+(``windows: []``), which an older build reads as "Limit reached".
 """
 
 from __future__ import annotations
@@ -42,7 +55,9 @@ from typing import Any, Awaitable, Callable
 
 logger = logging.getLogger(__name__)
 
-QUOTA_AGENTS = ("claude-code", "codex")
+# Claude keeps working on paid extra usage when its plan window is rejected
+# (the Python SDK models ``overageStatus`` only; T3 Code's rule).
+_CLAUDE_OVERAGE_OK = ("allowed", "allowed_warning")
 
 # claude ``unifiedWindows`` keys -> snapshot window kinds. ``overage`` is a
 # pay-as-you-go state, not a subscription window.
@@ -131,7 +146,8 @@ def normalize_claude_rate_limit(info: Any, *, status: str | None = None,
                         raw.get("resetsAt"))
             if w is not None:
                 windows.append(w)
-    limited = status == "rejected"
+    overage = getattr(info, "overage_status", None) or raw.get("overageStatus")
+    limited = status == "rejected" and overage not in _CLAUDE_OVERAGE_OK
     if not windows and not limited:
         return None
     return {
@@ -140,6 +156,8 @@ def normalize_claude_rate_limit(info: Any, *, status: str | None = None,
         "plan": None,
         "limited": limited,
         "windows": windows,
+        "resets_at": (_ts_iso(getattr(info, "resets_at", None) or raw.get("resetsAt"))
+                      if limited else None),
     }
 
 
@@ -176,7 +194,35 @@ def normalize_codex_snapshot(snapshot: Any, *,
         "plan": plan if isinstance(plan, str) and plan else None,
         "limited": limited,
         "windows": windows,
+        "resets_at": _full_window_reset(windows) if limited else None,
     }
+
+
+def _full_window_reset(windows: list[dict], now: float | None = None) -> str | None:
+    """The reset of an exhausted window: every window at 100 % must reset
+    before the agent runs again, so the latest of their resets (T3 Code's
+    rule). None when no exhausted window names a future reset."""
+    now = time.time() if now is None else now
+    resets = []
+    for w in windows or []:
+        if not isinstance(w, dict) or (w.get("used_pct") or 0) < 100:
+            continue
+        epoch = _iso_epoch(w.get("resets_at"))
+        if epoch is not None and epoch > now:
+            resets.append((epoch, w["resets_at"]))
+    return max(resets)[1] if resets else None
+
+
+def _iso_epoch(value: Any) -> float | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.timestamp()
 
 
 def pick_codex_snapshot(read_result: Any) -> dict | None:
@@ -192,9 +238,26 @@ def pick_codex_snapshot(read_result: Any) -> dict | None:
 
 
 def _valid_snapshot(agent: str, snap: Any) -> bool:
-    return (agent in QUOTA_AGENTS and isinstance(snap, dict)
+    # Spec 197: any agent may hold a limit (a limit-only entry for agents
+    # without a quota reading). An older daemon still loads only
+    # claude-code/codex and silently drops the rest, which is harmless.
+    return (isinstance(agent, str) and bool(agent)
+            and not agent.startswith("worker:") and isinstance(snap, dict)
             and isinstance(snap.get("windows"), list)
             and isinstance(snap.get("observed_at"), str))
+
+
+def _effective(snap: dict | None, now: float) -> dict | None:
+    """The entry as it reads NOW: a limit whose reset has passed is void
+    (a limit-only entry then says nothing at all)."""
+    if snap is None or not snap.get("limited"):
+        return snap
+    epoch = _iso_epoch(snap.get("resets_at"))
+    if epoch is None or epoch > now:
+        return snap
+    if not snap.get("windows") and not snap.get("plan"):
+        return None
+    return {**snap, "limited": False, "resets_at": None}
 
 
 def _observed_epoch(snap: dict) -> float | None:
@@ -235,12 +298,32 @@ class QuotaStore:
 
     def get(self, agent: str) -> dict | None:
         with self._lock:
-            snap = self._snapshots.get(agent)
+            snap = _effective(self._snapshots.get(agent), self._clock())
             return dict(snap) if snap is not None else None
 
     def snapshots(self) -> dict[str, dict]:
+        now = self._clock()
         with self._lock:
-            return {k: dict(v) for k, v in self._snapshots.items()}
+            out = {}
+            for k, v in self._snapshots.items():
+                eff = _effective(v, now)
+                if eff is not None:
+                    out[k] = dict(eff)
+            return out
+
+    def is_limited(self, agent: str) -> bool:
+        """Limited now (a known future reset, or an unknown one)."""
+        snap = self.get(agent)
+        return bool(snap and snap.get("limited"))
+
+    def avoids(self, agent: str) -> bool:
+        """Orbital's own picks pass this agent over: limited with a KNOWN
+        reset still ahead. An unknown reset never keeps an agent out."""
+        snap = self.get(agent)
+        if not snap or not snap.get("limited"):
+            return False
+        epoch = _iso_epoch(snap.get("resets_at"))
+        return epoch is not None and epoch > self._clock()
 
     def age_seconds(self, agent: str) -> float | None:
         snap = self.get(agent)
@@ -256,6 +339,33 @@ class QuotaStore:
             self._snapshots[agent] = dict(snapshot)
         self._persist()
         self._notify(agent, dict(snapshot))
+
+    def mark_limited(self, agent: str, resets_at: str | None) -> None:
+        """A turn failed on the agent's usage limit: the newest observation,
+        so it replaces the limit fact; known windows and plan are kept."""
+        if not isinstance(agent, str) or not agent or agent.startswith("worker:"):
+            return
+        prior = self.get(agent) or {}
+        self.record(agent, {
+            "agent": agent,
+            "observed_at": _now_iso(self._clock),
+            "plan": prior.get("plan"),
+            "limited": True,
+            "windows": list(prior.get("windows") or []),
+            "resets_at": resets_at if isinstance(resets_at, str) and resets_at else None,
+        })
+
+    def clear_limit(self, agent: str) -> None:
+        """The agent just finished a turn: it is not limited. A no-op (no
+        write, no broadcast) unless it is limited now, since this runs on
+        every successful turn of every agent."""
+        snap = self.get(agent)
+        if not snap or not snap.get("limited"):
+            return
+        if not snap.get("windows") and not snap.get("plan"):
+            self.clear(agent)
+            return
+        self.record(agent, {**snap, "limited": False, "resets_at": None})
 
     def clear(self, agent: str) -> None:
         """Drop an agent's snapshot (account switch: it belongs to the old
@@ -288,6 +398,8 @@ class QuotaStore:
             if not fresh["limited"]:
                 fresh["limited"] = any(
                     (w.get("used_pct") or 0) >= 100 for w in fresh["windows"])
+            if fresh["limited"]:
+                fresh["resets_at"] = _full_window_reset(fresh["windows"], self._clock())
         self.record("codex", fresh)
 
     # -- codex on-demand read -----------------------------------------
@@ -342,7 +454,7 @@ class QuotaStore:
             if not isinstance(rows, dict):
                 return
             for agent, snap in rows.items():
-                if _valid_snapshot(agent, snap):
+                if _valid_snapshot(agent, snap) and _effective(snap, self._clock()) is not None:
                     self._snapshots[agent] = snap
         except Exception:  # noqa: BLE001 — a bad file is an empty store
             logger.warning("quota: ignoring unreadable %s", self._path,
@@ -451,3 +563,92 @@ def publish_codex_snapshot(snapshot: Any, *, push: bool = False) -> None:
             store.record("codex", snap)
     except Exception:  # noqa: BLE001
         logger.warning("quota: codex rate-limit capture failed", exc_info=True)
+
+
+# ---------------------------------------------------------------------------
+# Spec 197: the turn's own failure, and Orbital's own picks
+# ---------------------------------------------------------------------------
+
+USAGE_LIMIT = "usage_limit"
+
+
+def note_turn_failure(agent: str, text: str | None, *, reason: str | None = None,
+                      at: str | None = None) -> dict | None:
+    """A worker's turn failed: when it failed on its usage limit, record the
+    limit and return ``{"reason": "usage_limit", "resets_at": iso | None}``
+    for the error row; otherwise None.
+
+    ``reason`` is what the transport read from STRUCTURED protocol data
+    (claude's rate-limit error, codex's error code, an ACP manifest pattern);
+    with none, the shared text classifier decides (the same one the Workbench
+    and left-off cards read finished sessions with, so the two never
+    disagree). Another reason (a region refusal) is never a limit.
+
+    The reset comes from the quota reading when it names a future one
+    (claude's rejected event; codex's exhausted window), else from the
+    vendor's sentence. Never raises.
+    """
+    try:
+        if not isinstance(agent, str) or not agent or agent.startswith("worker:"):
+            return None
+        if reason and reason != USAGE_LIMIT:
+            return None
+        from agent_os.onboarding.history_types import (
+            CAUSE_USAGE_LIMIT, classify_error_text,
+        )
+        stop = classify_error_text(text, at=at) if text else None
+        text_limit = stop is not None and stop.cause == CAUSE_USAGE_LIMIT
+        if reason != USAGE_LIMIT and not text_limit:
+            return None
+        store = _store
+        resets: str | None = None
+        snap = store.get(agent) if store is not None else None
+        if snap:
+            epoch = _iso_epoch(snap.get("resets_at"))
+            if snap.get("limited") and epoch is not None and epoch > time.time():
+                resets = snap["resets_at"]
+            else:
+                resets = _full_window_reset(snap.get("windows") or [])
+        if resets is None and text_limit:
+            resets = stop.resets_at
+        if store is not None:
+            store.mark_limited(agent, resets)
+        return {"reason": USAGE_LIMIT, "resets_at": resets}
+    except Exception:  # noqa: BLE001 — a classification must never break a turn end
+        logger.warning("quota: noting a turn failure for %s failed", agent,
+                       exc_info=True)
+        return None
+
+
+def note_turn_success(agent: str) -> None:
+    """The agent finished a turn: whatever limit it had is over. Never raises."""
+    store = _store
+    if store is None:
+        return
+    try:
+        store.clear_limit(agent)
+    except Exception:  # noqa: BLE001
+        logger.warning("quota: clearing %s's limit failed", agent, exc_info=True)
+
+
+def prefer_not_limited(slugs: list[str]) -> list[str]:
+    """``slugs`` with every agent limited until a KNOWN future reset moved
+    behind the rest (a stable partition). When all are limited, or none, the
+    order is unchanged."""
+    store = _store
+    slugs = list(slugs or [])
+    if store is None or not slugs:
+        return slugs
+    avoided = {s for s in slugs if avoids(s)}
+    return [s for s in slugs if s not in avoided] + [s for s in slugs if s in avoided]
+
+
+def avoids(agent: str) -> bool:
+    """Module form of :meth:`QuotaStore.avoids` (False without a store)."""
+    store = _store
+    if store is None:
+        return False
+    try:
+        return store.avoids(agent)
+    except Exception:  # noqa: BLE001
+        return False

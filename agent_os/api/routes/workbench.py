@@ -1024,7 +1024,9 @@ async def _router_agent(scratch_pid: str) -> str | None:
     except Exception:
         logger.warning("workbench route: worker readiness failed", exc_info=True)
         return None
-    for slug in ready or []:
+    # Spec 197: a worker limited until a known future reset is asked last.
+    from agent_os.daemon_v2.quota_store import prefer_not_limited
+    for slug in prefer_not_limited(list(ready or [])):
         try:
             if subs.can_ask_once(slug):
                 return slug

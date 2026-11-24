@@ -3180,3 +3180,55 @@ describe('transformChatHistory — spec 161 worker result delivery (_kind: worke
       && i.handle === 'pi')).toBe(true);
   });
 });
+
+// --------------------------------------------------------------------------
+// Spec 197 — a worker turn that failed on its usage limit ends with an error
+// row tagged reason=usage_limit (+ resets_at); the row states the value and
+// keeps the vendor's own sentence for the hover.
+// --------------------------------------------------------------------------
+
+describe('transformChatHistory — usage_limit error rows (spec 197)', () => {
+  const VENDOR = "Error: You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro) or try again at 5:23 PM.";
+  const RAW = `[Sub-agent] codex stopped with error: Usage limit reached; back at 17:23 local time (2026-11-24). ${VENDOR}. Transcript: /ws/orbital/sub_agents/codex.jsonl`;
+  const RESET = '2026-11-24T09:24:00+00:00';
+  const row = (meta: Record<string, unknown>, content = RAW): ChatMessage => ({
+    role: 'system', source: 'daemon', content, timestamp: TS, _meta: meta,
+  });
+  const activity = (items: ReturnType<typeof transformChatHistory>) => {
+    const item = items.find(i => i.type === 'sub_agent_activity');
+    if (!item || item.type !== 'sub_agent_activity') throw new Error('no activity row');
+    return item;
+  };
+
+  it('a terminal error row carries the limit and the vendor sentence alone', () => {
+    const item = activity(transformChatHistory([row({
+      event: 'sub_agent_terminal', kind: 'error', reason: 'usage_limit', resets_at: RESET,
+    })]));
+    expect(item.action).toBe('error');
+    expect(item.limit).toEqual({ resetsAt: RESET });
+    expect(item.error).toBe("You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro) or try again at 5:23 PM.");
+  });
+
+  it('an unknown reset is null', () => {
+    const item = activity(transformChatHistory([row({
+      event: 'sub_agent_terminal', kind: 'error', reason: 'usage_limit', resets_at: null,
+    }, '[Sub-agent] pi stopped with error: Usage limit reached; reset time unknown. Error: insufficient credits. Transcript: /t')]));
+    expect(item.limit).toEqual({ resetsAt: null });
+    expect(item.error).toBe('insufficient credits');
+  });
+
+  it('a could-not-start row on the limit gets the same treatment', () => {
+    const item = activity(transformChatHistory([row({
+      event: 'sub_agent_dispatch_failed', handle: 'codex', reason: 'usage_limit', resets_at: RESET,
+    }, "[Sub-agent] codex could not start: Error: You've hit your usage limit · resets 9:29pm")]));
+    expect(item.action).toBe('failed');
+    expect(item.limit).toEqual({ resetsAt: RESET });
+    expect(item.error).toBe("You've hit your usage limit · resets 9:29pm");
+  });
+
+  it('an error row without the reason is unchanged', () => {
+    const item = activity(transformChatHistory([row({ event: 'sub_agent_terminal', kind: 'error' })]));
+    expect(item.limit).toBeUndefined();
+    expect(item.error).toContain('Transcript:');
+  });
+});

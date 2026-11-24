@@ -207,6 +207,13 @@ export type DisplayItem =
       /** Present for action='failed' | 'error'. */
       error?: string;
       /**
+       * Spec 197: the turn (or the start) failed on the agent's usage
+       * limit. The row then states the value — "Usage limit · back at
+       * {time}" — and `error` holds only the vendor's own sentence, for the
+       * hover. `resetsAt` is ISO-8601, null when unknown.
+       */
+      limit?: { resetsAt: string | null };
+      /**
        * Number of background processes killed. Present for
        * action='background_lost', and for action='stopped' only when the
        * user's stop actually terminated tracked background work.
@@ -776,6 +783,17 @@ function applyDispatchFailureReason(
   tr: ActivityTranslate,
 ): SubAgentActivity {
   if (
+    meta?.reason === 'usage_limit'
+    && (meta.event === 'sub_agent_terminal' || meta.event === 'sub_agent_dispatch_failed')
+    && (activity.action === 'error' || activity.action === 'failed')
+  ) {
+    return {
+      ...activity,
+      error: vendorSentence(activity.error ?? ''),
+      limit: { resetsAt: typeof meta.resets_at === 'string' && meta.resets_at ? meta.resets_at : null },
+    };
+  }
+  if (
     meta?.event === 'sub_agent_terminal'
     && meta.reason === 'region_unavailable'
     && activity.action === 'error'
@@ -794,6 +812,18 @@ function applyDispatchFailureReason(
       min: typeof meta.min_version === 'string' ? meta.min_version : '?',
     }),
   };
+}
+
+// Spec 197: on_error's clause for the manager, ahead of the vendor's words,
+// and the row's transcript tail — neither is the vendor's sentence.
+const LIMIT_CLAUSE_RE = /^Usage limit reached; (?:back at [^()]*\(\d{4}-\d{2}-\d{2}\)|reset time unknown)\.\s*/;
+
+/** The vendor's own sentence out of a limit row's error text (the hover). */
+function vendorSentence(text: string): string {
+  let out = text.replace(LIMIT_CLAUSE_RE, '');
+  const tail = out.lastIndexOf('. Transcript:');
+  if (tail >= 0) out = out.slice(0, tail);
+  return out.replace(/^Error:\s*/, '').trim();
 }
 
 // The Orbital agent's terminal failure rows (agent/loop.py append_system:

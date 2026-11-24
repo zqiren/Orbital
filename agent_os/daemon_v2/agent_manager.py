@@ -2329,12 +2329,19 @@ class AgentManager:
             if ready:
                 return None
         available = self.available_worker_slugs(project_id, project=project, wait=wait)
-        if default is not None and default in available:
+        # Spec 197: Orbital's own pick passes over an agent limited until a
+        # KNOWN future reset while another is ready (a stable partition; all
+        # limited = today's order). The remembered default is not rewritten:
+        # it yields here and comes back by itself after the reset.
+        from agent_os.daemon_v2.quota_store import avoids, prefer_not_limited
+        preferred = prefer_not_limited(available)
+        if default is not None and default in available and not (
+                avoids(default) and not avoids(preferred[0])):
             return default
         if ready is None:
             ready = self.manager_ready(project_id)
-        if not ready and available:
-            return available[0]
+        if not ready and preferred:
+            return preferred[0]
         return None
 
     def set_default_pinned_target(self, project_id: str,

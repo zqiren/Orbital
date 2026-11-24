@@ -285,6 +285,16 @@ class SDKTransport(AgentTransport):
         # message text collected while the dispatch was pending.
         self._dispatch_done: "asyncio.Future | None" = None
         self._dispatch_text: list[str] = []
+        # Spec 197: this turn hit the subscription limit (the CLI's
+        # ``rate_limit`` error on its synthetic message, or a rejected
+        # rate_limit_event with no paid overage). Read and reset at the
+        # turn's ResultMessage.
+        self._turn_limited = False
+        # The CLI's synthetic error message (``AssistantMessage.error`` set):
+        # its text is the result's error text, so it is not a reply bubble.
+        # Held until the result says whether that error really came.
+        self._held_error_text: list[str] = []
+        self._turn_limit_signals: list[str] = []
         # Direction B (own the kill): captured at connect() so stop() can
         # terminate the claude subprocess tree directly, independent of the
         # SDK's cross-task-failing graceful disconnect(). ``_proc`` is a
@@ -565,6 +575,10 @@ class SDKTransport(AgentTransport):
                            "prior boundary as stopped")
             self._close_dispatch("stopped")
 
+        # Spec 197: a turn that ended without a result leaves nothing behind.
+        self._turn_limited = False
+        self._held_error_text = []
+        self._turn_limit_signals = []
         if prompt_uuid:
             await self._client.query(_one_prompt(message, prompt_uuid))
         else:
@@ -1071,6 +1085,19 @@ class SDKTransport(AgentTransport):
                 self._last_request_tokens = sum(int(msg_usage.get(k, 0) or 0) for k in (
                     "input_tokens", "cache_read_input_tokens",
                     "cache_creation_input_tokens", "output_tokens"))
+            api_error = getattr(msg, "error", None)
+            if api_error:
+                # Spec 197: a CLI-generated API error message (model
+                # ``<synthetic>``). Its text arrives again as the result's
+                # error, so it goes to the error path only: no reply bubble
+                # that is the error, shown a second time.
+                if api_error == "rate_limit":
+                    self._turn_limited = True
+                    self._turn_limit_signals.append("assistant error rate_limit")
+                self._held_error_text.extend(
+                    b.text for b in msg.content
+                    if isinstance(b, TextBlock) and b.text)
+                return events
             for block in msg.content:
                 if isinstance(block, TextBlock):
                     events.append(TransportEvent(
@@ -1130,12 +1157,35 @@ class SDKTransport(AgentTransport):
             # (guard counts management only) and never raises — a capture
             # failure must not break or delay the turn.
             self._capture_usage(msg)
-            if msg.is_error and msg.result:
+            held, self._held_error_text = self._held_error_text, []
+            limited, self._turn_limited = self._turn_limited, False
+            signals, self._turn_limit_signals = self._turn_limit_signals, []
+            error_text = msg.result or "\n".join(held)
+            if msg.is_error and error_text:
+                data = {"error": error_text}
+                # Spec 197: structured signals only. ``api_error_status`` 429
+                # is the CLI's own "rate limited" (also a gateway's cooldown:
+                # it only colours a dot and reorders Orbital's picks, and the
+                # next success clears it).
+                status = getattr(msg, "api_error_status", None)
+                if limited or status == 429:
+                    data["reason"] = "usage_limit"
+                    # One line for a real-account check (spec 197 U1): which
+                    # structured signals this failing turn carried.
+                    logger.info(
+                        "SDKTransport: usage-limit turn: signals=%s api_error_status=%s "
+                        "terminal_reason=%s", signals or ["none"], status,
+                        getattr(msg, "terminal_reason", None))
                 events.append(TransportEvent(
                     event_type="error",
-                    data={"error": msg.result},
-                    raw_text=f"Error: {msg.result}",
+                    data=data,
+                    raw_text=f"Error: {error_text}",
                 ))
+            elif held:
+                # No error came after all: the text was what the turn said.
+                events.extend(TransportEvent(
+                    event_type="message", data={"text": t}, raw_text=t)
+                    for t in held)
 
         elif isinstance(msg, SystemMessage):
             # BACKLOG 005 §4a — eager resume identity. The CLI's ``init``
@@ -1175,6 +1225,13 @@ class SDKTransport(AgentTransport):
             # "response" chunk and land in the transcript and chat.
             from agent_os.daemon_v2.quota_store import publish_claude_rate_limit
             publish_claude_rate_limit(msg.rate_limit_info)
+            info = msg.rate_limit_info
+            if (getattr(info, "status", None) == "rejected"
+                    and getattr(info, "overage_status", None)
+                    not in ("allowed", "allowed_warning")):
+                self._turn_limited = True
+                self._turn_limit_signals.append(
+                    f"rate_limit_event rejected resets_at={getattr(info, 'resets_at', None)}")
 
         return events
 

@@ -939,6 +939,9 @@ export interface QuotaSnapshot {
   plan: string | null;
   limited: boolean;
   windows: QuotaWindow[];
+  /** Spec 197: when the limit lifts (ISO-8601 UTC), null when unknown.
+   *  Absent on an older daemon. Void once passed. */
+  resets_at?: string | null;
 }
 
 /** One entry of GET /api/v2/agents/available. Everything past slug/name is
