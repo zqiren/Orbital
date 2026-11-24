@@ -165,3 +165,32 @@ def test_no_broadcast_when_the_failure_row_could_not_be_persisted(env, monkeypat
     assert resp.status_code == 404
     # Nothing new to refetch, so nothing is announced.
     assert not [e for _, e, _ in sent if e.get("type") == "sub_agent.failed"]
+
+
+class _LimitedSubAgentManager:
+    async def send(self, project_id, handle, message, **kwargs):
+        return "Error: You've hit your usage limit · resets 9:29pm (UTC)"
+
+    def last_start_failure_meta(self, project_id, handle):
+        return {}
+
+
+def test_a_start_that_fails_on_the_usage_limit_is_a_limit_row(client, tmp_path, monkeypatch):
+    """Spec 197: the pinned "could not start" row is the other terminal site
+    a limit can surface at. Text only (no structured signal exists there);
+    the row carries the reason and reset, and the agent is marked."""
+    from agent_os.daemon_v2 import quota_store as qs
+    routes_mod = _routes_mod()
+    monkeypatch.setattr(routes_mod, "_sub_agent_manager", _LimitedSubAgentManager())
+    monkeypatch.setattr(routes_mod, "_pinned_consolidation", MagicMock())
+    pid, ws = _make_project(client, tmp_path, "pinlimit")
+    sid = _make_session(ws, "pinlimit_sess_0001")
+    resp = client.post(f"/api/v2/agents/{pid}/inject", json={
+        "content": "hi", "target": "codex", "session_id": sid,
+    })
+    assert resp.status_code == 404
+    last = _session_rows(ws, sid)[-1]
+    assert last["_meta"]["event"] == "sub_agent_dispatch_failed"
+    assert last["_meta"]["reason"] == "usage_limit"
+    assert last["_meta"]["resets_at"].endswith("21:29:00+00:00")
+    assert qs.get_quota_store().is_limited("codex") is True

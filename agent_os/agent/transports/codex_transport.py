@@ -59,6 +59,18 @@ SUPPORTED_CODEX_VERSION = "0.162.1"
 _ACTIVE_WRITER_REFUSAL = "already has an active writer"
 
 
+def _codex_usage_limit(error_info) -> bool:
+    """Spec 197: Codex's structured "this turn hit the limit" —
+    ``codexErrorInfo`` ``usageLimitExceeded`` / ``rateLimitExceeded``, or
+    retries exhausted on HTTP 429 (T3 Code's CodexAdapterV2 rule)."""
+    if isinstance(error_info, str):
+        return error_info in ("usageLimitExceeded", "rateLimitExceeded")
+    if isinstance(error_info, dict):
+        exhausted = error_info.get("responseTooManyFailedAttempts")
+        return isinstance(exhausted, dict) and exhausted.get("httpStatusCode") == 429
+    return False
+
+
 class CodexRpcError(RuntimeError):
     """A JSON-RPC error reply to one of our requests. ``str()`` is unchanged
     from the plain RuntimeError it replaces; ``code``/``message`` are the
@@ -274,6 +286,13 @@ class CodexTransport(AgentTransport):
         self._codex_last_usage: dict[tuple[str, str], dict] = {}
         # Spec 099: strong ref to the post-start quota read.
         self._rate_limit_task: asyncio.Task | None = None
+        # Spec 197: this turn failed on the usage limit (codexErrorInfo), an
+        # error event went out this turn, and the one rate-limit read a limit
+        # failure starts (the reset lives in the snapshot, not the error).
+        self._turn_limited = False
+        self._turn_error_sent = False
+        self._turn_limit_read = False
+        self._limit_read_task: asyncio.Task | None = None
         self._skills_task: asyncio.Task | None = None
         self._repick_task: asyncio.Task | None = None
 
@@ -283,6 +302,9 @@ class CodexTransport(AgentTransport):
 
     def _begin_turn(self) -> None:
         self._turn_open = True
+        self._turn_limited = False
+        self._turn_error_sent = False
+        self._turn_limit_read = False
         self._turn_id = None
         self._message_parts = {}
         self._final_texts = []
@@ -420,9 +442,8 @@ class CodexTransport(AgentTransport):
                     and "model_not_found" in json.dumps(params)):
                 self._rejected = params  # held for the re-pick in _on_turn_completed
                 return
-            await self._event_queue.put(TransportEvent(
-                event_type="error", data={"error": params},
-                raw_text=f"Error: {text}"))
+            await self._put_error(params, str(text),
+                                  (params.get("error") or {}).get("codexErrorInfo"))
             return
         if method == "thread/tokenUsage/updated":
             # Display-only usage capture (P3-B). Track the latest per-turn
@@ -550,9 +571,54 @@ class CodexTransport(AgentTransport):
                 "turn=%s); continuing without it.",
                 self._thread_id, turn_id, exc_info=True)
 
+    async def _put_error(self, params: dict, text: str, error_info) -> None:
+        """One worker error event. Spec 197: a usage-limit code marks the
+        turn, and every error event after it in the same turn carries the
+        reason too (ProcessManager keeps the turn's LAST error), and starts
+        one rate-limit read for the reset."""
+        if _codex_usage_limit(error_info):
+            if not self._turn_limited:
+                # One line for a real-account check (spec 197 U3).
+                logger.info("CodexTransport: usage-limit error: codexErrorInfo=%s "
+                            "willRetry=%s", json.dumps(error_info),
+                            params.get("willRetry"))
+            self._turn_limited = True
+            self._read_limit_reset()
+        data = {"error": params}
+        if self._turn_limited:
+            data["reason"] = "usage_limit"
+        self._turn_error_sent = True
+        await self._event_queue.put(TransportEvent(
+            event_type="error", data=data, raw_text=f"Error: {text}"))
+
+    def _read_limit_reset(self) -> None:
+        """T3 Code's move: right after a usage-limit failure, one
+        ``account/rateLimits/read`` on this live connection, because the
+        reset lives in the snapshot. Event-tied and bounded, never a poll;
+        a task, since the answer arrives on the read loop this runs on."""
+        if not self._alive or self._turn_limit_read:
+            return
+        self._turn_limit_read = True
+        try:
+            self._limit_read_task = asyncio.get_running_loop().create_task(
+                self._publish_rate_limits(after_limit=True),
+                name=f"codex-limit-read-{id(self)}")
+        except RuntimeError:
+            pass
+
     async def _on_turn_completed(self, params: dict) -> None:
         turn = params.get("turn") or {}
         status = turn.get("status")
+        turn_error = turn.get("error")
+        if (status == "failed" and self._rejected is None
+                and isinstance(turn_error, dict)):
+            if _codex_usage_limit(turn_error.get("codexErrorInfo")):
+                self._turn_limited = True
+            if not self._turn_error_sent and turn_error.get("message"):
+                # Spec 197: the failure arrived only on the turn's close;
+                # surface it so the row says what happened.
+                await self._put_error(turn_error, str(turn_error["message"]),
+                                      turn_error.get("codexErrorInfo"))
         if self._rejected is not None:
             if status == "failed":
                 # Not on the read loop: the re-pick awaits RPC answers it reads.
@@ -772,7 +838,7 @@ class CodexTransport(AgentTransport):
         return await self._request("account/rateLimits/read", None,
                                    timeout=timeout)
 
-    async def _publish_rate_limits(self) -> None:
+    async def _publish_rate_limits(self, *, after_limit: bool = False) -> None:
         from agent_os.daemon_v2.quota_store import (
             pick_codex_snapshot,
             publish_codex_snapshot,
@@ -782,7 +848,13 @@ class CodexTransport(AgentTransport):
         except Exception as exc:  # noqa: BLE001 — display data only
             logger.info("CodexTransport: rate-limit read failed (%s)", exc)
             return
-        publish_codex_snapshot(pick_codex_snapshot(result))
+        snap = pick_codex_snapshot(result)
+        if after_limit:
+            # Spec 197 U3: what the reading right after a limit failure says.
+            logger.info("CodexTransport: rate limits after a usage-limit error: %s",
+                        json.dumps({k: (snap or {}).get(k) for k in
+                                    ("rateLimitReachedType", "primary", "secondary")})[:600])
+        publish_codex_snapshot(snap)
 
     async def _publish_skills(self) -> None:
         from agent_os.daemon_v2.worker_commands import codex_commands

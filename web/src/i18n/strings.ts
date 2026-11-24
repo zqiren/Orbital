@@ -279,6 +279,7 @@ export const STRINGS = {
   "chat.injectError": { en: "Failed to send message. Please try again.", zh: "发送消息失败。请重试。" },
   "chat.jumpToLatest": { en: "Jump to latest", zh: "回到最新" },
   "chat.keyless.hint": { en: "Talking to {agent}. Add an API key and Orbital will help manage this project.", zh: "正在与 {agent} 对话。添加 API 密钥后，Orbital 将帮助你管理此项目。" },
+  "chat.limit.switchTo": { en: "Switch to {name}", zh: "切换到 {name}" },
   "chat.loadEarlier": { en: "Load earlier messages ({n} more)", zh: "加载更早的消息（还有 {n} 条）" },
   "chat.loadingMore": { en: "Loading...", zh: "加载中…" },
   "chat.maxAttachments": { en: "Maximum of {n} attachments per message.", zh: "每条消息最多 {n} 个附件。" },

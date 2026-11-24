@@ -256,7 +256,9 @@ class TestStore:
         store = QuotaStore(str(path))
         assert store.snapshots() == {}
 
-    def test_unknown_agent_and_bad_rows_ignored_on_load(self, tmp_path):
+    def test_bad_rows_ignored_on_load(self, tmp_path):
+        # Spec 197: any agent may hold a limit now; a row without
+        # observed_at or not a dict is still dropped.
         path = tmp_path / "quota.json"
         path.write_text(json.dumps({"version": 1, "snapshots": {
             "cursor": {"agent": "cursor", "windows": []},

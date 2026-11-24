@@ -18,6 +18,7 @@ import {
   relativeParts,
   statusDot,
   summarizeQuota,
+  switchTarget,
   windowLeft,
 } from './quotaDisplay';
 
@@ -197,5 +198,62 @@ describe('time formatting', () => {
     expect(ageParts(at(5 * 3600_000), NOW)).toEqual({ unit: 'hours', n: 5 });
     expect(ageParts(at(3 * 86400_000), NOW)).toEqual({ unit: 'days', n: 3 });
     expect(ageParts('garbage', NOW)).toBeNull();
+  });
+});
+
+// Spec 197: one limited fact per agent — `limited` plus a top-level
+// `resets_at` — for every agent, not only claude-code and codex.
+describe('summarizeQuota — the limit fact (spec 197)', () => {
+  it('a limit-only entry with a future reset is limited until then', () => {
+    const s = summarizeQuota(snap([], { agent: 'kimi-code', limited: true, resets_at: inH(3) }), NOW);
+    expect(s.kind).toBe('limited');
+    expect(s.kind === 'limited' && s.resetsAt?.toISOString()).toBe(inH(3));
+  });
+
+  it('a limit with an unknown reset still reads as limited, without a time', () => {
+    const s = summarizeQuota(snap([], { limited: true, resets_at: null }), NOW);
+    expect(s).toEqual({ kind: 'limited', resetsAt: null, other: null });
+  });
+
+  it('a passed reset is void', () => {
+    expect(summarizeQuota(snap([], { limited: true, resets_at: inH(-1) }), NOW).kind).toBe('none');
+    const withWindows = snap([['five_hour', 40, inH(2)]], { limited: true, resets_at: inH(-1) });
+    expect(summarizeQuota(withWindows, NOW).kind).toBe('window');
+  });
+
+  it('the entry reset wins over the windows for the time', () => {
+    const s = summarizeQuota(snap([['five_hour', 100, inH(1)], ['weekly', 30, inH(48)]],
+      { limited: true, resets_at: inH(2) }), NOW);
+    expect(s.kind === 'limited' && s.resetsAt?.toISOString()).toBe(inH(2));
+  });
+
+  it('the red dot for any agent', () => {
+    const dot = statusDot({ ready: true, running: false, now: NOW,
+      quota: snap([], { agent: 'pi', limited: true, resets_at: inH(1) }) });
+    expect(dot).toEqual({ color: 'red', pulse: false });
+  });
+});
+
+describe('switchTarget (spec 197)', () => {
+  const avail = (entries: Record<string, Partial<QuotaSnapshot> | null>, ready: Record<string, boolean> = {}) =>
+    Object.fromEntries(Object.entries(entries).map(([slug, q]) => [slug, {
+      slug, name: slug, ready: ready[slug] ?? true,
+      ...(q ? { quota: snap([], q) } : {}),
+    }]));
+
+  it('the first ready agent in list order that is not limited and not the current one', () => {
+    const a = avail({ codex: { limited: true, resets_at: inH(2) }, 'claude-code': null, pi: null });
+    expect(switchTarget(['codex', 'claude-code', 'pi'], 'codex', a, NOW)).toBe('claude-code');
+  });
+
+  it('skips a limited or not-ready agent', () => {
+    const a = avail({ codex: { limited: true, resets_at: inH(2) },
+      'claude-code': { limited: true, resets_at: null }, pi: null, kimi: null }, { pi: false });
+    expect(switchTarget(['codex', 'claude-code', 'pi', 'kimi'], 'codex', a, NOW)).toBe('kimi');
+  });
+
+  it('none when every other agent is limited', () => {
+    const a = avail({ codex: { limited: true, resets_at: inH(2) }, 'claude-code': { limited: true, resets_at: inH(1) } });
+    expect(switchTarget(['codex', 'claude-code'], 'codex', a, NOW)).toBeNull();
   });
 });

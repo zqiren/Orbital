@@ -225,7 +225,9 @@ def _read_orbital(path: str) -> OrbitalSession | None:
                         turn.error(worker_reply if isinstance(worker_reply, str)
                                    and worker_reply else content, ts)
                     elif kind == "error":
-                        turn.error(content, ts)
+                        resets = meta.get("resets_at")
+                        turn.error(content, ts, resets_at=resets
+                                   if isinstance(resets, str) else None)
                     elif kind == "stopped":
                         turn.interrupted("stopped")
                     else:

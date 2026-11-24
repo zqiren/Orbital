@@ -13,7 +13,7 @@
 //   reading, so its number no longer describes anything.
 
 import type { Locale } from '../i18n/locales';
-import type { QuotaSnapshot, QuotaWindow } from '../types';
+import type { AgentAvailability, QuotaSnapshot, QuotaWindow } from '../types';
 
 /** Amber below this share left of the shown window (spec D2). */
 export const LOW_LEFT_PCT = 20;
@@ -83,6 +83,18 @@ export function summarizeQuota(
 ): QuotaSummary {
   if (!snapshot) return { kind: 'none' };
   const windows = snapshot.windows ?? [];
+  // Spec 197: the entry's own reset decides when its limit lifts, for any
+  // agent. Passed = void (the windows, if any, speak for themselves).
+  const entryReset = parseDate(snapshot.resets_at ?? null);
+  if (snapshot.limited && snapshot.resets_at !== undefined) {
+    if (entryReset && entryReset.getTime() <= now) {
+      return summarizeQuota({ ...snapshot, limited: false, resets_at: undefined }, now);
+    }
+    const all = selectable(snapshot, now);
+    if (entryReset || windows.length === 0) {
+      return { kind: 'limited', resetsAt: entryReset, other: all[0] ?? null };
+    }
+  }
   const live = windows.filter((w) => windowLeft(w, now) !== null);
   const candidates = selectable(snapshot, now);
   const shown = pickShownWindow(snapshot, now);
@@ -169,4 +181,24 @@ export function ageParts(
   const hours = Math.floor(mins / 60);
   if (hours < 48) return { unit: 'hours', n: hours };
   return { unit: 'days', n: Math.floor(hours / 24) };
+}
+
+/**
+ * Spec 197: the agent the limit row's one button switches to — the first in
+ * the list (the pin menu's order) that is not the limited one, is ready and
+ * is not limited itself. Null when there is none. Workers only: Orbital is
+ * one click away in the pin menu.
+ */
+export function switchTarget(
+  slugs: string[], current: string,
+  availability: Record<string, AgentAvailability | undefined>, now: number,
+): string | null {
+  for (const slug of slugs) {
+    if (slug === current) continue;
+    const info = availability[slug];
+    if (!info || info.ready === false || info.update_needed) continue;
+    if (summarizeQuota(info.quota, now).kind === 'limited') continue;
+    return slug;
+  }
+  return null;
 }

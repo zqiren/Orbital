@@ -261,8 +261,10 @@ function usageLines(
   // must hear "update", not "login".
   if (info.update_needed) return [{ text: t('pinAgent.status.needsUpdate'), tone: 'ok' }];
   if (info.ready === false) return [{ text: t('pinAgent.status.needsLogin'), tone: 'ok' }];
-  if (!QUOTA_SLUGS.has(slug)) return [];
   const s = summarizeQuota(info.quota, now);
+  // Spec 197: any agent can be limited (from its own failed turn); only the
+  // two with a quota reading say anything else.
+  if (!QUOTA_SLUGS.has(slug) && s.kind !== 'limited') return [];
   if (s.kind === 'none') return [{ text: t('pinAgent.quota.noReading'), tone: 'muted' }];
   if (s.kind === 'stale') return [{ text: t('pinAgent.quota.noCurrent'), tone: 'muted' }];
   const second = (o: ShownWindow | null): Line[] =>
@@ -761,7 +763,8 @@ function PinTargetSelect({
   const dotFor = (slug: string) => statusDot({
     ready: availability[slug]?.ready,
     running: running.has(slug),
-    quota: QUOTA_SLUGS.has(slug) ? availability[slug]?.quota : undefined,
+    // Spec 197: every agent's limit lights the red dot.
+    quota: availability[slug]?.quota,
     now,
   });
   const nameOf = (slug: string) => agents.find((a) => a.slug === slug)?.name ?? slug;

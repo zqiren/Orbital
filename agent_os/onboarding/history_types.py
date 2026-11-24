@@ -128,13 +128,22 @@ _RESET_RE = re.compile(
     r"resets?(?: at)?\s+(\d{1,2})(?::(\d{2}))?\s*([ap]m)?(?:\s*\(([A-Za-z_]+(?:/[A-Za-z_+\-]+)*)\))?",
     re.IGNORECASE)
 
+# Spec 197: Codex's own form, "…or try again at 5:23 PM." today, else
+# "…try again at Jan 3rd, 2027 5:23 PM." (T3 Code's codexUsageLimits.ts).
+_CODEX_RESET_RE = re.compile(
+    r"try again at (?:([A-Z][a-z]{2}) (\d{1,2})(?:st|nd|rd|th), (\d{4}) )?(\d{1,2}):(\d{2}) ([AP]M)",
+    re.IGNORECASE)
+_MONTHS = ("jan", "feb", "mar", "apr", "may", "jun",
+           "jul", "aug", "sep", "oct", "nov", "dec")
+
 
 def classify_error_text(text: str | None, *, at: str | None = None) -> StopInfo | None:
     """The stop cause an agent's error text names, or None if it names none.
 
     ``at`` (ISO-8601) is when the error happened; a reset time in the text is
-    resolved to its next occurrence after ``at`` in the named time zone (UTC
-    when none is named) and returned as ISO-8601 UTC.
+    resolved to its next occurrence after ``at`` in the named time zone (this
+    machine's local zone when none is named, spec 197) and returned as
+    ISO-8601 UTC.
     """
     if not text:
         return None
@@ -148,7 +157,41 @@ def classify_error_text(text: str | None, *, at: str | None = None) -> StopInfo 
     return None
 
 
+def _local_zone(base: datetime):
+    """This machine's zone: a vendor sentence that names none speaks the
+    local clock of the CLI, which runs here (spec 197)."""
+    return base.astimezone().tzinfo or timezone.utc
+
+
+def _parse_codex_reset(m: re.Match, at: str | None) -> str | None:
+    month, day, year, hour, minute, ampm = m.groups()
+    hour, minute = int(hour), int(minute)
+    if not (1 <= hour <= 12 and 0 <= minute <= 59):
+        return None
+    hour = hour % 12 + (12 if ampm.lower() == "pm" else 0)
+    base = _parse_iso(at) or datetime.now(timezone.utc)
+    local = base.astimezone(_local_zone(base))
+    try:
+        if month is not None:
+            mon = _MONTHS.index(month.lower()) + 1
+            reset = datetime(int(year), mon, int(day), hour, minute)
+        else:
+            reset = datetime(local.year, local.month, local.day, hour, minute)
+    except ValueError:
+        return None
+    # Naive local wall time -> aware (the machine's rules for that date).
+    # Codex drops the seconds; the minute is kept as printed, so the row reads
+    # the same clock time as the rate-limit snapshot's reset (shown floored).
+    reset = reset.astimezone()
+    if reset <= base:
+        return None
+    return reset.astimezone(timezone.utc).isoformat()
+
+
 def _parse_reset(text: str, at: str | None) -> str | None:
+    cm = _CODEX_RESET_RE.search(text)
+    if cm:
+        return _parse_codex_reset(cm, at)
     m = _RESET_RE.search(text)
     if not m:
         return None
@@ -159,11 +202,11 @@ def _parse_reset(text: str, at: str | None) -> str | None:
         hour = hour % 12 + (12 if ampm.lower() == "pm" else 0)
     if not (0 <= hour <= 23 and 0 <= minute <= 59):
         return None
-    try:
-        tz = ZoneInfo(tzname) if tzname else timezone.utc
-    except (ZoneInfoNotFoundError, ValueError):
-        tz = timezone.utc
     base = _parse_iso(at) or datetime.now(timezone.utc)
+    try:
+        tz = ZoneInfo(tzname) if tzname else _local_zone(base)
+    except (ZoneInfoNotFoundError, ValueError):
+        tz = _local_zone(base)
     local = base.astimezone(tz)
     reset = local.replace(hour=hour, minute=minute, second=0, microsecond=0)
     if reset <= local:

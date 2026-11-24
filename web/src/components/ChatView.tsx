@@ -16,7 +16,9 @@ import { api, apiWithTotal, ApiError } from '../config';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { useAgent, type InjectResult } from '../hooks/useAgent';
 import { useQueue } from '../hooks/useQueue';
-import { projectAgents } from '../hooks/useAgentAvailability';
+import { projectAgents, useAgentAvailability } from '../hooks/useAgentAvailability';
+import { summarizeQuota, switchTarget } from '../utils/quotaDisplay';
+import UsageLimitRow from './UsageLimitRow';
 import { useAutoScroll } from '../hooks/useAutoScroll';
 import {
   transformChatHistory,
@@ -1281,6 +1283,17 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   const builtins = slash.builtins;
   // The pin menu offers only the workers this project keeps on.
   const pinAgents = useMemo(() => projectAgents(agents, project), [agents, project]);
+  // Spec 197: who the usage-limit row's one button switches to — only while
+  // this conversation still talks to the limited agent and it is limited now.
+  const agentAvailability = useAgentAvailability();
+  const limitSwitchFor = useCallback((handle: string) => {
+    if (pinnedTarget !== handle) return null;
+    const now = Date.now();
+    if (summarizeQuota(agentAvailability[handle]?.quota, now).kind !== 'limited') return null;
+    const slug = switchTarget(pinAgents.map((a) => a.slug), handle, agentAvailability, now);
+    if (!slug) return null;
+    return { slug, name: pinAgents.find((a) => a.slug === slug)?.name ?? slug };
+  }, [pinnedTarget, agentAvailability, pinAgents]);
   // One skill per message, scoped to the session it was picked in (a chip
   // must not follow the user into another conversation). Seeded from
   // `initialSkill` (the Tasks page's "New automation" doorway).
@@ -1549,6 +1562,14 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       return next;
     });
   }, [onOpenWorker]);
+  // Spec 197: only the latest usage-limit row carries the switch button.
+  const lastLimitIndex = useMemo(() => {
+    for (let i = items.length - 1; i >= 0; i--) {
+      const it = items[i];
+      if (it.type === 'sub_agent_activity' && it.limit) return i;
+    }
+    return -1;
+  }, [items]);
   // Spec 096: `showThinking` follows the viewed session's status (this
   // instance outlives session switches). Not isActivelyRunning: the spinner
   // stays through running → waiting on purpose.
@@ -4662,7 +4683,17 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                     : item.action === 'interaction_required'
                       ? 'text-primary'
                       : 'text-secondary';
-              rendered = (
+              rendered = item.limit ? (
+                <UsageLimitRow
+                  key={`sa-${index}`}
+                  handle={item.handle}
+                  name={agents.find((a) => a.slug === item.handle)?.name ?? item.handle}
+                  resetsAt={item.limit.resetsAt}
+                  vendorText={item.error ?? ''}
+                  switchTo={index === lastLimitIndex ? limitSwitchFor(item.handle) : null}
+                  onSwitch={handlePinChange}
+                />
+              ) : (
                 <div
                   key={`sa-${index}`}
                   data-testid="sub-agent-activity"

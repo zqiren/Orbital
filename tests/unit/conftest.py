@@ -47,6 +47,19 @@ def _no_real_drive_roots_in_repo_walk():
 
 
 @pytest.fixture(autouse=True)
+def _no_quota_store_between_tests():
+    """Spec 197: Orbital's own agent picks read the process-wide quota
+    store's limit marks. ``create_app()`` installs one per app and nothing
+    removed it, so a limit one test recorded reordered a later test's picks.
+    Each test starts with none; a test that needs one installs it (or
+    builds an app, which does)."""
+    from agent_os.daemon_v2 import quota_store
+    quota_store.install(None)
+    yield
+    quota_store.install(None)
+
+
+@pytest.fixture(autouse=True)
 def _no_sub_agent_warm_up():
     """Spec 136: ``create_app()``'s lifespan starts a background sweep of
     every agent CLI. Unit tests that enter it must not probe the developer's

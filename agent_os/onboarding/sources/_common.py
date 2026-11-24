@@ -17,7 +17,7 @@ import re
 from datetime import datetime, timezone
 
 from agent_os.onboarding.history_types import (
-    CAUSE_INTERRUPTED, CAUSE_NO_REPLY, HistorySession, StopInfo,
+    CAUSE_INTERRUPTED, CAUSE_NO_REPLY, CAUSE_USAGE_LIMIT, HistorySession, StopInfo,
     classify_error_text,
 )
 from agent_os.onboarding.text_clean import KIND_AUTOMATION, KIND_USER, clean_user_text
@@ -138,11 +138,15 @@ class TurnState:
     def interrupted(self, detail: str | None = None) -> None:
         self.state, self.stop = "stopped", StopInfo(CAUSE_INTERRUPTED, detail)
 
-    def error(self, text: str | None, ts: str | None, *, fallback: str = CAUSE_INTERRUPTED) -> None:
+    def error(self, text: str | None, ts: str | None, *, fallback: str = CAUSE_INTERRUPTED,
+              resets_at: str | None = None) -> None:
         """An error ended the turn. Text that names no cause still counts as
         "didn't finish": ``fallback`` (``interrupted``, the same choice every
-        reader makes)."""
+        reader makes). ``resets_at`` (spec 197): the reset Orbital already
+        worked out for its own usage-limit row, which wins over the text."""
         stop = classify_error_text(text, at=ts)
+        if stop is not None and resets_at and stop.cause == CAUSE_USAGE_LIMIT:
+            stop = StopInfo(stop.cause, stop.detail, resets_at)
         if stop is None:
             detail = " ".join((text or "").split())[:200] or None
             stop = StopInfo(fallback, detail)
