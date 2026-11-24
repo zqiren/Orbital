@@ -114,6 +114,28 @@ class TestRecapGap:
         assert "C1 reply" not in recap
         assert "U3 for claude" not in recap
 
+    def test_files_restored_row_reaches_the_worker(self):
+        """Spec 196 D2: the hidden 'files put back' row is part of the
+        conversation for every worker, native or fresh, like the move note."""
+        note = {"role": "system", "source": "daemon",
+                "content": "The user put these files back to how they were before 2026-11-24 10:02 UTC: "
+                           "notes.md. Re-read them before relying on earlier edits.",
+                "_meta": {"event": "files_restored", "suppress_wake": True,
+                          "paths": ["notes.md"], "to_before": "2026-11-24T10:02:00+00:00"}}
+        rows = [
+            _user("U1", target="codex"),
+            _marker("codex", "d1"),
+            _completed("codex", "edited notes.md"),
+            note,
+            _user("U2", target="codex"),
+        ]
+        for fresh in (False, True):
+            recap = build_recap(rows, "codex", fresh=fresh)
+            assert "system: The user put these files back" in recap, fresh
+        # an unrelated system row with no event still stays out
+        other = {"role": "system", "source": "daemon", "content": "ping-pong guard"}
+        assert "ping-pong" not in build_recap([other, _user("U", target="codex")], "codex", fresh=True)
+
     def test_rows_landed_during_in_flight_turn_reach_the_next_dispatch(self):
         """The completion row is NOT the watermark: anything that lands while
         the worker is still running (between its marker and its completion)

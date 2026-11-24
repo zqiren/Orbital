@@ -415,6 +415,25 @@ describe('ChatMessage — action row (spec 156 §5.1, 164)', () => {
     expect(ids).toEqual(['user-message-copy', 'message-retry', 'message-edit']);
   });
 
+  it('spec 196 D1: the undo-since glyph only on the user row, last, when ChatView allows it', () => {
+    const onUndoSince = vi.fn();
+    const msg = userMsg('q');
+    const { rerender } = render(
+      <ChatMessage message={msg} canEdit onEdit={() => {}} canUndoSince onUndoSince={onUndoSince} />,
+    );
+    const ids = Array.from(screen.getByTestId('message-actions').querySelectorAll('button')).map((b) =>
+      b.getAttribute('data-testid'),
+    );
+    expect(ids).toEqual(['user-message-copy', 'message-edit', 'message-undo-since']);
+    fireEvent.click(screen.getByTestId('message-undo-since'));
+    expect(onUndoSince).toHaveBeenCalledWith(msg);
+    expect(screen.getByTestId('message-undo-since')).toHaveAttribute('title', 'Undo changes since this message');
+    rerender(<ChatMessage message={msg} canUndoSince={false} onUndoSince={onUndoSince} />);
+    expect(screen.queryByTestId('message-undo-since')).toBeNull();
+    rerender(<ChatMessage message={agentMsg('a')} canUndoSince onUndoSince={onUndoSince} />);
+    expect(screen.queryByTestId('message-undo-since')).toBeNull();
+  });
+
   it('a header-only agent row gets no row at all, even as the retry anchor', () => {
     const headerOnly = { ...agentMsg(''), isHeaderOnly: true } as AgentMessage;
     render(<ChatMessage message={headerOnly} canRetry onRetry={() => {}} />);

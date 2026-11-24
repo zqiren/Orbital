@@ -5983,6 +5983,52 @@ describe('ChatView: message actions (spec 156 §5.1/§5.6/§5.7, 164)', () => {
     expect(forkCalls[0].body.at).toBe(U1);
   });
 
+  describe('spec 196 D1: undo everything since a message', () => {
+    it('the glyph sits last in the user row and opens the sheet for this message to now', async () => {
+      historyStatusResponse = { status: 'watching', has_changes: true };
+      seed([user('first', U1), reply('one', A1), user('second', U2), reply('two', A2)]);
+      const props = await mount();
+      const undo = q('message-undo-since');
+      expect(undo).toHaveLength(2);
+      expect(undo[0]).toHaveAttribute('aria-label', 'Undo changes since this message');
+      const ids = Array.from(q('message-actions')[0].querySelectorAll('button')).map((b) => b.getAttribute('data-testid'));
+      expect(ids).toEqual(['user-message-copy', 'message-edit', 'message-undo-since']);
+      // never on agent rows
+      for (const a of Array.from(container.querySelectorAll('.chat-agent-name')).map((n) => n.closest('.group')!)) {
+        expect(a.querySelector('[data-testid="message-undo-since"]')).toBeNull();
+      }
+      await act(async () => undo[0].click());
+      // No rewind, no fork, no second dialog: the existing sheet, open-ended.
+      expect(props.onUndoTurn).toHaveBeenCalledWith({ sessionId: 's1', fromTs: U1, toTs: null, since: true });
+      expect(forkCalls).toHaveLength(0);
+    });
+
+    it('hidden while the session runs, without history, or without a sheet to open', async () => {
+      historyStatusResponse = { status: 'watching', has_changes: true };
+      seed([user('first', U1), reply('one', A1)]);
+      await mount({ agentStatus: 'running' as never });
+      expect(q('message-undo-since')).toHaveLength(0);
+
+      __clearChatHistoryCacheForTests();
+      await mount({ sessionId: 's2', onUndoTurn: undefined });
+      expect(q('message-undo-since')).toHaveLength(0);
+    });
+
+    it('hidden when the project has no recorded change or history is not watching', async () => {
+      historyStatusResponse = { status: 'watching', has_changes: false };
+      seed([user('first', U1), reply('one', A1)]);
+      await mount();
+      expect(q('message-undo-since')).toHaveLength(0);
+    });
+
+    it('hidden while history is still building', async () => {
+      historyStatusResponse = { status: 'building', has_changes: true };
+      seed([user('first', U1), reply('one', A1)]);
+      await mount();
+      expect(q('message-undo-since')).toHaveLength(0);
+    });
+  });
+
   it('a failed send in the fork puts the edited words back in its composer', async () => {
     seed([user('first', U1), reply('one', A1)]);
     injectMessageMock = async () => { throw new Error('boom'); };

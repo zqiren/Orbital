@@ -1555,6 +1555,13 @@ export function transformChatHistory(
     }
 
     if (msg.role === 'system') {
+      // Spec 196 D2: "the user put these files back" is for the agent only
+      // (the turn line's 已撤销 N 个 and the toast are the user's side). No
+      // capsule finalize: a row deferred mid-run must not split the capsule.
+      if (msg._meta?.event === 'files_restored') {
+        i++;
+        continue;
+      }
       // Budget trip row (P3-G): {source:'budget', event:'budget_blocked',
       // payload:{action,window,spend,limit,currency}}. The session endpoint
       // passes the raw JSONL through, so `event`/`payload` ride as extra fields

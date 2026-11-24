@@ -219,9 +219,10 @@ def _visible_line(row: dict, handle: str, *, fresh: bool) -> str | None:
         return None
     if role == "system":
         # Spec 180: the move note is part of the conversation for every
-        # worker (each is a fresh spawn in the new project).
+        # worker (each is a fresh spawn in the new project). Spec 196 D2: so
+        # is the note that the user put files back from history.
         meta = row.get("_meta")
-        if isinstance(meta, dict) and meta.get("event") == "session_moved":
+        if isinstance(meta, dict) and meta.get("event") in ("session_moved", "files_restored"):
             if isinstance(content, str) and content.strip():
                 return f"system: {content.strip()}"
             return None

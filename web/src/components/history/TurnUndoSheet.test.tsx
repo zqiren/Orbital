@@ -76,7 +76,8 @@ describe('TurnUndoSheet (spec 065 §5.9, §7)', () => {
     expect(within(rows()[2]).getByTestId('turn-later').querySelector('[data-agent="orbital"]')).not.toBeNull();
     expect(rows()[3]).toHaveTextContent('Created this file');
     expect(screen.getByTestId('turn-undo-skipped')).toHaveTextContent('1 file has no history: binary or too large');
-    expect(screen.getByTestId('turn-undo-restore')).toHaveTextContent('Restore 2 selected files');
+    // Spec 196 decision 5: with unchecked files the button states both counts.
+    expect(screen.getByTestId('turn-undo-restore')).toHaveTextContent('Restore 2, skip 2');
   });
 
   it('memory files come last, unchecked, under a 记忆 label', async () => {
@@ -94,16 +95,21 @@ describe('TurnUndoSheet (spec 065 §5.9, §7)', () => {
     // The label sits between the work files and the memory files.
     expect(rows()[0].compareDocumentPosition(label) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(label.compareDocumentPosition(rows()[1]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(screen.getByTestId('turn-undo-restore')).toHaveTextContent('Restore 1 selected file');
+    expect(screen.getByTestId('turn-undo-restore')).toHaveTextContent('Restore 1, skip 2');
   });
 
   it('the button counts as boxes change', async () => {
     render(<TurnUndoSheet projectId="p1" turn={TURN} onView={vi.fn()} onRestored={vi.fn()} />);
     await waitFor(() => expect(rows()).toHaveLength(4));
     fireEvent.click(box(rows()[0]));
-    expect(screen.getByTestId('turn-undo-restore')).toHaveTextContent('Restore 1 selected file');
+    expect(screen.getByTestId('turn-undo-restore')).toHaveTextContent('Restore 1, skip 3');
     fireEvent.click(box(rows()[1]));
     expect(screen.getByTestId('turn-undo-restore')).toBeDisabled();
+    // nothing to restore: the plain label, no "restore 0"
+    expect(screen.getByTestId('turn-undo-restore')).toHaveTextContent('Restore 0 selected files');
+    // every box checked: nothing skipped, the plain label
+    for (const r of rows()) if (box(r).getAttribute('aria-checked') === 'false') fireEvent.click(box(r));
+    expect(screen.getByTestId('turn-undo-restore')).toHaveTextContent('Restore 4 selected files');
   });
 
   it('restores each checked file to what the turn started from, against the hash the user reviewed', async () => {
@@ -112,18 +118,24 @@ describe('TurnUndoSheet (spec 065 §5.9, §7)', () => {
     await waitFor(() => expect(rows()).toHaveLength(4));
     fireEvent.click(screen.getByTestId('turn-undo-restore'));
     await waitFor(() => expect(onRestored).toHaveBeenCalled());
-    const body = calls.find((c) => c.path.endsWith('/restore'))!.body as { items: unknown[] };
+    const body = calls.find((c) => c.path.endsWith('/restore'))!.body as { items: unknown[]; session_id?: string; from_ts?: string };
     expect(body.items).toEqual([
       { path: 'site/download.html', sha: 'b-site/download.html', expect_sha: 't-site/download.html' },
       { path: 'README.md', sha: 'b-README.md', expect_sha: 't-README.md' },
     ]);
+    // Spec 196 D2: the sheet names its session, so the agent is told.
+    expect(body.session_id).toBe('S');
+    expect(body.from_ts).toBe(TURN.fromTs);
     expect(onRestored.mock.calls[0][0]).toBe(2);
     expect(onRestored.mock.calls[0][2]).toBe(true);
 
     // The toast's undo puts the turn's content back.
     calls.length = 0;
     await onRestored.mock.calls[0][1]();
-    expect((calls.find((c) => c.path.endsWith('/restore'))!.body as { items: unknown[] }).items).toEqual([
+    const back = calls.find((c) => c.path.endsWith('/restore'))!.body as { items: unknown[]; session_id?: string; from_ts?: string };
+    expect(back.session_id).toBe('S');
+    expect(back.from_ts).toBeUndefined();
+    expect(back.items).toEqual([
       { path: 'site/download.html', sha: 't-site/download.html', expect_sha: 'b-site/download.html' },
       { path: 'README.md', sha: 't-README.md', expect_sha: 'b-README.md' },
     ]);
@@ -182,7 +194,7 @@ describe('TurnUndoSheet — opened by editing a sent message (spec 156 §5.6)', 
   it('without `edit` the sheet is 065’s, unchanged: one button, its own label', async () => {
     render(<TurnUndoSheet projectId="p1" turn={TURN} onView={vi.fn()} onRestored={vi.fn()} />);
     await waitFor(() => expect(rows()).toHaveLength(4));
-    expect(screen.getByTestId('turn-undo-restore')).toHaveTextContent('Restore 2 selected files');
+    expect(screen.getByTestId('turn-undo-restore')).toHaveTextContent('Restore 2, skip 2');
     expect(screen.queryByTestId('turn-undo-send-only')).toBeNull();
   });
 

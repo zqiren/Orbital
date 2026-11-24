@@ -216,6 +216,34 @@ class TestPruneBySupersession:
         assert s2.names[("draft.md", drafts[1]["sha"])] == "评审稿"
 
 
+class TestSeenLines:
+    """Spec 196 D3: metadata-only lines for created files without history."""
+
+    def test_seen_line_is_metadata_only_and_reloads(self, tmp_path):
+        s = HistoryStore(str(tmp_path))
+        s.load()
+        rec = s.record_seen("shot.png", sha="ab" * 32, size=4096, mtime_ns=7,
+                            attrib={"kind": "running", "sessions": [{"session_id": "S"}]})
+        assert rec["kind"] == "seen" and not s.has_blob("ab" * 32)
+        assert s.current("shot.png") is None and s.versions == []  # not a version
+        assert s.has_changes()
+        s2 = HistoryStore(str(tmp_path))
+        s2.load()
+        assert [r["sha"] for r in s2.seen_for("shot.png")] == ["ab" * 32]
+        assert s2.record("n.md", b"x\n", attrib=A)["v"] > rec["v"]  # ids stay unique
+
+    def test_new_prune_carries_seen_lines(self, tmp_path):
+        s = HistoryStore(str(tmp_path), cap_bytes=4000)
+        s.load()
+        s.record_seen("shot.png", sha="cd" * 32, size=10, mtime_ns=1, attrib=A)
+        for _ in range(8):
+            s.record("a.md", os.urandom(800).hex().encode(), attrib=A)
+        assert s.prune_if_needed() > 0
+        s2 = HistoryStore(str(tmp_path))
+        s2.load()
+        assert s2.seen_for("shot.png") and s2.seen_for("shot.png")[0]["sha"] == "cd" * 32
+
+
 def store_epoch(iso):
     from agent_os.history.store import iso_to_epoch
     return iso_to_epoch(iso)

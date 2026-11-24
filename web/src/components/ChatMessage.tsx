@@ -16,6 +16,7 @@ import MarkdownContent, { renderAnchor } from './MarkdownContent';
 import MessageAvatar from './MessageAvatar';
 import CopyButton from './CopyButton';
 import SourceMark from './sources/SourceMark';
+import { UndoGlyph } from './history/TurnChangedLine';
 import { typeName } from './sources/sourcesText';
 import {
   parseSourceTask,
@@ -66,6 +67,13 @@ interface ChatMessageProps {
   onEditSend?: (message: MessageItem, body: string) => void;
   /** Resolves when the resend's request has answered (the button waits). */
   onRetry?: (message: MessageItem) => Promise<unknown> | void;
+  /**
+   * Spec 196 D1 — 撤销这条消息之后的修改: the user's own, persisted message,
+   * while the session is idle and the project's history is watching. Opens
+   * the existing undo sheet for this message to now; no rewind.
+   */
+  canUndoSince?: boolean;
+  onUndoSince?: (message: MessageItem) => void;
 }
 
 /**
@@ -365,6 +373,8 @@ export default function ChatMessage({
   onEditCancel,
   onEditSend,
   onRetry,
+  canUndoSince = false,
+  onUndoSince,
 }: ChatMessageProps) {
   const t = useT();
   const time = formatTime(message.timestamp);
@@ -411,6 +421,7 @@ export default function ChatMessage({
     const showEditor = editing && canEdit && onEditSend !== undefined;
     const showEdit = canEdit && onEdit !== undefined;
     const showRetry = canRetry && onRetry !== undefined;
+    const showUndoSince = canUndoSince && onUndoSince !== undefined;
 
     return (
       <div
@@ -477,7 +488,7 @@ export default function ChatMessage({
             )}
           </div>
         )}
-        {!showEditor && (hasText || showRetry || showEdit) && (
+        {!showEditor && (hasText || showRetry || showEdit || showUndoSince) && (
           <ActionRow side="right">
             {/* Copy carries the message's own text, with the <attached_files>
                 and <use_skill> blocks already stripped — that block is machine
@@ -505,6 +516,21 @@ export default function ChatMessage({
                 className={ACTION_BTN}
               >
                 <Pencil size={12} aria-hidden="true" />
+              </button>
+            )}
+            {showUndoSince && (
+              <button
+                type="button"
+                data-testid="message-undo-since"
+                aria-label={t('chat.message.undoSince')}
+                title={t('chat.message.undoSince')}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onUndoSince(message);
+                }}
+                className={ACTION_BTN}
+              >
+                <UndoGlyph size={13} />
               </button>
             )}
           </ActionRow>

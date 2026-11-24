@@ -37,6 +37,14 @@ class FakeAgents:
     def list_sessions(self, pid):
         return self.sessions
 
+    # spec 196 D2: rows the restore route writes into the session
+    injected: list = []
+
+    async def inject_system_message(self, project_id, content, *, session_id=None, meta=None):
+        self.injected.append({"project_id": project_id, "content": content,
+                              "session_id": session_id, "meta": meta})
+        return "suppressed"
+
 
 def iso(dt):
     return dt.isoformat()
@@ -58,8 +66,10 @@ def client(ws):
     app = FastAPI()
     store = FakeProjects(ws)
     fh = FileHistory(store, lambda pid: [], quiet=0.3, reconcile_every=0)
+    agents = FakeAgents()
+    agents.injected = []
     files_v2.configure(store)
-    history.configure(store, agent_manager=FakeAgents(), file_history=fh)
+    history.configure(store, agent_manager=agents, file_history=fh)
     app.include_router(files_v2.router)
     app.include_router(history.router)
 
@@ -74,6 +84,7 @@ def client(ws):
 
     with TestClient(app) as c:
         c.fh = fh
+        c.agents = agents
         yield c
 
 
@@ -214,6 +225,78 @@ class TestTurn:
         write_as(client.fh, ws, "notes.md", "x\n", "sess-A")
         r = client.get(base("/turn"), params={"session_id": "sess-B", "from_ts": iso(t0)}).json()
         assert r["files"] == []
+
+
+class TestTellTheAgent:
+    """Spec 196 D2: a restore made from a session's sheet appends ONE hidden
+    system row to that session (suppress_wake: never starts a turn); a
+    per-file restore (no session) appends nothing."""
+
+    def test_sheet_restore_writes_one_row_to_its_session(self, client, ws):
+        write_as(client.fh, ws, "notes.md", "agent text\n", "sess-A")
+        write_as(client.fh, ws, "plan.md", "plan v2\n", "sess-A")
+        r = client.post(base("/restore"), json={
+            "session_id": "sess-A", "from_ts": "2026-11-24T10:02:00+00:00",
+            "items": [
+                {"path": "notes.md", "sha": sha256(b"one\ntwo\nthree\n"), "expect_sha": sha256(b"agent text\n")},
+                {"path": "plan.md", "sha": sha256(b"plan v1\n"), "expect_sha": "stale"},  # conflict
+            ]}).json()
+        assert [x["status"] for x in r["results"]] == ["ok", "conflict"]
+        rows = client.agents.injected
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["project_id"] == "p1" and row["session_id"] == "sess-A"
+        meta = row["meta"]
+        assert meta["event"] == "files_restored" and meta["suppress_wake"] is True
+        assert meta["paths"] == ["notes.md"]  # only what actually changed
+        assert meta["to_before"] == "2026-11-24T10:02:00+00:00"
+        assert "notes.md" in row["content"] and "plan.md" not in row["content"]
+        assert "2026-11-24 10:02 UTC" in row["content"]
+        assert not row["content"].startswith("[")  # never parsed as a [Sub-agent] marker
+
+    def test_per_file_restore_and_nothing_changed_write_nothing(self, client, ws):
+        write_as(client.fh, ws, "notes.md", "agent text\n", "sess-A")
+        item = {"path": "notes.md", "sha": sha256(b"one\ntwo\nthree\n"), "expect_sha": sha256(b"agent text\n")}
+        assert client.post(base("/restore"), json={"items": [item]}).json()["results"][0]["status"] == "ok"
+        assert client.agents.injected == []
+        # a sheet restore where every row conflicted: nothing was put back
+        bad = {**item, "expect_sha": "stale"}
+        client.post(base("/restore"), json={"session_id": "sess-A", "items": [bad]})
+        assert client.agents.injected == []
+
+    def test_undo_of_the_undo_tells_the_agent_too(self, client, ws):
+        write_as(client.fh, ws, "notes.md", "agent text\n", "sess-A")
+        client.post(base("/restore"), json={"session_id": "sess-A", "items": [
+            {"path": "notes.md", "sha": sha256(b"one\ntwo\nthree\n"), "expect_sha": sha256(b"agent text\n")}]})
+        # the toast's 撤销: back to the agent's version, no from_ts
+        client.post(base("/restore"), json={"session_id": "sess-A", "items": [
+            {"path": "notes.md", "sha": sha256(b"agent text\n"), "expect_sha": sha256(b"one\ntwo\nthree\n")}]})
+        assert len(client.agents.injected) == 2
+        second = client.agents.injected[1]
+        assert second["meta"]["paths"] == ["notes.md"] and second["meta"].get("to_before") is None
+        assert (ws / "notes.md").read_text() == "agent text\n"
+
+    def test_long_path_list_is_capped_in_the_text(self, client, ws):
+        items = []
+        for i in range(25):
+            rel = f"d/f{i:02d}.md"
+            write_as(client.fh, ws, rel, f"made {i}\n", "sess-A")
+            items.append({"path": rel, "sha": None, "expect_sha": sha256(f"made {i}\n".encode())})
+        r = client.post(base("/restore"), json={"session_id": "sess-A", "items": items}).json()
+        assert all(x["status"] == "ok" for x in r["results"])
+        row = client.agents.injected[0]
+        assert len(row["meta"]["paths"]) == 25
+        assert "d/f19.md" in row["content"] and "d/f20.md" not in row["content"]
+        assert "5 more" in row["content"]
+
+    def test_a_failing_session_append_never_fails_the_restore(self, client, ws):
+        async def boom(*a, **k):
+            raise RuntimeError("session gone")
+        client.agents.inject_system_message = boom
+        write_as(client.fh, ws, "notes.md", "agent text\n", "sess-A")
+        r = client.post(base("/restore"), json={"session_id": "sess-A", "items": [
+            {"path": "notes.md", "sha": sha256(b"one\ntwo\nthree\n"), "expect_sha": sha256(b"agent text\n")}]})
+        assert r.status_code == 200 and r.json()["results"][0]["status"] == "ok"
 
 
 class TestUnavailable:

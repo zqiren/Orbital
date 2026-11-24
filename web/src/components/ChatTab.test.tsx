@@ -1550,6 +1550,19 @@ describe('ChatTab — the sheet opened by an edit', () => {
     expect(screen.getByText('Undo this turn')).toBeInTheDocument();
   });
 
+  it('spec 196 D1: opened from a message’s undo glyph it is titled for that message to now', async () => {
+    setViewportWidth(1440);
+    await act(async () => {
+      renderChatTab();
+    });
+    const open = lastChatViewProps.onUndoTurn as (t: unknown) => void;
+    await act(async () => {
+      open({ sessionId: 'sess-x', fromTs: '2026-11-04T10:00:00Z', toTs: null, since: true });
+    });
+    expect(screen.getByText('Undo changes since this message')).toBeInTheDocument();
+    expect(screen.queryByText('Undo this turn')).toBeNull();
+  });
+
   it('spec 180: a send ChatView reports as delivered into another project follows the session there', async () => {
     mockSessions = [makeSession({ session_id: 'sess-a' })];
     const route = makeRoute({ sessionId: 'sess-a' });

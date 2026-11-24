@@ -10,7 +10,10 @@
 - ``GET  /projects/{id}/files/history/turn?session_id=&from_ts=&to_ts=`` —
   files one turn changed.
 - ``POST /projects/{id}/files/history/restore`` — ``{items:[{path, sha,
-  expect_sha}]}`` → per item ``ok | conflict | busy | refused``.
+  expect_sha}], session_id?, from_ts?}`` → per item ``ok | conflict | busy |
+  refused``. With ``session_id`` (a restore made from that session's undo
+  sheet) the session gets one hidden ``files_restored`` system row (spec 196
+  D2).
 - ``POST /projects/{id}/files/history/name`` — ``{path, sha, name}``.
 
 Containment reuses ``files_v2._resolve_path`` (realpath both sides).
@@ -20,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
@@ -54,6 +58,47 @@ class RestoreItem(BaseModel):
 
 class RestoreRequest(BaseModel):
     items: list[RestoreItem]
+    # Spec 196 D2: the session whose undo sheet made this restore (turn undo,
+    # undo since a message, the edit sheet's restore), and where the sheet's
+    # span began. Absent for a per-file restore from the history column.
+    session_id: str | None = None
+    from_ts: str | None = None
+
+
+# The row names at most this many files; the meta keeps all of them.
+_RESTORED_PATHS_IN_TEXT = 20
+
+
+def _restored_text(paths: list[str], from_ts: str | None) -> str:
+    shown = ", ".join(paths[:_RESTORED_PATHS_IN_TEXT])
+    more = len(paths) - _RESTORED_PATHS_IN_TEXT
+    if more > 0:
+        shown += f", and {more} more"
+    t = iso_to_epoch(from_ts) if from_ts else None
+    if t is not None:
+        when = datetime.fromtimestamp(t, timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        head = f"The user put these files back to how they were before {when}"
+    else:
+        head = "The user restored these files from their history"
+    return f"{head}: {shown}. Re-read them before relying on earlier edits."
+
+
+async def _tell_session(project_id: str, session_id: str, from_ts: str | None,
+                        results: list[dict]) -> None:
+    """One row at the session's tail, never a wake (rides the spec 074
+    append-without-wake path in all three branches: idle, running, evicted).
+    The manager reads it as a ``[runtime]`` turn at its place; workers get
+    it in the next dispatch's recap. The user sees nothing new in chat."""
+    paths = [r["path"] for r in results if r.get("status") == "ok" and not r.get("unchanged")]
+    if not paths or _agent_manager is None or not hasattr(_agent_manager, "inject_system_message"):
+        return
+    meta = {"event": "files_restored", "suppress_wake": True, "paths": paths, "to_before": from_ts}
+    try:
+        await _agent_manager.inject_system_message(
+            project_id, _restored_text(paths, from_ts), session_id=session_id, meta=meta)
+    except Exception:  # noqa: BLE001 — the files are back either way
+        logger.warning("file history: could not note the restore in session %s/%s",
+                       project_id, session_id, exc_info=True)
 
 
 class NameRequest(BaseModel):
@@ -208,6 +253,8 @@ async def restore_files(project_id: str, req: RestoreRequest):
                                           capture_attrib=capture)
     except HistoryUnavailable:
         raise HTTPException(status_code=409, detail=_status(project_id))
+    if req.session_id:
+        await _tell_session(project_id, req.session_id, req.from_ts, results)
     return {"results": results}
 
 

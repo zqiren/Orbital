@@ -37,6 +37,12 @@ export interface TurnRef {
     onProceed: () => void;
     onSendOnly: () => void;
   };
+  /**
+   * Spec 196 D1: opened from the undo glyph under a user message, for the
+   * span from that message to now (`toTs` null). Only the title differs; the
+   * conversation is not rewound.
+   */
+  since?: boolean;
 }
 
 export interface TurnUndoSheetProps {
@@ -120,6 +126,9 @@ export default function TurnUndoSheet({ projectId, turn, onView, onRestored }: T
   const checked = (f: TurnFile) => checks.get(f.path) ?? defaultChecked(f);
   const selected = files.filter(checked);
   const n = selected.length;
+  // Spec 196 decision 5: the sheet is the confirmation, so with unchecked
+  // files the button says what is left alone too.
+  const skipped = files.length - n;
 
   const toggle = (f: TurnFile) =>
     setChecks((prev) => new Map(prev).set(f.path, !checked(f)));
@@ -130,7 +139,10 @@ export default function TurnUndoSheet({ projectId, turn, onView, onRestored }: T
     setFailed(false);
     const items = selected.map((f) => ({ path: f.path, sha: f.before_sha, expect_sha: f.current_sha }));
     try {
-      const { results } = await historyApi.restore(projectId, items);
+      const { results } = await historyApi.restore(projectId, items, {
+        sessionId: turn.sessionId,
+        fromTs: turn.fromTs,
+      });
       const ok = results.filter((r) => r.status === 'ok');
       const nextChecks = new Map(checks);
       const notes = new Map<string, 'busy' | 'refused'>();
@@ -149,7 +161,7 @@ export default function TurnUndoSheet({ projectId, turn, onView, onRestored }: T
           return { path: r.path, sha: before?.expect_sha ?? null, expect_sha: r.current_sha ?? null };
         });
         onRestored(ok.length, async () => {
-          await historyApi.restore(projectId, back).catch(() => undefined);
+          await historyApi.restore(projectId, back, { sessionId: turn.sessionId }).catch(() => undefined);
           bumpFileHistory(projectId, { again: SETTLE_MS });
         }, ok.length === results.length);
       }
@@ -252,9 +264,11 @@ export default function TurnUndoSheet({ projectId, turn, onView, onRestored }: T
             ? n === 1
               ? t('chat.edit.restoreAndSend.one', { n })
               : t('chat.edit.restoreAndSend.other', { n })
-            : n === 1
-              ? t('turn.restoreSelected.one', { n })
-              : t('turn.restoreSelected.other', { n })}
+            : n > 0 && skipped > 0
+              ? t('turn.restoreSkip', { n, m: skipped })
+              : n === 1
+                ? t('turn.restoreSelected.one', { n })
+                : t('turn.restoreSelected.other', { n })}
         </button>
         {turn.edit && (
           <button

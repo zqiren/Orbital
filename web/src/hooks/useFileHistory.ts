@@ -59,10 +59,16 @@ export const historyApi = {
     api<TurnFiles>(
       `${base(projectId)}/turn${qs({ session_id: sessionId, from_ts: fromTs, to_ts: toTs ?? undefined })}`,
     ),
-  restore: (projectId: string, items: HistoryRestoreItem[]) =>
+  /**
+   * `from`: the undo sheet that made this restore (spec 196 D2). The daemon
+   * then tells that session's agent which files were put back.
+   */
+  restore: (projectId: string, items: HistoryRestoreItem[], from?: { sessionId: string; fromTs?: string }) =>
     api<{ results: HistoryRestoreResult[] }>(`${base(projectId)}/restore`, {
       method: 'POST',
-      body: JSON.stringify({ items }),
+      body: JSON.stringify(
+        from ? { items, session_id: from.sessionId, ...(from.fromTs ? { from_ts: from.fromTs } : {}) } : { items },
+      ),
     }),
   name: (projectId: string, path: string, sha: string, name: string) =>
     api<{ path: string; sha: string; name: string | null }>(`${base(projectId)}/name`, {

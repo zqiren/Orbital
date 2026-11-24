@@ -368,7 +368,7 @@ export default function ChatTab({
   // Spec 156 §5.6: the same sheet, opened by editing a sent message.
   const undoTitle = (
     <span className="text-title font-semibold text-primary">
-      {t(undoTurn?.edit ? 'chat.edit.sheetTitle' : 'turn.sheetTitle')}
+      {t(undoTurn?.edit ? 'chat.edit.sheetTitle' : undoTurn?.since ? 'turn.sheetTitleSince' : 'turn.sheetTitle')}
     </span>
   );
 
