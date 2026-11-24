@@ -610,7 +610,11 @@ class TestCreatedBinaries:
         (ws / "a.pdf").write_bytes(b"%PDF-1.7\x00one" * 100)
         assert await until(lambda: len(store.seen_for("a.pdf")) == 1)
         os.remove(ws / "a.pdf")
-        await asyncio.sleep(QUIET * 3)
+        # Wait until the delete has settled, not a fixed time: Windows file
+        # events arrive about 1 s late, so a fixed sleep recreated the file
+        # before the delete was processed and it read as an overwrite.
+        proj = svc.get_project("p1")
+        assert await until(lambda: "a.pdf" not in proj.skipped)
         svc.running.now["p1"] = [("sess-B", ["codex"])]
         (ws / "a.pdf").write_bytes(b"%PDF-1.7\x00two" * 100)
         assert await until(lambda: len(store.seen_for("a.pdf")) == 2)
