@@ -275,6 +275,34 @@ def test_index_deleted_while_running_is_recreated_on_the_next_write(project, tmp
     assert n == 1
 
 
+def test_an_index_without_the_thread_ids_column_keeps_its_rows(project, tmp_path, monkeypatch):
+    """2026-11-24: the index gained a nullable ``thread_ids`` column (the
+    session-import dedup's worker thread ids). An index written by the
+    previous build is not rebuilt: the column is added, every row stays, and
+    no session log is reopened."""
+    import sqlite3
+    ws, sessions, ps = project
+    _make_manager(tmp_path, ps).build_session_index(str(ws))
+    path = si.index_path(str(sessions))
+    conn = sqlite3.connect(path)
+    conn.execute("ALTER TABLE sessions DROP COLUMN thread_ids")  # the v0.24.1 shape
+    conn.commit()
+    conn.close()
+
+    counter = _JsonlOpenCounter(monkeypatch, sessions)
+    restarted = _make_manager(tmp_path, ps)
+    restarted.build_session_index(str(ws))
+    assert counter.paths == []
+    conn = sqlite3.connect(path)
+    try:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(sessions)")]
+        rows = conn.execute("SELECT count(*), count(thread_ids) FROM sessions").fetchone()
+    finally:
+        conn.close()
+    assert "thread_ids" in cols
+    assert rows == (7, 0)  # all rows kept; ids unknown until read
+
+
 # ---------------------------------------------------------------------------
 # Spec 108 — who spoke last: ``last_user_at`` / ``last_reply_at`` on every row
 # ---------------------------------------------------------------------------
