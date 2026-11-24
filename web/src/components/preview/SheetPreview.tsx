@@ -95,7 +95,10 @@ export default function SheetPreview({ bytes, format, fileName, onNav, onError }
           })}
         </p>
       )}
-      <div className="relative flex-1 min-h-0">
+      {/* Design pass D: the grid reads on an inset card like a page
+          (index.css .grid-sheet), so it never runs edge to edge against the
+          white conversation beside the panel. */}
+      <div className="grid-sheet relative flex-1 min-h-0">
         {!sheet || sheet.rows.length === 0 || sheet.colCount === 0 ? (
           <p className="p-4 text-caption text-secondary">{t('filePreview.doc.sheetEmpty')}</p>
         ) : (
@@ -106,7 +109,7 @@ export default function SheetPreview({ bytes, format, fileName, onNav, onError }
         <div
           role="tablist"
           aria-label={t('filePreview.doc.sheets')}
-          className="flex items-center gap-1 px-2 py-1 border-t border-border bg-sidebar overflow-x-auto shrink-0"
+          className="flex items-center gap-1 px-3.5 pt-2 pb-2.5 overflow-x-auto shrink-0"
         >
           {sheetNames.map((name, i) => (
             <button
@@ -116,10 +119,12 @@ export default function SheetPreview({ bytes, format, fileName, onNav, onError }
               aria-selected={i === index}
               title={name}
               onClick={() => setActive(i)}
-              className={`shrink-0 max-w-[10rem] truncate text-caption px-2 py-0.5 rounded-md border transition-colors ${
+              // The active tab is a raised chip in primary text (white on
+              // D's accent measured 4.19:1 light / 3.24:1 dark).
+              className={`shrink-0 max-w-[10rem] truncate text-caption px-2 py-0.5 rounded-md transition-colors ${
                 i === index
-                  ? 'bg-accent text-white border-accent'
-                  : 'border-border text-secondary hover:text-primary'
+                  ? 'bg-[var(--float-layer)] text-primary font-medium shadow-[var(--float-shadow-nested)]'
+                  : 'text-secondary hover:text-primary'
               }`}
             >
               {name}

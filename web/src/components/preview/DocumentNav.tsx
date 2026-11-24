@@ -43,7 +43,7 @@ function PdfNav({ nav, compact }: { nav: PdfNavState; compact: boolean }) {
   const t = useT();
   const narrow = compact ? '@max-[24rem]:hidden' : '';
   return (
-    <div className="flex items-center gap-1 min-w-0">
+    <div data-pdf-nav="" className="flex items-center gap-1 min-w-0">
       <NavButton label={t('filePreview.doc.prevPage')} onClick={() => nav.goTo(nav.page - 1)} disabled={nav.page <= 1}>
         <ChevronLeft size={14} aria-hidden />
       </NavButton>
@@ -80,6 +80,7 @@ function PdfNav({ nav, compact }: { nav: PdfNavState; compact: boolean }) {
         onZoomIn={nav.zoomIn}
         onFit={nav.fitWidth}
         compact={compact}
+        narrowAt="24rem"
       />
     </div>
   );

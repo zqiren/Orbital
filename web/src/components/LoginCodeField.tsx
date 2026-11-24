@@ -98,20 +98,20 @@ export default function LoginCodeField({ slug, className = '' }: { slug: string;
           spellCheck={false}
           autoFocus
           data-testid={`login-code-input-${slug}`}
-          className="min-w-0 flex-1 text-sm font-mono bg-sidebar border border-border rounded px-2 py-1.5 text-primary focus:outline-none focus:border-accent"
+          className="min-w-0 flex-1 text-body font-mono bg-sidebar border border-border rounded px-2 py-1.5 text-primary focus:outline-none focus:border-accent"
         />
         <button
           type="button"
           onClick={() => void submit()}
           disabled={sending || !value.trim()}
           data-testid={`login-code-submit-${slug}`}
-          className="shrink-0 text-xs bg-accent text-white rounded px-3 py-1.5 hover:bg-accent/90 transition-all duration-150 disabled:opacity-50"
+          className="shrink-0 text-body font-medium bg-accent text-white rounded px-3 py-1.5 hover:bg-accent/90 transition-all duration-150 disabled:opacity-50"
         >
           {sending ? t('subAgentCard.sending') : t('subAgentCard.submit')}
         </button>
       </div>
       {error && (
-        <p className="text-[11px] text-error-text" role="alert">{error}</p>
+        <p className="text-micro text-error-text" role="alert">{error}</p>
       )}
     </div>
   );

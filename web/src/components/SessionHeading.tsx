@@ -74,7 +74,7 @@ export default function SessionHeading({ session }: SessionHeadingProps) {
 
   return (
     <div
-      className="session-heading relative z-10 shrink-0 px-7 pt-[20px] pb-1 bg-card"
+      className="session-heading relative z-10 shrink-0 px-7 pt-[calc(20px+var(--sheet-pad-top))] pb-1 bg-card"
       data-testid="session-heading"
     >
       {eyebrow && (

@@ -372,7 +372,7 @@ export default function WorkbenchPage({
 
   return (
     <div
-      className={`wb-page relative flex-1 min-h-0 flex ${phone ? 'wb-phone' : ''}`}
+      className={`wb-page relative flex-1 min-h-0 flex ${phone ? 'wb-phone' : 'sheet'}`}
       data-testid="workbench-page"
     >
       <div className="flex-1 min-w-0 min-h-0 overflow-y-auto" data-testid="workbench-scroller">

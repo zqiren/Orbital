@@ -135,7 +135,7 @@ export default function SheetGrid({ sheet }: { sheet: SheetData }) {
       key={key}
       role="gridcell"
       title={value.length > 24 ? value : undefined}
-      className="absolute px-1.5 text-caption text-primary whitespace-nowrap overflow-hidden text-ellipsis border-r border-b border-border bg-card select-text"
+      className="absolute px-1.5 text-caption text-primary whitespace-nowrap overflow-hidden text-ellipsis border-r border-b border-border bg-[var(--float-layer)] select-text"
       style={{
         top,
         left,
@@ -202,7 +202,7 @@ export default function SheetGrid({ sheet }: { sheet: SheetData }) {
       aria-rowcount={rowCount}
       aria-colcount={sheet.colCount}
       tabIndex={0}
-      className="absolute inset-0 overflow-auto bg-card focus:outline-none"
+      className="absolute inset-0 overflow-auto bg-[var(--float-layer)] focus:outline-none"
       data-testid="sheet-grid"
     >
       <div className="relative" style={{ width: gutter + bodyW, height: HEADER_H + bodyH }}>

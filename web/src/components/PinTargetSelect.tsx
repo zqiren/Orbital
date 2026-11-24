@@ -976,7 +976,7 @@ function PinTargetSelect({
             ? `flex items-center gap-1 px-1.5 py-1 rounded-md border border-border
                hover:bg-card-hover/50 disabled:opacity-50 focus-visible:outline-none
                focus-visible:bg-card-hover/50 max-md:min-h-[36px]`
-            : `flex items-center gap-1 pl-3 pr-1.5 rounded-l-[14px] border-r border-border
+            : `flex items-center gap-1 pl-3 pr-1.5 rounded-l-[var(--r-card)] border-r border-border
                hover:bg-card-hover/50 disabled:opacity-50 focus-visible:outline-none
                focus-visible:bg-card-hover/50 max-md:min-w-[48px]`
         }

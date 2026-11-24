@@ -214,7 +214,7 @@ export default function PairPhone() {
 
               {/* Right: QR code */}
               <div className="flex-shrink-0 p-6 flex flex-col items-center justify-center border-l border-border bg-[var(--bg-primary,#111)] max-md:border-l-0 max-md:border-t">
-                <div className="bg-qr-surface p-3 rounded-xl shadow-lg shadow-black/20 max-md:max-w-full">
+                <div className="bg-qr-surface p-3 rounded-[var(--r-card)] shadow-lg shadow-black/20 max-md:max-w-full">
                   <QRCodeSVG
                     value={lanUrl}
                     size={176}
@@ -232,7 +232,7 @@ export default function PairPhone() {
           ) : (
             /* No LAN / error state */
             <div className="p-6 flex items-center gap-5">
-              <div className="flex-shrink-0 w-24 h-24 rounded-xl bg-accent/5 border border-accent/10 flex flex-col items-center justify-center gap-1.5">
+              <div className="flex-shrink-0 w-24 h-24 rounded-[var(--r-card)] bg-accent/5 border border-accent/10 flex flex-col items-center justify-center gap-1.5">
                 <Wifi className="w-8 h-8 text-accent/40" />
                 <span className="type-label text-secondary">
                   LAN
@@ -332,7 +332,7 @@ export default function PairPhone() {
 
             {/* Right: QR code */}
             <div className="flex-shrink-0 p-6 flex flex-col items-center justify-center border-l border-border bg-[var(--bg-primary,#111)] max-md:border-l-0 max-md:border-t">
-              <div className="bg-qr-surface p-3 rounded-xl shadow-lg shadow-black/20 max-md:max-w-full">
+              <div className="bg-qr-surface p-3 rounded-[var(--r-card)] shadow-lg shadow-black/20 max-md:max-w-full">
                 <QRCodeSVG
                   value={qrValue}
                   size={176}
@@ -351,7 +351,7 @@ export default function PairPhone() {
           /* Idle / loading / error state */
           <div className="p-6 flex items-center gap-5">
             {/* Illustration placeholder */}
-            <div className="flex-shrink-0 w-24 h-24 rounded-xl bg-accent/5 border border-accent/10 flex flex-col items-center justify-center gap-1.5">
+            <div className="flex-shrink-0 w-24 h-24 rounded-[var(--r-card)] bg-accent/5 border border-accent/10 flex flex-col items-center justify-center gap-1.5">
               <Scan className="w-8 h-8 text-accent/40" />
               <span className="type-label text-secondary">
                 Scan

@@ -251,15 +251,19 @@ export function useHistoryPanel(
       aria-pressed={open}
       title={t('history.open')}
       data-testid="history-open"
-      className={`flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-[9px] text-body transition-colors hover:bg-accent/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 ${
-        open ? 'text-accent' : 'text-secondary hover:text-primary'
+      // Caption, like every other control on the file header row (编辑, the
+      // size, the page field): it was text-body, one step larger than its
+      // neighbours (design pass D type rule). On: primary label, accent
+      // glyph, on the accent tint.
+      className={`history-toggle flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-[9px] text-caption transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 ${
+        open ? 'bg-accent/12 text-primary [&>svg]:text-accent-text' : 'text-secondary hover:text-primary hover:bg-accent/10'
       }`}
     >
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" aria-hidden>
         <circle cx="12" cy="12" r="9" />
         <path d="M12 7v5l3 2" />
       </svg>
-      <span className="@max-[20rem]:hidden">{t('history.open')}</span>
+      <span data-history-label="" className="@max-[20rem]:hidden">{t('history.open')}</span>
     </button>
   ) : null;
 
@@ -339,7 +343,7 @@ export function useHistoryPanel(
         {open && (
           <aside
             aria-label={t('history.open')}
-            className="mb-2.5 ml-2.5 mr-2.5 mt-0.5 flex w-[304px] shrink-0 flex-col rounded-[14px] bg-elevated shadow-[0_2px_2px_rgb(0_0_0/0.02),0_4px_14px_rgb(0_0_0/0.04),0_22px_50px_rgb(0_0_0/0.07),inset_0_1px_0_rgb(255_255_255/0.8)] dark:shadow-[0_2px_3px_rgb(0_0_0/0.45),0_16px_48px_rgb(0_0_0/0.5),inset_0_1px_0_rgb(255_255_255/0.06)] @max-[36rem]:absolute @max-[36rem]:inset-y-0 @max-[36rem]:right-0 @max-[36rem]:z-20 @max-[36rem]:w-[min(304px,calc(100%-20px))]"
+            className="mb-2.5 ml-2.5 mr-2.5 mt-0.5 flex w-[304px] shrink-0 flex-col rounded-[var(--r-card)] bg-elevated shadow-[var(--float-shadow)] @max-[36rem]:absolute @max-[36rem]:inset-y-0 @max-[36rem]:right-0 @max-[36rem]:z-20 @max-[36rem]:w-[min(304px,calc(100%-20px))]"
           >
             {column('column')}
           </aside>

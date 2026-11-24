@@ -27,7 +27,7 @@ import AgentGlyph from './AgentGlyph';
 import { agentStateOf, isReady, type AgentState } from './welcomeModel';
 
 const tileClass =
-  'surface-float-static surface-float-nested flex h-[46px] min-w-0 items-center gap-2.5 !rounded-[12px] pl-3 pr-2';
+  'surface-float-static surface-float-nested flex h-[46px] min-w-0 items-center gap-2.5 pl-3 pr-2';
 
 function AgentTile({ entry, state, emphasis, onChanged }: {
   entry: SubAgentListEntry;

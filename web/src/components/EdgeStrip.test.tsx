@@ -262,12 +262,14 @@ describe('EdgeStrip — pinned (docked list)', () => {
     expect(getStrip()).toHaveAttribute('aria-expanded', 'true');
   });
 
-  it('the rail hairline exists only while collapsed — floated or docked it is the list\'s gutter', () => {
+  // Design pass D: the rail is part of the window's chrome — the tint itself
+  // is the edge, so it has no fill and no hairline in any state.
+  it('the rail paints no fill and no hairline, collapsed or docked', () => {
     vi.useRealTimers();
     const { setPinned } = renderStrip();
-    expect(getStrip()).toHaveClass('border-r');
+    expect(getStrip().className).not.toMatch(/\bborder-r\b|\bbg-nav\b/);
     setPinned(true);
-    expect(getStrip()).not.toHaveClass('border-r');
+    expect(getStrip().className).not.toMatch(/\bborder-r\b|\bbg-nav\b/);
   });
 
   it('hides the aggregate dot while pinned — the real per-project dots are on screen', () => {
@@ -286,7 +288,8 @@ describe('EdgeStrip — pinned (docked list)', () => {
 
     expect(strip).toHaveAttribute('aria-expanded', 'true');
     expect(getWrapper()).toHaveClass('w-5');
-    expect(getFlyout()).toHaveClass('shadow-xl');
+    // Floated over the sheet it repaints the chrome with the column edge shadow.
+    expect(getFlyout()).toHaveClass('edge-flyout-floating');
 
     fireEvent.mouseLeave(strip);
     act(() => {
@@ -543,7 +546,8 @@ describe('EdgeStrip — the column chevron', () => {
     // 16px, the gear's size: at 14 it read fainter than the gear beside it.
     expect(svg).toHaveAttribute('width', '16');
     expect(svg).toHaveAttribute('stroke-width', '2.5');
-    expect(chevron).toHaveClass('text-secondary', 'rounded-md', 'group-hover:bg-nav-hover');
+    // Design pass D: on the tint, the hover box is the chrome hover (white .6).
+    expect(chevron).toHaveClass('text-secondary', 'rounded-md', 'group-hover:bg-chrome-hover');
     expect(getStrip()).toHaveClass('group');
   });
 

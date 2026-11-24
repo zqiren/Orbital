@@ -9,6 +9,7 @@ import type { FileContent } from '../types';
 import FilePreview from './FilePreview';
 import { useT } from '../i18n/useT';
 import { useCoverWindow } from '../hooks/useWindowCover';
+import { useScrollHairline } from '../hooks/useScrollHairline';
 
 const FILE_PREVIEW_DRAWER_WIDTH_KEY = 'orbital:filePreviewDrawerWidth';
 /** Docked panel width is remembered separately from the overlay drawer's. */
@@ -143,6 +144,10 @@ export default function FilePreviewDrawer({
   // collapses to the strip meanwhile (App, useWindowCover).
   useCoverWindow(maximized && (docked || open));
   const panelRef = useRef<HTMLDivElement>(null);
+  // Design pass D: the header row sits on the panel tone with no line at
+  // rest; a hairline shows while the content under it is scrolled. A file's
+  // own header (FilePreview) owns its scroller.
+  const hairline = useScrollHairline(selectedPath);
   const closeBtnRef = useRef<HTMLButtonElement>(null);
   const [drawerWidth, setDrawerWidth] = useState(() => readSavedDrawerWidth(docked));
   const widthRef = useRef(drawerWidth);
@@ -369,7 +374,9 @@ export default function FilePreviewDrawer({
         data-maximized={maximized}
         aria-label={t('panel.handle')}
         style={{ '--file-preview-drawer-width': `${dockedWidth}px` } as CSSProperties}
-        className={`float-panel-dock relative z-0 hidden md:flex h-full min-h-0 flex-col bg-background ${
+        // Design pass D: part of the chat's sheet — a tone step from the
+        // conversation (bg-dock), no line; maximized it is the whole sheet.
+        className={`float-panel-dock sheet-pad-top relative z-0 hidden md:flex h-full min-h-0 flex-col bg-dock ${
           maximized
             ? // 2026-11-04: the whole window except the 20px edge strip
               // (index.css), not just the right area beside the column.
@@ -378,14 +385,15 @@ export default function FilePreviewDrawer({
               // the row narrows without a window resize — pinning the project
               // list takes 240px from the right area and re-measures nothing
               // (spec 137: strip + list + column + right area must coexist).
-              'shrink min-w-[320px] border-l border-border w-[var(--file-preview-drawer-width)] max-w-[80%]'
+              'shrink min-w-[320px] w-[var(--file-preview-drawer-width)] max-w-[80%]'
         }`}
       >
         {!maximized && resizeHandle}
         {header ? (
           <div
             data-testid="workspace-panel-header"
-            className="flex items-center justify-between gap-2 pl-3 pr-2 py-1.5 border-b border-border shrink-0 min-w-0"
+            data-scrolled={hairline.scrolled ? 'true' : 'false'}
+            className="flex items-center justify-between gap-2 pl-3 pr-2 py-1.5 shrink-0 min-w-0"
           >
             <div className="min-w-0 flex-1">{header}</div>
             {collapseButton}
@@ -395,7 +403,7 @@ export default function FilePreviewDrawer({
           // rather than holding open an otherwise empty bar.
           <div className="absolute right-2 top-1.5 z-10">{collapseButton}</div>
         )}
-        <div className="flex-1 overflow-hidden min-h-0 flex flex-col">{body}</div>
+        <div {...hairline.scrollProps} className="flex-1 overflow-hidden min-h-0 flex flex-col">{body}</div>
       </section>
     );
   }
@@ -429,15 +437,17 @@ export default function FilePreviewDrawer({
         onKeyDown={handleTrapTab}
         data-maximized={maximized}
         style={{ '--file-preview-drawer-width': `${drawerWidth}px` } as CSSProperties}
-        className={`float-panel-drawer absolute ${raised ? 'z-[70]' : 'z-40'} flex flex-col bg-background shadow-xl transition-transform duration-200 ease-out
+        className={`float-panel-drawer sheet-pad-top absolute ${raised ? 'z-[70]' : 'z-40'} flex flex-col bg-dock shadow-xl transition-transform duration-200 ease-out
           inset-x-0 bottom-0 h-[75%] rounded-t-xl border-t border-border
-          md:inset-y-0 md:right-0 md:h-full md:rounded-none md:border-t-0 md:border-l
+          md:inset-y-0 md:right-0 md:h-full md:rounded-none md:border-t-0
           ${maximized ? 'md:left-0 md:w-auto md:max-w-none panel-max-window' : 'md:left-auto md:w-[var(--file-preview-drawer-width)] md:max-w-[80%]'}
           ${open ? 'translate-y-0 md:translate-x-0' : 'translate-y-full md:translate-y-0 md:translate-x-full pointer-events-none'}`}
       >
         {!maximized && resizeHandle}
         <div
-          className={`flex items-center justify-between gap-2 border-b border-border shrink-0 min-w-0 ${
+          data-scrolled={hairline.scrolled ? 'true' : 'false'}
+          // The phone's bottom sheet keeps its rule (unchanged in pass D).
+          className={`flex items-center justify-between gap-2 max-md:border-b max-md:border-border shrink-0 min-w-0 ${
             header ? 'pl-3 pr-2 py-1.5' : 'px-4 py-2.5'
           }`}
         >
@@ -458,7 +468,7 @@ export default function FilePreviewDrawer({
             <X size={16} />
           </button>
         </div>
-        <div className={`flex-1 min-h-0 ${children ? 'overflow-hidden flex flex-col' : 'overflow-y-auto'}`}>{body}</div>
+        <div {...hairline.scrollProps} className={`flex-1 min-h-0 ${children ? 'overflow-hidden flex flex-col' : 'overflow-y-auto'}`}>{body}</div>
       </div>
     </>
   );

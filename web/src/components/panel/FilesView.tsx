@@ -134,7 +134,9 @@ function RecentGroup({
   if (files.length === 0) return null;
   const rows = showAll ? files : files.slice(0, RECENT_VISIBLE);
   return (
-    <div className="shrink-0 border-b border-border p-2">
+    // Design pass D: rows on the panel tone; 2px of space, not a rule,
+    // separates the group from the tree.
+    <div className="shrink-0 p-2 pb-0.5">
       <button
         type="button"
         onClick={() => setOpen((prev) => !prev)}

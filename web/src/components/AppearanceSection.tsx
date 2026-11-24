@@ -23,47 +23,45 @@ import { useTheme, type ThemePreference } from '../hooks/useTheme';
  */
 
 interface Palette {
-  nav: string;
-  sidebar: string;
+  /** The window's chrome (design pass D): rail + column as one tint. */
+  chrome: string;
   card: string;
   line: string;
   ink: string;
   composer: string;
+  accent: string;
 }
 
 const LIGHT: Palette = {
-  nav: '#E8EBF0',
-  sidebar: '#F0F3F7',
+  chrome: 'linear-gradient(180deg, #DCE4F0 0%, #E3E7F1 55%, #E8E6F0 100%)',
   card: '#FFFFFF',
-  line: '#E1E5EA',
-  ink: '#C9CED6',
+  line: '#D9DFE8',
+  ink: '#C3CAD5',
   composer: '#FFFFFF',
+  accent: '#2F6FF0',
 };
 
 const DARK: Palette = {
-  nav: '#111317',
-  sidebar: '#16191D',
-  card: '#1E2126',
-  line: '#2D3138',
+  chrome: 'linear-gradient(180deg, #131826 0%, #0F1218 60%, #110F18 100%)',
+  card: '#1B1E23',
+  line: '#2B3039',
   ink: '#454A53',
-  composer: '#262A30',
+  composer: '#24282F',
+  accent: '#4C8DF8',
 };
-
-const ACCENT = '#539AF8';
 
 function Thumb({ p }: { p: Palette }) {
   return (
-    <div className="flex h-full w-full" style={{ background: p.card }}>
-      <div className="h-full w-[13%]" style={{ background: p.nav }} />
-      <div className="flex h-full w-[26%] flex-col gap-[3px] p-[4px]" style={{ background: p.sidebar }}>
+    <div className="flex h-full w-full" style={{ background: p.chrome }}>
+      <div className="flex h-full w-[34%] flex-col gap-[3px] p-[5px]">
         <div className="h-[5px] w-full rounded-[2px]" style={{ background: p.line }} />
         <div className="h-[5px] w-3/4 rounded-[2px]" style={{ background: p.line }} />
         <div className="h-[5px] w-5/6 rounded-[2px]" style={{ background: p.line }} />
       </div>
-      <div className="flex h-full flex-1 flex-col gap-[4px] p-[6px]">
+      <div className="my-[3px] mr-[3px] flex flex-1 flex-col gap-[4px] rounded-[3px] p-[6px]" style={{ background: p.card }}>
         <div className="h-[4px] w-4/5 rounded-full" style={{ background: p.ink }} />
         <div className="h-[4px] w-3/5 rounded-full" style={{ background: p.ink }} />
-        <div className="ml-auto h-[9px] w-2/5 rounded-[3px]" style={{ background: ACCENT, opacity: 0.85 }} />
+        <div className="ml-auto h-[9px] w-2/5 rounded-[3px]" style={{ background: p.accent, opacity: 0.85 }} />
         <div
           className="mt-auto h-[11px] w-full rounded-[3px] border"
           style={{ background: p.composer, borderColor: p.line }}
@@ -104,7 +102,7 @@ export default function AppearanceSection() {
             <label
               key={value}
               data-testid={`appearance-option-${value}`}
-              className={`flex cursor-pointer flex-col gap-2 rounded-xl border-2 p-1.5 transition-colors duration-150 has-[input:focus-visible]:ring-2 has-[input:focus-visible]:ring-accent/50 ${
+              className={`flex cursor-pointer flex-col gap-2 rounded-[var(--r-card)] border-2 p-1.5 transition-colors duration-150 has-[input:focus-visible]:ring-2 has-[input:focus-visible]:ring-accent/50 ${
                 selected ? 'border-primary' : 'border-border hover:border-secondary/40'
               }`}
             >

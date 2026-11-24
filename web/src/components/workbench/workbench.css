@@ -9,20 +9,30 @@
  * utility classes. Theme tokens come from index.css. */
 
 .wb-page {
-  --wb-page: #FAFBFC;
+  --wb-page: #F5F7FB;
   /* The Float layer and shadows are the shared ones in index.css. */
   --wb-layer: var(--float-layer);
   --wb-float: var(--float-shadow);
   --wb-float-hover: var(--float-shadow-hover);
-  --wb-tint: rgb(83 154 248 / .09);
+  --wb-tint: rgb(47 111 240 / .10);
   --wb-pop: var(--float-shadow-pop);
-  background: var(--wb-page);
+  /* Design pass D: the one quiet wash at the top of the page. Explicit
+   * rgb(... / 0) stops: a stop to `transparent` (or an oklab hint) smears
+   * through grey in WebKit (v0.19.0). */
+  --wb-wash: linear-gradient(180deg, #DFE9FD 0%, rgb(245 247 251 / 0) 46%);
+  background: var(--wb-wash), var(--wb-page);
   color: var(--color-primary);
 }
 :root[data-theme="dark"] .wb-page {
   --wb-page: var(--color-background);
-  --wb-tint: rgb(83 154 248 / .14);
+  --wb-tint: rgb(76 141 248 / .14);
+  --wb-wash: linear-gradient(180deg, #172033 0%, rgb(21 23 28 / 0) 45%);
 }
+/* The page is a sheet (index.css): on macOS its scroller and its panes pad
+ * past the band themselves, so a pane's header never sits under the native
+ * drag strip and no strip of wash shows above a pane. */
+.wb-page.sheet > [data-testid="workbench-scroller"],
+.wb-page.sheet > .wb-pane { padding-top: var(--sheet-pad-top); }
 
 /* Cards, summary and composer share one column. Desktop home docks the
  * 260px project list, so the column takes most of what is left, up to 860px. */
@@ -37,14 +47,14 @@
 .wb-golden { height: max(40px, calc(38.2% - var(--wb-lead) - var(--wb-lead-gap))); }
 .wb-greeting {
   margin: 0 0 var(--wb-lead-gap); height: var(--wb-lead); line-height: var(--wb-lead);
-  text-align: center; font-size: var(--text-heading); font-weight: 500; letter-spacing: var(--text-heading--letter-spacing);
-  color: color-mix(in srgb, var(--color-primary) 78%, transparent);
+  text-align: center; font-size: var(--text-heading); font-weight: 600; letter-spacing: var(--text-heading--letter-spacing);
+  color: var(--color-primary);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 
 .wb-layer {
   background: var(--wb-layer);
-  border-radius: 14px;
+  border-radius: var(--r-card);
   box-shadow: var(--wb-float);
   transition: transform .15s ease-out, box-shadow .15s ease-out, opacity .25s ease-out;
 }
@@ -90,7 +100,7 @@
 
 .wb-pop {
   position: absolute; z-index: 30; top: calc(100% + 6px); width: 260px; max-height: 360px; overflow-y: auto;
-  background: var(--wb-layer); border-radius: 12px; box-shadow: var(--wb-pop); padding: 5px;
+  background: var(--wb-layer); border-radius: var(--r-card); box-shadow: var(--wb-pop); padding: 5px;
   animation: wb-pop-in .16s cubic-bezier(.2,.7,.2,1);
 }
 @keyframes wb-pop-in { from { opacity: 0; transform: translateY(-4px) scale(.985); } }
@@ -365,10 +375,6 @@ button.wb-slot:not([aria-disabled="true"]):hover .wb-cv, .wb-slot[aria-expanded=
   .wb-pane, .wb-sheet, .wb-scrim { animation: none; }
 }
 
-/* The macOS titlebar band above home matches the page (index.css paints it
- * per route; home is near-white, not the grey canvas). */
-:root[data-chrome="mac-inline"] main.wb-band { background-color: #FAFBFC; }
-:root[data-chrome="mac-inline"][data-theme="dark"] main.wb-band { background-color: var(--color-background); }
 
 /* Spec 180: a session row moved to another project folds out of the list
  * (prototype `.srow.gone`); on a device with no hover its ⋯ is always shown. */
@@ -401,3 +407,8 @@ button.wb-slot:not([aria-disabled="true"]):hover .wb-cv, .wb-slot[aria-expanded=
 .wb-examples { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
 .wb-example { padding: 6px 12px; border-radius: 999px; background: var(--color-soft-button); color: var(--color-secondary); font-size: var(--text-caption); line-height: var(--text-caption--line-height); transition: background .12s, color .12s; max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .wb-example:hover { background: var(--color-soft-button-hover); color: var(--color-primary); }
+
+/* Phone: the app header above home takes the wash's top colour, so the
+ * header and the page read as one surface. */
+.wb-wash-top { background-color: #DFE9FD; }
+:root[data-theme="dark"] .wb-wash-top { background-color: #172033; }

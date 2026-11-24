@@ -35,18 +35,22 @@
      harmonize with the blue accent. The previous set was violet-cast
      (R = G < B, e.g. nav #E9E9EF), which read purple next to any true blue.
      Keep the R < G < B ordering when retuning any surface below. */
-  --color-nav: #E8EBF0;
-  --color-background: #F4F6F9;
-  --color-sidebar: #F0F3F7;
+  /* Design pass D (2026-11-24): deeper, with the chrome as one tinted
+     surface (--color-chrome below) and the reading area on an inset sheet.
+     nav/sidebar no longer paint columns: nav is the segmented-control and
+     tab track, sidebar the field and table-header fill. */
+  --color-nav: #DFE5EE;
+  --color-background: #F0F3F8;
+  --color-sidebar: #E8EDF4;
   --color-card: #FFFFFF;
   --color-elevated: #FFFFFF;
   /* Row hover/selection tints. Each must read clearly against the surface it
      sits on, so the nav column needs its own: `card-hover` is only ~3 levels
      off `nav` and would be invisible there. Used at full strength for the
      selected row and at /50 for hover, matching the existing pattern. */
-  --color-card-hover: #E4E8EE;
-  --color-nav-hover: #DAE0E9;
-  --color-border: #E1E5EA;
+  --color-card-hover: #E1E7F0;
+  --color-nav-hover: #D1D9E5;
+  --color-border: #D9DFE8;
 
   /* ------------------------------------------------------------------- text
      Two text greys, both AA (>= 4.5:1) on EVERY light surface text sits on,
@@ -62,16 +66,16 @@
      (`text-secondary/60` = 2.0-2.4:1) are retired. The one place text keeps
      the muted grey is a DISABLED control (an unavailable menu option, a
      disabled send button), where reading as unavailable is the point. */
-  --color-primary: #18181B;
-  --color-secondary: #62626C;
-  --color-muted: #8A8A94;
+  --color-primary: #0E1116;
+  --color-secondary: #4E5563;
+  --color-muted: #858B97;
 
   /* Codex-style azure. Deliberately bright: it carries fills (buttons, pills,
      badges) well but is only ~2.9:1 on white as TEXT — if small accent links
      ever need a boost, the fix is a darker text-accent token (two-tone, the
      way ChatGPT pairs #539AF8 fills with darker link text), not darkening
      this fill value. */
-  --color-accent: #539AF8;
+  --color-accent: #2F6FF0;
   --color-success: #22C55E;
   --color-warning: #F59E0B;
   --color-error: #EF4444;
@@ -83,17 +87,28 @@
      every other use of the base token. In light mode each one is EXACTLY the
      base token or literal its call sites used before, so light renders
      unchanged; the dark block below sets them all explicitly. */
-  --color-selected: var(--color-card-hover);       /* selected row on canvas/sidebar */
-  --color-nav-selected: var(--color-nav-hover);    /* selected row on the nav column */
-  --color-session-selected: var(--color-card-hover); /* selected session row (item 157: apart from the white New session row) */
+  /* D: selection ON THE CHROME is a flat white pill; selection ON A SHEET
+     (settings rail, file tree, an open dispatch row) is the accent tint. */
+  --color-selected: rgb(255 255 255 / .62);        /* selected row on the chrome */
+  --color-nav-selected: rgb(255 255 255 / .78);    /* selected row in the project list */
+  --color-session-selected: rgb(255 255 255 / .62); /* selected session row (item 157: apart from the raised New session button) */
+  --color-sheet-selected: rgb(47 111 240 / .10);   /* selected row on a sheet */
+  /* Things that sit on the tinted chrome. */
+  --color-chrome-chip: rgb(255 255 255 / .6);      /* automations line, New project */
+  --color-chrome-badge: rgb(0 0 0 / .06);          /* count badges */
+  --color-chrome-line: rgb(0 0 0 / .07);           /* the list footer's rule */
+  --color-chrome-hover: rgb(255 255 255 / .6);     /* a rail control's hover box */
+  --color-new-session: #FFFFFF;                    /* the raised New session button */
+  --color-dock: var(--color-background);           /* the docked panel's tone step inside the sheet */
   --color-selected-text: var(--color-primary);
   --color-segment-on: var(--color-card);           /* segmented control "on" chip */
   --color-segment-on-text: var(--color-primary);
   --color-tab-active: var(--color-primary);        /* underline tab: text + rule */
-  --color-bubble: color-mix(in srgb, var(--color-accent) 8%, var(--color-card)); /* user chat bubble: accent-soft (owner, 2026-11-04) */
+  --color-bubble: color-mix(in srgb, var(--color-accent) 14%, var(--color-card)); /* user chat bubble: accent-soft (owner, 2026-11-04) */
   --color-bubble-text: var(--color-primary);
   --color-send: var(--color-accent);               /* composer send glyph */
-  --color-link: var(--color-accent);               /* link text in markdown */
+  --color-link: #1D5FD8;                           /* link text in markdown */
+  --color-code-surface: #EEF2F8;                   /* inline code */
   --color-soft-button: var(--color-card-hover);    /* filled secondary button (settings Back) */
   --color-soft-button-hover: var(--color-nav-hover);
   --color-warning-surface: #FFFBF0;                /* tinted warning panel */
@@ -104,7 +119,7 @@
      above (success/warning/error/accent) read at ~2-2.9:1 on light surfaces;
      these reach >= 4.5:1 on every light surface. */
   --color-success-text: #15803D;                   /* small success text, status dots */
-  --color-accent-text: #2563EB;                    /* blue status dots + glyphs */
+  --color-accent-text: #1D5FD8;                    /* blue status dots + glyphs */
   --color-warning-dot: #D97706;                    /* pin switcher "low" dot (brighter, apart from red) */
   --color-qr-surface: var(--color-background);     /* QR quiet zone; must stay light */
   --color-logo-ink: #1a1a2e;                       /* logo stem + leaf; applied on dark only */
@@ -205,19 +220,20 @@
 :root[data-theme="dark"] {
   color-scheme: dark;
 
-  --color-nav: #111317;
-  --color-sidebar: #16191D;
-  --color-background: #1A1D22;
-  --color-card: #1E2126;
-  --color-elevated: #262A30;
-  --color-card-hover: #2A2E35;
-  --color-nav-hover: #23272E;
-  --color-border: #2D3138;
+  --color-nav: #0C0E12;
+  --color-sidebar: #121419;
+  --color-background: #15171C;
+  --color-card: #1B1E23;
+  --color-elevated: #24282F;
+  --color-card-hover: #2A2F37;
+  --color-nav-hover: #20242B;
+  --color-border: #2B3039;
 
-  --color-primary: #E8EAED;
-  --color-secondary: #A3A7AF;
-  --color-muted: #7F848D;
-  --color-idle: #7F848D;
+  --color-primary: #EEF0F3;
+  --color-secondary: #A9AEB8;
+  --color-muted: #7D838E;
+  --color-idle: #7D838E;
+  --color-accent: #4C8DF8;
 
   /* Accent stays the same FILL. The status FILLS are unchanged; as small text
      or dots they drop below 4.5:1 here too (red: 4.29 on card, 3.83 on
@@ -230,17 +246,23 @@
      brand colour (SubAgentStatusBar chips, the author line in ChatMessage).
      Plain grey Graphite read as dull in review; this keeps long reading
      calm while the state of the screen is visible at a glance. */
-  --color-selected: rgb(83 154 248 / 0.16);
-  --color-nav-selected: rgb(83 154 248 / 0.16);
-  --color-session-selected: rgb(83 154 248 / 0.16);
-  --color-selected-text: #D6E7FF;
+  --color-selected: rgb(255 255 255 / .045);
+  --color-nav-selected: rgb(255 255 255 / .09);
+  --color-session-selected: rgb(255 255 255 / .045);
+  --color-sheet-selected: rgb(76 141 248 / .16);
+  --color-selected-text: var(--color-primary);
+  --color-chrome-chip: rgb(255 255 255 / .06);
+  --color-chrome-badge: rgb(255 255 255 / .08);
+  --color-chrome-line: rgb(255 255 255 / .07);
+  --color-chrome-hover: rgb(255 255 255 / .07);
+  --color-new-session: #2C313A;
   --color-segment-on: rgb(83 154 248 / 0.22);
   --color-segment-on-text: #D6E7FF;
   --color-tab-active: #539AF8;
-  --color-bubble: color-mix(in srgb, var(--color-accent) 12%, var(--color-card));
-  --color-bubble-text: #E8EAED;
-  --color-send: #6FAEFB;
-  --color-link: #7DB4FB;
+  --color-bubble: color-mix(in srgb, var(--color-accent) 16%, var(--color-card));
+  --color-bubble-text: #EEF0F3;
+  --color-send: #74A9FB;
+  --color-link: #84B6FF;
   --color-code-surface: rgb(83 154 248 / 0.12);
   --color-code-text: #A9CCFF;
   /* nav-hover is DARKER than card-hover here, so the light pairing would
@@ -252,10 +274,10 @@
   --color-error-surface: rgb(239 68 68 / 0.12);
   --color-error-text: #F87171;
   --color-success-text: #4ADE80;
-  --color-accent-text: #539AF8;
+  --color-accent-text: #6EA4FA;
   --color-warning-dot: #FBBF24;
   --color-qr-surface: #FFFFFF;
-  --color-logo-ink: #E8EAED;
+  --color-logo-ink: #EEF0F3;
   --color-logo-tile: #FFFFFF;
 
   /* Light-mode shadows (black at 10–13%) vanish against a dark canvas. */
@@ -351,7 +373,10 @@ body {
   line-height: var(--text-body--line-height);
   letter-spacing: var(--text-body--letter-spacing);
   color: var(--color-primary);
-  background: var(--color-background);
+  /* D: the window is the chrome. Columns and rails paint nothing of their
+     own; the reading area is a sheet inset on it (.sheet below). */
+  background: var(--color-chrome);
+  background-color: var(--color-background);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -394,36 +419,142 @@ body {
   padding-top: var(--titlebar-h);
 }
 
-/* Band fill for panes that don't otherwise paint a background of their own.
-   Scoped to the attribute rather than applied as a plain `bg-*` utility so
-   that off macOS these classes resolve to nothing at all and the non-mac
-   render stays byte-identical — <main> currently paints no background, and
-   giving it one unconditionally would recolour the strip around the
-   sandbox-warning banner on the project route. */
-:root[data-chrome="mac-inline"] .titlebar-band-card {
-  background-color: var(--color-card);
-}
+/* ------------------------------------------------------- D: chrome + sheet
+   Design pass D (2026-11-24). The rail, the project column and the full
+   project list are one tinted surface (the body's --color-chrome); every
+   page you read or edit sits on a rounded `.sheet` inset 8px into it (top,
+   right, bottom; the left edge meets the column). The old per-pane titlebar
+   band fills are gone: on macOS the column region shows the chrome, the
+   sheet starts 8px below the window top and pads its content by the rest of
+   the band, so nothing interactive enters the native drag strip.
 
-:root[data-chrome="mac-inline"] .titlebar-band-canvas {
-  background-color: var(--color-background);
-}
+   --chrome-top is the chrome columns' own top padding: the band on macOS,
+   and on Windows the sheet's inset, so the column's first line stays level
+   with the sheet's (it was level with the pane before the inset existed).
 
-/* Spec 137 (the folder shell): on desktop and narrow windows the project is a
-   tinted column at the left edge of <main> (260px, 220 below the dock
-   threshold — ProjectDetail picks the same split in JS). The band above it
-   takes the column's tint so the column runs to the top of the window like
-   the nav, instead of starting under a white strip. */
-:root[data-chrome="mac-inline"] .titlebar-band-card:has(.project-column) {
-  background-image: linear-gradient(to right, var(--color-sidebar) 260px, transparent 260px);
+   With the session column folded on macOS only 40px of chrome sits left of
+   the sheet while the traffic lights span ~12-72px, so the sheet starts
+   below the band there (--sheet-top = band); the same when a panel is
+   maximized over everything but the 20px strip.
+
+   Phone (< 768px): no inset, no radius; the sheet fills the screen. */
+:root {
+  --color-chrome: linear-gradient(180deg, #DCE4F0 0%, #E3E7F1 55%, #E8E6F0 100%);
+  --sheet-inset: 0px;
+  --sheet-top: 0px;
+  --sheet-radius: 0px;
+  --r-card: 8px;   /* everything floating inside a sheet */
+  --r-small: 6px;  /* rows and chips on the chrome */
+  --sheet-shadow: none;
+  --chrome-top: var(--titlebar-h);
+  /* Read by the first row of each pane inside a sheet (the session heading,
+     a page heading, the docked panel, the Workbench scroller). 0 outside a
+     sheet: on a phone <main> clears the band itself. */
+  --sheet-pad-top: 0px;
 }
-@media (max-width: 1199px) {
-  :root[data-chrome="mac-inline"] .titlebar-band-card:has(.project-column) {
-    background-image: linear-gradient(to right, var(--color-sidebar) 220px, transparent 220px);
+:root[data-theme="dark"] {
+  --color-chrome: linear-gradient(180deg, #131826 0%, #0F1218 60%, #110F18 100%);
+}
+@media (min-width: 768px) {
+  :root {
+    --sheet-inset: 8px;
+    --sheet-top: var(--sheet-inset);
+    --sheet-radius: 8px;
+    --sheet-shadow: 0 0 0 .5px rgb(16 24 40 / .07), 0 1px 3px rgb(16 24 40 / .06), 0 10px 28px -10px rgb(16 24 40 / .14);
+    --chrome-top: max(var(--titlebar-h), var(--sheet-inset));
+  }
+  :root[data-theme="dark"] {
+    --sheet-shadow: 0 0 0 .5px rgb(255 255 255 / .06), 0 1px 3px rgb(0 0 0 / .4), 0 12px 32px -10px rgb(0 0 0 / .6);
+  }
+  .sheet {
+    /* What the band leaves above the sheet's own top edge: 20px on macOS,
+       0 where the sheet already starts below the band, 0 off macOS. */
+    --sheet-pad-top: max(0px, calc(var(--titlebar-h) - var(--sheet-top)));
+    position: relative;
+    margin: var(--sheet-top) var(--sheet-inset) var(--sheet-inset) 0;
+    border-radius: var(--sheet-radius);
+    box-shadow: var(--sheet-shadow);
+    overflow: hidden;
+    overflow: clip;
+    min-width: 0;
+  }
+  /* macOS with the session column folded and the project list not docked:
+     only the 20px strip + 20px rail sit left of the sheet, so the sheet
+     starts below the band and the traffic lights stay on the tint. */
+  :root[data-chrome="mac-inline"] [data-testid="edge-strip-wrapper"][data-pinned="false"] ~ main .project-rail + .sheet {
+    --sheet-top: var(--titlebar-h);
   }
 }
-/* The column folded to its 20px rail (2026-11-18): the band tints only that. */
-:root[data-chrome="mac-inline"] .titlebar-band-card:has(.project-rail) {
-  background-image: linear-gradient(to right, var(--color-sidebar) 20px, transparent 20px);
+.pt-chrome {
+  padding-top: var(--chrome-top);
+}
+/* A sticky strip inside a chrome column (the New session row) repaints the
+   window's chrome aligned to the window, so rows scrolling under it never
+   show through. The body's gradient spans the viewport, as this does. */
+.chrome-fill {
+  background: var(--color-chrome);
+  background-attachment: fixed;
+}
+/* The PDF row on the file header carries the most controls: under 24rem the
+   历史 label goes too (its glyph stays), so the file name keeps its width. */
+@container (max-width: 24rem) {
+  [data-testid="file-preview-panel-header"]:has([data-pdf-nav]) [data-history-label] { display: none; }
+}
+/* The closed panel (PanelHandle) inside the chat's sheet. */
+.panel-handle:hover { background-color: var(--color-card-hover); }
+:root[data-theme="dark"] .panel-handle:hover { background-color: var(--color-nav-hover); }
+.panel-handle:focus-visible { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--color-accent) 50%, rgb(from var(--color-accent) r g b / 0)); }
+.panel-handle-tab {
+  background-color: var(--color-card);
+  box-shadow: var(--float-shadow-nested);
+}
+:root[data-theme="dark"] .panel-handle-tab { background-color: var(--color-elevated); }
+/* The phone's bottom sheet keeps its header rule; no second line under it. */
+@media (max-width: 767px) {
+  .float-panel-drawer [data-scrolled="true"] { box-shadow: none; }
+}
+/* A chip on the chrome: the automations line in the project column. The
+   ring rides --tw-shadow so a selected accent ring stacks on it. */
+.chrome-chip {
+  background-color: var(--color-chrome-chip);
+  border-radius: var(--r-small);
+  --tw-shadow: 0 0 0 .5px rgb(0 0 0 / .05);
+  box-shadow: var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow);
+  transition: background-color .15s;
+}
+.chrome-chip:hover { background-color: var(--color-nav-selected); }
+:root[data-theme="dark"] .chrome-chip { --tw-shadow: 0 0 0 .5px rgb(255 255 255 / .06); }
+/* New session (design pass D 8.7): a solid raised button, apart from the
+   flat translucent pill of the selected session below it. */
+.new-session-raised {
+  background-color: var(--color-new-session);
+  box-shadow: var(--float-shadow-nested);
+}
+:root[data-theme="dark"] .new-session-raised {
+  box-shadow: var(--float-shadow-nested), 0 0 0 .5px rgb(255 255 255 / .06);
+}
+/* The project list inside the edge strip (EdgeStrip) repaints the chrome:
+   invisible when docked, a surface of its own when floated over a sheet. */
+.edge-flyout {
+  background: var(--color-chrome);
+}
+.edge-flyout-floating {
+  box-shadow: var(--float-edge-right);
+}
+.sheet-pad-top {
+  padding-top: var(--sheet-pad-top);
+}
+
+/* A header that belongs to its sheet paints nothing and has no line at
+   rest; the hairline appears only while the content under it is scrolled
+   (hooks/useScrollHairline.ts toggles data-scrolled). */
+[data-scrolled] {
+  transition: box-shadow .15s;
+}
+[data-scrolled="true"] {
+  position: relative;
+  z-index: 2;
+  box-shadow: 0 1px 0 var(--color-border);
 }
 
 /* ------------------------------------------------- native control suppression
@@ -562,10 +693,10 @@ body {
    utilities; nothing else depends on it. */
 :root {
   --float-layer: var(--color-card);
-  --float-shadow: 0 2px 2px rgb(0 0 0 / .02), 0 4px 14px rgb(0 0 0 / .04), 0 22px 50px rgb(0 0 0 / .07), inset 0 1px 0 rgb(255 255 255 / .8);
+  --float-shadow: 0 1px 2px rgb(16 24 40 / .04), 0 4px 14px rgb(16 24 40 / .06), 0 22px 50px rgb(16 24 40 / .09), inset 0 1px 0 rgb(255 255 255 / .8);
   --float-shadow-hover: 0 2px 2px rgb(0 0 0 / .02), 0 8px 20px rgb(0 0 0 / .05), 0 32px 64px rgb(0 0 0 / .09), inset 0 1px 0 rgb(255 255 255 / .8);
   --float-shadow-pop: 0 2px 4px rgb(0 0 0 / .04), 0 16px 40px rgb(0 0 0 / .14);
-  --float-shadow-nested: 0 1px 2px rgb(0 0 0 / .04), 0 3px 10px rgb(0 0 0 / .05), inset 0 1px 0 rgb(255 255 255 / .8);
+  --float-shadow-nested: 0 1px 2px rgb(16 24 40 / .05), 0 3px 10px rgb(16 24 40 / .07), inset 0 1px 0 rgb(255 255 255 / .8);
   --float-shadow-nested-hover: 0 1px 2px rgb(0 0 0 / .04), 0 6px 16px rgb(0 0 0 / .08), inset 0 1px 0 rgb(255 255 255 / .8);
   --float-focus: 0 0 0 3px color-mix(in oklab, var(--color-accent) 18%, transparent);
 }
@@ -582,13 +713,15 @@ body {
   .surface-float-static,
   .surface-float-pop {
     background-color: var(--float-layer);
-    border-radius: 14px;
+    /* D (2026-11-24): cards inside a sheet take the sheet's radius family
+       (8px; never rounder than the sheet). Was 14, popovers 12. */
+    border-radius: var(--r-card);
     --tw-shadow: var(--float-shadow);
     box-shadow: var(--tw-inset-shadow, 0 0 #0000), var(--tw-inset-ring-shadow, 0 0 #0000),
       var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow);
   }
   .surface-float-pop {
-    border-radius: 12px;
+    border-radius: var(--r-card);
     --tw-shadow: var(--float-shadow-pop);
   }
   .surface-float {
@@ -649,9 +782,13 @@ body {
   --float-bubble: 0 1px 1px rgb(0 0 0 / .3), 0 2px 6px rgb(0 0 0 / .3), inset 0 1px 0 rgb(255 255 255 / .05);
 }
 .float-panel-column { position: relative; z-index: 1; box-shadow: var(--float-edge-right); }
-.float-panel-dock:not([data-maximized="true"]) { border-left-width: 0; z-index: 1; box-shadow: var(--float-edge-left); }
+/* D: the docked panel is part of the chat's sheet, apart from the
+   conversation by a tone step (--color-dock), no line and no shadow. */
+.float-panel-dock:not([data-maximized="true"]) { border-left-width: 0; z-index: 1; }
 .float-panel-drawer { border-width: 0; box-shadow: var(--float-drawer-up); }
 @media (min-width: 768px) {
+  /* Below the dock threshold it slides in INSIDE the sheet (square on its
+     left, the sheet's own corners on its right), its scrim inside too. */
   .float-panel-drawer { box-shadow: var(--float-drawer-left); }
 }
 /* Closed, the drawer waits just off-screen; its shadow would bleed back over
@@ -668,14 +805,20 @@ body {
    own tint. */
 :root { --doc-desk: var(--color-background); }
 .doc-sheet {
-  margin: 14px; border-radius: 12px; background-color: var(--float-layer); box-shadow: var(--float-shadow);
+  margin: 14px; border-radius: var(--r-card); background-color: var(--float-layer); box-shadow: var(--float-shadow);
 }
 .doc-desk { background-color: transparent; }
 /* The Browser view's viewport takes the same Page treatment: an inset white
    card under the address line, which stays on the panel tint. Only the frame
    around the mirror changes; the annotation overlay is inset-0 inside it. */
 .browser-sheet {
-  margin: 12px 14px 4px; border-radius: 12px; background-color: var(--float-layer); box-shadow: var(--float-shadow);
+  margin: 12px 14px 4px; border-radius: var(--r-card); background-color: var(--float-layer); box-shadow: var(--float-shadow);
+}
+/* D: a spreadsheet grid reads on the same inset card as a page, so a white
+   grid never runs edge to edge against the white conversation. */
+.grid-sheet {
+  margin: 14px 14px 0; border-radius: var(--r-card); background-color: var(--float-layer); box-shadow: var(--float-shadow);
+  overflow: hidden; overflow: clip;
 }
 
 /* Markdown content styles for agent messages */
@@ -884,6 +1027,11 @@ body {
 ::view-transition-group(project-body) {
   overflow: clip;
 }
+/* Design pass D: the project body swaps inside its sheet; clip the swap to
+   the sheet's rounded corners so a square edge never shows mid-transition. */
+::view-transition-group(project-body) {
+  border-radius: var(--sheet-radius);
+}
 ::view-transition-old(project-body) {
   animation: vt-fade-out 120ms ease-out both;
 }
@@ -948,17 +1096,27 @@ body {
  * list over it and the Workbench glyph stays one click away. Desktop only:
  * the phone's sheet is already the whole screen. */
 @media (min-width: 768px) {
+  /* D: maximized, the panel is the whole sheet — from the strip to the
+     right inset. On macOS it starts below the band, since the 20px strip
+     would leave the traffic lights over its top-left corner. */
   .panel-max-window {
     position: fixed !important;
-    top: 0 !important;
-    right: 0 !important;
-    bottom: 0 !important;
+    top: var(--sheet-inset) !important;
+    right: var(--sheet-inset) !important;
+    bottom: var(--sheet-inset) !important;
     left: 20px !important;
     z-index: 19 !important;
     width: auto !important;
     max-width: none !important;
     height: auto !important;
-    padding-top: var(--titlebar-h);
+    border-radius: var(--sheet-radius);
+    box-shadow: var(--sheet-shadow) !important;
+    overflow: hidden;
+    overflow: clip;
+    --sheet-pad-top: 0px;
+  }
+  :root[data-chrome="mac-inline"] .panel-max-window {
+    top: var(--titlebar-h) !important;
   }
   /* The project's main area carries a view-transition name, which makes it a
    * stacking context painted under the project column (z-index 1). While a
@@ -967,5 +1125,13 @@ body {
   [data-testid="project-main"]:has(.panel-max-window) {
     position: relative;
     z-index: 19;
+  }
+  /* D: the maximized panel is now the sheet, so the one it covers paints
+     nothing: no white band above it (macOS starts it below the titlebar) and
+     no second ring or shadow under its edges. */
+  .sheet:has(.panel-max-window),
+  .sheet .wb-pane:has(.panel-max-window) {
+    background: transparent !important;
+    box-shadow: none;
   }
 }

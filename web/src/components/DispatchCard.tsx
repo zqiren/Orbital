@@ -106,7 +106,7 @@ function DispatchCard({ card, name, needsYou = false, open = false, onOpen }: Di
           aria-expanded={open}
           title={name}
           className={`-ml-1 flex w-full max-w-[640px] min-h-[30px] items-center gap-2 rounded-lg py-1 pl-1 pr-2 text-left transition-colors duration-150 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 ${
-            open ? 'bg-selected' : 'hover:bg-card-hover/55'
+            open ? 'bg-card-hover' : 'hover:bg-card-hover/55'
           }`}
         >
           <AgentMarkWithDot handle={card.handle} dot={cardDot(card.status, needsYou)} name={name} />

@@ -12,6 +12,8 @@ interface PageHeadingProps {
   /** Already translated. Rendered as the h1. */
   title: string;
   titleTestId: string;
+  /** The page is scrolled under the heading: show the hairline. */
+  scrolled?: boolean;
 }
 
 /**
@@ -25,10 +27,17 @@ interface PageHeadingProps {
  *
  * The phone has no column and keeps PageToolbar (Back · `Project / Page`).
  */
-export default function PageHeading({ parents = [], title, titleTestId }: PageHeadingProps) {
+export default function PageHeading({ parents = [], title, titleTestId, scrolled = false }: PageHeadingProps) {
   const t = useT();
   return (
-    <div className="shrink-0 px-6 pt-[22px] bg-background" data-testid="page-heading">
+    // Design pass D: part of the page's sheet (no fill, no line at rest);
+    // sheet-pad-top keeps it out of the macOS band.
+    <div
+      className="sheet-pad-top shrink-0"
+      data-testid="page-heading"
+      data-scrolled={scrolled ? 'true' : 'false'}
+    >
+      <div className="px-6 pt-[22px]">
       {parents.length > 0 && (
         <nav aria-label={t('settingsToolbar.breadcrumb')} className="flex items-center gap-1.5 min-w-0 text-caption">
           {parents.map((p, i) => (
@@ -55,6 +64,7 @@ export default function PageHeading({ parents = [], title, titleTestId }: PageHe
       >
         {title}
       </h1>
+      </div>
     </div>
   );
 }

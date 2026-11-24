@@ -301,7 +301,7 @@ export default function FileExplorer({ projectId, initialPath, onSelectFile }: F
       <div
         className={`
           w-full md:w-[260px] md:min-w-[260px]
-          border-r border-border flex flex-col min-h-0
+          md:bg-card flex flex-col min-h-0
           ${mobileShowPreview ? 'hidden md:flex' : 'flex'}
         `}
       >
@@ -463,7 +463,7 @@ function TreeItem({ node, depth, selectedPath, onToggle, onFileClick, onReveal }
         className={`
           group relative flex items-center gap-1.5 w-full text-left py-1 px-2 rounded-md
           text-body cursor-pointer select-none transition-colors duration-150
-          ${isSelected ? 'bg-selected text-selected-text' : 'text-primary hover:bg-card-hover'}
+          ${isSelected ? 'bg-sheet-selected text-selected-text' : 'text-primary hover:bg-card-hover'}
         `}
         style={{ paddingLeft: `${depth * 16 + 8}px` }}
       >

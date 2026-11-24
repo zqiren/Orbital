@@ -572,7 +572,7 @@ export default function BrowserView({
     <div
       role="toolbar"
       aria-label={t('panel.browser.label')}
-      className="flex shrink-0 items-center gap-0.5 border-b border-border px-1.5 py-1"
+      className="flex shrink-0 items-center gap-0.5 px-1.5 py-1"
     >
       <button
         type="button"

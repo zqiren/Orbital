@@ -23,6 +23,7 @@ import GlobalSkillsSettings from './GlobalSkillsSettings';
 import TelemetrySettings from './TelemetrySettings';
 import SendFeedback from './SendFeedback';
 import AboutSection from './AboutSection';
+import { useScrollHairline } from '../hooks/useScrollHairline';
 import SettingsRail, { scrollToSettingsSection, type SettingsRailSection } from './SettingsRail';
 import { useLocale } from '../i18n/LocaleContext';
 import { LOCALES } from '../i18n/locales';
@@ -154,10 +155,13 @@ export default function GlobalSettings({ onBack, onTakeTour, canTakeTour, scroll
     await api('/api/v2/settings', { method: 'PUT', body: JSON.stringify(patch) });
   }, []);
   const autosave = useAutosave<GlobalSettingsPatch>(savePatch);
+  const hairline = useScrollHairline();
   const { saveNow, saveSoon } = autosave;
 
   return (
-    <div className="flex flex-col flex-1 min-h-0 bg-background">
+    // A sheet (design pass D): the toolbar belongs to it — no band of its
+    // own, a hairline only once the body is scrolled under it.
+    <div className="sheet sheet-pad-top flex flex-col flex-1 min-h-0 bg-card">
       {/* Same toolbar as project settings — the two settings surfaces are one
           design. No parent crumb: global settings belongs to no project. */}
       <PageToolbar
@@ -165,10 +169,11 @@ export default function GlobalSettings({ onBack, onTakeTour, canTakeTour, scroll
         onBack={onBack}
         backTestId="global-settings-back-button"
         titleTestId="global-settings-title"
+        scrolled={hairline.scrolled}
       />
 
       {/* Scrollable body */}
-      <div ref={scrollContainerRef} className="flex-1 overflow-y-auto min-h-0">
+      <div ref={scrollContainerRef} {...hairline.scrollProps} className="flex-1 overflow-y-auto min-h-0">
         {/* Index rail beside the single scrolling document (desktop) / jump
             menu above it (mobile).
 

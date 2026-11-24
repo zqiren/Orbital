@@ -26,7 +26,7 @@ interface ProviderTilesProps {
 }
 
 const tileBase =
-  'surface-float surface-float-nested !rounded-[12px] flex h-[72px] @md:h-[76px] flex-col items-center justify-center gap-2 px-0.5 @md:px-1 min-w-0 focus-visible:outline-2 focus-visible:outline-accent';
+  'surface-float surface-float-nested flex h-[72px] @md:h-[76px] flex-col items-center justify-center gap-2 px-0.5 @md:px-1 min-w-0 focus-visible:outline-2 focus-visible:outline-accent';
 
 export default function ProviderTiles({
   catalog,
@@ -124,7 +124,7 @@ export default function ProviderTiles({
       </div>
 
       {moreOpen && (
-        <div className="mt-2 surface-float-static surface-float-nested !rounded-[12px]" data-testid="connect-more-panel">
+        <div className="mt-2 surface-float-static surface-float-nested" data-testid="connect-more-panel">
           <div className="m-1 mb-0.5 flex h-9 items-center gap-2 rounded-[9px] bg-sidebar px-2.5 text-muted">
             <Search aria-hidden="true" className="h-3.5 w-3.5 shrink-0" strokeWidth={1.6} />
             <input

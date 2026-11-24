@@ -174,7 +174,7 @@ export default function SettingsRail({ sections, containerRef }: SettingsRailPro
   if (isMobile) {
     // Compact jump menu — plain sticky positioning (WKWebView-safe).
     return (
-      <div className="sticky top-0 z-10 bg-background border-b border-border px-4 py-2">
+      <div className="sticky top-0 z-10 bg-card border-b border-border px-4 py-2">
         <Select
           data-testid="settings-jump-menu"
           aria-label={t('settingsRail.aria')}
@@ -241,9 +241,12 @@ export default function SettingsRail({ sections, containerRef }: SettingsRailPro
                   // row (bg-nav-hover on bg-nav, 1.11:1), so the two columns
                   // read as one system instead of the rail being three times
                   // fainter than every other selection in the app.
+                  // Design pass D: settings sit on a white sheet now, so the
+                  // pill is the accent tint every on-sheet selection uses
+                  // (the chrome's white pill would vanish on white).
                   className={`block w-full text-left text-body rounded-md px-2.5 py-1.5 transition-colors duration-150 truncate ${
                     activeId === s.id
-                      ? 'text-selected-text bg-selected font-medium'
+                      ? 'text-selected-text bg-sheet-selected font-medium'
                       : 'text-secondary hover:text-primary hover:bg-card-hover/50'
                   }`}
                 >

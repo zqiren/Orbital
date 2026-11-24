@@ -25,6 +25,9 @@ interface PageToolbarProps {
   onBack: () => void;
   backTestId: string;
   titleTestId: string;
+  /** The content under the bar is scrolled: show the hairline
+   *  (useScrollHairline). At rest the bar is part of its sheet. */
+  scrolled?: boolean;
 }
 
 /**
@@ -61,6 +64,7 @@ export default function PageToolbar({
   onBack,
   backTestId,
   titleTestId,
+  scrolled = false,
 }: PageToolbarProps) {
   const t = useT();
   const linkClass =
@@ -99,7 +103,13 @@ export default function PageToolbar({
   );
 
   return (
-    <header className="vt-project-header flex items-center gap-3 h-[52px] shrink-0 px-4 bg-card border-b border-border max-md:h-14">
+    // Design pass D: no band and no line of its own; the page's sheet shows
+    // under it, and a hairline marks it only once the page scrolls under it.
+    <header
+      data-testid="page-toolbar"
+      data-scrolled={scrolled ? 'true' : 'false'}
+      className="vt-project-header flex items-center gap-3 h-[52px] shrink-0 px-4 max-md:h-14"
+    >
       <button
         type="button"
         onClick={onBack}

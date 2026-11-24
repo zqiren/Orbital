@@ -18,6 +18,11 @@ export interface PanelHandleProps {
 
 export default function PanelHandle({ working, onExpand }: PanelHandleProps) {
   const t = useT();
+  // Design pass D (8.10 B): the panel folded to 20px inside the chat's
+  // sheet, at its right edge (it takes the sheet's right corners). Its tone
+  // is the open panel's, so closed and open read as one object; the chevron
+  // sits on a raised tab (the New session button's treatment) so it is
+  // findable on a white sheet. The whole band is the hit target.
   return (
     <button
       type="button"
@@ -26,9 +31,14 @@ export default function PanelHandle({ working, onExpand }: PanelHandleProps) {
       title={t('panel.handle')}
       data-testid="panel-handle"
       data-tour="panel-handle"
-      className="hidden md:flex w-5 shrink-0 h-full flex-col items-center justify-center gap-1.5 border-l border-border bg-nav text-secondary hover:text-primary hover:bg-card-hover transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/50"
+      className="panel-handle group hidden md:flex w-5 shrink-0 h-full flex-col items-center justify-center gap-1.5 bg-dock text-secondary transition-colors focus:outline-none"
     >
-      <ChevronLeft size={12} aria-hidden />
+      <span
+        data-testid="panel-handle-tab"
+        className="panel-handle-tab flex h-9 w-5 items-center justify-center rounded-[var(--r-small)] transition-colors group-hover:text-primary"
+      >
+        <ChevronLeft size={12} aria-hidden />
+      </span>
       {working && (
         <span
           data-testid="panel-handle-working"

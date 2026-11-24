@@ -37,6 +37,7 @@ import { useT } from '../i18n/useT';
 import { api } from '../config';
 import { fileContentPath } from '../hooks/useFiles';
 import { useHistoryPanel } from './history/useHistoryPanel';
+import { useParentScrollHairline } from '../hooks/useScrollHairline';
 import { bumpFileHistory, SETTLE_MS } from '../hooks/useFileHistory';
 
 /**
@@ -379,10 +380,16 @@ function PanelFileHeader({
   menuItems: PanelMenuItem[];
 }) {
   const t = useT();
+  // Design pass D: on the panel tone, no line at rest; a hairline while the
+  // file under it is scrolled.
+  const rowRef = useRef<HTMLDivElement>(null);
+  const scrolled = useParentScrollHairline(rowRef, fileName);
   return (
     <div
+      ref={rowRef}
       data-testid="file-preview-panel-header"
-      className="@container sticky top-0 z-20 flex shrink-0 min-w-0 items-center gap-1.5 border-b border-border bg-background py-1.5 pl-1.5 pr-2"
+      data-scrolled={scrolled ? 'true' : 'false'}
+      className="@container sticky top-0 z-20 flex shrink-0 min-w-0 items-center gap-1.5 bg-dock py-1.5 pl-1.5 pr-2"
     >
       <button
         type="button"

@@ -802,22 +802,19 @@ export default function App() {
 
       {/* NOTE: keep a space before `${` — Tailwind's scanner will not extract a
           class that runs straight into a template-literal interpolation, so
-          `shadow-panel${...}` silently emits no CSS. */}
-      {/* pt-titlebar clears the macOS transparent-titlebar band (0 elsewhere).
-          The band's fill is route-dependent so it matches the pane beneath it:
-          the chat pane is white "paper" while the card-list surfaces keep the
-          grey canvas so their cards still lift off it. Global settings opens
-          with the card-coloured PageToolbar, so it takes the card band
-          too. Both classes are inert off macOS, so the non-mac render is
-          unchanged. */}
-      <main className={`flex-1 overflow-hidden flex flex-col shadow-panel pt-titlebar ${route.name === 'project' || route.name === 'settings' ? 'titlebar-band-card' : 'titlebar-band-canvas'} ${onHome ? 'wb-band' : ''} ${contentHidden ? 'hidden' : ''}`}>
+          a class glued to `${...}` silently emits no CSS. */}
+      {/* Design pass D: <main> paints nothing; the window is the chrome and
+          each route's page is a rounded `.sheet` inset into it (index.css).
+          The sheet pads its own content past the macOS band, so <main> clears
+          the band only on a phone, where there is no sheet. */}
+      <main className={`flex-1 min-w-0 overflow-hidden flex flex-col max-md:pt-titlebar max-md:bg-card ${contentHidden ? 'hidden' : ''}`}>
         {/* Phone header (spec 154 §5.9): the Orbital mark goes home, the
             right button opens the project list. Replaces the old Back row. */}
         {isMobile && mobileView === 'content' && (
           <div
             data-testid="mobile-header"
             className={`flex items-center gap-2 pl-4 pr-3 pt-4 pb-2.5 shrink-0 ${
-              onHome ? 'bg-[#FAFBFC] dark:bg-background' : ''
+              onHome ? 'wb-wash-top' : ''
             }`}
           >
             <button

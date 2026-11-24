@@ -255,12 +255,12 @@ function SessionListItemBase({
       onMouseLeave={() => setHovered(false)}
       style={
         selected
-          ? { background: 'var(--color-session-selected)', boxShadow: '0 1px 2px rgba(0,0,0,0.04)' }
+          ? { background: 'var(--color-session-selected)' }
           : undefined
       }
       className={[
-        'session-row relative flex items-center gap-1.5 px-2.5 py-[7px] rounded-md cursor-pointer select-none transition-colors',
-        selected ? 'font-medium text-selected-text' : 'hover:bg-card-hover',
+        'session-row relative flex items-center gap-1.5 px-2.5 py-[7px] rounded-[var(--r-small)] cursor-pointer select-none transition-colors',
+        selected ? 'font-medium text-selected-text' : 'hover:bg-session-selected/50',
         gone ? 'is-gone' : '',
       ].join(' ')}
     >
@@ -400,7 +400,7 @@ function SessionListItemBase({
               e.stopPropagation();
               setMenuOpen((v) => !v);
             }}
-            className="flex items-center justify-center w-5 h-5 rounded text-secondary hover:text-primary hover:bg-card-hover transition-colors"
+            className="flex items-center justify-center w-5 h-5 rounded text-secondary hover:text-primary hover:bg-chrome-hover transition-colors"
             style={{ fontSize: '14px', lineHeight: 1 }}
           >
             ⋯

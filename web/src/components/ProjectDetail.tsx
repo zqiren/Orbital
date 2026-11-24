@@ -33,6 +33,7 @@ import { fetchPathWithFallback } from '../utils/openPathWithFallback';
 import { useT } from '../i18n/useT';
 import { projectDisplayName } from '../utils/projectDisplayName';
 import { useCredentialCards, resolveCard } from '../hooks/useCredentialCards';
+import { useScrollHairline } from '../hooks/useScrollHairline';
 
 interface ProjectDetailProps {
   project: Project;
@@ -118,6 +119,9 @@ export default function ProjectDetail({
 
   const page = route.page;
   const pageDef = page ? PROJECT_PAGES[page] : undefined;
+  // A page's heading (or its phone toolbar) shows a hairline only while the
+  // page is scrolled under it (design pass D).
+  const hairline = useScrollHairline(page);
 
   // The status line's queue half (spec 137 gap 4): without it a project with
   // queued work and no automations has no way to reach its queue.
@@ -364,9 +368,8 @@ export default function ProjectDetail({
   // drawer's own preview (spec 153 note links).
   const body = (
     <div
-      className={`flex-1 project-body-clip min-h-0 relative ${phone ? 'vt-project-body' : ''} ${
-        pageDef ? 'bg-background' : ''
-      }`}
+      {...(pageDef ? hairline.scrollProps : {})}
+      className={`flex-1 project-body-clip min-h-0 relative ${phone ? 'vt-project-body' : ''}`}
     >
       <OpenPathContext.Provider value={handleOpenPath}>
         {pageDef
@@ -420,6 +423,7 @@ export default function ProjectDetail({
             onBack={handleBack}
             backTestId={pageDef.backTestId}
             titleTestId={pageDef.titleTestId}
+            scrolled={hairline.scrolled}
           />
         ) : (
           // Everything above the conversation, as one unit (see above).
@@ -481,7 +485,9 @@ export default function ProjectDetail({
   // ── Desktop and narrow: the project column + the right area ──────────────
   const settingsOpen = trail[0] === 'settings';
   return (
-    <div className="flex flex-1 min-h-0 bg-card" data-testid="project-shell">
+    // Design pass D: the column and the rail sit on the window's chrome and
+    // paint nothing of their own; the right area is the sheet.
+    <div className="flex flex-1 min-w-0 min-h-0" data-testid="project-shell">
       {columnCollapsed ? (
         // The folded column: same tint and edge as the open one, 20px wide.
         // `project-rail`, not `project-column`: the mac titlebar band's tint
@@ -489,7 +495,7 @@ export default function ProjectDetail({
         <aside
           data-testid="session-rail"
           aria-label={projectName}
-          className="project-rail float-panel-column w-5 shrink-0 min-h-0 bg-sidebar"
+          className="project-rail relative z-[1] w-5 shrink-0 min-h-0 pt-chrome"
         >
           <SessionRail
             projectId={project.project_id}
@@ -509,7 +515,7 @@ export default function ProjectDetail({
           // 260 beside a docked panel, 220 on a narrow window (the column the
           // session list had, now holding the whole project).
           style={{ width: dockable ? 260 : 220 }}
-          className="project-column float-panel-column group/column flex flex-col shrink-0 min-h-0 bg-sidebar"
+          className="project-column relative z-[1] group/column flex flex-col shrink-0 min-h-0 pt-chrome"
         >
           <div className="flex flex-col gap-1.5 px-4 pt-[18px] pb-1.5 shrink-0">
             <div className="flex items-center gap-2 min-w-0">
@@ -579,7 +585,7 @@ export default function ProjectDetail({
             aria-label={t('sessionSidebar.collapse')}
             aria-expanded={true}
             onClick={() => setCollapsed(true)}
-            className="absolute top-1/2 -right-3 z-10 flex h-9 w-[18px] -translate-y-1/2 items-center justify-center rounded-full border border-border bg-card text-muted opacity-0 pointer-events-none transition-[opacity,color,background-color] duration-150 hover:bg-card-hover hover:text-primary group-hover/column:opacity-100 group-hover/column:pointer-events-auto focus:outline-none focus-visible:opacity-100 focus-visible:pointer-events-auto focus-visible:ring-2 focus-visible:ring-accent/50 [@media(hover:none)]:opacity-60 [@media(hover:none)]:pointer-events-auto"
+            className="absolute top-[calc(50%+var(--chrome-top)/2)] -right-3 z-10 flex h-9 w-[18px] -translate-y-1/2 items-center justify-center rounded-full border border-border bg-card text-muted opacity-0 pointer-events-none transition-[opacity,color,background-color] duration-150 hover:bg-card-hover hover:text-primary group-hover/column:opacity-100 group-hover/column:pointer-events-auto focus:outline-none focus-visible:opacity-100 focus-visible:pointer-events-auto focus-visible:ring-2 focus-visible:ring-accent/50 [@media(hover:none)]:opacity-60 [@media(hover:none)]:pointer-events-auto"
           >
             <ChevronLeft size={12} strokeWidth={2.25} aria-hidden="true" />
           </button>
@@ -588,14 +594,27 @@ export default function ProjectDetail({
       {/* The right area: the chat, or the page opened from the column. One
           `vt-project-body`, so a move between them swaps it as a whole while
           the column stays put. */}
+      {/* Design pass D: the right area is the sheet. The view transition
+          name sits on a wrapper INSIDE it, so on a page switch the content
+          swaps while the sheet itself (its corners, ring and shadow) stays
+          put; index.css rounds the transition group's clip to match. */}
       <div
-        className={`vt-project-body flex flex-col flex-1 min-w-0 min-h-0 ${pageDef ? 'bg-background' : 'bg-card'}`}
+        className="sheet flex flex-col flex-1 min-w-0 min-h-0 bg-card"
         data-testid="project-main"
       >
-        {/* A page starts with its own heading (no bar): the column is the
-            navigation, so there is nothing to put beside the title. */}
-        {pageDef && <PageHeading parents={crumbs} title={t(pageDef.titleKey)} titleTestId={pageDef.titleTestId} />}
-        {body}
+        <div className="vt-project-body flex flex-col flex-1 min-w-0 min-h-0">
+          {/* A page starts with its own heading (no bar): the column is the
+              navigation, so there is nothing to put beside the title. */}
+          {pageDef && (
+            <PageHeading
+              parents={crumbs}
+              title={t(pageDef.titleKey)}
+              titleTestId={pageDef.titleTestId}
+              scrolled={hairline.scrolled}
+            />
+          )}
+          {body}
+        </div>
       </div>
     </div>
   );

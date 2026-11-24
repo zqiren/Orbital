@@ -296,13 +296,9 @@ export default function EdgeStrip({
         onKeyDown={handleStripKeyDown}
         onMouseEnter={() => handleZoneEnter('strip')}
         onMouseLeave={() => handleZoneLeave('strip')}
-        className={`group absolute inset-y-0 left-0 z-[21] flex w-5 flex-col items-center bg-nav pt-titlebar focus:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-accent ${
-          // The hairline is the collapsed rail's edge. Once the list is
-          // visible (floated or docked) the rail is the list's left gutter —
-          // same colour, above the list's padding — and a hairline there
-          // would cut through it; the floated list's shadow marks its edge.
-          visible ? '' : 'border-r border-border'
-        }`}
+        // Design pass D: the rail is part of the window's chrome — no fill and
+        // no edge line of its own; the tint itself is the edge.
+        className="group absolute inset-y-0 left-0 z-[21] flex w-5 flex-col items-center pt-chrome focus:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-accent"
       >
         {/* pt-titlebar (above) clears the mac band on its own; this inner
             span carries the strip's own visual padding so the two pt-*
@@ -320,7 +316,7 @@ export default function EdgeStrip({
           {!pinned && (
             <span
               data-testid="strip-chevron"
-              className="flex h-7 w-5 shrink-0 items-center justify-center rounded-md text-secondary transition-colors group-hover:bg-nav-hover group-hover:text-primary"
+              className="flex h-7 w-5 shrink-0 items-center justify-center rounded-md text-secondary transition-colors group-hover:bg-chrome-hover group-hover:text-primary"
             >
               <ChevronRight size={16} strokeWidth={2.5} aria-hidden="true" />
             </span>
@@ -349,7 +345,7 @@ export default function EdgeStrip({
           list. The band itself passes clicks to the rail; only the glyph
           takes them. No hover tip (2026-11-18); the aria-label names it. */}
       {onHome && !visible && (
-        <div className="pointer-events-none absolute inset-x-0 top-0 z-[22] w-5 pt-titlebar">
+        <div className="pointer-events-none absolute inset-x-0 top-0 z-[22] w-5 pt-chrome">
           <button
             type="button"
             data-testid="strip-workbench"
@@ -388,11 +384,16 @@ export default function EdgeStrip({
         onMouseLeave={() => handleZoneLeave('flyout')}
         onClick={handleFlyoutClick}
         className={`absolute left-3 top-0 bottom-0 z-20 w-[248px] transition-all duration-150 ease-out motion-reduce:transition-none ${
+          // The list always repaints the chrome (edge-flyout): docked it
+          // lands exactly on the window's own chrome and is invisible, and
+          // while it slides in or out it covers the project column instead
+          // of fading over its text. Floated over a sheet it also casts the
+          // column edge shadow.
           pinned
-            ? 'translate-x-0 opacity-100'
+            ? 'edge-flyout translate-x-0 opacity-100'
             : open
-              ? 'translate-x-0 opacity-100 shadow-xl'
-              : 'pointer-events-none -translate-x-1.5 opacity-0'
+              ? 'edge-flyout edge-flyout-floating translate-x-0 opacity-100'
+              : 'edge-flyout edge-flyout-floating pointer-events-none -translate-x-1.5 opacity-0'
         }`}
       >
         {children}

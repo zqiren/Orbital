@@ -61,7 +61,9 @@ describe('DocumentNav (spec 090)', () => {
   it('compact adds container-query classes to the secondary pieces', () => {
     render(<DocumentNav nav={pdfNav()} compact />);
     expect(screen.getByText('of 5').className).toContain('@max-[24rem]:hidden');
-    expect(screen.getByText('80%').className).toContain('@max-[20rem]:hidden');
+    // Design pass D: the PDF row also drops the zoom percentage under 24rem
+    // (at 360px it left the file name 0px wide); other documents keep 20rem.
+    expect(screen.getByText('80%').className).toContain('@max-[24rem]:hidden');
   });
 
   it('sheets: a compact selector that selects by index', () => {

@@ -91,7 +91,7 @@ export default function PrivateNotesCard({ projectId, project, agents, onOpenPat
       data-testid="private-notes-card"
       data-folded={notes.folded ? 'true' : 'false'}
       onClick={() => void open(notes)}
-      className="group mt-6 -mb-2 flex w-full items-center gap-3 rounded-xl border border-border bg-card px-3.5 py-3 text-left shadow-[0_1px_2px_rgb(0_0_0/0.04)] transition-[border-color,box-shadow,transform] duration-150 hover:border-accent/50 hover:shadow-[0_4px_12px_-4px_rgb(0_0_0/0.12)] active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 motion-reduce:transition-none motion-reduce:active:scale-100"
+      className="group mt-6 -mb-2 flex w-full items-center gap-3 rounded-[var(--r-card)] border border-border bg-card px-3.5 py-3 text-left shadow-[0_1px_2px_rgb(0_0_0/0.04)] transition-[border-color,box-shadow,transform] duration-150 hover:border-accent/50 hover:shadow-[0_4px_12px_-4px_rgb(0_0_0/0.12)] active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 motion-reduce:transition-none motion-reduce:active:scale-100"
     >
       <span className="shrink-0 [&>div]:h-8 [&>div]:w-8 [&>div]:rounded-lg [&>div]:p-1">
         <MessageAvatar variant="agent" agentHandle={notes.agent} />

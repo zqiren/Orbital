@@ -605,8 +605,9 @@ describe('ProjectDetail — the status line', () => {
     const line = screen.getByTestId('trigger-summary');
     expect(line.className).toContain('whitespace-nowrap');
     expect(line.className).not.toMatch(/flex-wrap/);
-    // A Float card: the raised layer that lifts on hover, never a grey tint.
-    expect(line.className).toMatch(/(^|\s)surface-float(\s|$)/);
+    // Design pass D: a chip on the chrome (white .6 on the tint, a .5px
+    // ring), never a grey tint and never a bordered box.
+    expect(line.className).toMatch(/(^|\s)chrome-chip(\s|$)/);
     expect(line.className).not.toContain('hover:bg-card-hover');
     expect(line.className).not.toMatch(/border/);
     expect(line).toHaveAttribute('title', '2 automations 1 off');
@@ -616,7 +617,7 @@ describe('ProjectDetail — the status line', () => {
     renderProjectDetail({ page: 'tasks' });
     const line = screen.getByTestId('trigger-summary');
     expect(line).toHaveAttribute('aria-current', 'page');
-    expect(line.className).toMatch(/(^|\s)surface-float(\s|$)/);
+    expect(line.className).toMatch(/(^|\s)chrome-chip(\s|$)/);
     expect(line.className).toContain('ring-accent');
     expect(line.className).not.toContain('hover:bg-card-hover');
   });
@@ -822,7 +823,9 @@ describe('ProjectDetail — the project column (desktop, narrow)', () => {
     const wide = renderProjectDetail();
     const column = screen.getByTestId('project-column');
     expect(column.style.width).toBe('260px');
-    expect(column.className).toContain('bg-sidebar');
+    // Design pass D: the column is part of the window's chrome and paints
+    // nothing of its own (no fill, no edge shadow).
+    expect(column.className).not.toMatch(/\bbg-|float-panel-column/);
     expect(column.className).not.toMatch(/\bborder/);
     wide.unmount();
 
@@ -839,8 +842,12 @@ describe('ProjectDetail — the project column (desktop, narrow)', () => {
     // Nothing folds on desktop: the header→toolbar View Transition is the phone's.
     expect(container.querySelector('.vt-project-header')).toBeNull();
     expect(container.querySelector('.vt-project-title')).toBeNull();
-    // The right area swaps as one.
-    expect(screen.getByTestId('project-main').className).toContain('vt-project-body');
+    // The right area swaps as one — inside its sheet (design pass D): the
+    // sheet stays put and one wrapper inside it carries the name.
+    const main = screen.getByTestId('project-main');
+    expect(main.className).toContain('sheet');
+    expect(main.className).not.toContain('vt-project-body');
+    expect(main.querySelectorAll('.vt-project-body')).toHaveLength(1);
   });
 
   it('a page keeps the column free of View Transition names too', () => {
@@ -1065,7 +1072,9 @@ describe('ProjectDetail — collapsing the session column', () => {
     expect(within(screen.getByTestId('session-list')).queryByTestId('session-column-handle')).toBeNull();
     expect(column).toHaveClass('group/column');
     // Vertically centred, straddling the right edge.
-    expect(handle).toHaveClass('absolute', 'top-1/2', '-translate-y-1/2', '-right-3');
+    // Centred on the column's content box (below the chrome's top pad), so it
+    // sits where the folded rail's chevron sits.
+    expect(handle).toHaveClass('absolute', 'top-[calc(50%+var(--chrome-top)/2)]', '-translate-y-1/2', '-right-3');
     // Hidden (and click-through) at rest; shown on column hover, on keyboard
     // focus, and faint at rest where nothing hovers.
     expect(handle).toHaveClass('opacity-0', 'pointer-events-none');
@@ -1114,7 +1123,7 @@ describe('ProjectDetail — collapsing the session column', () => {
     expect(screen.queryByTestId('project-column')).toBeNull();
     const rail = screen.getByTestId('session-rail');
     expect(rail.className).toContain('w-5');
-    expect(rail.className).toContain('bg-sidebar');
+    expect(rail.className).not.toMatch(/\bbg-|float-panel-column/);
     expect(localStorage.getItem(KEY)).toBe('1');
     // The right area stays.
     expect(screen.getByTestId('project-main')).toBeInTheDocument();

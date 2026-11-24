@@ -853,7 +853,7 @@ export default function ConnectPanel({
         </div>
       )}
       {signin === 'ok' && (
-        <div className="rounded-[12px] bg-sidebar" data-testid="connect-account">
+        <div className="rounded-[var(--r-card)] bg-sidebar" data-testid="connect-account">
           <div className="flex h-11 items-center gap-2.5 pl-3 pr-1.5">
             <ProviderLogo id={provider} size={20} />
             <span className="min-w-0 flex-1 truncate text-body font-medium text-primary" data-testid="connect-account-email">

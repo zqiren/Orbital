@@ -184,7 +184,9 @@ export default function TurnUndoSheet({ projectId, turn, onView, onRestored }: T
   const startedAt = Number.isNaN(Date.parse(turn.fromTs)) ? null : turn.fromTs;
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-card dark:bg-elevated" data-testid="turn-undo-sheet">
+    // Design pass D: on the panel's tone (no white surface of its own), so it
+    // never runs white against the white conversation beside it.
+    <div className="flex h-full min-h-0 flex-col" data-testid="turn-undo-sheet">
       <div className="flex min-w-0 items-center gap-1.5 px-5 pb-2.5 pt-2.5 text-caption text-secondary">
         {editorAgents.map((a) => (
           <AgentLogo key={a} slug={a} />

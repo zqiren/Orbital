@@ -234,14 +234,17 @@ describe('SessionSidebar — new session row (item 157)', () => {
     expect(list.contains(button)).toBe(true);
   });
 
-  it('sits on the white tint (--card / --elevated), sticky while the list scrolls', () => {
+  // Design pass D (8.7): a solid raised button (index.css .new-session-raised:
+  // --color-new-session + the nested float shadow), sticky while the list
+  // scrolls, on a wrapper that repaints the chrome rather than a grey band.
+  it('is a solid raised button, sticky while the list scrolls', () => {
     resetMocks();
     render(<SessionSidebar projectId="proj-1" />);
     const button = screen.getByTestId('session-new-button');
-    expect(button.className).toContain('bg-card');
-    expect(button.className).toContain('dark:bg-elevated');
-    expect(button.className).not.toMatch(/shadow/);
-    expect(screen.getByTestId('session-new-row').className).toContain('sticky');
+    expect(button.className).toContain('new-session-raised');
+    const row = screen.getByTestId('session-new-row');
+    expect(row.className).toContain('sticky');
+    expect(row.className).not.toMatch(/\bbg-sidebar\b/);
   });
 
   it('calls onNewSession when clicked', async () => {
@@ -1183,13 +1186,21 @@ describe('SessionSidebar — in the project column', () => {
     expect(el.className).not.toMatch(/bg-card|shadow|rounded|\bmx-|\bmt-/);
   });
 
-  it('the selected row is the raised card row it is on the tint', () => {
+  // Design pass D (8.7): New session and the selected session differ by
+  // elevation and solidity — the button is solid and raised, the selected
+  // row a FLAT translucent pill — never by a border or a new hue.
+  it('the selected row is a flat pill; New session is the raised button above it', () => {
     resetMocks();
     mockSessions = [makeSession({ session_id: 'sess-a', session_uuid: 'ua' })];
     render(<SessionSidebar projectId="proj-1" selectedSessionId="sess-a" />);
     const row = screen.getByTestId('session-list-item-sess-a');
     expect(row.style.background).toBe('var(--color-session-selected)');
-    expect(row.style.boxShadow).not.toBe('');
+    expect(row.style.boxShadow).toBe('');
+    const button = screen.getByTestId('session-new-button');
+    expect(button.className).toMatch(/\bnew-session-raised\b/);
+    expect(button.className).not.toMatch(/\bborder\b/);
+    // 12px of air below it before the first session (was 6).
+    expect(screen.getByTestId('session-new-row').className).toMatch(/\bpb-3\b/);
   });
 });
 

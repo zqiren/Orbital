@@ -115,7 +115,7 @@ function Chevron({ open }: { open: boolean }) {
 }
 
 const foldedRow =
-  'surface-float surface-float-nested flex h-12 w-full min-w-0 items-center gap-2.5 !rounded-[12px] px-3.5 text-left';
+  'surface-float surface-float-nested flex h-12 w-full min-w-0 items-center gap-2.5 px-3.5 text-left';
 const bandHead = 'flex h-9 w-full min-w-0 items-center gap-2 text-left';
 
 function LineCheckbox({ state }: { state: 'all' | 'some' | 'none' }) {
@@ -310,7 +310,7 @@ export default function WelcomePage({ onComplete }: WelcomePageProps) {
   const projectsBand = showProjects && (
     <div
       data-testid="welcome-band-projects"
-      className={`surface-float-static surface-float-nested !rounded-[12px] ${reviewing ? 'flex min-h-0 flex-1 flex-col' : ''}`}
+      className={`surface-float-static surface-float-nested ${reviewing ? 'flex min-h-0 flex-1 flex-col' : ''}`}
     >
       {scan.error && !found ? (
         <div className="flex h-12 items-center gap-2 px-3.5 text-body" role="alert" data-testid="welcome-projects-error">
@@ -462,7 +462,7 @@ export default function WelcomePage({ onComplete }: WelcomePageProps) {
   return (
     // pt-titlebar: a full-screen surface outside the app shell clears the
     // macOS titlebar band itself (the native titlebar eats clicks there).
-    <div className="flex h-dvh items-center justify-center bg-background px-4 py-6 pt-titlebar" data-testid="welcome-page">
+    <div className="flex h-dvh items-center justify-center px-4 py-6 pt-titlebar" data-testid="welcome-page">
       <div
         className={`surface-float-static flex w-full max-w-[640px] flex-col overflow-hidden max-h-[calc(100dvh-48px-var(--titlebar-h,0px))] ${
           reviewing ? 'h-[calc(100dvh-48px-var(--titlebar-h,0px))]' : ''

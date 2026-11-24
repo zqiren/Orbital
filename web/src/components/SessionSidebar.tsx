@@ -388,7 +388,7 @@ export function SessionSidebar({
           data-testid="session-automation-group-toggle"
           aria-expanded={open}
           onClick={() => toggleGroup(group.key)}
-          className="w-full flex items-center gap-1.5 px-2.5 py-[7px] rounded-md text-left select-none transition-colors hover:bg-card-hover"
+          className="w-full flex items-center gap-1.5 px-2.5 py-[7px] rounded-[var(--r-small)] text-left select-none transition-colors hover:bg-session-selected/50"
         >
           <span className="w-[14px] shrink-0 flex items-center justify-center text-secondary">
             {open ? (
@@ -418,7 +418,7 @@ export function SessionSidebar({
                 role="img"
                 aria-label={waitingLabel}
                 title={waitingLabel}
-                className="shrink-0 self-center text-micro tabular-nums font-medium leading-none px-1.5 py-0.5 rounded-full text-secondary bg-nav-hover"
+                className="shrink-0 self-center text-micro tabular-nums font-medium leading-none px-1.5 py-0.5 rounded-full text-secondary bg-chrome-badge"
               >
                 {waitingRuns > 99 ? '99+' : waitingRuns}
               </span>
@@ -476,8 +476,8 @@ export function SessionSidebar({
           aria-label={t('sessionSidebar.filterToggle')}
           title={t('sessionSidebar.filterToggle')}
           onClick={toggleFilterOpen}
-          className={`ml-auto -mr-[5px] inline-flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-md transition-colors hover:bg-card-hover hover:text-primary ${
-            filterOpen ? 'bg-card-hover text-primary' : filter !== 'all' ? 'text-accent' : 'text-muted'
+          className={`ml-auto -mr-[5px] inline-flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-md transition-colors hover:bg-chrome-hover hover:text-primary ${
+            filterOpen ? 'bg-chrome-hover text-primary' : filter !== 'all' ? 'text-accent' : 'text-muted'
           }`}
         >
           {/* A filter icon, not a chevron: in the column headers a chevron
@@ -524,17 +524,20 @@ export function SessionSidebar({
         className="flex-1 overflow-y-auto px-1.5 pb-1.5 flex flex-col gap-0.5"
         data-testid="session-list"
       >
-        {/* Item 157: New session is the first row, on a white tint, sticky
-            while the list scrolls; 6px below it before the first session. */}
+        {/* Item 157 + design pass D (8.7): New session is the first row, a
+            solid raised button, sticky while the list scrolls; 12px below it
+            before the first session, whose selected state is a flat pill.
+            The sticky wrapper repaints the window's chrome (chrome-fill) so
+            rows scrolling under it never show through its gaps. */}
         <div
-          className="sticky top-0 z-[2] -mx-1.5 shrink-0 bg-sidebar px-1.5 pt-0.5 pb-1.5"
+          className="chrome-fill sticky top-0 z-[2] -mx-1.5 shrink-0 px-1.5 pt-0.5 pb-3"
           data-testid="session-new-row"
         >
           <button
             type="button"
             data-testid="session-new-button"
             onClick={onNewSession}
-            className="w-full flex items-center gap-1.5 px-2.5 py-[7px] rounded-md text-left text-caption text-primary bg-card dark:bg-elevated transition-colors"
+            className="new-session-raised w-full flex items-center gap-1.5 px-2.5 py-[7px] rounded-[var(--r-small)] text-left text-caption text-primary transition-colors"
           >
             <span className="w-[14px] shrink-0 flex items-center justify-center text-secondary">
               <Plus size={13} strokeWidth={2} aria-hidden="true" />
@@ -572,7 +575,7 @@ export function SessionSidebar({
             type="button"
             data-testid="session-show-older"
             onClick={() => setShowOlderFor(projectId)}
-            className="w-full px-2.5 py-[7px] rounded-md text-left text-caption text-secondary hover:text-primary hover:bg-card-hover transition-colors"
+            className="w-full px-2.5 py-[7px] rounded-[var(--r-small)] text-left text-caption text-secondary hover:text-primary hover:bg-session-selected/50 transition-colors"
           >
             {t('session.showOlder', { n: olderCount })}
           </button>
@@ -650,7 +653,7 @@ export function SessionRail({
       >
         <span
           data-testid="session-rail-chevron"
-          className="absolute left-0 top-1/2 flex h-9 w-5 -translate-y-1/2 items-center justify-center rounded-md text-muted opacity-70 transition-[opacity,color,background-color] duration-150 group-hover:bg-card-hover group-hover:text-primary group-hover:opacity-100 group-focus-visible:opacity-100"
+          className="absolute left-0 top-1/2 flex h-9 w-5 -translate-y-1/2 items-center justify-center rounded-md text-muted opacity-70 transition-[opacity,color,background-color] duration-150 group-hover:bg-chrome-hover group-hover:text-primary group-hover:opacity-100 group-focus-visible:opacity-100"
         >
           <ChevronRight size={12} strokeWidth={2.25} aria-hidden="true" />
         </span>
@@ -670,7 +673,7 @@ export function SessionRail({
         data-testid="session-rail-new"
         aria-label={t('sessionSidebar.newSessionRow')}
         onClick={onNewSession}
-        className="absolute left-0 top-16 flex h-7 w-5 items-center justify-center rounded-md text-secondary transition-colors hover:bg-card-hover hover:text-primary focus:outline-none focus-visible:ring-1 focus-visible:ring-accent max-md:min-h-[44px]"
+        className="absolute left-0 top-16 flex h-7 w-5 items-center justify-center rounded-md text-secondary transition-colors hover:bg-chrome-hover hover:text-primary focus:outline-none focus-visible:ring-1 focus-visible:ring-accent max-md:min-h-[44px]"
       >
         <Plus size={14} strokeWidth={2} aria-hidden="true" />
       </button>
@@ -685,7 +688,7 @@ export function SessionRail({
             className={`${RAIL_BUTTON} ${
               settingsSelected
                 ? 'bg-card text-primary shadow-[0_1px_2px_rgb(0_0_0/0.06)]'
-                : 'text-secondary hover:bg-card-hover hover:text-primary'
+                : 'text-secondary hover:bg-chrome-hover hover:text-primary'
             }`}
           >
             <Settings size={14} aria-hidden="true" />
@@ -699,7 +702,7 @@ export function SessionRail({
           data-tour="panel-button"
           aria-label={t('projectDetail.openPanel')}
           onClick={onOpenPanel}
-          className={`absolute left-0 top-[94px] ${RAIL_BUTTON} text-secondary hover:bg-card-hover hover:text-primary`}
+          className={`absolute left-0 top-[94px] ${RAIL_BUTTON} text-secondary hover:bg-chrome-hover hover:text-primary`}
         >
           <PanelRight size={14} aria-hidden="true" />
         </button>

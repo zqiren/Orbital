@@ -297,7 +297,7 @@ export default function Sidebar({
         data-tour={project.is_scratch ? 'quick-tasks-row' : undefined}
         onClick={() => onSelectProject(project.project_id)}
         className={`flex-1 min-w-0 text-left px-3 py-2 rounded-sm flex items-center gap-2.5 transition-all duration-150 max-md:min-h-[44px] ${
-          isActive ? 'bg-nav-selected' : 'hover:bg-nav-hover/50'
+          isActive ? 'bg-nav-selected' : 'hover:bg-chrome-chip/60'
         }`}
       >
         {/* The dot rides in a 14px box — the width of the 工作台 row's
@@ -328,7 +328,7 @@ export default function Sidebar({
             data-testid={`project-unread-count-${project.project_id}`}
             title={unreadLabel}
             aria-label={unreadLabel}
-            className="ml-auto shrink-0 text-micro tabular-nums font-medium leading-none px-1.5 py-0.5 rounded-full text-secondary bg-nav-hover"
+            className="ml-auto shrink-0 text-micro tabular-nums font-medium leading-none px-1.5 py-0.5 rounded-full text-secondary bg-chrome-badge"
           >
             {unread > 99 ? '99+' : unread}
           </span>
@@ -337,9 +337,11 @@ export default function Sidebar({
     );
   }
 
-  // pt-titlebar: clears the macOS traffic lights, which float over this
-  // column's top-left corner when the desktop shell runs frameless. Padding
-  // (not margin) so bg-nav still fills the band. 0 off macOS.
+  // pt-chrome: clears the macOS traffic lights, which float over this
+  // column's top-left corner when the desktop shell runs frameless (and, off
+  // macOS, keeps the first row level with the sheet beside it). Design pass
+  // D: the list is part of the window's chrome, so it paints no fill and no
+  // edge line of its own.
   //
   // Width and insets are one decision (spec 078 pin amendment). The column
   // is always 260 on desktop. Its content is inset 12px on the left (so the
@@ -353,7 +355,7 @@ export default function Sidebar({
   // or going (leaving one) never shifts it — only the chevron comes and
   // goes. Mobile has no rail and no insets (max-md:w-full).
   return (
-    <aside className={`${narrow ? 'w-[248px] pr-1' : 'w-[260px] md:pl-3 md:pr-1'} shrink-0 bg-nav border-r border-border flex flex-col h-full max-md:w-full pt-titlebar`}>
+    <aside className={`${narrow ? 'w-[248px] pr-1' : 'w-[260px] md:pl-3 md:pr-1'} shrink-0 flex flex-col h-full max-md:w-full pt-chrome`}>
       {/* Wordmark — plain again (2026-11-04): the way home is the 工作台 row
           under 工作区 below, which the edge strip's glyph lines up with. */}
       <div className="mx-2 mt-2 mb-1 px-2 pt-2 pb-2 flex items-center gap-2 max-md:min-h-[44px]">
@@ -384,7 +386,7 @@ export default function Sidebar({
             aria-label={t('sidebar.collapse')}
             aria-expanded={true}
             onClick={onCollapse}
-            className="ml-auto -mr-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-secondary transition-colors hover:bg-nav-hover hover:text-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 max-md:min-h-[44px]"
+            className="ml-auto -mr-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-secondary transition-colors hover:bg-chrome-hover hover:text-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 max-md:min-h-[44px]"
           >
             <ChevronLeft size={16} strokeWidth={2.5} aria-hidden="true" />
           </button>
@@ -415,7 +417,7 @@ export default function Sidebar({
           data-testid="sidebar-workbench"
           aria-current={route.name === 'list' ? 'page' : undefined}
           className={`w-full text-left px-3 py-2 rounded-sm flex items-center gap-2.5 transition-all duration-150 max-md:min-h-[44px] ${
-            route.name === 'list' ? 'bg-nav-selected' : 'hover:bg-nav-hover/50'
+            route.name === 'list' ? 'bg-nav-selected' : 'hover:bg-chrome-chip/60'
           }`}
         >
           <span className="relative flex w-3.5 shrink-0 items-center justify-center text-secondary">
@@ -520,7 +522,7 @@ export default function Sidebar({
             data-testid="pinned-projects"
             className={
               regularProjects.length > 0
-                ? 'pb-1 mb-1 border-b border-border/60'
+                ? 'pb-1 mb-1 border-b border-chrome-line'
                 : undefined
             }
           >
@@ -556,7 +558,7 @@ export default function Sidebar({
       </nav>
 
       {/* Bottom section */}
-      <div className="px-3 pb-3 pt-2 border-t border-border space-y-2">
+      <div className="px-3 pb-3 pt-2 border-t border-chrome-line space-y-2">
         {/* New Project is one click; importing from other agents sits behind
             the ⌃ half of the split button (batch 1026: the plain text link
             under it read as clutter). The menu opens above the button. */}

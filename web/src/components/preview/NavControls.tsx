@@ -46,6 +46,7 @@ export function ZoomControls({
   onZoomIn,
   onFit,
   compact = false,
+  narrowAt = '20rem',
 }: {
   percent: number;
   fit: boolean;
@@ -54,9 +55,13 @@ export function ZoomControls({
   onFit: () => void;
   /** Drop the percentage and fit button when the nearest @container is under 20rem. */
   compact?: boolean;
+  /** Where `compact` starts dropping them. The PDF row carries more (page
+   *  field, count, divider), so it drops them under 24rem (design pass D:
+   *  at 360px the file name had measured 0px wide). */
+  narrowAt?: '20rem' | '24rem';
 }) {
   const t = useT();
-  const narrow = compact ? '@max-[20rem]:hidden' : '';
+  const narrow = compact ? (narrowAt === '24rem' ? '@max-[24rem]:hidden' : '@max-[20rem]:hidden') : '';
   return (
     <div className="flex items-center gap-0.5 shrink-0">
       <NavButton label={t('filePreview.doc.zoomOut')} onClick={onZoomOut}>
