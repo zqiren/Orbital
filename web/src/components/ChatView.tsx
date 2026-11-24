@@ -1562,14 +1562,18 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       return next;
     });
   }, [onOpenWorker]);
-  // Spec 197: only the latest usage-limit row carries the switch button.
+  // Spec 197: only the pinned agent's latest usage-limit row carries the
+  // switch button. Batch 1124: a later limit row of another agent (an
+  // Orbital dispatch still running when the user pinned, spec 195) must not
+  // take it away, so the search is for the pinned agent's rows only.
   const lastLimitIndex = useMemo(() => {
+    if (!pinnedTarget) return -1;
     for (let i = items.length - 1; i >= 0; i--) {
       const it = items[i];
-      if (it.type === 'sub_agent_activity' && it.limit) return i;
+      if (it.type === 'sub_agent_activity' && it.limit && it.handle === pinnedTarget) return i;
     }
     return -1;
-  }, [items]);
+  }, [items, pinnedTarget]);
   // Spec 096: `showThinking` follows the viewed session's status (this
   // instance outlives session switches). Not isActivelyRunning: the spinner
   // stays through running → waiting on purpose.

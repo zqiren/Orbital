@@ -341,6 +341,7 @@ vi.mock('./StreamingMessage', async (importOriginal) => {
 });
 
 import { __resetFileHistoryStores } from '../hooks/useFileHistory';
+import { setAgentAvailability } from '../hooks/useAgentAvailability';
 import ChatView, {
   appendLiveReasoning,
   __clearChatHistoryCacheForTests,
@@ -6943,5 +6944,66 @@ describe('Spec 195: dispatch cards (live)', () => {
     await flushEffects();
     expect(signature()).toEqual(live);
     expect(live).toEqual(['card:claude-code:completed', 'agent-message', 'card:codex:running']);
+  });
+});
+
+// Batch 1124 (specs 195 × 197): while the session is pinned to a limited
+// agent, a later limit row of ANOTHER agent (an Orbital dispatch that was
+// already running when the user pinned) must not take the switch button off
+// the pinned agent's own row.
+describe('Batch 1124: the usage-limit switch button with dispatch cards', () => {
+  const soon = () => new Date(Date.now() + 3 * 3600_000).toISOString();
+  const limitedQuota = (agent: string) => ({
+    agent, observed_at: new Date().toISOString(), plan: null, limited: true, windows: [], resets_at: soon(),
+  });
+  const limitRow = (handle: string, ts: string) => {
+    const content = `[Sub-agent] ${handle} stopped with error: Usage limit reached; reset time unknown. Error: You've hit your usage limit. Transcript: /t/${handle}.jsonl`;
+    return {
+      role: 'system', source: 'management', content, timestamp: ts,
+      _meta: { event: 'sub_agent_terminal', kind: 'error', reason: 'usage_limit', resets_at: soon(), display_content: content },
+    };
+  };
+  const AGENTS = [
+    { slug: 'claude-code', name: 'Claude Code' },
+    { slug: 'codex', name: 'Codex' },
+    { slug: 'pi', name: 'Pi' },
+  ];
+
+  afterEach(() => { setAgentAvailability([]); });
+
+  it('the pinned agent keeps its button; the dispatched agent\'s limit row has none', async () => {
+    setAgentAvailability([
+      { slug: 'claude-code', name: 'Claude Code', installed: true, ready: true, quota: limitedQuota('claude-code') },
+      { slug: 'codex', name: 'Codex', installed: true, ready: true, quota: limitedQuota('codex') },
+      { slug: 'pi', name: 'Pi', installed: true, ready: true },
+    ]);
+    sessionsListResponse = [
+      { session_id: 's1', session_uuid: 's1', status: 'idle', last_terminal_event: null, pinned_target: 'claude-code' },
+    ];
+    const marker = {
+      role: 'system', source: 'management', timestamp: '2026-11-24T10:00:01Z',
+      content: '[Sub-agent] Message sent to codex: "汇总口碑关键词". Transcript: /t/codex.jsonl',
+      _meta: { dispatch_id: 's1:d1', handle: 'codex', transcript_path: '/t/codex.jsonl', initiator: 'management_agent' },
+    };
+    const rows = [
+      { role: 'user', content: 'split the work', source: 'user', timestamp: '2026-11-24T10:00:00Z' },
+      marker,
+      { role: 'user', content: 'hi claude', source: 'user', target: 'claude-code', timestamp: '2026-11-24T10:00:02Z' },
+      limitRow('claude-code', '2026-11-24T10:00:03Z'),
+      limitRow('codex', '2026-11-24T10:00:04Z'),
+    ];
+    chatInitialResponse = { data: rows, total: rows.length };
+    await renderChat({ sessionId: 's1', agents: AGENTS });
+    await flushEffects();
+
+    const limitRows = Array.from(container.querySelectorAll('[data-testid="usage-limit-row"]'));
+    expect(limitRows).toHaveLength(2);
+    // The codex card is there and shows the failure; its row carries no button.
+    const card = container.querySelector('[data-testid="dispatch-card"][data-handle="codex"]');
+    expect(card?.getAttribute('data-status')).toBe('error');
+    const switches = Array.from(container.querySelectorAll('[data-testid="usage-limit-switch"]'));
+    expect(switches).toHaveLength(1);
+    expect(limitRows[0].contains(switches[0])).toBe(true);
+    expect(switches[0].getAttribute('data-slug')).toBe('pi');
   });
 });
