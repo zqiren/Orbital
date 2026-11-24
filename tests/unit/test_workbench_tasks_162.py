@@ -101,7 +101,7 @@ class FakeManager:
                 "pinned_target": self.pinned.get(project_id)}
 
     async def inject_message(self, project_id, content, *, session_id=None, nonce=None,
-                             routed_by=None):
+                             routed_by=None, queue_meta=None):
         self.log.append(("inject", project_id))
         self.injected.append((project_id, content, session_id))
         self.routed_by = routed_by

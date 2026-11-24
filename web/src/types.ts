@@ -1160,6 +1160,8 @@ export interface PendingCancelledEvent {
   /** The cancelled entry's nonce (removes its optimistic bubble + map entry).
    *  Nullable to mirror the backend cancel-by-session path. */
   nonce: string | null;
+  /** A message waiting behind an outside agent was removed (2026-11-24). */
+  dispatch_id?: string | null;
 }
 
 export interface DeviceStatusEvent {

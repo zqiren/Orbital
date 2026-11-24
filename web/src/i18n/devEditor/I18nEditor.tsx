@@ -181,7 +181,8 @@ export default function I18nEditor() {
       setHover(e.target.getBoundingClientRect());
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && pick) { setPick(false); setHover(null); }
+      // preventDefault: this Esc is the editor's, not the composer's stop.
+      if (e.key === 'Escape' && pick) { e.preventDefault(); setPick(false); setHover(null); }
     };
     document.addEventListener('click', onClick, true);
     document.addEventListener('mousemove', onMove, true);

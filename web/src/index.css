@@ -1135,3 +1135,110 @@ body {
     box-shadow: none;
   }
 }
+
+/* ------------------------------------------------ Composer: send + queue
+   2026-11-24, the approved prototype (run/1124-composer, send option B and
+   queue layout 1).
+
+   Send (SendButton.tsx): an accent square, 8px radius. A light tint while
+   there is nothing to send, filled once there is. The button is the hit area
+   (30px, 44px on a phone); .send-vis is the 28px square you see. The chat
+   composer and the Workbench composer use the same one. .is-stop is the
+   quiet stop square in the same family.
+
+   Queue block (QueueBlock.tsx): rows inside the composer's own surface, a
+   hairline above the input row. One line per row with an ellipsis; edit,
+   delete and send-now appear on hover or focus (always on a phone, with
+   44px targets). Up to 4 rows, then the list scrolls. */
+:root {
+  --send-tint: color-mix(in srgb, var(--color-accent) 10%, transparent);
+}
+:root[data-theme="dark"] {
+  --send-tint: color-mix(in srgb, var(--color-accent) 16%, transparent);
+}
+.send-hit {
+  flex: none; width: 30px; height: 30px; border-radius: 8px;
+  display: inline-grid; place-items: center; cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.send-hit:disabled { cursor: default; }
+.send-vis {
+  width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center;
+  background: var(--color-accent); color: #fff;
+  transition: background-color .15s, color .15s, transform .08s, opacity .15s;
+}
+.send-hit:disabled .send-vis {
+  background: var(--send-tint); color: color-mix(in srgb, var(--color-accent) 55%, transparent);
+}
+.send-hit:not(:disabled):hover .send-vis { background: color-mix(in srgb, var(--color-accent) 86%, #000); }
+:root[data-theme="dark"] .send-hit:not(:disabled):hover .send-vis { background: color-mix(in srgb, var(--color-accent) 86%, #fff); }
+.send-hit:not(:disabled):active .send-vis { transform: scale(.92); }
+.send-hit.is-stop .send-vis,
+.send-hit.is-stop:disabled .send-vis { background: var(--send-tint); color: var(--color-accent); }
+.send-hit.is-stop:not(:disabled):hover .send-vis,
+:root[data-theme="dark"] .send-hit.is-stop:not(:disabled):hover .send-vis {
+  background: color-mix(in srgb, var(--color-accent) 18%, transparent);
+}
+.send-hit.is-pending .send-vis { opacity: .45; }
+.send-hit:focus-visible { outline: 2px solid color-mix(in srgb, var(--color-accent) 45%, transparent); outline-offset: 1px; }
+@media (max-width: 767px) {
+  .send-hit { width: 44px; height: 44px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .send-vis { transition: none; }
+  .send-hit:not(:disabled):active .send-vis { transform: none; }
+}
+
+.qblock { display: flex; flex-direction: column; gap: 8px; }
+.qrows { display: flex; flex-direction: column; max-height: 128px; overflow-y: auto; margin: -2px -8px 0; }
+.qrow {
+  position: relative; display: flex; align-items: center; gap: 8px; height: 32px; flex: none;
+  padding: 0 4px 0 12px; border-radius: 6px;
+}
+.qrow:hover, .qrow:focus-within { background: color-mix(in srgb, var(--color-card-hover) 55%, transparent); }
+.qlead { flex: none; width: 16px; height: 16px; display: grid; place-items: center; color: var(--color-muted); }
+.qlead-mark {
+  width: 16px; height: 16px; border-radius: 5px; overflow: hidden; display: block;
+  background: var(--color-logo-tile); padding: 2px;
+  box-shadow: 0 0 0 .5px color-mix(in srgb, var(--color-border) 90%, transparent);
+}
+.qlead-mark img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.qtxt {
+  flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--color-secondary); font-size: var(--text-body); line-height: 20px;
+}
+.qchip {
+  flex: none; display: inline-flex; align-items: center; gap: 4px; max-width: 132px; height: 20px;
+  padding: 0 6px; border-radius: 6px; background: var(--color-sidebar); color: var(--color-secondary);
+  font-size: var(--text-caption); line-height: 16px;
+}
+:root[data-theme="dark"] .qchip { background: var(--color-card-hover); }
+.qchip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.qacts { flex: none; display: flex; gap: 2px; margin-left: auto; opacity: 0; transition: opacity .12s; }
+.qrow:hover .qacts, .qrow:focus-within .qacts { opacity: 1; }
+.qa {
+  width: 26px; height: 26px; border-radius: 6px; display: grid; place-items: center;
+  color: var(--color-secondary); cursor: pointer; -webkit-tap-highlight-color: transparent;
+}
+.qa:hover, .qa:focus-visible { background: var(--color-card-hover); color: var(--color-primary); }
+.qa:focus-visible { outline: none; }
+.qa:disabled { opacity: .4; cursor: default; }
+.qsep { height: 1px; background: color-mix(in srgb, var(--color-border) 70%, transparent); margin: 0 -12px; }
+.qtip {
+  position: fixed; z-index: 1000; width: max-content; max-width: 220px; pointer-events: none;
+  border-radius: 8px; border: 1px solid var(--color-border); background: var(--color-sidebar);
+  padding: 6px 10px; font-size: var(--text-caption); line-height: 16px; color: var(--color-secondary);
+  box-shadow: 0 10px 15px -3px rgb(0 0 0 / .1), 0 4px 6px -4px rgb(0 0 0 / .1);
+}
+@media (hover: none), (max-width: 767px) {
+  .qacts { opacity: 1; }
+}
+@media (max-width: 767px) {
+  .qrows { margin: -2px -10px 0; max-height: 176px; } /* 4 rows of 44px */
+  .qrow { height: 44px; padding-right: 0; }
+  .qa { width: 44px; height: 44px; }
+  .qchip { max-width: 88px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .qacts { transition: none; }
+}

@@ -92,11 +92,7 @@
 .wb-plus:hover { background: var(--wb-tint); color: var(--color-primary); }
 .wb-box.is-drop { outline: 2px dashed color-mix(in srgb, var(--color-accent) 70%, transparent); outline-offset: -4px; }
 .wb-atterr { font-size: var(--text-caption); color: var(--color-warning-text); }
-.wb-send {
-  width: 30px; height: 30px; border-radius: 9px; background: var(--color-accent); color: #fff;
-  display: inline-flex; align-items: center; justify-content: center; flex: none;
-}
-.wb-send:disabled { opacity: .35; cursor: default; }
+/* Send: the shared SendButton (.send-hit in index.css), 2026-11-24. */
 
 .wb-pop {
   position: absolute; z-index: 30; top: calc(100% + 6px); width: 260px; max-height: 360px; overflow-y: auto;

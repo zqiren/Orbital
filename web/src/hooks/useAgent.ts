@@ -36,6 +36,9 @@ export interface InjectResult extends ActionResult {
   dispatch_id?: string;
   handle?: string;
   position?: number;
+  /** The composer queue block (2026-11-24): with `queued_behind`, the chat
+   *  row is held back until the message is dispatched. */
+  held?: boolean;
 }
 
 /**
@@ -50,7 +53,18 @@ export interface PendingEntry {
   nonce: string | null;
   content: string;
   position: number;
-  kind: 'same';
+  /** `same`: behind this chat's own agent. `worker` (2026-11-24): a direct
+   *  send held back behind an outside agent's current task. */
+  kind: 'same' | 'worker';
+  /** The typed words and the exact attachments (the queue block's row and
+   *  its edit); absent on an entry the daemon has no record of them for. */
+  text?: string;
+  attachments?: Array<{ path: string; mime: string; size: number; local?: boolean }> | null;
+  /** When it queued (the block's row order). */
+  queued_at?: string;
+  /** kind `worker` only. */
+  dispatch_id?: string;
+  handle?: string;
 }
 
 export interface PendingListResult {
@@ -68,6 +82,12 @@ export interface PendingListResult {
  */
 export interface CancelPendingResult extends ActionResult {
   removed: boolean;
+}
+
+/** POST /agents/{id}/pending/send-now: `sent` is false when the message had
+ *  already gone out or been removed (nothing is sent twice). */
+export interface SendPendingNowResult extends ActionResult {
+  sent: boolean;
 }
 
 export function useAgent() {
@@ -164,7 +184,7 @@ export function useAgent() {
   // caller whether a still-queued entry was actually removed (server-
   // authoritative recall, §12 R2).
   const cancelPendingInput = useCallback(
-    async (projectId: string, sessionId: string, nonce?: string) => {
+    async (projectId: string, sessionId: string, nonce?: string, dispatchId?: string) => {
       return api<CancelPendingResult>(
         `/api/v2/agents/${encodeURIComponent(projectId)}/pending/cancel`,
         {
@@ -172,6 +192,27 @@ export function useAgent() {
           body: JSON.stringify({
             session_id: sessionId,
             ...(nonce !== undefined && { nonce }),
+            ...(dispatchId !== undefined && { dispatch_id: dispatchId }),
+          }),
+        },
+      );
+    },
+    [],
+  );
+
+  // The composer queue block's "send now" (2026-11-24): stop what is running
+  // and send this queued message next. `nonce` names one queued behind this
+  // chat's own agent, `dispatchId` one waiting behind an outside agent.
+  const sendPendingNow = useCallback(
+    async (projectId: string, sessionId: string, which: { nonce?: string; dispatchId?: string }) => {
+      return api<SendPendingNowResult>(
+        `/api/v2/agents/${encodeURIComponent(projectId)}/pending/send-now`,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            session_id: sessionId,
+            ...(which.nonce !== undefined && { nonce: which.nonce }),
+            ...(which.dispatchId !== undefined && { dispatch_id: which.dispatchId }),
           }),
         },
       );
@@ -248,5 +289,5 @@ export function useAgent() {
     [],
   );
 
-  return { startAgent, cancelMessage, newSession, injectMessage, cancelPendingInput, getPending, getSubAgentTranscript, approveToolCall, denyToolCall };
+  return { startAgent, cancelMessage, newSession, injectMessage, cancelPendingInput, sendPendingNow, getPending, getSubAgentTranscript, approveToolCall, denyToolCall };
 }

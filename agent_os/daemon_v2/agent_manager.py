@@ -3593,7 +3593,8 @@ class AgentManager:
                              nonce: str | None = None,
                              session_id: str | None = None,
                              queue_state: str = "chat",
-                             routed_by: str | None = None) -> "str | dict":
+                             routed_by: str | None = None,
+                             queue_meta: dict | None = None) -> "str | dict":
         """Inject a message. Four cases:
         1. Loop running -> queue (returns "queued_same_session")
         1b. Loop paused for approval -> auto-deny pending, deliver, resume
@@ -3613,6 +3614,10 @@ class AgentManager:
         ``(project_id, session_id)``. The newly minted session shares
         the project's workspace and config; it does NOT inherit
         conversation history from any other session in the same project.
+
+        ``queue_meta`` (the typed words and attachments) is kept beside a
+        message that queues (Case 1), in memory, for the composer's queue
+        block; it changes nothing that is sent or written.
         """
         # Inject (start-work) None-policy: holder if the queue is draining,
         # else the project's persistent chat session (lazy-mint funnel).
@@ -3656,7 +3661,8 @@ class AgentManager:
                 # with a second hydrated copy.
                 return await self.inject_message(
                     project_id, content, nonce=nonce, session_id=session_id,
-                    queue_state=queue_state)
+                    queue_state=queue_state,
+                    **({"queue_meta": queue_meta} if queue_meta else {}))
             if loaded is not None:
                 logger.info(
                     "inject_message(%s): hydrating session uuid %s (meta F1 %s) from disk",
@@ -3692,7 +3698,10 @@ class AgentManager:
             # wait-state append below (which is surfaced via on_completed and is
             # not recallable). Spec 006 §12, diff-review Finding 1.
             logger.info("inject_message(%s): loop running, queuing message", project_id)
-            handle.session.queue_message(content, nonce=nonce)
+            if queue_meta:
+                handle.session.queue_message(content, nonce=nonce, meta=queue_meta)
+            else:
+                handle.session.queue_message(content, nonce=nonce)
             if handle.loop.yield_memory_record():
                 logger.info("inject_message(%s): memory record turn yielded", project_id)
             return "queued_same_session"
@@ -3812,7 +3821,8 @@ class AgentManager:
                     or await self._wait_for_start_in_flight(sk)):
                 return await self.inject_message(
                     project_id, content, nonce=nonce, session_id=session_id,
-                    queue_state=queue_state)
+                    queue_state=queue_state,
+                    **({"queue_meta": queue_meta} if queue_meta else {}))
             return await self._start_with_persisted_message(
                 project_id, config, content, nonce,
                 session_id=session_id, queue_state=queue_state,
@@ -4253,18 +4263,42 @@ class AgentManager:
             list_queued = getattr(handle.session, "list_queued", None)
             if list_queued is None:
                 continue
+            queued_meta = getattr(handle.session, "queued_meta", None)
             for idx, item in enumerate(list_queued(), start=1):
                 if isinstance(item, tuple):
                     content, nonce = item
                 else:
                     content, nonce = item, None
-                out.append({
+                entry = {
                     "session_id": sid,
                     "nonce": nonce,
                     "content": content or "",
                     "position": idx,
                     "kind": "same",
-                })
+                }
+                # The composer's queue block: the typed words and the
+                # attachments, so a reload shows the row and an edit restores
+                # its chips. Added keys only; older clients ignore them.
+                meta = queued_meta(nonce) if (nonce and callable(queued_meta)) else None
+                if isinstance(meta, dict):
+                    if meta.get("queued_at"):
+                        entry["queued_at"] = meta["queued_at"]
+                    if "text" in meta:
+                        entry["text"] = meta["text"]
+                    if meta.get("attachments"):
+                        entry["attachments"] = meta["attachments"]
+                out.append(entry)
+        # Messages held back behind an outside agent's current task (kind
+        # "worker"; older clients only read kind "same").
+        lister = getattr(self._sub_agent_manager, "list_held_prompts", None)
+        if callable(lister):
+            try:
+                held = lister(project_id)
+            except Exception:
+                logger.exception("list_held_prompts raised for %s", project_id)
+                held = []
+            if isinstance(held, list):
+                out.extend(held)
         return out
 
     def cancel_pending_inject(self, project_id: str, session_id: str,
@@ -4294,14 +4328,85 @@ class AgentManager:
         }, session_id=session_id)
         return {"status": "cancelled", "removed": removed_any}
 
+    async def cancel_pending(self, project_id: str, session_id: str, *,
+                             nonce: str | None = None,
+                             dispatch_id: str | None = None) -> dict:
+        """Remove one queued message, whichever queue it waits in: this
+        session's own (``nonce``) or an outside agent's (``dispatch_id``).
+        ``removed`` is True only when it was still waiting, so the composer
+        loads it back for editing only then (no double send)."""
+        if dispatch_id is None:
+            return self.cancel_pending_inject(project_id, session_id, nonce=nonce)
+        remover = getattr(self._sub_agent_manager, "remove_queued_prompt", None)
+        removed = bool(callable(remover) and await remover(
+            project_id, session_id, dispatch_id))
+        self._broadcast(project_id, {
+            "type": "chat.pending_cancelled",
+            "project_id": project_id,
+            "session_id": session_id,
+            "nonce": nonce,
+            "dispatch_id": dispatch_id,
+        }, session_id=session_id)
+        return {"status": "cancelled", "removed": removed}
+
+    async def send_queued_now(self, project_id: str, session_id: str, *,
+                              nonce: str | None = None,
+                              dispatch_id: str | None = None) -> dict:
+        """The queue block's "send now": stop what is running and send this
+        message next; the others keep their order behind it.
+
+        This chat's own agent (``nonce``): the message moves to the head of
+        the session queue and the turn is stopped through the Stop button's
+        path (``cancel_message``), whose loop-end drain sends the queue, this
+        one first. With no turn running (one that ended on an error keeps its
+        queue), it is delivered as a new message. An outside agent
+        (``dispatch_id``): that agent's current task is stopped and this
+        prompt dispatched first. ``sent`` is False when the message is no
+        longer waiting (it already went out or was removed)."""
+        gone = {"status": "gone", "sent": False}
+        if dispatch_id is not None:
+            sender = getattr(self._sub_agent_manager, "send_queued_now", None)
+            if not callable(sender) or not await sender(project_id, session_id, dispatch_id):
+                return gone
+            return {"status": "sent", "sent": True}
+        if not nonce:
+            return gone
+        handle = self._handles.get(make_session_key(project_id, session_id))
+        if handle is None or handle.session is None:
+            return gone
+        session = handle.session
+        if handle.task is not None and not handle.task.done():
+            if not session.move_queued_to_front(nonce):
+                return gone
+            await self.cancel_message(project_id, session_id=session_id)
+            return {"status": "sent", "sent": True}
+        content = session.remove_queued_message(nonce)
+        if content is None:
+            return gone
+        await self.inject_message(project_id, content, nonce=nonce,
+                                  session_id=session_id)
+        self._broadcast(project_id, {
+            "type": "chat.pending_dispatched",
+            "project_id": project_id,
+            "session_id": session_id,
+            "nonce": nonce,
+        }, session_id=session_id)
+        return {"status": "sent", "sent": True}
+
     def _clear_same_session_pending(self, project_id: str, session_id: str) -> None:
-        """Clear FE same-session "Waiting…" lines for any leftover queued
-        messages when a turn ends terminally (cancel / error / stop) WITHOUT
-        draining its queue — otherwise the line orphans (diff-review Finding 1,
-        terminal paths). The messages stay in ``session._queue`` and still run
-        on the next turn; only the stale visual indicator is cleared, mirroring
-        the normal-drain ``chat.pending_dispatched`` broadcast.
-        """
+        """A turn ended terminally (error, task cancelled) WITHOUT draining
+        its queue. The leftover messages stay in ``session._queue`` and run
+        with the next turn, so the composer's queue block keeps their rows
+        and nothing is broadcast. (Before the queue block this sent
+        ``chat.pending_dispatched`` for each, telling the UI they had been
+        sent while they were still waiting.) Kept as the one named place the
+        terminal paths call, so the rule has a single home."""
+        return None
+
+    def _drop_same_session_pending(self, project_id: str, session_id: str) -> None:
+        """The handle is being dropped (session stopped) with messages still
+        queued: they go with it, so say so (``chat.pending_cancelled``) and
+        their rows leave the composer."""
         handle = self._handles.get(make_session_key(project_id, session_id))
         if handle is None:
             return
@@ -4312,7 +4417,7 @@ class AgentManager:
         for _content, nonce in leftover:
             if nonce:
                 self._broadcast(project_id, {
-                    "type": "chat.pending_dispatched",
+                    "type": "chat.pending_cancelled",
                     "project_id": project_id,
                     "session_id": session_id,
                     "nonce": nonce,
@@ -7352,9 +7457,9 @@ class AgentManager:
             if not handle:
                 return
             if handle.session.is_stopped():
-                # Clear leftover same-session "Waiting…" lines BEFORE dropping
-                # the handle (the helper reads session._queue via the handle).
-                self._clear_same_session_pending(project_id, session_id)
+                # Leftover queued messages go with the handle: say so BEFORE
+                # dropping it (the helper reads session._queue via the handle).
+                self._drop_same_session_pending(project_id, session_id)
                 self._handles.pop(sk, None)
                 self._set_last_terminal_event(
                     project_id, session_id, "stopped",

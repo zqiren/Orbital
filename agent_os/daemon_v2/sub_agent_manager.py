@@ -16,6 +16,7 @@ import secrets
 import time
 from collections import deque
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from agent_os import telemetry
 from agent_os.telemetry.diagnostics import (
@@ -55,6 +56,42 @@ FANOUT_STAGGER_TIMEOUT_S = 20.0
 
 
 @dataclass
+class HeldUserRow:
+    """The chat row of a user's direct send, held back until it is sent.
+
+    The composer's queue block (2026-11-24): a message waiting behind an
+    outside agent's current task is not in the chat yet. Its row is written
+    when the prompt is dispatched (or, if the queue is dropped, just before
+    the "not sent" marker that explains it), stamped with that moment, so
+    the chat shows what was really sent and in the order it went out.
+    ``persist_fn`` is the route's ``persist_mention_message`` call; one
+    write at most, whoever asks first.
+    """
+
+    row: dict
+    persist_fn: object  # async (row) -> object
+    text: str = ""
+    attachments: list | None = None
+    queued_at: str = ""
+    persisted: bool = False
+
+    def __post_init__(self):
+        if not self.queued_at:
+            self.queued_at = str(self.row.get("timestamp") or "")
+
+    async def persist(self) -> None:
+        if self.persisted:
+            return
+        self.persisted = True
+        self.row["timestamp"] = datetime.now(timezone.utc).isoformat()
+        try:
+            await self.persist_fn(self.row)
+        except Exception:
+            logger.exception("could not write a held user row (nonce=%s)",
+                             self.row.get("nonce"))
+
+
+@dataclass
 class _QueuedPrompt:
     """One provider turn waiting behind the active turn for a handle."""
 
@@ -65,6 +102,8 @@ class _QueuedPrompt:
     # Spec 184: a turn the daemon started (memory reminder, worker result,
     # job message) — never a user taking the worker over.
     daemon_turn: bool = False
+    # The user's chat row, written when this prompt goes out (HeldUserRow).
+    held_row: "HeldUserRow | None" = None
 
 
 #: The loopback entries every seat-holder needs in NO_PROXY (spec 184 §5.2).
@@ -2234,7 +2273,8 @@ class SubAgentManager:
                    *, session_id: str | None = None, depth: int = 0,
                    fresh: bool = False, dispatch_id: str | None = None,
                    initiator: str = "management_agent",
-                   daemon_turn: bool = False) -> str:
+                   daemon_turn: bool = False,
+                   held_row: "HeldUserRow | None" = None) -> str:
         """Dispatch message to adapter, spawning the sub-agent if needed.
 
         Returns immediately with a transcript path acknowledgement.
@@ -2290,6 +2330,10 @@ class SubAgentManager:
         user-side initiator (memory reminder, worker result, job message):
         it never counts as the user taking a worker over
         (``_takeover_due``).
+
+        ``held_row`` (the composer queue block) is the user's chat row for
+        this send; it is written when the prompt goes out, so a message
+        waiting behind another task is not in the chat until it is sent.
         """
         session_id = self._resolve_session_id(session_id)
         if initiator in TOP_INITIATORS and self._project_store is not None:
@@ -2445,6 +2489,7 @@ class SubAgentManager:
                 transcript_path=transcript_path,
                 initiator=initiator,
                 daemon_turn=daemon_turn,
+                held_row=held_row,
             )
             if prompt_key in self._prompt_active:
                 self._prompt_queues.setdefault(prompt_key, deque()).append(queued)
@@ -2477,12 +2522,119 @@ class SubAgentManager:
                 return i
         return None
 
+    def holds_user_rows(self, project_id: str, session_id: str | None,
+                        handle: str) -> bool:
+        """Whether a user's send to ``handle`` may hold its chat row back
+        until dispatch: the worker is already running in this session, so
+        nothing spawns before the dispatch (a spawn keeps the old order:
+        row first, then the start)."""
+        session_id = self._resolve_session_id(session_id)
+        return handle in self._adapters.get(make_session_key(project_id, session_id), {})
+
+    def list_held_prompts(self, project_id: str) -> list[dict]:
+        """The user's sends waiting behind a worker's current task, for GET
+        /pending (reload and reconnect rebuild the queue block from it).
+        Only prompts holding their row back are listed; everything else in
+        a worker queue (Orbital's dispatches) is not the user's message."""
+        out: list[dict] = []
+        for (pid, sid, handle), queue in list(self._prompt_queues.items()):
+            if pid != project_id:
+                continue
+            for idx, prompt in enumerate(queue, start=1):
+                held = getattr(prompt, "held_row", None)
+                if not isinstance(held, HeldUserRow) or held.persisted:
+                    continue
+                out.append({
+                    "session_id": sid,
+                    "dispatch_id": prompt.dispatch_id,
+                    "handle": handle,
+                    "nonce": held.row.get("nonce"),
+                    "content": held.row.get("content") or "",
+                    "text": held.text,
+                    "attachments": held.attachments,
+                    "position": idx,
+                    "kind": "worker",
+                    "queued_at": held.queued_at,
+                })
+        return out
+
+    def _find_queued(self, project_id: str, session_id: str, dispatch_id: str):
+        for (pid, sid, handle), queue in self._prompt_queues.items():
+            if pid != project_id or sid != session_id:
+                continue
+            for prompt in queue:
+                if getattr(prompt, "dispatch_id", None) == dispatch_id:
+                    return (pid, sid, handle), queue, prompt
+        return None, None, None
+
+    async def remove_queued_prompt(self, project_id: str, session_id: str | None,
+                                   dispatch_id: str) -> bool:
+        """Take one still-waiting prompt out of its worker's queue (the queue
+        block's delete and edit). True only if it was still waiting; a prompt
+        that already went out is not touched. The user removed it, so no row
+        and no "not sent" marker are written."""
+        session_id = self._resolve_session_id(session_id)
+        async with self._get_lock(project_id, session_id=session_id):
+            key, queue, prompt = self._find_queued(project_id, session_id, dispatch_id)
+            if prompt is None:
+                return False
+            queue.remove(prompt)
+            if not queue:
+                self._prompt_queues.pop(key, None)
+            return True
+
+    async def send_queued_now(self, project_id: str, session_id: str | None,
+                              dispatch_id: str) -> bool:
+        """Send now: stop the worker's current task (the card's Stop, one
+        route for every transport) and deliver this prompt first; the rest
+        of its queue follows in order. False when it is no longer waiting.
+
+        The queue is taken out before the stop (a stop drops whatever is
+        still queued) and handed back through ``send()``, which respawns
+        the worker resuming its thread, exactly as a rebuild does."""
+        session_id = self._resolve_session_id(session_id)
+        async with self._get_lock(project_id, session_id=session_id):
+            key, queue, prompt = self._find_queued(project_id, session_id, dispatch_id)
+            if prompt is None:
+                return False
+            queue.remove(prompt)
+            queue.appendleft(prompt)
+            pending = self._prompt_queues.pop(key, None)
+        handle = key[2]
+        await self.stop_for_user(project_id, handle, session_id=session_id)
+        while pending:
+            item = pending.popleft()
+            try:
+                result = await self.send(
+                    project_id, handle, item.message,
+                    session_id=session_id, dispatch_id=item.dispatch_id,
+                    initiator=item.initiator, daemon_turn=item.daemon_turn,
+                    held_row=getattr(item, "held_row", None),
+                )
+            except Exception:
+                logger.exception("send now to %s/%s raised", project_id, handle)
+                result = "Error: send raised"
+            if result.startswith("Error"):
+                pending.appendleft(item)
+                await self._mark_queued_prompts_dropped(
+                    pending, project_id, handle, session_id=session_id,
+                    why="the sub-agent was no longer available before dispatch",
+                )
+                break
+        return True
+
     async def _dispatch_prompt_locked(
         self, adapter, prompt: _QueuedPrompt, project_id: str,
         session_id: str, handle: str,
     ) -> None:
         """Start one queued prompt while the session lifecycle lock is held."""
         self._note_worker_activity(project_id, session_id)
+        # The user's held-back row lands now, before the recap is built and
+        # before the dispatch marker: the same order a send that went out at
+        # once always had (row, then "Message sent to …").
+        held = getattr(prompt, "held_row", None)
+        if isinstance(held, HeldUserRow):
+            await held.persist()
         # Spec 074: push this dispatch's initiator into the lifecycle
         # observer's registry BEFORE the dispatch, so the terminal event that
         # eventually closes this turn (fired by process_manager, which has no
@@ -2772,7 +2924,16 @@ class SubAgentManager:
         the marker-parity guard discovers the drop sites from this module's
         AST and fails on any that does neither.
         """
-        if not dropped or self._lifecycle_observer is None:
+        if not dropped:
+            return
+        # A held-back user row was never written: write it now, so the marker
+        # below explains a message the user can see (what a queued send
+        # always left behind before rows were held back).
+        for _prompt in dropped:
+            held = getattr(_prompt, "held_row", None)
+            if isinstance(held, HeldUserRow):
+                await held.persist()
+        if self._lifecycle_observer is None:
             return
         for _prompt in dropped:
             try:
@@ -2969,6 +3130,7 @@ class SubAgentManager:
                     session_id=session_id, dispatch_id=prompt.dispatch_id,
                     initiator=prompt.initiator,
                     daemon_turn=prompt.daemon_turn,
+                    held_row=getattr(prompt, "held_row", None),
                 )
             except Exception:
                 logger.exception("rebuild of %s/%s for a queued prompt failed",

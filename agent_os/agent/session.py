@@ -284,6 +284,9 @@ class Session:
 
         # Message injection queue — each item is (content, nonce)
         self._queue: list[tuple[str, str | None]] = []
+        # In memory only, by nonce: what the composer needs to show and edit a
+        # queued message (the typed words, its attachments). Never written.
+        self._queue_meta: dict[str, dict] = {}
 
         # Deferred messages (lifecycle notifications buffered during tool execution)
         self._deferred_messages: list[dict] = []
@@ -1026,15 +1029,37 @@ class Session:
     # Queue (user injection while loop runs)
     # ------------------------------------------------------------------
 
-    def queue_message(self, content: str, *, nonce: str | None = None) -> None:
-        """Append to internal queue list as (content, nonce) tuple."""
+    def queue_message(self, content: str, *, nonce: str | None = None,
+                      meta: dict | None = None) -> None:
+        """Append to internal queue list as (content, nonce) tuple.
+
+        ``meta`` (the typed words, the attachments) rides beside it in memory
+        so the composer's queue block can rebuild and edit the message."""
         self._queue.append((content, nonce))
+        if nonce:
+            entry = dict(meta) if meta else {}
+            entry.setdefault("queued_at", datetime.now(timezone.utc).isoformat())
+            self._queue_meta[nonce] = entry
 
     def pop_queued_messages(self) -> list[tuple[str, str | None]]:
         """Return and clear queue. Each item is (content, nonce)."""
         queued = self._queue[:]
         self._queue.clear()
+        self._queue_meta.clear()
         return queued
+
+    def queued_meta(self, nonce: str) -> dict | None:
+        """The composer meta a queued message was sent with, if any."""
+        return self._queue_meta.get(nonce)
+
+    def move_queued_to_front(self, nonce: str) -> bool:
+        """Move the still-queued message ``nonce`` to the head of the queue
+        (send now). False when it is no longer queued."""
+        for idx, item in enumerate(self._queue):
+            if item[1] == nonce:
+                self._queue.insert(0, self._queue.pop(idx))
+                return True
+        return False
 
     def remove_queued_message(self, nonce: str) -> str | None:
         """Remove the queued ``(content, nonce)`` tuple matching ``nonce``.
@@ -1047,6 +1072,7 @@ class Session:
         for idx, (content, q_nonce) in enumerate(self._queue):
             if q_nonce == nonce:
                 del self._queue[idx]
+                self._queue_meta.pop(nonce, None)
                 return content
         return None
 

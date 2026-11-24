@@ -403,9 +403,12 @@ async def test_same_session_queued_messages_list_and_cancel(tmp_path):
     try:
         assert await mgr.inject_message(PID, "follow-up", nonce="n1", session_id=A) == (
             "queued_same_session")
-        assert mgr.list_pending(PID) == [{
+        (entry,) = mgr.list_pending(PID)
+        # queued_at (2026-11-24, the composer queue block): an added key.
+        assert entry.pop("queued_at")
+        assert entry == {
             "session_id": A, "nonce": "n1", "content": "follow-up",
-            "position": 1, "kind": "same"}]
+            "position": 1, "kind": "same"}
         assert mgr.cancel_pending_inject(PID, A, nonce="n1") == {
             "status": "cancelled", "removed": True}
         assert mgr.list_pending(PID) == []

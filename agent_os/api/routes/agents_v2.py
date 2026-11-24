@@ -1925,12 +1925,35 @@ async def inject_message(project_id: str, req: InjectRequest):
         # persist below resolves it through the canonical funnel. It is async
         # (spec 101: the disk hydrate runs off the loop), so each attempt's
         # coroutine is awaited by _retry_session_lock; the append stays here.
+        #
+        # The composer's queue block (2026-11-24): when the worker is already
+        # running in this chat, the row is HELD and written by send() when
+        # the prompt actually goes out (at once, or after the task it waits
+        # behind), so a waiting message is not in the chat until it is sent.
+        # A send that spawns the worker keeps the old order (row first).
+        held_row = None
+        holds = getattr(_sub_agent_manager, "holds_user_rows", None)
+        if (isinstance(inject_session_id, str) and inject_session_id
+                and callable(holds)
+                and holds(project_id, inject_session_id, req.target) is True):
+            from agent_os.daemon_v2.sub_agent_manager import HeldUserRow
+
+            async def _persist_held(row, _sid=inject_session_id):
+                await _retry_session_lock(
+                    lambda: _agent_manager.persist_mention_message(
+                        project_id, _sid, row))
+
+            held_row = HeldUserRow(
+                row=user_msg, persist_fn=_persist_held, text=req.content,
+                attachments=attachment_dicts)
+            mention_session_id = inject_session_id
         try:
-            mention_session_id = await _retry_session_lock(
-                lambda: _agent_manager.persist_mention_message(
-                    project_id, inject_session_id, user_msg,
-                    **({"routed_by": req.routed_by} if req.routed_by else {}),
-                ))
+            if held_row is None:
+                mention_session_id = await _retry_session_lock(
+                    lambda: _agent_manager.persist_mention_message(
+                        project_id, inject_session_id, user_msg,
+                        **({"routed_by": req.routed_by} if req.routed_by else {}),
+                    ))
         except FileLockError:
             # Still contended after the whole backoff budget: refuse cleanly
             # (retryable, message NOT persisted) rather than letting the
@@ -1975,12 +1998,15 @@ async def inject_message(project_id: str, req: InjectRequest):
                 project_id, req.target, effective_content + turn_note,
                 session_id=mention_session_id, dispatch_id=dispatch_id,
                 initiator=initiator,
+                **({"held_row": held_row} if held_row is not None else {}),
             )
         except Exception as exc:
             # Spec 116 D7: the reason used to be swallowed here — a 404 with a
             # generic detail and nothing in the log.
             logger.exception("Pinned dispatch to %s raised for %s/%s",
                              req.target, project_id, mention_session_id)
+            if held_row is not None:
+                await held_row.persist()
             raise HTTPException(
                 status_code=404, detail=str(exc) or "No active session for project")
         if result.startswith("Error"):
@@ -1989,6 +2015,9 @@ async def inject_message(project_id: str, req: InjectRequest):
             # unanswered (every Claude Code send on Windows, v0.16.0).
             logger.warning("Pinned dispatch to %s failed for %s/%s: %s",
                            req.target, project_id, mention_session_id, result)
+            if held_row is not None:
+                # Refused before it went out: the user's row, then the reason.
+                await held_row.persist()
             failure_row = {
                 "role": "system",
                 "source": "daemon",
@@ -2056,8 +2085,15 @@ async def inject_message(project_id: str, req: InjectRequest):
         position = (position_of(project_id, mention_session_id, req.target, dispatch_id)
                     if callable(position_of) else None)
         if isinstance(position, int) and position > 0:
-            return {"status": "queued_behind", "handle": req.target,
+            body = {"status": "queued_behind", "handle": req.target,
                     "dispatch_id": dispatch_id, "position": position}
+            # ``held``: its chat row is not written yet (the composer shows
+            # it in the queue block, not as a bubble, until it is sent).
+            if held_row is not None and not held_row.persisted:
+                body["held"] = True
+            return body
+        if held_row is not None and not held_row.persisted:
+            await held_row.persist()
         return {"status": result, "dispatch_id": dispatch_id}
     else:
         # Route to management agent (auto-starts if no session).
@@ -2069,6 +2105,11 @@ async def inject_message(project_id: str, req: InjectRequest):
                 project_id, effective_content + turn_note, nonce=req.nonce,
                 session_id=req.session_id,
                 **({"routed_by": req.routed_by} if req.routed_by else {}),
+                # A message that queues keeps its attachments (in memory) so
+                # the composer's queue block can restore its chips on edit.
+                **({"queue_meta": {"text": req.content,
+                                   "attachments": attachment_dicts}}
+                   if attachment_dicts else {}),
             )
         except ProviderConfigError as e:
             # Auto-start could not construct the LLM provider (missing/invalid
@@ -2259,19 +2300,41 @@ class PendingCancelRequest(BaseModel):
     """
     session_id: str
     nonce: str | None = None
+    # A message waiting behind an outside agent's task (the queue block);
+    # names it instead of ``nonce``.
+    dispatch_id: str | None = None
 
 
 @router.post("/agents/{project_id}/pending/cancel")
 async def cancel_pending(project_id: str, req: PendingCancelRequest) -> dict:
-    """Cancel / recall a message queued in a running session's own queue.
+    """Cancel / recall a queued message: one in a running session's own queue
+    (``nonce``) or one waiting behind an outside agent's task (``dispatch_id``).
 
     Drops the still-queued entry and broadcasts ``chat.pending_cancelled``. Returns
     ``{"status": "cancelled", "removed": bool}`` where ``removed`` is True only
     when an actually-still-queued entry was dequeued — the FE relies on this to
     avoid a recall-vs-dispatch double-send (spec 006 §12 R2).
     """
-    return _agent_manager.cancel_pending_inject(
-        project_id, req.session_id, nonce=req.nonce,
+    return await _agent_manager.cancel_pending(
+        project_id, req.session_id, nonce=req.nonce, dispatch_id=req.dispatch_id,
+    )
+
+
+@router.post("/agents/{project_id}/pending/send-now")
+async def send_pending_now(project_id: str, req: PendingCancelRequest) -> dict:
+    """The queue block's "send now": stop what is running and send this
+    queued message next (the others keep their order behind it).
+
+    ``nonce``: a message queued behind this chat's own agent; the turn is
+    stopped the way the Stop button stops it, and the stop's drain sends this
+    one first. ``dispatch_id``: a message waiting behind an outside agent;
+    that agent's current task is stopped (the card's Stop) and this one goes
+    out first. ``{"status": "sent"|"gone", "sent": bool}``; ``sent`` is False
+    when the message had already gone out or been removed, so nothing is
+    sent twice.
+    """
+    return await _agent_manager.send_queued_now(
+        project_id, req.session_id, nonce=req.nonce, dispatch_id=req.dispatch_id,
     )
 
 

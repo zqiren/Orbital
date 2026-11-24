@@ -271,6 +271,32 @@ export function useAttachments(
     });
   }, []);
 
+  /** The composer queue block (2026-11-24): an edited queued message gets
+   *  its attachments back as finished chips (the files are already in the
+   *  workspace, or attached by path), with a fresh thumbnail when this
+   *  client still has the picked image. Nothing is uploaded again. */
+  const restoreAttachments = useCallback((chips: readonly {
+    filename: string; mime: string; size: number;
+    uploadedPath?: string; localPath?: string; file?: File;
+  }[]) => {
+    if (chips.length === 0) return;
+    setAttachments((prev) => {
+      const room = MAX_ATTACHMENTS - prev.length;
+      if (room <= 0) return prev;
+      const restored = chips.slice(0, room).map((c): PendingAttachment => ({
+        id: genId(),
+        ...(c.file && { file: c.file }),
+        ...(c.localPath ? { localPath: c.localPath } : { uploadedPath: c.uploadedPath, uploadedProject: projectId }),
+        filename: c.filename,
+        mime: c.mime,
+        size: c.size,
+        status: 'done',
+        thumbnailUrl: c.file && c.mime.startsWith('image/') ? URL.createObjectURL(c.file) : undefined,
+      }));
+      return [...prev, ...restored];
+    });
+  }, [projectId]);
+
   const localMode = options?.localPaths === true;
 
   /**
@@ -397,6 +423,7 @@ export function useAttachments(
     removeAttachment,
     retryAttachment,
     clearAttachments,
+    restoreAttachments,
     uploadAll,
     handleFilePickerChange,
     handlePaste,

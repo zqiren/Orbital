@@ -29,6 +29,7 @@ header/footer, only the scrollable form body grows/shrinks), so its test
 below checks for that instead of the old top-level classname.
 """
 
+import re
 from pathlib import Path
 
 WEB_SRC = Path(__file__).resolve().parents[2] / "web" / "src"
@@ -40,15 +41,30 @@ def _read(rel: str) -> str:
 
 # ---- App.tsx ---------------------------------------------------------------
 
+def _main_class_tokens(source: str) -> set[str]:
+    """The static class tokens of App.tsx's <main> (template literal or plain
+    string). Interpolations are dropped; only the literal classes count."""
+    m = re.search(r"<main\s+className=\{?[`\"]([^`\"]*)[`\"]", source)
+    assert m, "App.tsx must render a <main className=...> element"
+    static = re.sub(r"\$\{[^}]*\}", " ", m.group(1))
+    return set(static.split())
+
+
 def test_main_element_is_flex_column():
-    """<main> must be a flex column so the back button and content share space."""
-    source = _read("App.tsx")
-    # The main element's className must include both "flex" and "flex-col".
-    # We look for the template-literal fragment that builds the className.
-    assert "flex-1 overflow-hidden flex flex-col" in source, (
-        "<main> in App.tsx must have 'flex flex-col' to prevent the mobile "
-        "back button from pushing content below the visible viewport"
+    """<main> must be a flex column so the back button and content share space.
+
+    Checked by class tokens, not by one exact string: other classes on <main>
+    (design pass D added min-w-0 between flex-1 and overflow-hidden) are not
+    what this guards."""
+    tokens = _main_class_tokens(_read("App.tsx"))
+    missing = {"flex-1", "overflow-hidden", "flex", "flex-col"} - tokens
+    assert not missing, (
+        f"<main> in App.tsx is missing {sorted(missing)}: it must be a "
+        "'flex flex-col' column so the mobile header does not push content "
+        "below the visible viewport"
     )
+    # A responsive-only column (max-md:flex-col) would not count: the token
+    # itself must be unprefixed, which the set check above already requires.
 
 
 # ---- ProjectDetail.tsx -----------------------------------------------------

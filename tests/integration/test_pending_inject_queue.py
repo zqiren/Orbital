@@ -265,11 +265,13 @@ async def test_inject_to_b_while_a_is_busy_starts_b_now(a_state):
 
 
 @pytest.mark.asyncio
-async def test_clear_same_session_pending_broadcasts_on_terminal():
-    """A terminal turn-end (cancel/error/stop) with leftover same-session queued
-    messages broadcasts chat.pending_dispatched per nonce so the FE 'Waiting…'
-    line can't orphan (diff-review Finding 1, terminal paths). None-nonce
-    entries are skipped (no FE bubble to clear)."""
+async def test_terminal_end_keeps_leftover_rows_and_drop_reports_them():
+    """A terminal turn-end (error / task cancelled) with leftover same-session
+    queued messages leaves them queued for the next turn, so NOTHING says they
+    were sent (the composer's queue block keeps their rows; 2026-11-24 — this
+    used to broadcast chat.pending_dispatched for each). When the handle is
+    dropped with them (session stopped) they are gone, and
+    chat.pending_cancelled says so. None-nonce entries are skipped."""
     project_id = "proj-term"
     mgr, _, _ = _make_agent_manager()
     session = _mk_session("sess-A")
@@ -279,12 +281,16 @@ async def test_clear_same_session_pending_broadcasts_on_terminal():
     mgr._handles[(project_id, "sess-A")] = _mk_handle(session)
 
     mgr._clear_same_session_pending(project_id, "sess-A")
+    assert [p for p in _payloads(mgr)
+            if p.get("type") in ("chat.pending_dispatched",
+                                 "chat.pending_cancelled")] == []
 
-    disp = [p for p in _payloads(mgr)
-            if p.get("type") == "chat.pending_dispatched"]
-    assert len(disp) == 1  # None-nonce skipped
-    assert disp[0]["session_id"] == "sess-A"
-    assert disp[0]["nonce"] == "n-1"
+    mgr._drop_same_session_pending(project_id, "sess-A")
+    dropped = [p for p in _payloads(mgr)
+               if p.get("type") == "chat.pending_cancelled"]
+    assert len(dropped) == 1  # None-nonce skipped
+    assert dropped[0]["session_id"] == "sess-A"
+    assert dropped[0]["nonce"] == "n-1"
 
 
 # ---------------------------------------------------------------------------
@@ -366,6 +372,8 @@ async def test_get_pending_and_run_status_count(tmp_path):
     client, saved = _build_client(mgr, project_store)
     try:
         body = client.get(f"/api/v2/agents/{project_id}/pending").json()
+        # queued_at (2026-11-24, the composer queue block): an added key.
+        assert body["pending"][0].pop("queued_at")
         assert body["pending"] == [{
             "session_id": "sess-A", "nonce": "n-a", "content": "more for A",
             "position": 1, "kind": "same",

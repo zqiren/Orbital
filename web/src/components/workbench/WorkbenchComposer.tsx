@@ -51,7 +51,7 @@
  */
 
 import { useEffect, useRef, useState, type DragEvent, type KeyboardEvent } from 'react';
-import { ArrowUp, Check, ChevronDown, Folder, Plus, Settings2, Sparkles } from 'lucide-react';
+import { Check, ChevronDown, Folder, Plus, Settings2, Sparkles } from 'lucide-react';
 import type { Project } from '../../types';
 import { useT } from '../../i18n/useT';
 import { api } from '../../config';
@@ -64,6 +64,7 @@ import { restoreComposer, useWorkbenchFeed } from '../../hooks/useWorkbenchFeed'
 import { projectAgents } from '../../hooks/useAgentAvailability';
 import { overUploadCap, useAttachments } from '../../hooks/useAttachments';
 import AttachmentChip from '../AttachmentChip';
+import SendButton from '../SendButton';
 import SkillChip from '../SkillChip';
 import SlashMenu, { useSlashPicker } from '../SlashMenu';
 import type { SkillCatalogEntry } from '../../lib/skill-catalog';
@@ -457,17 +458,14 @@ export default function WorkbenchComposer({
             <span className="wb-cv"><ChevronDown size={11} strokeWidth={2.2} aria-hidden="true" /></span>
           </button>
           <span className="flex-1" />
-          <button
-            type="button"
-            className="wb-send"
-            aria-label={t('workbench.composer.send')}
+          {/* The chat composer's send (option B, one size for both). */}
+          <SendButton
+            label={t('workbench.composer.send')}
             title={t('workbench.composer.send')}
-            data-testid="wb-composer-send"
+            testId="wb-composer-send"
             disabled={!text.trim() && sendable.length === 0 && !skill}
             onClick={() => void send()}
-          >
-            <ArrowUp size={15} strokeWidth={2.2} aria-hidden="true" />
-          </button>
+          />
         </div>
       </div>
 
