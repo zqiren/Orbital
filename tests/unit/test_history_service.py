@@ -342,6 +342,28 @@ class TestRestore:
         assert res[0]["status"] == "ok" and not (ws / "made.md").exists()
         assert svc.get_project("p1").store.get_blob(sha256(b"by the turn\n")) == b"by the turn\n"
 
+    async def test_undo_latest_turn_at_the_cap(self, ws, svc):
+        """Spec 196 D4, end to end: a store pruned at its cap still undoes
+        the newest turn on a file whose 'before' is its baseline."""
+        from agent_os.history import views
+        store = svc.get_project("p1").store
+        base = versions(svc, "p1", "notes.md")[0]
+        assert base["kind"] == "baseline"
+        for _ in range(10):  # another file churned, all of it superseded earlier
+            write_and_record(str(ws / "draft.md"), os.urandom(800).hex().encode(), {"kind": "outside"})
+        t0 = time.time()
+        write_and_record(str(ws / "notes.md"), b"the turn's rewrite\n", tool_attrib("sess-T", "codex"))
+        with store.lock:  # the store reaches its cap; the next flush prunes
+            store.cap_bytes = int(store.total_bytes * 0.8)
+            assert store.prune_if_needed() > 0
+        res = views.turn_files(store, views.SessionIndex(str(ws)), "sess-T", t0 - 1, None)
+        row = next(f for f in res["files"] if f["path"] == "notes.md")
+        assert row["before_sha"] == base["sha"]
+        out = await asyncio.to_thread(svc.restore, "p1", [
+            {"path": "notes.md", "sha": row["before_sha"], "expect_sha": row["current_sha"]}])
+        assert out[0]["status"] == "ok", out[0]
+        assert (ws / "notes.md").read_bytes() == b"# notes\nline one\n"
+
     async def test_busy_when_replace_is_denied(self, ws, svc, monkeypatch):
         base = versions(svc, "p1", "notes.md")[0]
         (ws / "notes.md").write_text("locked\n", newline="\n")

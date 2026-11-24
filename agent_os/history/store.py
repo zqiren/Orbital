@@ -325,15 +325,22 @@ class HistoryStore:
     # ── retention ─────────────────────────────────────────────────────
 
     def prune_if_needed(self) -> int:
-        """Size cap (§6): over the cap, drop the oldest versions first —
-        never a file's current version or a named version — and delete
-        blobs no remaining line references. Returns versions dropped."""
+        """Size cap (§6): over the cap, drop first the versions that stopped
+        being current earliest (by the ts of the same file's next version;
+        spec 196 D4) — never a file's current version or a named version —
+        and delete blobs no remaining line references. Append order would
+        drop a file's baseline first, which is the 'before' of its newest
+        turn. Returns versions dropped."""
         with self.lock:
             if self.total_bytes <= self.cap_bytes:
                 return 0
             target = int(self.cap_bytes * PRUNE_TARGET_FRACTION)
             latest: dict[str, int] = {}
+            superseded_at: dict[int, float] = {}
             for i, rec in enumerate(self.versions):
+                prev = latest.get(rec["path"])
+                if prev is not None:
+                    superseded_at[prev] = iso_to_epoch(rec.get("ts")) or 0.0
                 latest[rec["path"]] = i
             protected = set(latest.values())
             for i, rec in enumerate(self.versions):
@@ -348,11 +355,12 @@ class HistoryStore:
             drop: set[int] = set()
             freed: list[str] = []
             est = self.total_bytes
-            for i, rec in enumerate(self.versions):
+            order = sorted((i for i in superseded_at if i not in protected),
+                           key=lambda i: (superseded_at[i], i))
+            for i in order:
                 if est <= target:
                     break
-                if i in protected:
-                    continue
+                rec = self.versions[i]
                 drop.add(i)
                 est -= 200  # its jsonl line, roughly
                 sha = rec.get("sha")

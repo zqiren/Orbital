@@ -149,6 +149,78 @@ class TestStore:
         assert {v["sha"] for v in s2.versions} == shas
 
 
+class TestPruneBySupersession:
+    """Spec 196 D4: at the cap, the version that stopped being current
+    earliest goes first. Before, versions went in append order, so a file's
+    baseline (its oldest line) went first even when it was the 'before' of
+    the newest turn, and undoing that turn failed with unknown_version."""
+
+    T_BASE = "2026-11-01T09:00:00+00:00"   # baselines, weeks ago
+    T_TURN = "2026-11-24T12:00:00+00:00"   # today's turn
+
+    @staticmethod
+    def _body():
+        return os.urandom(800).hex().encode()
+
+    def _fill(self, tmp_path, cap=None):
+        from agent_os.history.service import tool_attrib
+        s = HistoryStore(str(tmp_path), cap_bytes=cap)
+        s.load()
+        base = s.record("notes.md", self._body(), attrib={"kind": "baseline"}, kind="baseline",
+                        ts=self.T_BASE)
+        s.record("other.md", self._body(), attrib={"kind": "baseline"}, kind="baseline",
+                 ts=self.T_BASE)
+        # yesterday: a draft rewritten many times, each version superseded
+        # long before today's turn
+        drafts = [s.record("draft.md", self._body(), attrib=A,
+                           ts=f"2026-11-23T10:{m:02d}:00+00:00") for m in range(10)]
+        turn = s.record("notes.md", self._body(), attrib=tool_attrib("sess-T"), ts=self.T_TURN)
+        return s, base, drafts, turn
+
+    def test_undo_of_the_latest_turn_survives_the_cap(self, tmp_path):
+        from agent_os.history import views
+        s, base, drafts, turn = self._fill(tmp_path)
+        s.cap_bytes = int(s.total_bytes * 0.8)  # the store is now over its cap
+        assert s.prune_if_needed() > 0
+        assert s.total_bytes <= s.cap_bytes
+        # the newest turn's "before": its version line AND its blob survive
+        assert any(v["v"] == base["v"] for v in s.versions), "baseline line pruned"
+        assert s.has_blob(base["sha"]), "baseline blob pruned"
+        res = views.turn_files(s, views.SessionIndex(str(tmp_path)), "sess-T",
+                               store_epoch(self.T_TURN), None)
+        row = next(f for f in res["files"] if f["path"] == "notes.md")
+        assert row["before_sha"] == base["sha"]
+        assert s.get_blob(row["before_sha"]) == s.get_blob(base["sha"])
+        # yesterday's superseded drafts went first; currents are protected
+        kept = {v["v"] for v in s.versions}
+        assert drafts[0]["v"] not in kept
+        assert drafts[-1]["v"] in kept and turn["v"] in kept
+        assert s.has_blob(s.current("other.md")["sha"])
+
+    def test_rewrite_keeps_ts_order_names_and_loads(self, tmp_path):
+        s, base, drafts, turn = self._fill(tmp_path)
+        s.set_name("draft.md", drafts[1]["sha"], "评审稿")
+        s.cap_bytes = int(s.total_bytes * 0.8)
+        assert s.prune_if_needed() > 0
+        kept = {v["v"] for v in s.versions}
+        assert drafts[1]["v"] in kept  # named survives
+        with open(s.versions_path, "rb") as f:
+            lines = [json.loads(raw) for raw in f]
+        from agent_os.history.store import iso_to_epoch
+        stamps = [iso_to_epoch(r["ts"]) for r in lines]
+        assert stamps == sorted(stamps)  # same rewrite order as before
+        assert any(r.get("kind") == "name" and r["name"] == "评审稿" for r in lines)
+        s2 = HistoryStore(str(tmp_path))
+        s2.load()
+        assert {v["v"] for v in s2.versions} == kept
+        assert s2.names[("draft.md", drafts[1]["sha"])] == "评审稿"
+
+
+def store_epoch(iso):
+    from agent_os.history.store import iso_to_epoch
+    return iso_to_epoch(iso)
+
+
 class TestHasChanges:
     """D10 × spec 153: an Orbital-attributed version is the daemon's own
     bookkeeping (the first-use seed's AGENTS.md, the import fold's INDEX.md,
