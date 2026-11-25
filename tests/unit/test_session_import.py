@@ -1040,3 +1040,54 @@ def test_session_list_reads_the_same_home_as_the_history_scan(monkeypatch, tmp_p
     # The agents' own variables still win, for both readers alike.
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "elsewhere"))
     assert si.claude_home() == history_paths.claude_dir() == str(tmp_path / "elsewhere")
+
+
+# ---------------------------------------------------------------------------
+# Copies of Orbital's own worker threads made by another app (2026-11-26)
+# ---------------------------------------------------------------------------
+#
+# The Codex desktop app imports Claude Code sessions into its own store
+# ("external-import-turn-1", originator "Codex Desktop", a new thread id). A
+# copy of a Claude Code thread Orbital ran is then a Codex thread that no
+# record of the folder names and whose originator is not Orbital's. What still
+# marks it is its title: the first lines Orbital sends a worker.
+
+def _native(agent, native_id, title):
+    return si.NativeSession(agent=agent, native_id=native_id, path="/x", title=title,
+                            last_activity="2026-11-24T00:00:00Z", size_bytes=10)
+
+
+class TestCopiesOfOrbitalThreadsAreNotListed:
+    def _listed(self, monkeypatch, tmp_path, sessions):
+        monkeypatch.setattr(si, "_list_claude", lambda ws, home: [])
+        monkeypatch.setattr(si, "_list_codex", lambda ws, home: list(sessions))
+        for name in ("_list_pi", "_list_kimi", "_list_minimax"):
+            monkeypatch.setattr(si, name, lambda ws, home: [])
+        return [s.title for s in si.list_native_sessions(str(tmp_path))]
+
+    def test_a_thread_titled_by_the_dispatch_note_is_skipped(self, monkeypatch, tmp_path):
+        from agent_os.daemon_v2.dispatch_tools import DispatchContext, seat_note
+        import dataclasses
+        fields = {f.name for f in dataclasses.fields(DispatchContext)}
+        ctx = DispatchContext(**{k: v for k, v in dict(
+            project_id="p", session_id="s", handle="claude-code",
+            agents=["claude-code", "codex", "dsh"], token="t").items() if k in fields})
+        note = seat_note(ctx)
+        assert note
+        got = self._listed(monkeypatch, tmp_path, [
+            _native("codex", "01a20982-5b93-75c0-96e8-3e7dc0cf2641", note[:60]),
+            _native("codex", "01a20982-0000-75c0-96e8-3e7dc0cf2641", "Fix the login bug"),
+        ])
+        assert got == ["Fix the login bug"]
+
+    def test_the_skills_note_and_the_launcher_note_are_skipped_too(self, monkeypatch, tmp_path):
+        from agent_os.agent.skills import worker_skills_note
+        skills = worker_skills_note([{"name": "x", "description": "d", "path": "/p"}])
+        got = self._listed(monkeypatch, tmp_path, [
+            _native("codex", "a", skills.splitlines()[0][:70]),
+            _native("codex", "b", "Long-running commands: never wait on a command that can take more than"),
+            _native("codex", "c", "  Other agents in this project: codex. When the…"),
+            _native("codex", "d", "What other agents in this project can do"),
+            _native("codex", "e", None),
+        ])
+        assert got == ["What other agents in this project can do", None]

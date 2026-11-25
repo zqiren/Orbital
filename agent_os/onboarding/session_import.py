@@ -203,6 +203,23 @@ def clear_cache() -> None:
         _cache.clear()
 
 
+# How the first text Orbital sends a worker begins (dispatch_tools.seat_note,
+# skills.worker_skills_note, job_launcher's launcher note). A native thread
+# titled by one of them is a thread Orbital ran, or another app's copy of one:
+# the Codex desktop app imports Claude Code sessions into its own store under
+# a new id and its own originator, so neither the folder's thread records nor
+# the originator can tell (seen 2026-11-26: 33 such threads in 38 folders).
+_ORBITAL_OPENERS = (
+    "Other agents in this project:",
+    "Skills you can use (from Orbital):",
+    "Long-running commands: never wait on a command",
+)
+
+
+def _titled_by_orbital(title: str | None) -> bool:
+    return isinstance(title, str) and title.lstrip().startswith(_ORBITAL_OPENERS)
+
+
 def list_native_sessions(workspace: str, *, members=None, claude_dir: str | None = None,
                          codex_dir: str | None = None,
                          history_dir: str | None = None) -> list[NativeSession]:
@@ -234,7 +251,8 @@ def list_native_sessions(workspace: str, *, members=None, claude_dir: str | None
         # records hold. The only mark ACP agents leave, and the backstop for
         # Codex / Claude threads whose originator or entrypoint did not say so.
         own = orbital_thread_ids(workspace)
-        out = [s for s in out if s.native_id not in own]
+        out = [s for s in out
+               if s.native_id not in own and not _titled_by_orbital(s.title)]
     seen = {(s.agent, s.native_id) for s in out}
     for agent, native_id in _member_pairs(members):
         if (agent, native_id) in seen:
