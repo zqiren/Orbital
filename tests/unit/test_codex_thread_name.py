@@ -37,6 +37,20 @@ WRITER_ERROR = {"code": -32600,
                 "message": f"thread {HELD} already has an active writer"}
 
 
+@pytest.fixture(autouse=True)
+def _no_retry_wait(monkeypatch):
+    """The retries after a refused name wait seconds in production."""
+    from agent_os.agent.transports import codex_transport
+    monkeypatch.setattr(codex_transport, "_THREAD_NAME_RETRY_S", (0.0, 0.0, 0.0),
+                        raising=False)
+
+
+EMPTY_ROLLOUT = {"code": -32603, "message": (
+    "failed to set thread name: Fatal error: failed to update thread metadata "
+    "019f1111-aaaa-7bbb-8ccc-dddddddddddd: thread-store internal error: failed to read "
+    "canonical session metadata: rollout at C:/Users/u/.codex/sessions/x.jsonl is empty")}
+
+
 def _fake_request(script: dict, calls: list):
     """``script``: method -> list of outcomes in order; an outcome is a dict
     (the result), an Exception (raised) or an asyncio.Event (wait on it)."""
@@ -175,6 +189,62 @@ class TestWhichThreadsAreNamed:
         (sent,) = _names(calls)
         assert sent["name"].startswith("Fix the bug x")
         assert "\n" not in sent["name"] and len(sent["name"]) <= 100
+
+
+class TestTheNameIsRetried:
+    """Codex 0.171 on Windows refuses ``thread/name/set`` in the first moments
+    of a thread's first turn: its rollout file is still empty (seen
+    2026-11-26, 50 ms after ``turn/start``). The name is tried again."""
+
+    @pytest.mark.asyncio
+    async def test_a_refusal_while_the_rollout_is_empty_is_retried(self, caplog):
+        t, calls = await _opened({
+            "thread/start": [_thread(FRESH)],
+            "thread/name/set": [CodexRpcError("thread/name/set", EMPTY_ROLLOUT),
+                                CodexRpcError("thread/name/set", EMPTY_ROLLOUT), {}],
+        })
+        t.name_thread("Fix the login bug")
+        with caplog.at_level(logging.INFO):
+            await t.dispatch("go")
+            await _settle(t)
+        assert _names(calls) == [{"threadId": FRESH, "name": "Fix the login bug"}] * 3
+        assert any("named thread" in r.getMessage() for r in caplog.records)
+        assert t._event_queue.empty()
+
+    @pytest.mark.asyncio
+    async def test_the_retries_are_bounded(self):
+        t, calls = await _opened({
+            "thread/start": [_thread(FRESH)],
+            "thread/name/set": [CodexRpcError("thread/name/set", EMPTY_ROLLOUT)],
+        })
+        t.name_thread("A title")
+        await t.dispatch("go")
+        await _settle(t)
+        assert len(_names(calls)) == 4  # the first try and three more
+        assert t._event_queue.empty()
+
+    @pytest.mark.asyncio
+    async def test_an_older_codex_without_the_method_is_not_retried(self):
+        t, calls = await _opened({
+            "thread/start": [_thread(FRESH)],
+            "thread/name/set": [CodexRpcError("thread/name/set",
+                                              {"code": -32601, "message": "method not found"})],
+        })
+        t.name_thread("A title")
+        await t.dispatch("go")
+        await _settle(t)
+        assert len(_names(calls)) == 1
+
+    @pytest.mark.asyncio
+    async def test_a_timeout_is_not_retried(self):
+        t, calls = await _opened({
+            "thread/start": [_thread(FRESH)],
+            "thread/name/set": [asyncio.TimeoutError()],
+        })
+        t.name_thread("A title")
+        await t.dispatch("go")
+        await _settle(t)
+        assert len(_names(calls)) == 1
 
 
 class TestNamingIsHarmless:

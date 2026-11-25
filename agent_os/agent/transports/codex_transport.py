@@ -62,6 +62,10 @@ _ACTIVE_WRITER_REFUSAL = "already has an active writer"
 # offers Orbital's session title (~50 chars); this only bounds a stray one.
 _THREAD_NAME_MAX = 100
 _THREAD_NAME_TIMEOUT_S = 10.0
+# Waits before each further try after Codex refuses the name (see
+# ``_set_thread_name``): the rollout is written within the turn's first seconds.
+_THREAD_NAME_RETRY_S = (1.0, 3.0, 8.0)
+_METHOD_NOT_FOUND = -32601
 
 
 def _codex_usage_limit(error_info) -> bool:
@@ -1400,19 +1404,37 @@ class CodexTransport(AgentTransport):
             self._set_thread_name(thread_id, name), name=f"codex-name-{id(self)}")
 
     async def _set_thread_name(self, thread_id: str, name: str) -> None:
-        """``thread/name/set``, once. Display only: an older Codex without the
-        method, an error or a slow answer leaves the thread as it was."""
-        try:
-            await self._request("thread/name/set",
-                                {"threadId": thread_id, "name": name},
-                                timeout=_THREAD_NAME_TIMEOUT_S)
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:  # noqa: BLE001 — never touches the turn
-            logger.debug("CodexTransport: thread/name/set failed (%s)",
-                         str(e) or type(e).__name__)
-        else:
-            logger.info("CodexTransport: named thread %s", thread_id)
+        """``thread/name/set``. Display only: an older Codex without the
+        method, a slow answer or a lasting error leaves the thread as it was.
+
+        A refusal is tried again a few times: in the first moments of a
+        thread's first turn Codex has not written its rollout yet and answers
+        "rollout … is empty" (0.171 on Windows, 50 ms after ``turn/start``)."""
+        waits = iter(_THREAD_NAME_RETRY_S)
+        while True:
+            try:
+                await self._request("thread/name/set",
+                                    {"threadId": thread_id, "name": name},
+                                    timeout=_THREAD_NAME_TIMEOUT_S)
+            except asyncio.CancelledError:
+                raise
+            except CodexRpcError as e:
+                wait = None if e.code == _METHOD_NOT_FOUND else next(waits, None)
+                if wait is None or not self._alive or self._thread_id != thread_id:
+                    logger.info("CodexTransport: thread %s keeps its default name "
+                                "(thread/name/set: %s)", thread_id,
+                                (e.message or str(e))[:200])
+                    return
+                logger.debug("CodexTransport: thread/name/set refused (%s); "
+                             "again in %.1fs", e.message or e, wait)
+                await asyncio.sleep(wait)
+            except Exception as e:  # noqa: BLE001 — never touches the turn
+                logger.debug("CodexTransport: thread/name/set failed (%s)",
+                             str(e) or type(e).__name__)
+                return
+            else:
+                logger.info("CodexTransport: named thread %s", thread_id)
+                return
 
     def _turn_start_params(self, turn_input: list) -> dict:
         params: dict = {"threadId": self._thread_id, "input": turn_input}
