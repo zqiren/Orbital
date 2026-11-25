@@ -1349,6 +1349,16 @@ def open_window(port: int):
             absolute paths. Nothing is uploaded and there is no size cap."""
             return pick_files_in(window)
 
+        def set_titlebar_theme(self, theme):
+            """The page's theme ("light" / "dark"), reported by
+            ``win_titlebar.THEME_WATCH_JS``: the native Windows title bar
+            follows it. A no-op on the other systems."""
+            if sys.platform != "win32":
+                return False
+            from agent_os.desktop import win_titlebar
+            return win_titlebar.apply_titlebar_theme(
+                win_titlebar.window_handle(window), theme)
+
     # Set icon in background thread (needs window to exist first)
     icon_thread = threading.Thread(target=_set_window_icon, daemon=True)
     icon_thread.start()
@@ -1552,6 +1562,9 @@ def open_window(port: int):
     # the reload it may trigger re-fires this, which the installer absorbs.
     window.events.loaded += _install_drag_strip
     window.events.loaded += lambda: install_native_drop(window)
+    if sys.platform == "win32":
+        from agent_os.desktop import win_titlebar
+        window.events.loaded += lambda: win_titlebar.watch_theme(window)
     window.events.before_show += _reveal_traffic_lights
     # macOS fires `maximized` on entering fullscreen and `restored` on leaving
     # it (webview/platforms/cocoa.py). `restored` also fires on un-minimize,
