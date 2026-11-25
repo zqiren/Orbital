@@ -1,4 +1,4 @@
-STATUS: NOT READY — four fixes made tonight are not yet verified on a CI installer (B7 import, B8 Codex thread names, B10 ChatGPT sign-in on Windows), and B10 has never completed end to end
+STATUS: NOT READY — the fixes made tonight (B7 import, B8 Codex thread names, B10 ChatGPT sign-in on Windows, themed title bar) work from the repo but are not yet verified on a CI installer
 
 # Windows results — v0.25.0 release candidate (2026-11-26, 00:00–02:00 local)
 
@@ -127,13 +127,35 @@ screenshots were taken from the screen. Evidence is in `evidence\1125\` (git-ign
 | `69880045` | Codex: `thread/name/set` is retried after 1 s, 3 s and 8 s when refused. Codex 0.171 answers "rollout … is empty" 50 ms after `turn/start`; Orbital tried once and logged the failure at DEBUG. | Dev daemon: "refused … again in 1.0s" then `named thread …`; `thread/read` shows the session title. |
 | `1b64ae31`, `33509d86` | Import: a native session whose title starts with one of Orbital's own openers is skipped. The 33 threads were not Orbital's Codex threads: the Codex desktop app imports Claude Code sessions into its own store (`external-import-turn-1`, originator "Codex Desktop", new ids), so neither the folder's thread records nor the originator matched. | From the repo: `list_native_sessions` on three of the affected folders returns none of them. |
 | `fffa18b0` | Windows: a card secret over 1000 characters is split over `card:<id>#1..n`. | A 6004-character secret round-trips through the real Credential Manager; shorter replacement and delete leave no parts. |
+| `029261d7` | Windows title bar follows the light / dark theme (owner's request). | Real window from the repo on Windows 10: see "Later the same night". |
 
 Local unit runs: the touched test files pass. Five tests in `test_session_import.py`, two in
 `test_onboarding_rows_138.py`, two in `test_browser_manager.py` and one in `test_left_off_138.py`
 fail on this PC with and without these commits (the known local baseline); CI decides.
 
-CI on the new head and the re-check on its installer (new sha256, B7, B8, B10 again with the
-owner at the browser) are **not done**.
+## Later the same night (02:00–02:40)
+
+- **B10 from the repo, real Windows vault, with the owner's consent: PASS.** A repo daemon
+  (`fffa18b0`, isolated data dir, the real `WinVaultKeyring`) ran the sign-in end to end:
+  `POST /providers/chatgpt/signin` 200, card "ChatGPT · gpt-6.2-sol" with the account email,
+  `auth: signin`, connection test "Connected to chatgpt using gpt-6.2-sol", default card. The
+  vault holds `orbital-parts:v1:4` and four parts (1000, 1000, 1000, 917 characters). A manager
+  turn on that card read `fact.txt` and answered with the code word. The card was kept
+  (`C:\orbital-scratch\1125\dev-realvault\data`, card `card_35086af1`) so the installer check
+  can run a turn on it and then delete it without a second consent. Not yet seen: deleting the
+  card signs out; any of this on a CI installer.
+- **Title bar (A2a), at the owner's request: it now follows the theme** (`029261d7`). The page's
+  `data-theme` is reported to the shell on load and on every change; the window asks Windows for
+  its dark title bar in the dark theme, and on Windows 11 also for the chrome's colour. Checked
+  on this Windows 10 (build 19045) with a real pywebview window from the repo: bar white in
+  light, black in dark, white again, each within a second of the theme change
+  (`evidence\titlebar-*.png`). On Windows 10 the light theme is unchanged (Windows offers only
+  its own light or dark bar there); the Windows 11 colour path is unit-tested only. Removing the
+  bar (frameless) was discussed and left for later.
+- CI: run `45670454550` (head `74034c06`, the three fixes) built its Windows installer; it was not
+  installed because the title bar commit followed. Run `45672108561` (head `029261d7`) is the
+  build to install. **Still not done: installing it (one UAC click) and re-checking B7, B8, B10
+  and the title bar on it.**
 
 ## Not run, and why
 
