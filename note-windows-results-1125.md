@@ -1,4 +1,4 @@
-STATUS: NOT READY — only because CI run 45672108561 on the re-checked build had not finished when this was written (Windows unit tests and the install scenarios still running); every fix passes on that build's installer
+STATUS: READY on Windows — every fix passes on the installer of CI run 45672108561 and that run's Windows jobs are green; its two macOS install scenarios were cancelled waiting for a runner and were re-run (check them), and the items under "Not run, and why" plus the A1 downgrade question remain the owner's call
 
 # Windows results — v0.25.0 release candidate (2026-11-26, 00:00–02:00 local)
 
@@ -175,8 +175,9 @@ Build: run `45672108561`, head `029261d7` (the three fixes and the title bar), a
 `efc95bda…93f460cf` matched, `Orbital-Setup-0.25.0.exe` sha256
 `606cf55f7d2ad2b9a1d366b4a9d5bec2af10445a82d4ee6c27e8f01959f2704d`. Installed over the first
 0.25.0 build (exit code 0). When this was written the run's installer and both unit-test-free
-jobs were green; **Backend unit tests (windows-latest) and the four install scenarios were still
-running**, so check the run before trusting this build.
+jobs were green; The run then finished: both unit-test jobs, the frontend job, both installers and both Windows
+install scenarios green; the two macOS install scenarios were cancelled waiting for a runner
+("capacity constraints") and were re-run with `gh run rerun --failed`.
 
 | Check | Result | What was seen |
 |---|---|---|
