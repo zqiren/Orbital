@@ -7,6 +7,7 @@
 import json
 import logging
 import os
+import sys
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 from agent_os.utils.atomic_write import atomic_write_text
@@ -41,6 +42,36 @@ def _card_item(card_id: str) -> str:
     return f"{_CARD_ITEM_PREFIX}{card_id}"
 
 
+# Windows Credential Manager holds at most 2560 bytes per credential, and
+# keyring writes UTF-16: 1280 characters (CredWrite error 1783 beyond that).
+# An API key fits; a sign-in's token set (ChatGPT: three JWTs) does not. On
+# Windows a longer secret is split: the card's own item holds a marker with
+# the part count, the text sits in ``card:<id>#1`` … ``#n``. Other systems
+# keep one item, so a card written there reads the same in every build.
+_PART_CHARS = 1000
+_PARTS_MARKER = "orbital-parts:v1:"
+_MAX_PARTS = 64
+
+
+def _splits_long_secrets() -> bool:
+    return sys.platform == "win32"
+
+
+def _part_item(card_id: str, n: int) -> str:
+    return f"{_card_item(card_id)}#{n}"
+
+
+def _part_count(head: str | None) -> int:
+    """How many parts the card's own item announces; 0 for a plain secret."""
+    if not isinstance(head, str) or not head.startswith(_PARTS_MARKER):
+        return 0
+    try:
+        n = int(head[len(_PARTS_MARKER):])
+    except ValueError:
+        return 0
+    return n if 0 < n <= _MAX_PARTS else 0
+
+
 class CardKeyStore:
     """Per-card secret storage (spec 082 §3.1).
 
@@ -63,7 +94,16 @@ class CardKeyStore:
         if not _KEYRING_AVAILABLE:
             return None
         try:
-            return keyring.get_password(_SERVICE_NAME, _card_item(card_id))
+            head = keyring.get_password(_SERVICE_NAME, _card_item(card_id))
+            n = _part_count(head)
+            if not n:
+                return head
+            parts = [keyring.get_password(_SERVICE_NAME, _part_item(card_id, i))
+                     for i in range(1, n + 1)]
+            if any(not part for part in parts):
+                logger.warning("card %s: a part of its stored secret is missing", card_id)
+                return None
+            return "".join(parts)
         except Exception:
             logger.warning(
                 "keyring.get_password failed for card %s", card_id, exc_info=True,
@@ -86,19 +126,45 @@ class CardKeyStore:
         if not _KEYRING_AVAILABLE:
             raise RuntimeError("keyring package not available")
         try:
-            keyring.set_password(_SERVICE_NAME, _card_item(card_id), key)
+            old_parts = _part_count(
+                keyring.get_password(_SERVICE_NAME, _card_item(card_id)))
+        except Exception:
+            old_parts = 0
+        chunks = ([key[i:i + _PART_CHARS] for i in range(0, len(key), _PART_CHARS)]
+                  if _splits_long_secrets() and len(key) > _PART_CHARS else [])
+        if len(chunks) > _MAX_PARTS:
+            raise RuntimeError("secret too long to store")
+        try:
+            for i, chunk in enumerate(chunks, 1):
+                keyring.set_password(_SERVICE_NAME, _part_item(card_id, i), chunk)
+            keyring.set_password(
+                _SERVICE_NAME, _card_item(card_id),
+                f"{_PARTS_MARKER}{len(chunks)}" if chunks else key)
         except Exception as exc:
             raise RuntimeError(f"keyring.set_password failed: {exc}") from exc
-        if keyring.get_password(_SERVICE_NAME, _card_item(card_id)) != key:
+        self._delete_parts(card_id, range(len(chunks) + 1, old_parts + 1))
+        if self.get(card_id) != key:
             raise RuntimeError(
                 "Keychain write verification failed: stored value does not match"
             )
         return {"source": "keychain"}
 
+    def _delete_parts(self, card_id: str, numbers) -> None:
+        for i in numbers:
+            try:
+                keyring.delete_password(_SERVICE_NAME, _part_item(card_id, i))
+            except Exception:
+                logger.debug("card %s: part %d was already gone", card_id, i)
+
     def delete(self, card_id: str) -> None:
         """Remove ``card_id``'s item. Absent items are a no-op."""
         if not card_id or card_id == ENV_CARD_ID or not _KEYRING_AVAILABLE:
             return
+        try:
+            parts = _part_count(keyring.get_password(_SERVICE_NAME, _card_item(card_id)))
+        except Exception:
+            parts = 0
+        self._delete_parts(card_id, range(1, parts + 1))
         try:
             keyring.delete_password(_SERVICE_NAME, _card_item(card_id))
         except Exception:
