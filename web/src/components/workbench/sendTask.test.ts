@@ -131,6 +131,19 @@ describe('sendWorkbenchTask — a signed-out agent (batch 1123)', () => {
     expect(out).toEqual({ ok: false, restored: true, signedOut: { agent: 'claude-code', agentName: 'Claude Code' } });
   });
 
+  it('a signed-in agent that is not ready is named with its reason (2026-11-25)', async () => {
+    const d = deps();
+    d.injectMessage.mockRejectedValueOnce(new Error(JSON.stringify({
+      code: 'agent_not_ready', message: 'm', agent: 'antigravity', agent_name: 'Antigravity',
+      reason: 'region_unavailable', detail: 'not available in your location',
+    })));
+    const out = await sendWorkbenchTask({ text: 'fix it', projectId: 'p1', agent: null, fallbackProjectId: 'qt' }, d);
+    expect(out).toEqual({ ok: false, restored: true, signedOut: {
+      agent: 'antigravity', agentName: 'Antigravity', code: 'agent_not_ready',
+      reason: 'region_unavailable', detail: 'not available in your location',
+    } });
+  });
+
   it('any other refusal stays generic', async () => {
     const d = deps();
     d.injectMessage.mockRejectedValueOnce(new Error(JSON.stringify({ code: 'no_runner', message: 'x' })));

@@ -16,33 +16,106 @@
  */
 
 import { useCallback, useState } from 'react';
-import { Check, ChevronDown, ChevronUp, KeyRound, Loader2, Plus } from 'lucide-react';
+import { Check, ChevronDown, ChevronUp, KeyRound, Loader2, Plus, RotateCw } from 'lucide-react';
 import type { SubAgentListEntry } from '../../hooks/useSubAgentList';
 import { useAgentLogin } from '../../hooks/useAgentLogin';
 import { useT } from '../../i18n/useT';
 import { sendTelemetry } from '../../utils/telemetry';
+import HintSign from '../HintSign';
 import LoginCodeField from '../LoginCodeField';
-import NotDetectedRow from '../NotDetectedRow';
+import NotDetectedRow, { installCommandOf } from '../NotDetectedRow';
+import { issueLabelKey, issueRechecks, notReadyOf } from '../../utils/agentIssue';
 import AgentGlyph from './AgentGlyph';
 import { agentStateOf, isReady, type AgentState } from './welcomeModel';
+
+const STATE_RANK: Record<AgentState, number> = { ready: 0, out: 1, key: 1, off: 2 };
 
 const tileClass =
   'surface-float-static surface-float-nested flex h-[46px] min-w-0 items-center gap-2.5 pl-3 pr-2';
 
-function AgentTile({ entry, state, emphasis, onChanged }: {
+/** Signed in, yet not ready: the issue in a few words, the vendor's own
+ *  words behind the sign, and the one fix there is (Update, Check again). */
+function AgentIssue({ entry, update, recheck, checking }: {
+  entry: SubAgentListEntry;
+  update: ReturnType<typeof useAgentLogin>;
+  recheck: () => void;
+  checking: boolean;
+}) {
+  const t = useT();
+  const issue = notReadyOf(entry.not_ready);
+  const reason = issue?.reason ?? null;
+  const canUpdate = reason === 'update_needed' && entry.supports_update !== false;
+  const action = 'inline-flex h-[30px] shrink-0 items-center gap-1.5 rounded-[8px] px-3 text-caption font-medium transition-colors duration-150 disabled:opacity-70 max-md:min-h-[44px] bg-card-hover text-primary hover:bg-nav-hover';
+  return (
+    <>
+      <span
+        className="min-w-0 shrink-[100] truncate text-caption text-warning-text"
+        data-testid={`welcome-agent-issue-${entry.slug}`}
+        data-reason={reason ?? 'not_ready'}
+      >
+        {t(issueLabelKey(reason))}
+      </span>
+      {issue?.detail && (
+        <HintSign label={t('agentIssue.detail')} align="right" testId={`welcome-agent-issue-detail-${entry.slug}`}>
+          <span className="block max-w-[260px] whitespace-normal break-words">{issue.detail}</span>
+        </HintSign>
+      )}
+      {canUpdate && (
+        <button
+          type="button"
+          onClick={() => void update.start()}
+          disabled={update.busy}
+          aria-busy={update.busy || undefined}
+          data-testid={`welcome-agent-update-${entry.slug}`}
+          className={action}
+        >
+          {update.busy && <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />}
+          {!update.busy && t('subAgentCard.update')}
+        </button>
+      )}
+      {!canUpdate && issueRechecks(reason) && (
+        <button
+          type="button"
+          onClick={recheck}
+          disabled={checking}
+          aria-label={t('wizard.agents.checkAgain')}
+          title={t('wizard.agents.checkAgain')}
+          data-testid={`welcome-agent-recheck-${entry.slug}`}
+          className="inline-flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-[8px] text-secondary transition-colors duration-150 hover:bg-card-hover hover:text-primary disabled:opacity-60 max-md:min-h-[44px] max-md:min-w-[44px]"
+        >
+          {checking
+            ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+            : <RotateCw className="h-3.5 w-3.5" aria-hidden="true" strokeWidth={1.8} />}
+        </button>
+      )}
+    </>
+  );
+}
+
+function AgentTile({ entry, state, emphasis, onChanged, recheck, checking }: {
   entry: SubAgentListEntry;
   state: AgentState;
   /** Nothing is ready: Sign in is the main action. */
   emphasis: boolean;
   onChanged: () => void;
+  /** Re-run detection (the band's Check again). */
+  recheck: () => void;
+  checking: boolean;
 }) {
   const t = useT();
   const login = useAgentLogin(entry.slug, onChanged);
+  const update = useAgentLogin(entry.slug, onChanged, 'update');
   return (
-    <li data-testid={`welcome-agent-${entry.slug}`} data-state={state} className="min-w-0">
+    // A tile that names an issue takes the whole row: the label and the
+    // vendor's sign need the room a half tile cannot give (zh or en).
+    <li data-testid={`welcome-agent-${entry.slug}`} data-state={state} className={`min-w-0 ${state === 'off' ? 'col-span-2 max-[520px]:col-span-1' : ''}`}>
       <div className={tileClass}>
         <AgentGlyph slug={entry.slug} size={22} />
-        <span className="min-w-0 flex-1 truncate text-body font-medium text-primary">{entry.name}</span>
+        {/* An issue label beside the name gives way first (shrink-[100]):
+            the name stays readable, the label truncates, the hover holds the
+            rest. A spacer keeps the trailing controls at the edge. */}
+        <span className={`min-w-0 truncate text-body font-medium text-primary ${state === 'off' ? 'shrink' : 'flex-1'}`}>{entry.name}</span>
+        {state === 'off' && <span className="min-w-0 flex-1" aria-hidden="true" />}
         {state === 'ready' && (
           <Check
             aria-label={t('wizard.agents.signedIn')}
@@ -77,6 +150,9 @@ function AgentTile({ entry, state, emphasis, onChanged }: {
             {!login.busy && t('wizard.agents.signIn')}
           </button>
         )}
+        {state === 'off' && (
+          <AgentIssue entry={entry} update={update} recheck={recheck} checking={checking} />
+        )}
       </div>
       {login.busy && login.url && (
         <a
@@ -91,8 +167,8 @@ function AgentTile({ entry, state, emphasis, onChanged }: {
       {/* A login that asks for the code its browser page shows (Antigravity):
           renders nothing until the CLI asks, and nothing for other agents. */}
       {login.busy && <LoginCodeField slug={entry.slug} className="mt-1.5" />}
-      {login.failed && (
-        <p className="mt-1 px-1 text-caption text-error-text" role="alert">{login.failed}</p>
+      {(login.failed || update.failed) && (
+        <p className="mt-1 px-1 text-caption text-error-text" role="alert">{login.failed || update.failed}</p>
       )}
     </li>
   );
@@ -112,6 +188,11 @@ export function AgentsBandBody({ entries, error, reload }: AgentsBandProps) {
   const [picked, setPicked] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
   const onChanged = useCallback(() => { void reload(); }, [reload]);
+  const recheck = useCallback(async () => {
+    setChecking(true);
+    await reload(true);
+    setChecking(false);
+  }, [reload]);
 
   if (error && (entries === null || entries.length === 0)) {
     return (
@@ -142,7 +223,9 @@ export function AgentsBandBody({ entries, error, reload }: AgentsBandProps) {
   const installed = entries
     .filter((e) => e.installed)
     .map((e) => ({ entry: e, state: agentStateOf(e) }))
-    .sort((a, b) => Number(a.state !== 'ready') - Number(b.state !== 'ready'));
+    // Ready first, then the half tiles with an action (Sign in, the key),
+    // then the full-row tiles that name an issue — so the grid has no holes.
+    .sort((a, b) => STATE_RANK[a.state] - STATE_RANK[b.state]);
   const missing = entries.filter((e) => !e.installed);
   const none = installed.length === 0;
   const emphasis = !installed.some((a) => a.state === 'ready');
@@ -153,7 +236,15 @@ export function AgentsBandBody({ entries, error, reload }: AgentsBandProps) {
       {!none && (
         <ul className="mt-2 grid grid-cols-2 gap-2 max-[520px]:grid-cols-1" data-testid="welcome-agent-list">
           {installed.map(({ entry, state }) => (
-            <AgentTile key={entry.slug} entry={entry} state={state} emphasis={emphasis} onChanged={onChanged} />
+            <AgentTile
+              key={entry.slug}
+              entry={entry}
+              state={state}
+              emphasis={emphasis}
+              onChanged={onChanged}
+              recheck={() => void recheck()}
+              checking={checking}
+            />
           ))}
         </ul>
       )}
@@ -200,6 +291,7 @@ export function AgentsBandBody({ entries, error, reload }: AgentsBandProps) {
                     name={pickedEntry.name}
                     overridePath={pickedEntry.override_path}
                     overrideMissing={pickedEntry.override_missing}
+                    installCommand={installCommandOf(pickedEntry.setup_actions)}
                     onChanged={async () => {
                       sendTelemetry('agent_located');
                       setPicked(null);
@@ -217,7 +309,7 @@ export function AgentsBandBody({ entries, error, reload }: AgentsBandProps) {
               <button
                 type="button"
                 disabled={checking}
-                onClick={async () => { setChecking(true); await reload(true); setChecking(false); }}
+                onClick={() => void recheck()}
                 data-testid="welcome-agents-recheck"
                 className="mt-2 inline-flex items-center gap-1.5 text-caption font-medium text-accent-text hover:underline disabled:opacity-60 max-md:min-h-[44px]"
               >

@@ -21,13 +21,19 @@
  * Batch 1123: `agent_signed_out` names the agent that needs a sign-in and
  * offers Sign in (the in-app login job) instead of Open settings; the notice
  * goes once the sign-in completes.
+ *
+ * 2026-11-25: `agent_not_ready` names an agent that is signed in but cannot
+ * answer (its vendor refused a turn from this region, …) and the issue in a
+ * few words; the vendor's own words sit behind the sign.
  */
 
 import { useCallback, useState } from 'react';
 import { AlertCircle, Loader2 } from 'lucide-react';
 import { useT } from '../i18n/useT';
 import { useAgentLogin } from '../hooks/useAgentLogin';
-import { refreshAgentAvailability } from '../hooks/useAgentAvailability';
+import { refreshAgentAvailability, useAgentAvailability } from '../hooks/useAgentAvailability';
+import { issueLabelKey, notReadyOf } from '../utils/agentIssue';
+import HintSign from './HintSign';
 import { isInternalError, providerErrorKey, readableProviderDetail } from '../utils/providerError';
 import LoginCodeField from './LoginCodeField';
 import { SendFeedbackDialog } from './SendFeedback';
@@ -37,9 +43,13 @@ export interface AgentErrorNoticeProps {
   code?: string;
   /** Raw backend detail message, shown untranslated below the headline. */
   message?: string;
-  /** `agent_signed_out`: the agent's slug and display name. */
+  /** `agent_signed_out` / `agent_not_ready`: the agent's slug and display name. */
   agent?: string;
   agentName?: string;
+  /** `agent_not_ready`: the daemon's reason and the vendor's words, when the
+   *  caller has them; otherwise the agent list's current `not_ready`. */
+  reason?: string;
+  reasonDetail?: string;
   /** Open the Global Settings surface (where the API key lives). */
   onOpenSettings: () => void;
   onDismiss: () => void;
@@ -79,12 +89,21 @@ export default function AgentErrorNotice({
   message,
   agent,
   agentName,
+  reason,
+  reasonDetail,
   onOpenSettings,
   onDismiss,
 }: AgentErrorNoticeProps) {
   const t = useT();
   const internal = isInternalError(code);
   const signedOut = code === 'agent_signed_out' && !!agent;
+  const notReady = code === 'agent_not_ready' && !!agent;
+  const availability = useAgentAvailability();
+  // The reason the error carried, else what the agent list says now (the
+  // chat passes only code/message/agent), else "unavailable".
+  const listed = agent ? notReadyOf(availability[agent]?.not_ready) : null;
+  const issueReason = reason ?? listed?.reason ?? null;
+  const issueDetail = reasonDetail ?? listed?.detail ?? null;
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const onSignedIn = useCallback(() => {
     refreshAgentAvailability();
@@ -93,7 +112,7 @@ export default function AgentErrorNotice({
   // The provider's sentence, not the SDK payload around it (1111 pass 2).
   // Send feedback still carries the raw detail. The signed-out headline
   // already says everything the daemon's sentence does.
-  const detail = message && !signedOut ? readableProviderDetail(message) : '';
+  const detail = message && !signedOut && !notReady ? readableProviderDetail(message) : '';
   return (
     <div
       data-testid="agent-error-notice"
@@ -107,7 +126,19 @@ export default function AgentErrorNotice({
           <p className="text-body text-primary">
             {signedOut
               ? t('agentError.agent_signed_out', { agent: agentName || agent })
-              : t(providerErrorKey(code))}
+              : notReady
+                ? t('agentError.agent_not_ready', {
+                    agent: agentName || agent || '',
+                    issue: t(issueLabelKey(issueReason)),
+                  })
+                : t(providerErrorKey(code))}
+            {notReady && issueDetail && (
+              <span className="ml-1.5 inline-flex align-middle">
+                <HintSign label={t('agentIssue.detail')} testId="agent-error-notice-issue-detail">
+                  <span className="block max-w-[260px] whitespace-normal break-words">{issueDetail}</span>
+                </HintSign>
+              </span>
+            )}
           </p>
           {detail && (
             <p className="mt-1 text-caption text-secondary break-words">{detail}</p>

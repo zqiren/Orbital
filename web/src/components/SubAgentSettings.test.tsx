@@ -94,6 +94,7 @@ interface Entry {
   min_version?: string | null;
   supports_update?: boolean;
   auth_expired?: boolean;
+  not_ready?: { reason: string; detail?: string | null } | null;
 }
 
 function makeEntry(overrides: Partial<Entry> = {}): Entry {
@@ -764,6 +765,74 @@ describe('SubAgentSettings — update removed the CLI (1018 bench item 5)', () =
     });
     expect(screen.getByTestId('sub-agent-update-notice-claude-code')).toHaveTextContent(/did not complete/i);
     expect(screen.queryByTestId('sub-agent-update-missing-claude-code')).not.toBeInTheDocument();
+  });
+});
+
+describe('SubAgentSettings — honest status (2026-11-25)', () => {
+  const REFUSAL = 'You do not have a valid license of this product. (#3501)';
+  const refused = (overrides: Partial<Entry> = {}): Entry => makeEntry({
+    slug: 'antigravity', name: 'Antigravity', version: '1.5.16',
+    credentials_configured: true, missing_credentials: [], ready: false,
+    not_ready: { reason: 'region_unavailable', detail: REFUSAL }, ...overrides,
+  });
+
+  it('a region-refused agent is signed in AND says it is not available, vendor words behind the sign', async () => {
+    api.mockResolvedValue([refused()]);
+    render(<SubAgentSettings />);
+    await waitFor(() => expect(screen.getByText('Antigravity')).toBeInTheDocument());
+    const pill = screen.getByTestId('sub-agent-issue-antigravity');
+    expect(pill).toHaveTextContent('Not available in your region');
+    expect(screen.getByText('Logged in')).toBeInTheDocument();
+    expect(screen.queryByText(REFUSAL)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('sub-agent-issue-detail-antigravity'));
+    expect(screen.getByText(REFUSAL)).toBeInTheDocument();
+  });
+
+  it('renders in Simplified Chinese', async () => {
+    localStorage.setItem('orbital.locale', 'zh');
+    api.mockResolvedValue([refused()]);
+    render(
+      <LocaleProvider>
+        <SubAgentSettings />
+      </LocaleProvider>,
+    );
+    await waitFor(() => expect(screen.getByText('Antigravity')).toBeInTheDocument());
+    expect(screen.getByTestId('sub-agent-issue-antigravity')).toHaveTextContent('所在地区不可用');
+  });
+
+  it('an unknown reason still reads unavailable; reasons with their own place get no extra pill', async () => {
+    api.mockResolvedValue([
+      refused({ not_ready: { reason: 'some_new_reason', detail: null } }),
+      makeEntry({ slug: 'codex', name: 'Codex', ready: false,
+                  not_ready: { reason: 'signed_out', detail: null } }),
+      makeEntry({ slug: 'cursor', name: 'Cursor', ready: false, credentials_configured: true,
+                  missing_credentials: [], update_needed: true, min_version: '9.0',
+                  not_ready: { reason: 'update_needed', detail: null } }),
+    ]);
+    render(<SubAgentSettings />);
+    await waitFor(() => expect(screen.getByText('Antigravity')).toBeInTheDocument());
+    expect(screen.getByTestId('sub-agent-issue-antigravity')).toHaveTextContent('Unavailable');
+    expect(screen.queryByTestId('sub-agent-issue-codex')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('sub-agent-issue-cursor')).not.toBeInTheDocument();
+  });
+
+  it('a ready agent shows no issue', async () => {
+    api.mockResolvedValue([refused({ ready: true, not_ready: null })]);
+    render(<SubAgentSettings />);
+    await waitFor(() => expect(screen.getByText('Antigravity')).toBeInTheDocument());
+    expect(screen.queryByTestId('sub-agent-issue-antigravity')).not.toBeInTheDocument();
+  });
+
+  it('a not-detected agent with an install command leads with it', async () => {
+    api.mockResolvedValue([makeEntry({
+      slug: 'antigravity', name: 'Antigravity', installed: false, binary_path: null,
+      setup_actions: [{ action: 'install_agent', label: 'Install Antigravity', command: 'curl -fsSL https://antigravity.google/cli/install.sh | bash', blocking: true }],
+    })]);
+    render(<SubAgentSettings />);
+    const line = await waitFor(() => screen.getByTestId('sub-agent-install-command-antigravity'));
+    expect(line).toHaveTextContent('curl -fsSL https://antigravity.google/cli/install.sh | bash');
+    expect(screen.getByTestId('sub-agent-not-detected-antigravity'))
+      .toHaveTextContent('Already installed? Copy a prompt into Antigravity and paste its answer below.');
   });
 });
 

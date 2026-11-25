@@ -373,6 +373,33 @@ describe('PinTargetSelect — usage + availability (spec 099)', () => {
     expect(card.textContent).not.toContain('not signed in');
   });
 
+  it('a region-refused agent names the region, not a login; the card carries the vendor words (2026-11-25)', () => {
+    act(() => setAgentAvailability([{
+      slug: 'antigravity', name: 'Antigravity', installed: true, ready: false,
+      not_ready: { reason: 'region_unavailable', detail: 'You do not have a valid license of this product. (#3501)' },
+    }]));
+    render(<PinTargetSelect agents={[{ slug: 'antigravity', name: 'Antigravity' }]} value={null} onChange={() => {}} />);
+    open();
+    expect(line('antigravity').textContent).toBe('Not available in your region');
+    expect(dot('antigravity')?.dataset.color).toBe('grey');
+    fireEvent.mouseEnter(screen.getByRole('option', { name: /Antigravity/ }));
+    const card = screen.getByTestId('pin-quota-card');
+    expect(card.textContent).toContain('Not available in your region');
+    expect(card.textContent).toContain('valid license of this product');
+    expect(card.textContent).not.toContain('not signed in');
+  });
+
+  it('a signed-out reason (or an older daemon with none) still reads "Needs login"', () => {
+    act(() => setAgentAvailability([
+      { slug: 'codex', name: 'Codex', installed: true, ready: false, not_ready: { reason: 'signed_out', detail: null } },
+      { slug: 'pi', name: 'Pi', installed: true, ready: false },
+    ]));
+    render(<PinTargetSelect agents={[{ slug: 'codex', name: 'Codex' }, { slug: 'pi', name: 'Pi' }]} value={null} onChange={() => {}} />);
+    open();
+    expect(line('codex').textContent).toBe('Needs login');
+    expect(line('pi').textContent).toBe('Needs login');
+  });
+
   it('the running worker pulses green', () => {
     act(() => setAgentAvailability(FOUR));
     render(<PinTargetSelect agents={ROWS} value="codex" onChange={() => {}}

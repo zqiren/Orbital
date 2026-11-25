@@ -17,6 +17,8 @@ import { useWebSocket } from './useWebSocket';
 import type { WebSocketEvent } from '../types';
 import { pickLoginUrl } from '../utils/loginUrl';
 
+const isUpdate = (event: WebSocketEvent) => (event as { kind?: unknown }).kind === 'update';
+
 export interface AgentLogin {
   /** The job is running (the browser is open, or opening). */
   busy: boolean;
@@ -27,31 +29,37 @@ export interface AgentLogin {
   start: () => Promise<void>;
 }
 
-/** `onSignedIn` runs when the job completes (refetch the agent list). */
-export function useAgentLogin(slug: string, onSignedIn: () => void): AgentLogin {
+/** `onSignedIn` runs when the job completes (refetch the agent list).
+ *  `action: 'update'` runs the CLI's own updater through the same job
+ *  runner (POST …/update; its events carry `kind: "update"`) — the Welcome
+ *  page's Update for an agent below its version floor. */
+export function useAgentLogin(
+  slug: string, onSignedIn: () => void, action: 'login' | 'update' = 'login',
+): AgentLogin {
   const t = useT();
   const ws = useWebSocket();
   const [busy, setBusy] = useState(false);
   const [url, setUrl] = useState<string | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
+  const updating = action === 'update';
 
   useEffect(() => {
     const onProgress = (event: WebSocketEvent) => {
-      if (event.type !== 'login.progress' || event.slug !== slug || event.kind === 'update') return;
+      if (event.type !== 'login.progress' || event.slug !== slug || isUpdate(event) !== updating) return;
       const found = pickLoginUrl(event.line);
       if (found) setUrl((prev) => prev ?? found);
     };
     const onComplete = (event: WebSocketEvent) => {
-      if (event.type !== 'login.complete' || event.slug !== slug || event.kind === 'update') return;
+      if (event.type !== 'login.complete' || event.slug !== slug || isUpdate(event) !== updating) return;
       setBusy(false);
       setUrl(null);
       onSignedIn();
     };
     const onFailed = (event: WebSocketEvent) => {
-      if (event.type !== 'login.failed' || event.slug !== slug || event.kind === 'update') return;
+      if (event.type !== 'login.failed' || event.slug !== slug || isUpdate(event) !== updating) return;
       setBusy(false);
       setUrl(null);
-      setFailed(t('subAgentCard.loginFailed'));
+      setFailed(t(updating ? 'agentIssue.updateFailed' : 'subAgentCard.loginFailed'));
     };
     ws.on('login.progress', onProgress);
     ws.on('login.complete', onComplete);
@@ -61,19 +69,20 @@ export function useAgentLogin(slug: string, onSignedIn: () => void): AgentLogin 
       ws.off('login.complete', onComplete);
       ws.off('login.failed', onFailed);
     };
-  }, [ws, slug, onSignedIn, t]);
+  }, [ws, slug, onSignedIn, t, updating]);
 
   const start = useCallback(async () => {
     setBusy(true);
     setFailed(null);
     setUrl(null);
     try {
-      await api(`/api/v2/settings/sub-agents/${encodeURIComponent(slug)}/login`, { method: 'POST' });
+      await api(`/api/v2/settings/sub-agents/${encodeURIComponent(slug)}/${action}`, { method: 'POST' });
     } catch (e) {
       setBusy(false);
-      setFailed(e instanceof Error && e.message ? e.message : t('subAgentCard.loginFailed'));
+      setFailed(e instanceof Error && e.message ? e.message
+        : t(action === 'update' ? 'agentIssue.updateFailed' : 'subAgentCard.loginFailed'));
     }
-  }, [slug, t]);
+  }, [slug, t, action]);
 
   return { busy, url, failed, start };
 }
