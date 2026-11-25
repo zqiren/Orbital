@@ -188,6 +188,6 @@ Additions for this build:
 
 - Version 0.25.0 is not published yet: the update pill may offer nothing or v0.24.1.
 - The SmartScreen warning on the unsigned installer.
-- `[STATUS:]` idle gap: the Background chip reads Idle for 3–4 s between a job ending and the
+- The Background chip reads Idle for 3–4 s between a job ending and the
   follow-up turn.
 - A message held behind an outside agent is lost if the daemon crashes before dispatch.
