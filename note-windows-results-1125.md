@@ -1,4 +1,4 @@
-STATUS: NOT READY — the fixes made tonight (B7 import, B8 Codex thread names, B10 ChatGPT sign-in on Windows, themed title bar) work from the repo but are not yet verified on a CI installer
+STATUS: NOT READY — only because CI run 45672108561 on the re-checked build had not finished when this was written (Windows unit tests and the install scenarios still running); every fix passes on that build's installer
 
 # Windows results — v0.25.0 release candidate (2026-11-26, 00:00–02:00 local)
 
@@ -154,8 +154,7 @@ fail on this PC with and without these commits (the known local baseline); CI de
   bar (frameless) was discussed and left for later.
 - CI: run `45670454550` (head `74034c06`, the three fixes) built its Windows installer; it was not
   installed because the title bar commit followed. Run `45672108561` (head `029261d7`) is the
-  build to install. **Still not done: installing it (one UAC click) and re-checking B7, B8, B10
-  and the title bar on it.**
+  build to install. It was installed and re-checked: see "Re-check on the new CI installer".
 
 ## Not run, and why
 
@@ -168,6 +167,28 @@ fail on this PC with and without these commits (the known local baseline); CI de
 - C steps 3–6, and the Welcome row for a region-refused Antigravity.
 - D.
 - Whether a stale `gemini-cli.yaml` loaded by v0.24.1 after a downgrade does any harm.
+
+
+## Re-check on the new CI installer (02:24–02:35)
+
+Build: run `45672108561`, head `029261d7` (the three fixes and the title bar), artifact zip digest
+`efc95bda…93f460cf` matched, `Orbital-Setup-0.25.0.exe` sha256
+`606cf55f7d2ad2b9a1d366b4a9d5bec2af10445a82d4ee6c27e8f01959f2704d`. Installed over the first
+0.25.0 build (exit code 0). When this was written the run's installer and both unit-test-free
+jobs were green; **Backend unit tests (windows-latest) and the four install scenarios were still
+running**, so check the run before trusting this build.
+
+| Check | Result | What was seen |
+|---|---|---|
+| Install over 0.25.0 | PASS | Same projects and card on the real data, About reads v0.25.0. |
+| Title bar | PASS | Installed app, captured with `PrintWindow`: dark theme → dark bar (`#2b2b2b`, the inactive dark bar) over the `#131825` chrome; light theme → white bar over `#dde4f0`. The page has the watcher and the shell method. `evidence\recheck-titlebar-*.png`. |
+| B8 Codex thread names | PASS | New session, pinned Codex: `turn/start` at 02:27:18.785, `named thread …` at 02:27:19.842 (the one-second retry); `thread/read` returns the session title as the name. |
+| B10 ChatGPT card | PASS, with one gap | Fresh data seeded with the card the repo daemon stored earlier (same card id, same vault items). The installed build read the four-part secret, showed the card as signed in, and a manager turn on it read `fact.txt`, wrote `word.txt` and answered HERON. Deleting the card: `deleted: true, revoked: true`, no card left, vault items gone, Settings back to "还没有模型服务". **Gap: the sign-in click itself (consent → card stored) ran on repo code, not on this installer**; the installer has the same commit. |
+| B7 import | PASS, one leftover | The folders that showed Orbital-titled imports: `1124\ws\invoices` 0 imported; `B\ws-w1` 6 imported, none Orbital-titled (was 3); `1118-slash\proj` 1 left (was 8). The one left is not a new import: it is `orbital\sessions\imp_codex_01a1f1a5c3d370d3.jsonl`, a session file the 11-24 test created by sending a message into an imported session. Recent shows that one. On the real data the rule now hides 1 such copy in BatchAI and 3 in `smoke1125-a4` (the Codex desktop app had already copied tonight's Claude Code threads); no session file was touched. |
+
+Still not run on any installer: the ChatGPT consent click, and everything in "Not run, and why".
+An imported session that an earlier build already wrote into a folder keeps its Orbital-made title;
+hiding or renaming those is a separate decision.
 
 ## Testing notes for the next Windows session
 
