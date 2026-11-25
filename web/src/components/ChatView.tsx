@@ -1459,7 +1459,6 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     ? cardPick.cardId : (project.card_id ?? null);
   const pinModels = useMemo(() => ({
     workers: convModels.workers,
-    editable: sessionId !== undefined,
     onWorkerChange: convModels.setWorkerParams,
     onMenuOpen: convModels.refresh,
     manager: convModels.cards.length > 0 ? {
@@ -1483,7 +1482,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       },
     } : undefined,
   }), [convModels.workers, convModels.setWorkerParams, convModels.refresh, convModels.cards,
-    convModels.defaultCardId, sessionId, projectCardId, projectId, onRefreshProject]);
+    convModels.defaultCardId, projectCardId, projectId, onRefreshProject]);
   // Session import: an imported row whose transcript the first /chat converts.
   const viewedIsUnimportedImport =
     viewedEntry?.origin === 'imported' && viewedEntry.imported?.materialized === false;

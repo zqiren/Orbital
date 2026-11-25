@@ -145,9 +145,9 @@ interface PinTargetSelectProps {
 export interface PinModels {
   /** Per worker slug; a worker missing here gets no line. */
   workers: Record<string, WorkerModelInfo>;
-  /** False until the conversation exists: lines show, but cannot change. */
-  editable: boolean;
-  /** Set / clear (null) a worker's model or thinking; resolves false on failure. */
+  /** Set / clear (null) a worker's model or thinking; resolves false on
+   *  failure. Before the project has a session the pick is the project's,
+   *  which the first send's session starts on (1125). */
   onWorkerChange: (slug: string, patch: ParamsPatch) => Promise<boolean>;
   /** Orbital's row: the project's credential card. Absent = no line. */
   manager?: {
@@ -815,7 +815,7 @@ function PinTargetSelect({
     return info ? modelLineText(info, t('pinAgent.model.default')) : null;
   };
   const editable = (slug: string | null) =>
-    slug === null ? Boolean(pinModels?.manager) : Boolean(pinModels?.editable);
+    slug === null ? Boolean(pinModels?.manager) : Boolean(pinModels?.workers[slug]);
   const openModel = (slug: string | null) => {
     setModelError(false);
     setCardFor(slug);
@@ -869,8 +869,8 @@ function PinTargetSelect({
     if (modelFor !== undefined) return;
     setCardFor(slug);
   };
-  /** The row's second line, a control of its own (or plain text before the
-   *  conversation exists). */
+  /** The row's second line, a control of its own (plain text only when
+   *  there is nothing behind it to open). */
   const modelLine = (slug: string | null, name: string, text: string) => {
     const key = slug ?? 'orbital';
     if (!editable(slug)) {

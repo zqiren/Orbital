@@ -74,7 +74,6 @@ const MINIMAX: WorkerModelInfo = {
 function models(over: Partial<PinModels> = {}): PinModels {
   return {
     workers: { 'claude-code': CLAUDE, codex: CODEX, 'minimax-code': MINIMAX },
-    editable: true,
     onWorkerChange: vi.fn().mockResolvedValue(true),
     manager: {
       cards: [{ id: 'c1', name: 'DeepSeek v4.1 · OpenCode Go' }, { id: 'c2', name: 'Kimi K2.5' }],
@@ -285,9 +284,33 @@ describe('PinTargetSelect model line', () => {
     expect(screen.getByTestId('pin-model-inline-codex')).toBeTruthy();
   });
 
-  it('before the conversation exists the line is text, not a control', () => {
-    renderMenu(models({ editable: false }));
-    expect(line('claude-code').tagName).toBe('SPAN');
+  // 1125: a fresh install's Quick Tasks has no session yet; the line is a
+  // control there too (the pick is the project's until the first send).
+  it('every worker with model info gets a chevron control, and its panel opens', () => {
+    renderMenu(models());
+    for (const slug of ['claude-code', 'codex', 'minimax-code']) {
+      expect(line(slug).tagName).toBe('BUTTON');
+      expect(line(slug).querySelector('svg')).not.toBeNull();
+    }
+    fireEvent.click(line('codex'));
+    expect(screen.getByTestId('pin-model-card').getAttribute('data-card-for')).toBe('codex');
+  });
+
+  it('a list that lands after the menu opened brings its chevron in place', () => {
+    const m = models({ workers: {} });
+    const { rerender, onChange } = renderMenu(m);
+    // Nothing yet: the menu is open at once, plain rows.
+    expect(screen.getByRole('listbox')).toBeTruthy();
+    expect(screen.queryByTestId('pin-model-line-claude-code')).toBeNull();
+    rerender(
+      <PinTargetSelect agents={AGENTS} value="claude-code" onChange={onChange}
+        models={{ ...m, workers: { 'claude-code': CLAUDE } }} />,
+    );
+    expect(screen.getByRole('listbox')).toBeTruthy();
+    expect(line('claude-code').tagName).toBe('BUTTON');
+    expect(line('claude-code').querySelector('svg')).not.toBeNull();
+    fireEvent.click(line('claude-code'));
+    expect(within(screen.getByTestId('pin-model-card')).getByTestId('pin-model-opt-opus')).toBeTruthy();
   });
 
   it('a worker without model info keeps the plain row', () => {

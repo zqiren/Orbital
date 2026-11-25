@@ -2659,25 +2659,13 @@ async def patch_session_sub_agent_params(project_id: str, session_id: str,
     resume, so the conversation continues). Returns the slug's overrides and
     whether they reached the session file (``persisted: false`` for a session
     whose first message has not been sent; the first send writes them)."""
-    from agent_os.daemon_v2.sub_agent_config_store import (
-        SubAgentConfigError, validate_session_params,
-    )
     if _project_store is not None and _project_store.get_project(project_id) is None:
         raise HTTPException(status_code=404, detail="Project not found")
     if _sub_agent_manager is None:
         raise HTTPException(status_code=503, detail="Sub-agents not available")
     current = await asyncio.to_thread(
         _sub_agent_manager.session_params, project_id, session_id, req.slug)
-    merged = dict(current)
-    for field in ("model", "effort"):
-        if field in req.model_fields_set:
-            merged[field] = (getattr(req, field) or "").strip()
-    try:
-        extra = await _session_params_extra_allowed(
-            req.slug, merged.get("model", ""))
-        cleaned = validate_session_params(req.slug, merged, extra_allowed=extra)
-    except SubAgentConfigError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+    cleaned = await _cleaned_worker_params(req, current)
     try:
         persisted = await _retry_session_lock(
             lambda: asyncio.to_thread(
@@ -2689,18 +2677,77 @@ async def patch_session_sub_agent_params(project_id: str, session_id: str,
     # Item 158: the pick is also the project's, so every session there that
     # has no pick of its own (a new one included) starts on it; "Default"
     # clears it back to Settings. Additive project field.
-    if _project_store is not None:
-        project = _project_store.get_project(project_id) or {}
-        stored = dict(project.get("sub_agent_params") or {})
-        if cleaned:
-            stored[req.slug] = dict(cleaned)
-        else:
-            stored.pop(req.slug, None)
-        _project_store.update_project(project_id, {"sub_agent_params": stored})
+    _store_project_worker_params(project_id, req.slug, cleaned)
     logger.info("session %s/%s: %s conversation params -> %s (persisted=%s)",
                 project_id, session_id, req.slug, cleaned, persisted)
     return {"session_id": session_id, "slug": req.slug, "params": cleaned,
             "persisted": bool(persisted)}
+
+
+async def _cleaned_worker_params(req: SubAgentParamsRequest,
+                                 current: dict) -> dict[str, str]:
+    """``current`` with the request's fields laid over it, validated like a
+    Settings save (400 otherwise)."""
+    from agent_os.daemon_v2.sub_agent_config_store import (
+        SubAgentConfigError, validate_session_params,
+    )
+    merged = dict(current)
+    for field in ("model", "effort"):
+        if field in req.model_fields_set:
+            merged[field] = (getattr(req, field) or "").strip()
+    try:
+        extra = await _session_params_extra_allowed(
+            req.slug, merged.get("model", ""))
+        return validate_session_params(req.slug, merged, extra_allowed=extra)
+    except SubAgentConfigError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+def _project_worker_params(project_id: str) -> dict[str, dict[str, str]]:
+    project = (_project_store.get_project(project_id) if _project_store else None) or {}
+    raw = project.get("sub_agent_params")
+    if not isinstance(raw, dict):
+        return {}
+    return {s: {k: v for k, v in p.items() if isinstance(v, str) and v}
+            for s, p in raw.items() if isinstance(s, str) and isinstance(p, dict) and p}
+
+
+def _store_project_worker_params(project_id: str, slug: str,
+                                 cleaned: dict[str, str]) -> None:
+    if _project_store is None:
+        return
+    project = _project_store.get_project(project_id) or {}
+    stored = dict(project.get("sub_agent_params") or {})
+    if cleaned:
+        stored[slug] = dict(cleaned)
+    else:
+        stored.pop(slug, None)
+    _project_store.update_project(project_id, {"sub_agent_params": stored})
+
+
+@router.get("/agents/{project_id}/sub-agent-params")
+async def get_project_sub_agent_params(project_id: str):
+    """1125: the pin menu's picks before the project has any session (a
+    fresh install's Quick Tasks): the project's own pick per worker (item
+    158), which the first session starts on."""
+    if _project_store is not None and _project_store.get_project(project_id) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return {"params": _project_worker_params(project_id)}
+
+
+@router.patch("/agents/{project_id}/sub-agent-params")
+async def patch_project_sub_agent_params(project_id: str, req: SubAgentParamsRequest):
+    """1125: set or clear one worker's pick with no session open. Validated
+    like the per-conversation route; stored only on the project, where the
+    first send's new session reads it."""
+    if _project_store is not None and _project_store.get_project(project_id) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    current = _project_worker_params(project_id).get(req.slug, {})
+    cleaned = await _cleaned_worker_params(req, current)
+    _store_project_worker_params(project_id, req.slug, cleaned)
+    logger.info("project %s: %s worker params -> %s (no session)",
+                project_id, req.slug, cleaned)
+    return {"slug": req.slug, "params": cleaned}
 
 
 class ForkSessionRequest(BaseModel):

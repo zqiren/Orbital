@@ -9,7 +9,9 @@
  *  - `GET /settings/sub-agents`: each agent's choices (`param_schema`, with
  *    the live model lists and their labels) and its Settings values (`config`);
  *  - `GET /agents/{pid}/sessions/{sid}/sub-agent-params`: this conversation's
- *    overrides (`PATCH` the same path to set/clear one);
+ *    overrides (`PATCH` the same path to set/clear one). With no session yet
+ *    (a fresh install's Quick Tasks) `/agents/{pid}/sub-agent-params`: the
+ *    project's pick, which the first send's session starts on (1125);
  *  - `GET /settings`: the credential cards Orbital's own row offers.
  * Everything loads when the menu opens (`refresh`), never on mount: the line
  * only shows inside the open menu.
@@ -121,16 +123,20 @@ export function useConversationModels(
     return () => { alive.current = false; };
   }, []);
 
+  const paramsPath = sessionId
+    ? `/api/v2/agents/${encodeURIComponent(projectId)}/sessions/${encodeURIComponent(sessionId)}/sub-agent-params`
+    : `/api/v2/agents/${encodeURIComponent(projectId)}/sub-agent-params`;
+
   const loadOverrides = useCallback(() => {
-    if (!sessionId) return;
-    api<{ params?: Overrides }>(
-      `/api/v2/agents/${encodeURIComponent(projectId)}/sessions/${encodeURIComponent(sessionId)}/sub-agent-params`,
-    )
+    api<{ params?: Overrides }>(paramsPath)
       .then((r) => {
-        if (alive.current) setOverrides({ sid: sessionId, params: r.params ?? {} });
+        if (alive.current) {
+          setOverrides((cur) => (cur.sid === sessionId
+            ? { sid: sessionId, params: r.params ?? {} } : cur));
+        }
       })
       .catch(() => {});
-  }, [projectId, sessionId]);
+  }, [paramsPath, sessionId]);
 
   // A different conversation has its own overrides.
   useEffect(() => {
@@ -155,7 +161,6 @@ export function useConversationModels(
   }, [loadOverrides]);
 
   const setWorkerParams = useCallback(async (slug: string, patch: ParamsPatch) => {
-    if (!sessionId) return false;
     const before = overrides.params;
     // Applied at once; the daemon's answer (or a failure) settles it.
     const optimistic = { ...(before[slug] ?? {}) };
@@ -167,7 +172,7 @@ export function useConversationModels(
     setOverrides({ sid: sessionId, params: { ...before, [slug]: optimistic } });
     try {
       const r = await api<{ params: { model?: string; effort?: string } }>(
-        `/api/v2/agents/${encodeURIComponent(projectId)}/sessions/${encodeURIComponent(sessionId)}/sub-agent-params`,
+        paramsPath,
         { method: 'PATCH', body: JSON.stringify({ slug, ...patch }) },
       );
       if (alive.current) {
@@ -180,7 +185,7 @@ export function useConversationModels(
       if (alive.current) setOverrides({ sid: sessionId, params: before });
       return false;
     }
-  }, [projectId, sessionId, overrides.params]);
+  }, [paramsPath, sessionId, overrides.params]);
 
   const params = overrides.sid === sessionId ? overrides.params : NO_OVERRIDES;
   const workers = useMemo(() => {
