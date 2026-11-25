@@ -28,6 +28,15 @@ InfoBeforeFile=before-install.txt
 ; files under a live process and then launching a second copy (line 53).
 AppMutex=OrbitalDesktopShell
 
+[InstallDelete]
+; [Files] only adds and overwrites, so a manifest the previous build shipped
+; and this one does not (a retired gemini-cli.yaml; antigravity.yaml after a
+; downgrade) would stay, and the agent registry loads every .yaml in this
+; folder. Empty it before the copy. Only this folder: nothing Orbital or the
+; user writes lives under {app} (data, logs and installed agents are under
+; %APPDATA%\Orbital, downloaded updates under %LOCALAPPDATA%\Orbital).
+Type: filesandordirs; Name: "{app}\bin\_internal\agent_os\agents\manifests"
+
 [Files]
 ; Application binaries (PyInstaller output)
 Source: "..\dist\Orbital\*"; DestDir: "{app}\bin"; Flags: recursesubdirs ignoreversion

@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import pathlib
 import sqlite3
 import threading
 
@@ -85,6 +86,88 @@ REPLY_META_EVENTS = frozenset({"sub_agent_terminal", "interaction_required",
 
 def index_path(sessions_dir: str) -> str:
     return os.path.join(sessions_dir, INDEX_FILENAME)
+
+
+# ---- worker thread ids (session import dedup, 2026-11-24) -----------------
+#
+# ``session_import.orbital_thread_ids`` needs the ``sub_agent_thread`` ids of
+# every session file in the folder, which means reading each file in full —
+# seconds across all projects on the first Workbench feed after a start. The
+# index keeps them in a nullable ``thread_ids`` column (a JSON list; NULL =
+# unknown, read the file). Only ``store_thread_ids`` fills it, and only on a
+# row whose (mtime_ns, size) still matches the file the ids were read from;
+# every rewrite of a row by the index itself (``INSERT OR REPLACE``) leaves it
+# NULL again. No version bump: an index without the column gets it added and
+# keeps its rows, and the previous build's explicit-column SELECT / INSERT
+# ignore it.
+
+def _ensure_thread_ids_column(conn: sqlite3.Connection) -> None:
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(sessions)")}
+    if "thread_ids" not in cols:
+        conn.execute("ALTER TABLE sessions ADD COLUMN thread_ids TEXT")
+
+
+def _connect_existing(sessions_dir: str, mode: str) -> sqlite3.Connection:
+    """A connection to the folder's index that never creates the file."""
+    uri = pathlib.Path(os.path.abspath(index_path(sessions_dir))).as_uri()
+    return sqlite3.connect(f"{uri}?mode={mode}", uri=True, timeout=1.0,
+                           isolation_level=None, check_same_thread=False)
+
+
+def read_thread_ids(sessions_dir: str) -> dict[str, tuple[int, int, frozenset | None]]:
+    """``fname -> (mtime_ns, size, ids)`` from the folder's index; ``ids`` is
+    None when the row does not know them (every row of an index that
+    predates the column). Empty when there is no index or it cannot be read."""
+    out: dict[str, tuple[int, int, frozenset | None]] = {}
+    try:
+        conn = _connect_existing(sessions_dir, "ro")
+        try:
+            try:
+                rows = conn.execute(
+                    "SELECT fname, mtime_ns, size, thread_ids FROM sessions").fetchall()
+            except sqlite3.OperationalError:
+                rows = conn.execute(
+                    "SELECT fname, mtime_ns, size, NULL FROM sessions").fetchall()
+        finally:
+            conn.close()
+    except (sqlite3.Error, OSError, ValueError):
+        return out
+    for fname, mtime_ns, size, raw in rows:
+        ids = None
+        if raw is not None:
+            try:
+                parsed = json.loads(raw)
+            except (TypeError, ValueError):
+                parsed = None
+            if isinstance(parsed, list) and all(isinstance(i, str) for i in parsed):
+                ids = frozenset(parsed)
+        try:
+            out[fname] = (int(mtime_ns), int(size), ids)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def store_thread_ids(sessions_dir: str,
+                     items: list[tuple[str, int, int, frozenset]]) -> None:
+    """Record ``(fname, mtime_ns, size, ids)`` on rows that still carry that
+    exact stamp and no ids yet. Never creates the index or a row; best-effort."""
+    if not items:
+        return
+    try:
+        conn = _connect_existing(sessions_dir, "rw")
+        try:
+            _ensure_thread_ids_column(conn)
+            conn.execute("BEGIN")
+            conn.executemany(
+                "UPDATE sessions SET thread_ids = ? WHERE fname = ? AND mtime_ns = ?"
+                " AND size = ? AND thread_ids IS NULL",
+                [(json.dumps(sorted(ids)), f, m, s) for f, m, s, ids in items])
+            conn.execute("COMMIT")
+        finally:
+            conn.close()
+    except (sqlite3.Error, OSError, ValueError):
+        logger.debug("Could not record thread ids in %s", sessions_dir, exc_info=True)
 
 
 def read_session_f1(path: str) -> str | None:
@@ -373,6 +456,7 @@ class SessionIndex:
                 " last_activity_at TEXT,"
                 " entry TEXT)"  # the list row as JSON; NULL = not a sidebar session
             )
+            _ensure_thread_ids_column(conn)
             row = conn.execute(
                 "SELECT value FROM index_meta WHERE key = 'version'"
             ).fetchone()

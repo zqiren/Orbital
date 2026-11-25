@@ -76,3 +76,40 @@ def test_install_dir_dacl_is_locked_before_anything_runs_from_it(iss_content):
     assert "*S-1-5-11:(OI)(CI)RX" in line, "Authenticated Users read/execute only"
     assert "(M)" not in line and ":(OI)(CI)M" not in line
     assert "/T" not in line, "root-only; children recompute inherited ACEs"
+
+
+def _section(iss: str, name: str) -> list[str]:
+    """The non-comment, non-blank lines of one ``[Section]``."""
+    lines, inside = [], False
+    for raw in iss.splitlines():
+        line = raw.strip()
+        if line.startswith("[") and line.endswith("]"):
+            inside = line == f"[{name}]"
+            continue
+        if inside and line and not line.startswith(";"):
+            lines.append(line)
+    return lines
+
+
+def test_upgrade_removes_only_the_bundled_agent_manifests_folder(iss_content):
+    """2026-11-24 Windows finding: ``[Files]`` only adds and overwrites, so a
+    manifest a previous build shipped (``gemini-cli.yaml``, or a newer build's
+    ``antigravity.yaml`` after a downgrade) stays in the folder the agent
+    registry loads every ``.yaml`` from. Setup empties that one folder before
+    copying; nothing else under ``{app}`` is removed."""
+    assert _section(iss_content, "InstallDelete") == [
+        'Type: filesandordirs; Name: "{app}\\bin\\_internal\\agent_os\\agents\\manifests"'
+    ]
+
+
+def test_install_delete_path_is_where_the_bundle_puts_the_manifests(iss_content):
+    """The deleted path is ``{app}\\bin`` (the ``dist\\Orbital`` copy) +
+    PyInstaller's onedir ``_internal`` + the spec's manifests destination."""
+    assert any(l.startswith('Source: "..\\dist\\Orbital\\*"; DestDir: "{app}\\bin"')
+               for l in _section(iss_content, "Files"))
+    spec = os.path.join(os.path.dirname(INSTALLER_SCRIPT), "..", "agent_os", "desktop",
+                        "agentos.spec")
+    with open(spec, "r", encoding="utf-8") as fh:
+        text = fh.read()
+    assert "'agent_os', 'agents', 'manifests'), 'agent_os/agents/manifests')" in text
+    assert "contents_directory" not in text  # PyInstaller 6 default: _internal

@@ -58,6 +58,11 @@ SUPPORTED_CODEX_VERSION = "0.162.1"
 # only this exact refusal is answered with a thread/fork.
 _ACTIVE_WRITER_REFUSAL = "already has an active writer"
 
+# ``thread/name/set`` (the thread's title in the ChatGPT app): the manager
+# offers Orbital's session title (~50 chars); this only bounds a stray one.
+_THREAD_NAME_MAX = 100
+_THREAD_NAME_TIMEOUT_S = 10.0
+
 
 def _codex_usage_limit(error_info) -> bool:
     """Spec 197: Codex's structured "this turn hit the limit" —
@@ -295,6 +300,14 @@ class CodexTransport(AgentTransport):
         self._limit_read_task: asyncio.Task | None = None
         self._skills_task: asyncio.Task | None = None
         self._repick_task: asyncio.Task | None = None
+        # The thread's name in the user's Codex (the ChatGPT app titles an
+        # unnamed thread from its first message, which is Orbital's preamble).
+        # True when the opened thread came back without a name; the manager
+        # then offers one (``name_thread``) and it goes out once, after the
+        # next turn starts, in the background (``_name_task``).
+        self._name_wanted = False
+        self._pending_name: str | None = None
+        self._name_task: asyncio.Task | None = None
 
     # ------------------------------------------------------------------
     # turn bookkeeping
@@ -1218,6 +1231,10 @@ class CodexTransport(AgentTransport):
         if not self._thread_id:
             raise RuntimeError(
                 f"codex thread/start returned no thread id: {result}")
+        # Name only a thread nobody named (a start, a fork, an old unnamed
+        # thread): a name set in the ChatGPT app is never overwritten. A
+        # one-off ephemeral thread is not listed anywhere.
+        self._name_wanted = not self._ephemeral and not (thread.get("name") or "").strip()
         self._publish_thread(self._thread_id, rollout_path=self._rollout_path)
 
     async def _fork_held_thread(self, params: dict) -> dict:
@@ -1356,6 +1373,46 @@ class CodexTransport(AgentTransport):
         # (the notification hasn't already closed it via turn/completed).
         if turn.get("id") and self._turn_open:
             self._turn_id = turn["id"]
+        self._send_pending_name()
+
+    # ------------------------------------------------------------------
+    # thread name (the title the ChatGPT app shows)
+    # ------------------------------------------------------------------
+
+    @property
+    def wants_thread_name(self) -> bool:
+        """True while this thread has no name and none has been sent."""
+        return self._name_wanted
+
+    def name_thread(self, name: str | None) -> None:
+        """Offer this thread's name; it goes out with the next turn start."""
+        text = " ".join((name or "").split())[:_THREAD_NAME_MAX]
+        if self._name_wanted and text:
+            self._pending_name = text
+
+    def _send_pending_name(self) -> None:
+        name, thread_id = self._pending_name, self._thread_id
+        if not (self._name_wanted and name and thread_id):
+            return
+        self._name_wanted = False
+        self._pending_name = None
+        self._name_task = asyncio.create_task(
+            self._set_thread_name(thread_id, name), name=f"codex-name-{id(self)}")
+
+    async def _set_thread_name(self, thread_id: str, name: str) -> None:
+        """``thread/name/set``, once. Display only: an older Codex without the
+        method, an error or a slow answer leaves the thread as it was."""
+        try:
+            await self._request("thread/name/set",
+                                {"threadId": thread_id, "name": name},
+                                timeout=_THREAD_NAME_TIMEOUT_S)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001 — never touches the turn
+            logger.debug("CodexTransport: thread/name/set failed (%s)",
+                         str(e) or type(e).__name__)
+        else:
+            logger.info("CodexTransport: named thread %s", thread_id)
 
     def _turn_start_params(self, turn_input: list) -> dict:
         params: dict = {"threadId": self._thread_id, "input": turn_input}

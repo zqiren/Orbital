@@ -2684,6 +2684,7 @@ class SubAgentManager:
                 preamble = f"{first_turn}\n\n{preamble}"
                 adapter._orbital_first_turn_note = None
             payload = preamble + prompt.message
+        await self._offer_thread_name(adapter, project_id, session_id, prompt.message)
         try:
             await self._dispatch_async(
                 adapter, project_id, handle, payload,
@@ -2702,6 +2703,34 @@ class SubAgentManager:
                 session_id=session_id,
                 dispatch_id=prompt.dispatch_id,
             )
+
+    async def _offer_thread_name(self, adapter, project_id: str, session_id: str,
+                                 message: str) -> None:
+        """Give an unnamed worker thread its title in the agent's own app
+        (Codex: the ChatGPT app's sidebar, which otherwise shows Orbital's
+        preamble). The Orbital session's title, else the first line of the
+        text this prompt carries. Only when the transport asks for one, so
+        the session is read once per thread. Never raises."""
+        transport = getattr(adapter, "_transport", None)
+        if getattr(transport, "wants_thread_name", False) is not True:
+            return
+        from agent_os.agent.session import _derive_name
+        name = None
+        resolver = getattr(self, "_session_resolver", None)
+        if resolver is not None:
+            try:
+                session = await asyncio.to_thread(resolver, project_id, session_id)
+                name = getattr(session, "name", None)
+            except Exception:  # noqa: BLE001 — the text below still names it
+                logger.debug("thread name: session read failed for %s/%s",
+                             project_id, session_id, exc_info=True)
+        if not isinstance(name, str) or not name.strip():
+            derived = _derive_name(message) or ""
+            name = derived.strip().split("\n", 1)[0].strip()
+        try:
+            transport.name_thread(name)
+        except Exception:  # noqa: BLE001 — display only
+            logger.debug("thread name: offer failed", exc_info=True)
 
     @staticmethod
     def _sends_alone(prompt: _QueuedPrompt) -> bool:

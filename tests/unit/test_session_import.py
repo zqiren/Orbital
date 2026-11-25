@@ -694,6 +694,260 @@ def test_acp_sessions_orbital_itself_runs_are_not_listed(ws, hhome):
     assert [s.agent for s in si.list_native_sessions(ws)] == ["pi"]
 
 
+def _write_orbital_thread_rows(ws, pairs):
+    """A project session file holding one ``sub_agent_thread`` row per
+    ``(handle, native_id)`` — what Orbital writes when a worker turn ends."""
+    sessions = os.path.join(ws, "orbital", "sessions")
+    os.makedirs(sessions, exist_ok=True)
+    with open(os.path.join(sessions, "s1.jsonl"), "w", encoding="utf-8") as fh:
+        fh.write(json.dumps({"role": "meta", "event": "session_start"}) + "\n")
+        for handle, nid in pairs:
+            fh.write(json.dumps({"role": "meta", "event": "sub_agent_thread", "handle": handle,
+                                 "thread": {"session_id": nid, "model": None}}) + "\n")
+
+
+@pytest.mark.parametrize("originator", ["codex_exec", None])
+def test_codex_threads_orbital_itself_runs_are_not_listed(ws, homes, originator):
+    """2026-11-24 Windows finding: Orbital's own Codex worker threads came
+    back as "Imported from Codex" when the thread did not carry the "orbital"
+    originator. The project's thread records name them."""
+    claude_dir, codex_dir = homes
+    own = "019f0000-0000-7000-8000-00000000000a"
+    mine = write_codex_rollout(codex_dir, ws, codex_rollout_rows(ws, tid=own), tid=own)
+    user = write_codex_rollout(codex_dir, ws, codex_rollout_rows(ws))
+    make_codex_home(codex_dir, [
+        {"id": own, "cwd": ws, "rollout_path": mine, "originator": originator,
+         "first_user_message": "Other agents in this project: codex, dsh."},
+        {"id": CODEX_ID, "cwd": ws, "rollout_path": user,
+         "first_user_message": "Rename the helper"},
+    ])
+    _write_orbital_thread_rows(ws, [("codex", own)])
+    found = si.list_native_sessions(ws, claude_dir=claude_dir, codex_dir=codex_dir)
+    assert [(s.agent, s.native_id) for s in found] == [("codex", CODEX_ID)]
+
+
+def test_codex_rollout_fallback_also_skips_threads_orbital_runs(ws, homes):
+    claude_dir, codex_dir = homes
+    own = "019f0000-0000-7000-8000-00000000000b"
+    write_codex_rollout(codex_dir, ws, codex_rollout_rows(ws, tid=own), tid=own)
+    write_codex_rollout(codex_dir, ws, codex_rollout_rows(ws))
+    _write_orbital_thread_rows(ws, [("codex", own)])
+    found = si.list_native_sessions(ws, claude_dir=claude_dir, codex_dir=codex_dir)
+    assert [(s.agent, s.native_id) for s in found] == [("codex", CODEX_ID)]
+
+
+def test_claude_sessions_orbital_itself_runs_are_not_listed(ws, homes):
+    """A Claude transcript with a user entrypoint ("cli") that a project
+    session names as a worker thread is Orbital's, not the user's. The SDK
+    resume id Orbital records is the transcript's file stem."""
+    claude_dir, codex_dir = homes
+    own = "99999999-8888-7777-6666-555555555555"
+    write_claude_session(claude_dir, ws, basic_claude_rows(ws))
+    own_rows = [dict(r, sessionId=own) if "sessionId" in r else r for r in basic_claude_rows(ws)]
+    write_claude_session(claude_dir, ws, own_rows, sid=own)
+    _write_orbital_thread_rows(ws, [("claude-code", own)])
+    found = si.list_native_sessions(ws, claude_dir=claude_dir, codex_dir=codex_dir)
+    assert [(s.agent, s.native_id) for s in found] == [("claude-code", CLAUDE_ID)]
+
+
+def test_thread_ids_read_each_file_once_and_take_one_cache_entry(ws, monkeypatch):
+    """The Workbench lists every project's sessions on each load: an unchanged
+    session file is never re-read, a changed one is, and a folder costs one
+    entry in the shared cache however many session files it holds."""
+    _write_orbital_thread_rows(ws, [("codex", "t-1")])
+    sessions = os.path.join(ws, "orbital", "sessions")
+    for n in range(5):
+        with open(os.path.join(sessions, f"x{n}.jsonl"), "w", encoding="utf-8") as fh:
+            fh.write(json.dumps({"role": "user", "content": "hi"}) + "\n")
+    reads = []
+    real = si._thread_ids_in
+    monkeypatch.setattr(si, "_thread_ids_in", lambda p: reads.append(p) or real(p))
+    assert si.orbital_thread_ids(ws) == {"t-1"}
+    assert len(reads) == 6
+    assert si.orbital_thread_ids(ws) == {"t-1"}
+    assert len(reads) == 6
+    with open(os.path.join(sessions, "x0.jsonl"), "a", encoding="utf-8") as fh:
+        fh.write(json.dumps({"role": "meta", "event": "sub_agent_thread", "handle": "codex",
+                             "thread": {"session_id": "t-2"}}) + "\n")
+    assert si.orbital_thread_ids(ws) == {"t-1", "t-2"}
+    assert [os.path.basename(p) for p in reads[6:]] == ["x0.jsonl"]
+    os.remove(os.path.join(sessions, "s1.jsonl"))
+    assert si.orbital_thread_ids(ws) == {"t-2"}
+    assert len([k for k in si._cache if k[0] == "orbital-threads"]) == 1
+
+
+# ---- thread ids ride the persistent session index (2026-11-24) -------------
+#
+# The Workbench feed lists every project after each daemon start, when the
+# in-memory cache above is empty. Reading every session file in full then cost
+# seconds; the session index already sits next to the files, keyed by each
+# file's (mtime_ns, size), so it carries the ids too.
+
+# The sessions table exactly as v0.24.1 (origin/main) creates it.
+_OLD_SESSIONS_TABLE = (
+    "CREATE TABLE sessions ( fname TEXT PRIMARY KEY, mtime_ns INTEGER NOT NULL,"
+    " size INTEGER NOT NULL, session_uuid TEXT, origin TEXT, trigger_type TEXT,"
+    " name TEXT, last_activity_at TEXT, entry TEXT)")
+_OLD_INSERT = (
+    "INSERT OR REPLACE INTO sessions (fname, mtime_ns, size, session_uuid,"
+    " origin, trigger_type, name, last_activity_at, entry)"
+    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+
+
+def _thread_folder(ws):
+    """s1 holds one worker thread; x0..x2 are plain chats."""
+    _write_orbital_thread_rows(ws, [("codex", "t-1")])
+    sessions = os.path.join(ws, "orbital", "sessions")
+    for n in range(3):
+        with open(os.path.join(sessions, f"x{n}.jsonl"), "w", encoding="utf-8") as fh:
+            fh.write(json.dumps({"role": "user", "content": "hi"}) + "\n")
+    return sessions
+
+
+def _index_folder(sessions):
+    """Index every file the way the daemon's index build does."""
+    from agent_os.daemon_v2.session_index import SessionIndex, derive_disk_entry
+    index = SessionIndex(sessions)
+    index.load_rows()
+    index.put_many([(f, os.stat(os.path.join(sessions, f)),
+                     derive_disk_entry(os.path.join(sessions, f), f[:-6]))
+                    for f in sorted(os.listdir(sessions)) if f.endswith(".jsonl")])
+    return index
+
+
+def _indexed_ids(sessions):
+    from agent_os.daemon_v2.session_index import index_path
+    conn = sqlite3.connect(index_path(sessions))
+    try:
+        return dict(conn.execute("SELECT fname, thread_ids FROM sessions"))
+    finally:
+        conn.close()
+
+
+def _count_reads(monkeypatch):
+    reads = []
+    real = si._thread_ids_in
+    monkeypatch.setattr(si, "_thread_ids_in", lambda p: reads.append(os.path.basename(p)) or real(p))
+    return reads
+
+
+def test_current_index_rows_give_the_thread_ids_without_opening_a_file(ws, monkeypatch):
+    import builtins
+    sessions = _thread_folder(ws)
+    _index_folder(sessions)
+    assert si.orbital_thread_ids(ws) == {"t-1"}  # reads the files, fills the index
+    assert _indexed_ids(sessions) == {"s1.jsonl": '["t-1"]', "x0.jsonl": "[]",
+                                      "x1.jsonl": "[]", "x2.jsonl": "[]"}
+    si.clear_cache()  # a daemon restart
+    reads = _count_reads(monkeypatch)
+    opened = []
+    real_open = builtins.open
+    monkeypatch.setattr(builtins, "open", lambda f, *a, **k: (
+        opened.append(str(f)) if str(f).endswith(".jsonl") else None) or real_open(f, *a, **k))
+    assert si.orbital_thread_ids(ws) == {"t-1"}
+    assert reads == [] and opened == []
+
+
+def test_a_file_changed_after_its_index_row_is_read_again(ws, monkeypatch):
+    sessions = _thread_folder(ws)
+    index = _index_folder(sessions)
+    si.orbital_thread_ids(ws)
+    s1 = os.path.join(sessions, "s1.jsonl")
+    with open(s1, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps({"role": "meta", "event": "sub_agent_thread", "handle": "codex",
+                             "thread": {"session_id": "t-2"}}) + "\n")
+    si.clear_cache()
+    reads = _count_reads(monkeypatch)
+    # The row's stamp no longer matches: the file is read, and the stale row
+    # is not given ids it was not derived with.
+    assert si.orbital_thread_ids(ws) == {"t-1", "t-2"}
+    assert reads == ["s1.jsonl"]
+    assert _indexed_ids(sessions)["s1.jsonl"] == '["t-1"]'
+    # The index re-derives the row (its normal write): ids are unknown again
+    # until the next read fills them.
+    index.put("s1.jsonl", os.stat(s1), None)
+    assert _indexed_ids(sessions)["s1.jsonl"] is None
+    si.clear_cache()
+    assert si.orbital_thread_ids(ws) == {"t-1", "t-2"}
+    assert reads == ["s1.jsonl", "s1.jsonl"]
+    assert _indexed_ids(sessions)["s1.jsonl"] == '["t-1", "t-2"]'
+    si.clear_cache()
+    assert si.orbital_thread_ids(ws) == {"t-1", "t-2"}
+    assert len(reads) == 2
+
+
+def test_an_index_from_the_previous_build_still_works(ws, monkeypatch):
+    """A v0.24.1 index has no thread_ids column: every file is read, nothing
+    raises, and the rows are kept (no rebuild) and filled in."""
+    sessions = _thread_folder(ws)
+    from agent_os.daemon_v2.session_index import INDEX_VERSION, index_path
+    conn = sqlite3.connect(index_path(sessions))
+    conn.execute("CREATE TABLE index_meta ( key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+    conn.execute("INSERT INTO index_meta VALUES ('version', ?)", (INDEX_VERSION,))
+    conn.execute(_OLD_SESSIONS_TABLE)
+    for f in os.listdir(sessions):
+        if f.endswith(".jsonl"):
+            st = os.stat(os.path.join(sessions, f))
+            conn.execute(_OLD_INSERT, (f, st.st_mtime_ns, st.st_size, f[:-6], "chat",
+                                       None, None, None, "{}"))
+    conn.commit()
+    conn.close()
+    reads = _count_reads(monkeypatch)
+    assert si.orbital_thread_ids(ws) == {"t-1"}
+    assert sorted(reads) == ["s1.jsonl", "x0.jsonl", "x1.jsonl", "x2.jsonl"]
+    assert _indexed_ids(sessions)["s1.jsonl"] == '["t-1"]'
+    si.clear_cache()
+    assert si.orbital_thread_ids(ws) == {"t-1"}
+    assert len(reads) == 4
+
+
+def test_the_previous_build_reads_and_writes_the_upgraded_index(ws, monkeypatch):
+    """Downgrade: v0.24.1's own SELECT and INSERT still run on an index this
+    build filled, and a row it rewrites reads as unknown here."""
+    sessions = _thread_folder(ws)
+    _index_folder(sessions)
+    si.orbital_thread_ids(ws)
+    from agent_os.daemon_v2.session_index import index_path
+    conn = sqlite3.connect(index_path(sessions))
+    rows = conn.execute("SELECT fname, mtime_ns, size, entry FROM sessions").fetchall()
+    assert len(rows) == 4
+    s1 = os.path.join(sessions, "s1.jsonl")
+    with open(s1, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps({"role": "meta", "event": "sub_agent_thread", "handle": "codex",
+                             "thread": {"session_id": "t-3"}}) + "\n")
+    st = os.stat(s1)
+    conn.execute(_OLD_INSERT, ("s1.jsonl", st.st_mtime_ns, st.st_size, "s1", "chat",
+                               None, None, None, "{}"))
+    conn.commit()
+    conn.close()
+    si.clear_cache()
+    reads = _count_reads(monkeypatch)
+    assert si.orbital_thread_ids(ws) == {"t-1", "t-3"}
+    assert reads == ["s1.jsonl"]
+
+
+def test_index_is_found_under_a_path_with_spaces_cjk_and_uri_marks(tmp_path, monkeypatch):
+    """The index is opened through a ``file:`` URI (so a read never creates
+    it): the folder name must survive the quoting."""
+    ws = str(tmp_path / "我的 项目 #1 ?a=b %20")
+    os.makedirs(ws)
+    sessions = _thread_folder(ws)
+    _index_folder(sessions)
+    si.orbital_thread_ids(ws)
+    si.clear_cache()
+    reads = _count_reads(monkeypatch)
+    assert si.orbital_thread_ids(ws) == {"t-1"}
+    assert reads == []
+
+
+def test_no_index_reads_the_files_and_creates_nothing(ws, monkeypatch):
+    sessions = _thread_folder(ws)
+    reads = _count_reads(monkeypatch)
+    assert si.orbital_thread_ids(ws) == {"t-1"}
+    assert len(reads) == 4
+    assert sorted(os.listdir(sessions)) == ["s1.jsonl", "x0.jsonl", "x1.jsonl", "x2.jsonl"]
+
+
 def test_pi_kimi_minimax_conversion_and_resume_records(ws, hhome):
     paths = _three(hhome, ws)
     pi_conv = si.convert_transcript("pi", paths["pi"], now="2026-10-21T00:00:00+00:00")

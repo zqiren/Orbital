@@ -71,10 +71,6 @@ AGENT_DISPLAY_NAMES = {AGENT_CLAUDE: "Claude Code", AGENT_CODEX: "Codex", AGENT_
 _HISTORY_SOURCES = {AGENT_PI: _pi_src.SOURCE, AGENT_KIMI: _kimi_src.SOURCE,
                     AGENT_MINIMAX: _minimax_src.SOURCE}
 
-# ACP agents keep no mark of the client that drove a session; Orbital's own
-# runs are known by the ids its session records hold.
-_ACP_AGENTS = frozenset({AGENT_KIMI, AGENT_MINIMAX})
-
 # Agents whose thread record carries the native file the transport reopens.
 _RESUME_PATH_AGENTS = frozenset({AGENT_CODEX, AGENT_PI})
 
@@ -233,9 +229,12 @@ def list_native_sessions(workspace: str, *, members=None, claude_dir: str | None
         except Exception:
             logger.warning("session import: %s listing failed for %s",
                            fn.__name__, workspace, exc_info=True)
-    if any(s.agent in _ACP_AGENTS for s in out):
+    if out:
+        # Orbital's own worker threads, known by the ids the folder's session
+        # records hold. The only mark ACP agents leave, and the backstop for
+        # Codex / Claude threads whose originator or entrypoint did not say so.
         own = orbital_thread_ids(workspace)
-        out = [s for s in out if s.agent not in _ACP_AGENTS or s.native_id not in own]
+        out = [s for s in out if s.native_id not in own]
     seen = {(s.agent, s.native_id) for s in out}
     for agent, native_id in _member_pairs(members):
         if (agent, native_id) in seen:
@@ -306,15 +305,29 @@ def _find_member(agent: str, native_id: str, homes: dict) -> NativeSession | Non
 
 def orbital_thread_ids(workspace: str) -> set[str]:
     """Native ids the project's own Orbital sessions hold as worker threads
-    (``sub_agent_thread`` records) — the kimi / mcode sessions Orbital ran.
-    Each session file is read once per ``(path, mtime, size)``."""
+    (``sub_agent_thread`` records) — the native sessions Orbital ran.
+    Each session file is read once per ``(mtime, size)``. One cache entry per
+    folder, not per file: the session list runs this for every project in the
+    Workbench feed, and per-file keys would fill the shared cache and clear it
+    on every pass.
+
+    On a miss (always, right after a daemon start) the folder's session index
+    answers first: a row whose (mtime_ns, size) matches the file and that
+    knows its ids saves reading the file. A file read for a row with the
+    matching stamp but no ids writes them back, so the next start skips it."""
     from agent_os.agent.project_paths import ProjectPaths
+    from agent_os.daemon_v2.session_index import read_thread_ids, store_thread_ids
     sessions_dir = ProjectPaths(workspace).sessions_dir
     ids: set[str] = set()
     try:
         names = os.listdir(sessions_dir)
     except OSError:
         return ids
+    key = ("orbital-threads", sessions_dir)
+    before = _cache_get(key) or {}
+    now: dict[str, tuple] = {}
+    indexed = None  # the index's rows, read on the first miss
+    learned: list[tuple] = []
     for name in names:
         if not name.endswith(".jsonl"):
             continue
@@ -323,12 +336,26 @@ def orbital_thread_ids(workspace: str) -> set[str]:
             st = os.stat(fpath)
         except OSError:
             continue
-        key = ("orbital-threads", fpath, st.st_mtime_ns, st.st_size)
-        found = _cache_get(key)
-        if found is None:
-            found = frozenset(_thread_ids_in(fpath))
-            _cache_put(key, found)
+        stamp = (st.st_mtime_ns, st.st_size)
+        hit = before.get(name)
+        if hit is not None and hit[0] == stamp:
+            found = hit[1]
+        else:
+            if indexed is None:
+                indexed = read_thread_ids(sessions_dir)
+            row = indexed.get(name)
+            current = row is not None and (row[0], row[1]) == stamp
+            if current and row[2] is not None:
+                found = row[2]
+            else:
+                found = frozenset(_thread_ids_in(fpath))
+                if current:
+                    learned.append((name, stamp[0], stamp[1], found))
+        now[name] = (stamp, found)
         ids |= found
+    store_thread_ids(sessions_dir, learned)
+    if now != before:
+        _cache_put(key, now)
     return ids
 
 
