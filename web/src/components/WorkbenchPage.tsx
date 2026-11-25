@@ -70,7 +70,7 @@ import { buildFeedGroups, type FeedItem } from './workbench/feedModel';
 import { classifySessionName } from '../lib/sessionLabel';
 import {
   choosePending, holdPending, recoverDraft, sendWorkbenchTask, unsendPending,
-  type SendChoice, type SendDeps,
+  type AgentBlocked, type SendChoice, type SendDeps,
 } from './workbench/sendTask';
 import TaskCard from './workbench/TaskCard';
 import WorkbenchComposer, { rememberLastProject } from './workbench/WorkbenchComposer';
@@ -128,7 +128,7 @@ export default function WorkbenchPage({
   const { newSession, injectMessage } = useAgent();
   const [openError, setOpenError] = useState<string | null>(null);
   // Batch 1123: the send was refused because the project's agent is signed out.
-  const [signedOut, setSignedOut] = useState<{ agent: string; agentName?: string } | null>(null);
+  const [signedOut, setSignedOut] = useState<AgentBlocked | null>(null);
   // Task sources: the panel in the docked pane (the reading pane's place),
   // opened by 任务来源 or by a card's source mark (at that entry).
   const sources = useSources();
@@ -392,9 +392,11 @@ export default function WorkbenchPage({
           )}
           {signedOut && (
             <AgentErrorNotice
-              code="agent_signed_out"
+              code={signedOut.code ?? 'agent_signed_out'}
               agent={signedOut.agent}
               agentName={signedOut.agentName}
+              reason={signedOut.reason}
+              reasonDetail={signedOut.detail}
               onOpenSettings={() => {}}
               onDismiss={() => setSignedOut(null)}
             />

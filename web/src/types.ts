@@ -986,6 +986,9 @@ export interface AgentAvailability {
   version?: string | null;
   update_needed?: boolean;
   min_version?: string | null;
+  /** Why it is not ready, when not: `{reason, detail}` (utils/agentIssue).
+   *  Absent on an older daemon, which then reads "needs login". */
+  not_ready?: { reason: string; detail?: string | null } | null;
 }
 
 /** Spec 099 — the daemon's quota store changed (null = cleared). Global:

@@ -16,9 +16,13 @@ import type { StringKey } from '../i18n/strings';
 export interface ProviderErrorInfo {
   code: string;
   message: string;
-  /** `agent_signed_out` (batch 1123): the agent that needs a sign-in. */
+  /** `agent_signed_out` (batch 1123): the agent that needs a sign-in.
+   *  `agent_not_ready` (2026-11-25): the agent that is signed in but not
+   *  ready, with the daemon's `reason` and the vendor's `detail`. */
   agent?: string;
   agent_name?: string;
+  reason?: string;
+  detail?: string;
 }
 
 const KEY_BY_CODE: Record<string, StringKey> = {
@@ -27,6 +31,8 @@ const KEY_BY_CODE: Record<string, StringKey> = {
   no_runner: 'agentError.no_runner',
   // Batch 1123: no key, and the project's agent is installed but signed out.
   agent_signed_out: 'agentError.agent_signed_out',
+  // 2026-11-25: no key, and the project's agent is signed in but not ready.
+  agent_not_ready: 'agentError.agent_not_ready',
   // Spec 082: the project's credential card is gone and there is no default.
   missing_card: 'agentError.missing_card',
   invalid_api_key: 'agentError.invalid_api_key',
@@ -139,12 +145,17 @@ function codedFromText(text: string): ProviderErrorInfo | null {
       typeof parsed === 'object' &&
       typeof (parsed as { code?: unknown }).code === 'string'
     ) {
-      const p = parsed as { code: string; message?: unknown; agent?: unknown; agent_name?: unknown };
+      const p = parsed as {
+        code: string; message?: unknown; agent?: unknown; agent_name?: unknown;
+        reason?: unknown; detail?: unknown;
+      };
       return {
         code: p.code,
         message: typeof p.message === 'string' ? p.message : '',
         ...(typeof p.agent === 'string' && p.agent ? { agent: p.agent } : {}),
         ...(typeof p.agent_name === 'string' && p.agent_name ? { agent_name: p.agent_name } : {}),
+        ...(typeof p.reason === 'string' && p.reason ? { reason: p.reason } : {}),
+        ...(typeof p.detail === 'string' && p.detail ? { detail: p.detail } : {}),
       };
     }
   } catch {

@@ -16,8 +16,9 @@ import {
 /** ready = could answer now (the daemon's `ready`: installed, signed in,
  *  nothing blocking it); out = installed, signed out, has a login; key =
  *  installed, takes a key instead (its key lives in Settings); off = signed
- *  in but something else blocks it (a dependency, its version floor), which
- *  Settings explains. */
+ *  in but something else blocks it (its vendor refused a turn, its version
+ *  floor, a failed handshake, a dependency): the tile names it
+ *  (`not_ready`) and offers the fix when there is one. */
 export type AgentState = 'ready' | 'out' | 'key' | 'off';
 
 /** The daemon's `ready` (and not a login the CLI said expired); an older

@@ -17,15 +17,16 @@ from __future__ import annotations
 import logging
 from typing import Optional, Sequence
 
-from agent_os.agents.setup_types import handshake_failed
+from agent_os.agents.setup_types import handshake_failed, sign_in_expired, turn_refused
 
 logger = logging.getLogger(__name__)
 
 
 def worker_ready(status) -> bool:
     """A worker a send could reach right now: installed, dependencies met,
-    signed in (``credentials_configured``), not below the version floor, and
-    not failing its handshake — the dispatch gate's own test. Identity checks
+    signed in (``credentials_configured``), not below the version floor, not
+    failing its handshake, its sign-in not seen to have expired, and no turn
+    refused by its vendor (a region refusal) — ``status_ready``'s test. Identity checks
     (``is True`` / ``is False``) so a mocked engine never trips it. The one
     readiness test for "who can this project's work go to": the pin list
     (``AgentManager.available_worker_slugs``) and the dispatch tool's agent
@@ -40,6 +41,8 @@ def worker_ready(status) -> bool:
     if getattr(status, "credentials_configured", True) is False:
         return False
     if getattr(status, "update_needed", False) is True:
+        return False
+    if sign_in_expired(status) or turn_refused(status):
         return False
     return not handshake_failed(status)
 

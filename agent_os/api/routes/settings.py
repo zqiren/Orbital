@@ -32,7 +32,7 @@ from agent_os.telemetry.diagnostics import (
 )
 from agent_os.agents.handshake import HANDSHAKE_TIMEOUT_S
 from agent_os.agents.setup_engine import agent_store_has
-from agent_os.agents.setup_types import status_ready
+from agent_os.agents.setup_types import not_ready, status_ready
 from agent_os.agents.installer import (
     InstallInProgress,
     InstallUnsupported,
@@ -990,13 +990,19 @@ def _build_sub_agent_status_entry(s) -> dict:
         "installed": s.installed,
         "binary_path": s.binary_path,
         "version": s.version,
-        # Spec 116 D4 floor and the ACP handshake verdict both count here.
+        # Spec 116 D4 floor, the ACP handshake verdict, an expired sign-in
+        # and a vendor-refused turn all count here.
         "ready": status_ready(s),
+        # Why not, when not: {"reason", "detail"} (setup_types.not_ready) —
+        # the UI's short label and, behind hover, the vendor's own words.
+        "not_ready": not_ready(s),
         "update_needed": update_needed,
         "min_version": getattr(s, "min_version", None),
         # A dispatch failed with an authentication error while the probe
         # still says signed in (1018 bench item 9): the card shows Login and
-        # "Sign-in expired". Not part of ``ready`` — it is a hint, not a gate.
+        # "Sign-in expired". Part of ``ready`` since 2026-11-25 (a message
+        # would fail); never a dispatch gate, so a pinned send still runs and
+        # a good turn clears it.
         "auth_expired": bool(getattr(s, "auth_expired", False)),
         # The locate card: the launcher the user pasted, and whether that
         # file has since disappeared (then ``installed`` is false and the
@@ -1615,6 +1621,11 @@ async def refresh_sub_agent_status():
     # (a key or a network problem fixed since the last ask).
     if hasattr(_setup_engine, "forget_handshakes"):
         _setup_engine.forget_handshakes()
+    # A refused turn (a region refusal) is invisible to every probe; the
+    # user pressing Check again is the signal something changed (a VPN).
+    # The next turn re-learns it if not.
+    if hasattr(_setup_engine, "forget_refusals"):
+        _setup_engine.forget_refusals()
     # Spec 136 B.3: version answers are cached by binary identity; a CLI
     # rewritten in place with the same mtime and size is caught here.
     if hasattr(_setup_engine, "forget_versions"):
@@ -2177,11 +2188,13 @@ async def _run_login_job(slug: str, job_id: str, command: str,
 
 
 def _clear_auth_failure(slug: str) -> None:
-    """Drop the engine's expired-sign-in record for ``slug`` (a confirmed
-    login or a logout); a no-op on engines without one."""
-    clear = getattr(_setup_engine, "clear_auth_failure", None)
-    if callable(clear):
-        clear(slug)
+    """Drop the engine's expired-sign-in and refused-turn records for
+    ``slug`` (a confirmed login or a logout: the account may have changed);
+    a no-op on engines without them."""
+    for name in ("clear_auth_failure", "clear_refusal"):
+        clear = getattr(_setup_engine, name, None)
+        if callable(clear):
+            clear(slug)
 
 
 def _now_iso() -> str:

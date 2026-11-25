@@ -2986,20 +2986,31 @@ class SubAgentManager:
     _AUTH_CHECK_CAUSES = ("error", "stream_ended", "consumer_exception")
     _AUTH_TAIL_BYTES = 64 * 1024
 
-    def _track_auth_outcome(self, key: tuple, cause: str | None) -> None:
+    def _track_auth_outcome(self, key: tuple, cause: str | None,
+                            refusal: dict | None = None) -> None:
         """Tell the setup engine whether this turn proved the agent's
         sign-in good (a successful turn) or expired (an error turn whose
-        text is an authentication failure). The probe reads the CLI's local
-        token file and cannot see expiry; this is the only evidence. Never
-        raises — it must not disturb the FIFO advance below it."""
+        text is an authentication failure), and whether its vendor refused
+        it (``refusal``; a success clears that too). The probes cannot see
+        either; the turn is the only evidence. Never raises — it must not
+        disturb the FIFO advance below it."""
         engine = self._setup_engine
         handle = key[2]
         try:
             if cause == "success":
-                clear = getattr(engine, "clear_auth_failure", None)
-                if callable(clear):
-                    clear(handle)
-            elif cause in self._AUTH_CHECK_CAUSES:
+                for name in ("clear_auth_failure", "clear_refusal"):
+                    clear = getattr(engine, name, None)
+                    if callable(clear):
+                        clear(handle)
+                return
+            if cause == "error" and isinstance(refusal, dict) and refusal.get("reason"):
+                note_refusal = getattr(engine, "note_refusal", None)
+                # True: a refusal the manifest declares, not a sign-in
+                # problem. Any other reason (usage_limit) is checked below.
+                if callable(note_refusal) and note_refusal(
+                        handle, refusal.get("reason"), refusal.get("text")) is True:
+                    return
+            if cause in self._AUTH_CHECK_CAUSES:
                 note = getattr(engine, "note_auth_failure", None)
                 if callable(note):
                     text = self._turn_tail_text(self._transcripts.get(key))
@@ -3047,13 +3058,16 @@ class SubAgentManager:
 
     async def _on_prompt_turn_closed(
         self, project_id: str, handle: str, *, session_id: str | None = None,
-        cause: str | None = None,
+        cause: str | None = None, refusal: dict | None = None,
     ) -> None:
-        """Advance a handle FIFO after its provider reports a real boundary."""
+        """Advance a handle FIFO after its provider reports a real boundary.
+
+        ``refusal``: ``{"reason", "text"}`` when the turn's error carried a
+        reason (a vendor refusal the manifest declares, e.g. a region)."""
         session_id = self._resolve_session_id(session_id)
         self._note_worker_activity(project_id, session_id)
         key = (project_id, session_id, handle)
-        self._track_auth_outcome(key, cause)
+        self._track_auth_outcome(key, cause, refusal)
         sk = make_session_key(project_id, session_id)
         lock = self._get_lock(project_id, session_id=session_id)
         async with lock:

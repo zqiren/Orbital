@@ -4,6 +4,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../config';
+import type { NotReady } from '../utils/agentIssue';
 
 /** The fields of GET /api/v2/settings/sub-agents the wizard's Agents step
  *  reads (Sub-agent settings keeps its own, fuller type). */
@@ -17,9 +18,16 @@ export interface SubAgentListEntry {
   override_path?: string | null;
   override_missing?: boolean;
   /** Installed, dependencies met, signed in, above its version floor, its
-   *  handshake not failing (the dispatch gate's test). Absent on an older
-   *  daemon. */
+   *  handshake not failing, its sign-in not expired, no turn refused by its
+   *  vendor. Absent on an older daemon. */
   ready?: boolean;
+  /** Why not, when not ready: `{reason, detail}` (utils/agentIssue). Absent
+   *  on an older daemon. */
+  not_ready?: NotReady | null;
+  /** The manifest declares an updater (the Update action). */
+  supports_update?: boolean;
+  /** The per-OS install command rides here as an `install_agent` action. */
+  setup_actions?: Array<{ action: string; command: string | null }>;
 }
 
 export const isSignedIn = (e: SubAgentListEntry) => e.credentials_configured && e.auth_expired !== true;

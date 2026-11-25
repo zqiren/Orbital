@@ -31,7 +31,7 @@ from agent_os.agent.providers.types import (
 from agent_os.agent.prompt_builder import Autonomy
 from agent_os.agent.skills import SkillLoader
 from agent_os.agent.skill_catalog import SkillCatalog
-from agent_os.agents.setup_types import status_ready
+from agent_os.agents.setup_types import not_ready, status_ready
 from agent_os.daemon_v2.agent_md_seeder import (
     AGENT_MD_FILENAME,
     is_seeded_agent_md,
@@ -3858,6 +3858,8 @@ async def available_agents():
             # Spec 116 D4: an installed CLI older than the manifest floor is
             # not ready; the picker reads ``update_needed`` to say "update".
             "ready": status_ready(s),
+            # Why not (setup_types.not_ready): the pin menu's short label.
+            "not_ready": not_ready(s),
             "update_needed": bool(getattr(s, "update_needed", False)),
             "min_version": getattr(s, "min_version", None),
             "dependencies_met": s.dependencies_met,
@@ -3897,6 +3899,7 @@ async def agent_status(slug: str):
         "binary_path": s.binary_path,
         "version": s.version,
         "ready": status_ready(s),
+        "not_ready": not_ready(s),
         "update_needed": bool(getattr(s, "update_needed", False)),
         "min_version": getattr(s, "min_version", None),
         "dependencies_met": s.dependencies_met,

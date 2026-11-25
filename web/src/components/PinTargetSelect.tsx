@@ -66,6 +66,7 @@ import {
   type ShownWindow,
 } from '../utils/quotaDisplay';
 import type { AgentAvailability, QuotaWindowKind } from '../types';
+import { issueLabelKey, notReadyOf } from '../utils/agentIssue';
 
 /** Result of resolving one composer send against the session pin. */
 export interface ResolvedSendTarget {
@@ -260,7 +261,7 @@ function usageLines(
   // too old to know `auth status` reads as signed-out too, and the user
   // must hear "update", not "login".
   if (info.update_needed) return [{ text: t('pinAgent.status.needsUpdate'), tone: 'ok' }];
-  if (info.ready === false) return [{ text: t('pinAgent.status.needsLogin'), tone: 'ok' }];
+  if (info.ready === false) return [{ text: notReadyLine(info, t), tone: 'ok' }];
   const s = summarizeQuota(info.quota, now);
   // Spec 197: any agent can be limited (from its own failed turn); only the
   // two with a quota reading say anything else.
@@ -299,6 +300,31 @@ function unitText(unit: 'minutes' | 'hours' | 'days', n: number, prefix: 'age' |
   return t(`pinAgent.quota.${prefix}.${unit}` as Parameters<T>[0], { n });
 }
 
+/** The row's line for a not-ready agent: the daemon's reason when it gave
+ *  one (a region refusal is not a missing login), "needs login" from an
+ *  older daemon. */
+function notReadyLine(info: AgentAvailability, t: T): string {
+  const issue = notReadyOf(info.not_ready);
+  if (!issue || issue.reason === 'signed_out') return t('pinAgent.status.needsLogin');
+  return t(issueLabelKey(issue.reason));
+}
+
+/** The hover card's body for a not-ready agent: the sign-in sentence for a
+ *  missing login (or an older daemon), else the short label and the
+ *  vendor's own words under it. */
+function notReadyCardBody(
+  info: AgentAvailability, name: string, t: T, note: (text: string) => ReactNode,
+): ReactNode {
+  const issue = notReadyOf(info.not_ready);
+  if (!issue || issue.reason === 'signed_out') return note(t('pinAgent.card.needsLogin', { name }));
+  return (
+    <>
+      <p className="m-0 text-caption text-warning-text" data-testid="pin-card-issue">{t(issueLabelKey(issue.reason))}</p>
+      {issue.detail && <p className="m-0 text-caption text-secondary break-words">{issue.detail}</p>}
+    </>
+  );
+}
+
 function hasCard(slug: string | null, info: AgentAvailability | undefined): boolean {
   if (!slug || !info) return false;
   return info.update_needed === true || info.ready === false
@@ -327,13 +353,13 @@ function QuotaCard({ slug, name, info, now, t, locale }: {
         <AvatarWithDot slug={slug} dot={{ color: 'grey', pulse: false }} dotTestId="pin-card-dot" t={t} />
         <b className="text-body font-medium">{name}</b>
       </>,
-      note(info.update_needed
-        ? t('pinAgent.card.needsUpdate', {
+      info.update_needed
+        ? note(t('pinAgent.card.needsUpdate', {
             name,
             version: info.version?.match(/\d+\.\d+\.\d+/)?.[0] ?? info.version ?? '?',
             min: info.min_version ?? '?',
-          })
-        : t('pinAgent.card.needsLogin', { name })),
+          }))
+        : notReadyCardBody(info, name, t, note),
     );
   }
   if (!QUOTA_SLUGS.has(slug)) {

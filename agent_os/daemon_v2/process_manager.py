@@ -388,6 +388,13 @@ class ProcessManager:
                         self._append_turn_boundary(
                             transcript, handle,
                             None if self_turn else self._pop_active_dispatch(key))
+                        # A vendor refusal (the error's reason) and its words,
+                        # for the setup engine's status record — taken before
+                        # the per-turn state resets. Passed only when present.
+                        refusal = ({"reason": last_error_detail["reason"],
+                                    "text": last_error_text}
+                                   if cause == "error" and last_error_detail.get("reason")
+                                   else None)
                         last_response_text = ""  # reset for next turn
                         last_error_text = ""
                         last_error_detail = {}
@@ -396,6 +403,7 @@ class ProcessManager:
                             await self.on_turn_closed(
                                 project_id, handle, session_id=session_id,
                                 cause="continued" if self_turn else cause,
+                                **({"refusal": refusal} if refusal else {}),
                             )
                         continue
                     if chunk.chunk_type == "thread_started":

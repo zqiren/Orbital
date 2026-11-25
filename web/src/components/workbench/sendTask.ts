@@ -186,14 +186,26 @@ export interface SendChoice {
   fallbackProjectId?: string | null;
 }
 
+/** The agent a keyless send could not go to, and why (the notice's input). */
+export interface AgentBlocked {
+  agent: string;
+  agentName?: string;
+  /** Absent = `agent_signed_out`. */
+  code?: 'agent_not_ready';
+  reason?: string;
+  detail?: string;
+}
+
 export type SendOutcome =
   | { ok: true; projectId: string; sessionId: string }
   /** `unrouted`: 自动 found no project; the user picks one. `unsent`: ✕ while
    *  picking — the text is back, nothing went out, nothing to report. */
   | {
     ok: false; restored: boolean; unrouted?: boolean; unsent?: boolean;
-    /** Batch 1123: no key and the project's agent is signed out — offer its sign-in. */
-    signedOut?: { agent: string; agentName?: string };
+    /** Batch 1123: no key and the project's agent is signed out — offer its
+     *  sign-in. 2026-11-25: or signed in but not ready (`code`
+     *  `agent_not_ready`, with the daemon's reason and the vendor's words). */
+    signedOut?: AgentBlocked;
   };
 
 /** `agent`: no key, a signed-in Claude Code or Codex chose (batch 1123). */
@@ -351,8 +363,15 @@ export async function sendWorkbenchTask(choice: SendChoice, deps: SendDeps): Pro
     return { ok: true, projectId, sessionId };
   } catch (err) {
     const coded = codedErrorOf(err);
-    const signedOut = coded?.code === 'agent_signed_out' && coded.agent
-      ? { agent: coded.agent, ...(coded.agent_name ? { agentName: coded.agent_name } : {}) }
+    const blocked = coded?.code === 'agent_signed_out' || coded?.code === 'agent_not_ready';
+    const signedOut: AgentBlocked | undefined = blocked && coded?.agent
+      ? {
+        agent: coded.agent,
+        ...(coded.agent_name ? { agentName: coded.agent_name } : {}),
+        ...(coded.code === 'agent_not_ready' ? { code: 'agent_not_ready' as const } : {}),
+        ...(coded.reason ? { reason: coded.reason } : {}),
+        ...(coded.detail ? { detail: coded.detail } : {}),
+      }
       : undefined;
     clearDraft();
     void refreshFeed();

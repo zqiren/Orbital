@@ -20,6 +20,7 @@ vi.mock('../hooks/useWebSocket', () => ({
 const apiMock = vi.hoisted(() => vi.fn());
 vi.mock('../config', async (orig) => ({ ...(await orig<object>()), api: apiMock }));
 import AgentErrorNotice from './AgentErrorNotice';
+import { __resetAgentAvailability, setAgentAvailability } from '../hooks/useAgentAvailability';
 
 describe('AgentErrorNotice', () => {
   it('renders the classified headline for missing_api_key plus the raw detail', () => {
@@ -201,5 +202,49 @@ describe('AgentErrorNotice — a signed-out agent whose login asks for a code (A
     await waitFor(() => expect(apiMock).toHaveBeenCalledWith(
       '/api/v2/settings/sub-agents/antigravity/login-jobs/j1/input',
       expect.objectContaining({ method: 'POST', body: JSON.stringify({ value: 'abc' }) })));
+  });
+});
+
+describe('AgentErrorNotice — a signed-in agent that is not ready (2026-11-25)', () => {
+  afterEach(() => act(() => __resetAgentAvailability()));
+  const REFUSAL = 'You do not have a valid license of this product. (#3501)';
+
+  it('names the agent and the issue from the agent list; the vendor words sit behind the sign', () => {
+    act(() => setAgentAvailability([{
+      slug: 'antigravity', name: 'Antigravity', installed: true, ready: false,
+      not_ready: { reason: 'region_unavailable', detail: REFUSAL },
+    }]));
+    render(
+      <AgentErrorNotice
+        code="agent_not_ready"
+        message="Orbital's agent has no API key, and Antigravity is not ready (region_unavailable): x"
+        agent="antigravity"
+        agentName="Antigravity"
+        onOpenSettings={vi.fn()}
+        onDismiss={vi.fn()}
+      />,
+    );
+    const notice = screen.getByTestId('agent-error-notice');
+    expect(notice.textContent).toContain('Antigravity: Not available in your region');
+    // Not "no agent is enabled", and not the daemon's sentence on screen.
+    expect(notice.textContent).not.toContain('no agent is enabled');
+    expect(notice.textContent).not.toContain('(region_unavailable)');
+    expect(screen.queryByText(REFUSAL)).toBeNull();
+    fireEvent.click(screen.getByTestId('agent-error-notice-issue-detail'));
+    expect(screen.getByText(REFUSAL)).toBeTruthy();
+    expect(screen.queryByTestId('agent-error-notice-signin')).toBeNull();
+  });
+
+  it('a reason the caller passes wins; with none at all it still names the agent', () => {
+    const { rerender } = render(
+      <AgentErrorNotice code="agent_not_ready" agent="antigravity" agentName="Antigravity"
+        reason="handshake_failed" onOpenSettings={vi.fn()} onDismiss={vi.fn()} />,
+    );
+    expect(screen.getByTestId('agent-error-notice').textContent).toContain("Antigravity: Can't connect");
+    rerender(
+      <AgentErrorNotice code="agent_not_ready" agent="antigravity" agentName="Antigravity"
+        onOpenSettings={vi.fn()} onDismiss={vi.fn()} />,
+    );
+    expect(screen.getByTestId('agent-error-notice').textContent).toContain('Antigravity: Unavailable');
   });
 });

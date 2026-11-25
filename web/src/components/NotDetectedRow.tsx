@@ -22,6 +22,19 @@ interface Props {
   /** The vendor app that ships this agent (DSH Desktop): the row leads with
    *  its download link, because installing the app is all it takes. */
   desktopApp?: { label: string; download_url?: string | null } | null;
+  /** The manifest's install command for this OS (the entry's
+   *  `install_agent` setup action). The row then leads with it, and the
+   *  ask-the-agent line below reads "already installed?" — an agent that is
+   *  not installed cannot answer (2026-11-25). */
+  installCommand?: string | null;
+}
+
+/** The install command a not-detected entry's setup actions carry, if any. */
+export function installCommandOf(
+  actions: ReadonlyArray<{ action: string; command: string | null }> | undefined,
+): string | null {
+  const command = actions?.find((a) => a.action === 'install_agent')?.command;
+  return typeof command === 'string' && command.trim() ? command.trim() : null;
 }
 
 interface LocateTestResult {
@@ -47,11 +60,12 @@ interface LocateTestResult {
  *  `overrideMissing`: the file the user chose earlier is gone (the agent
  *  updated itself, say). Same row, first line names the missing file. */
 export default function NotDetectedRow({
-  slug, name, overridePath, overrideMissing, onChanged, fallbackHint, desktopApp,
+  slug, name, overridePath, overrideMissing, onChanged, fallbackHint, desktopApp, installCommand,
 }: Props) {
   const t = useT();
   const [answer, setAnswer] = useState('');
   const [copied, setCopied] = useState(false);
+  const [installCopied, setInstallCopied] = useState(false);
   const [copyError, setCopyError] = useState<string | null>(null);
   const [promptText, setPromptText] = useState<string | null>(null);
   const [testing, setTesting] = useState(false);
@@ -89,7 +103,19 @@ export default function NotDetectedRow({
     }
   };
 
-  const trimmed = answer.trim();
+  const handleCopyInstall = async () => {
+    if (!installCommand) return;
+    try {
+      await navigator.clipboard.writeText(installCommand);
+      setInstallCopied(true);
+      if (copiedTimer.current) clearTimeout(copiedTimer.current);
+      copiedTimer.current = setTimeout(() => setInstallCopied(false), 2000);
+    } catch {
+      // No clipboard: the command is on screen, selectable by hand.
+    }
+  };
+
+    const trimmed = answer.trim();
   const tested = testedAnswer !== null && testedAnswer === trimmed && result?.ok === true;
 
   const handleTest = async () => {
@@ -173,9 +199,34 @@ export default function NotDetectedRow({
         </div>
       )}
 
+      {installCommand && !desktopApp?.download_url && (
+        <div
+          data-testid={`sub-agent-install-command-${slug}`}
+          className="flex items-center gap-2 mt-2 min-w-0"
+        >
+          <span className="shrink-0 text-caption text-primary">{t('subAgentCard.install')}</span>
+          <code className="min-w-0 flex-1 truncate rounded bg-sidebar border border-border px-2 py-1 text-micro font-mono text-primary select-all" title={installCommand}>
+            {installCommand}
+          </code>
+          <button
+            type="button"
+            onClick={handleCopyInstall}
+            data-testid={`sub-agent-install-copy-${slug}`}
+            className="shrink-0 text-caption border border-border rounded px-2 py-0.5 text-secondary hover:text-primary transition-all duration-150"
+          >
+            {installCopied ? t('subAgentCard.locate.copied') : t('subAgentCard.locate.copy')}
+          </button>
+        </div>
+      )}
+
       <div className="flex items-center gap-2 flex-wrap mt-1.5">
         <p className="text-caption text-secondary">
-          {fallbackHint ?? t('subAgentCard.locate.hint', { name })}
+          {fallbackHint
+            ?? (installCommand
+              // Installing is the first step; asking the agent where it is
+              // only works once it is there, so the line says so.
+              ? t('subAgentCard.locate.installedHint', { name })
+              : t('subAgentCard.locate.hint', { name }))}
         </p>
         <button
           type="button"

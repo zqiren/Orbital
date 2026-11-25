@@ -354,6 +354,11 @@ class SetupEngine:
         # (see ``note_auth_failure``). In-memory: a restart forgets it, and
         # the next failing dispatch records it again.
         self._auth_failures: set[str] = set()
+        # Slugs whose last turn its vendor refused with a reason the
+        # manifest declares (``runtime.refusal_patterns``), with the
+        # vendor's words: {"reason", "detail"} (see ``note_refusal``).
+        # In memory, like the record above.
+        self._refusals: dict[str, dict] = {}
 
     # ------------------------------------------------------------------
     # Expired sign-in record (1018 bench item 9)
@@ -384,8 +389,17 @@ class SetupEngine:
             self._auth_failures.discard(slug)
             self._patch_auth_record(slug)
 
+    def _refusal_for(self, slug: str, installed: bool, creds_ok: bool) -> dict | None:
+        """The refused-turn record as the status carries it: only on an
+        installed, signed-in agent (a copy, so the cache never aliases it)."""
+        record = self._refusals.get(slug)
+        if record is None or not installed or not creds_ok:
+            return None
+        return dict(record)
+
     def _patch_auth_record(self, slug: str) -> None:
-        """Turn the cached entry's ``auth_expired`` to match the record.
+        """Turn the cached entry's ``auth_expired`` (and ``refusal``) to
+        match the records.
 
         The record changes nothing a probe reads, so the sweep is patched
         instead of dropped (a dropped sweep re-probes every agent on the next
@@ -406,12 +420,59 @@ class SetupEngine:
                     getattr(status, "installed", False)
                     and getattr(status, "credentials_configured", False)
                     and slug in self._auth_failures)
+                status.refusal = self._refusal_for(
+                    slug, getattr(status, "installed", False),
+                    getattr(status, "credentials_configured", False))
             results.append(status)
         self._check_all_cache = (results, cached[1])
         self._publish(results)
 
     def auth_expired(self, slug: str) -> bool:
         return slug in self._auth_failures
+
+    # ------------------------------------------------------------------
+    # Refused-turn record (2026-11-25, honest status)
+    # ------------------------------------------------------------------
+
+    _REFUSAL_DETAIL_CHARS = 500
+
+    def note_refusal(self, slug: str, reason: str | None, text: str | None) -> bool:
+        """Record that ``slug``'s turn was refused by its vendor for
+        ``reason``, when its manifest declares that reason in
+        ``runtime.refusal_patterns`` (a region refusal: the probe lists
+        models from a refused region, so the refused turn is the only
+        evidence). Any other reason (``usage_limit`` has its own store) is
+        ignored. Returns whether it was recorded. The cached sweep is
+        patched, so the status turns on its next read and the change is
+        announced."""
+        if not isinstance(reason, str) or not reason:
+            return False
+        manifest = self._registry.get(slug)
+        declared = {p.get("reason") for p in
+                    (getattr(getattr(manifest, "runtime", None), "refusal_patterns", None) or [])
+                    if isinstance(p, dict)}
+        if reason not in declared:
+            return False
+        detail = " ".join((text or "").split())[: self._REFUSAL_DETAIL_CHARS] or None
+        record = {"reason": reason, "detail": detail}
+        if self._refusals.get(slug) != record:
+            self._refusals[slug] = record
+            self._patch_auth_record(slug)
+            logger.info("%s: a turn was refused (%s); the agent reads not ready "
+                        "until a turn succeeds or the user checks again", slug, reason)
+        return True
+
+    def clear_refusal(self, slug: str) -> None:
+        """Forget the refused-turn record: a turn succeeded, or the sign-in
+        changed."""
+        if self._refusals.pop(slug, None) is not None:
+            self._patch_auth_record(slug)
+
+    def forget_refusals(self) -> None:
+        """The user's "Check again" (POST …/refresh): something may have
+        changed (a VPN), and only the next turn can tell. Called before the
+        refresh drops and re-runs the sweep, so nothing is patched here."""
+        self._refusals.clear()
 
     def set_sub_agent_config_store(self, store) -> None:
         """Late-bind the sub-agent config store (called by app factory)."""
@@ -501,6 +562,12 @@ class SetupEngine:
             # being built, so there is no cached entry to patch.
             self._auth_failures.discard(manifest.slug)
         auth_expired = installed and creds_ok and manifest.slug in self._auth_failures
+        # A refused turn: kept across re-probes (the probe cannot see it). A
+        # probe that says signed out drops it, as above: the next sign-in may
+        # be another account.
+        if manifest.slug in self._refusals and installed and not creds_ok:
+            self._refusals.pop(manifest.slug, None)
+        refusal = self._refusal_for(manifest.slug, installed, creds_ok)
 
         # ACP agents: does the binary actually speak the protocol?
         if handshake_wait is None:
@@ -531,6 +598,7 @@ class SetupEngine:
             override_missing=override_missing,
             source=self.resolved_source(manifest.slug) if installed else None,
             handshake=handshake,
+            refusal=refusal,
         )
 
     def _version_for(self, slug: str, binary: str, cmd: str,

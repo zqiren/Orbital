@@ -76,7 +76,12 @@ function emit(type: string, payload: Record<string, unknown>) {
 import WelcomePage from './WelcomePage';
 import { getBackgroundImport, resetBackgroundImportForTests } from '../../utils/backgroundImport';
 
-interface Agent { slug: string; name: string; installed: boolean; credentials_configured: boolean; auth_expired?: boolean; supports_login?: boolean }
+interface Agent {
+  slug: string; name: string; installed: boolean; credentials_configured: boolean;
+  auth_expired?: boolean; supports_login?: boolean; ready?: boolean;
+  not_ready?: { reason: string; detail?: string | null } | null;
+  supports_update?: boolean; setup_actions?: Array<{ action: string; command: string | null }>;
+}
 const READY: Agent = { slug: 'claude-code', name: 'Claude Code', installed: true, credentials_configured: true };
 const OUT: Agent = { slug: 'codex', name: 'Codex', installed: true, credentials_configured: true, auth_expired: true };
 const MISSING: Agent = { slug: 'pi', name: 'Pi', installed: false, credentials_configured: false };
@@ -423,5 +428,123 @@ describe('WelcomePage — Antigravity (paste-the-code sign-in)', () => {
     expect(screen.queryByTestId('login-code-codex')).toBeNull();
     // Antigravity's own job was never started from here: no field for it either.
     expect(screen.queryByTestId('login-code-antigravity')).toBeNull();
+  });
+});
+
+describe('WelcomePage — honest status (2026-11-25)', () => {
+  const REFUSAL = 'You do not have a valid license of this product. (#3501)';
+  const AGY_REFUSED: Agent = {
+    slug: 'antigravity', name: 'Antigravity', installed: true, credentials_configured: true,
+    supports_login: true, ready: false, not_ready: { reason: 'region_unavailable', detail: REFUSAL },
+  };
+  const issue = (slug: string) => screen.getByTestId(`welcome-agent-issue-${slug}`);
+
+  it('a region-refused agent shows no check, says why, and does not open Start', async () => {
+    mockApi({ agents: [AGY_REFUSED, MISSING] });
+    render(<WelcomePage onComplete={vi.fn()} />);
+    await waitFor(() => expect(issue('antigravity').textContent).toBe('Not available in your region'));
+    expect(screen.queryByTestId('welcome-agent-ready-antigravity')).toBeNull();
+    expect(screen.queryByTestId('welcome-agent-login-antigravity')).toBeNull();
+    expect(startBtn().disabled).toBe(true);
+    // The vendor's own words are behind the sign, not on screen.
+    expect(screen.queryByText(REFUSAL)).toBeNull();
+    fireEvent.click(screen.getByTestId('welcome-agent-issue-detail-antigravity'));
+    expect(screen.getByText(REFUSAL)).toBeTruthy();
+  });
+
+  it('Check again on the row re-runs detection and the row follows the answer', async () => {
+    let agents: Agent[] = [AGY_REFUSED, MISSING];
+    apiMock.mockReset();
+    mockApi({});
+    const base = apiMock.getMockImplementation()!;
+    apiMock.mockImplementation(async (path: string, o?: RequestInit) => {
+      if (path === '/api/v2/settings/sub-agents') return agents;
+      if (path === '/api/v2/settings/sub-agents/refresh') {
+        agents = [{ ...AGY_REFUSED, ready: true, not_ready: null }, MISSING];
+        return agents;
+      }
+      return base(path, o);
+    });
+    render(<WelcomePage onComplete={vi.fn()} />);
+    fireEvent.click(await waitFor(() => screen.getByTestId('welcome-agent-recheck-antigravity')));
+    await waitFor(() => expect(screen.getByTestId('welcome-agent-ready-antigravity')).toBeTruthy());
+    expect(calls('/api/v2/settings/sub-agents/refresh', 'POST').length).toBe(1);
+  });
+
+  it('every not-ready reason has a label, never a blank row', async () => {
+    const reasons = ['update_needed', 'handshake_failed', 'missing_dependency', 'some_new_vendor_reason'];
+    const agents: Agent[] = reasons.map((reason, i) => ({
+      slug: `a${i}`, name: `Agent ${i}`, installed: true, credentials_configured: true,
+      ready: false, not_ready: { reason, detail: null },
+    }));
+    // An older daemon: ready false with no reason at all.
+    agents.push({ slug: 'old', name: 'Old', installed: true, credentials_configured: true, ready: false });
+    mockApi({ agents });
+    render(<WelcomePage onComplete={vi.fn()} />);
+    await waitFor(() => expect(issue('a0').textContent).toBe('Needs update'));
+    expect(issue('a1').textContent).toBe("Can't connect");
+    expect(issue('a2').textContent).toBe('Missing dependency');
+    expect(issue('a3').textContent).toBe('Unavailable');
+    expect(issue('old').textContent).toBe('Unavailable');
+    for (const a of agents) {
+      const row = screen.getByTestId(`welcome-agent-${a.slug}`);
+      expect(row.getAttribute('data-state')).toBe('off');
+    }
+  });
+
+  it('a too-old agent offers Update, which runs its updater job', async () => {
+    mockApi({ agents: [{
+      slug: 'claude-code', name: 'Claude Code', installed: true, credentials_configured: true,
+      ready: false, not_ready: { reason: 'update_needed', detail: null }, supports_update: true,
+    }] });
+    render(<WelcomePage onComplete={vi.fn()} />);
+    fireEvent.click(await waitFor(() => screen.getByTestId('welcome-agent-update-claude-code')));
+    await waitFor(() => expect(calls('/api/v2/settings/sub-agents/claude-code/update', 'POST').length).toBe(1));
+    expect(screen.queryByTestId('welcome-agent-recheck-claude-code')).toBeNull();
+  });
+
+  it('a not-installed agent with an install command leads with it; the ask line says "already installed?"', async () => {
+    mockApi({ agents: [READY, {
+      slug: 'antigravity', name: 'Antigravity', installed: false, credentials_configured: false,
+      setup_actions: [{ action: 'install_agent', command: 'curl -fsSL https://antigravity.google/cli/install.sh | bash' }],
+    }] });
+    render(<WelcomePage onComplete={vi.fn()} />);
+    fireEvent.click(await waitFor(() => screen.getByTestId('welcome-agents-add')));
+    fireEvent.click(screen.getByTestId('welcome-locate-chip-antigravity'));
+    expect(screen.getByTestId('sub-agent-install-command-antigravity').textContent)
+      .toContain('antigravity.google/cli/install.sh');
+    // Not "copy a prompt into Antigravity" as the way in: it is not there.
+    expect(screen.queryByText('Copy a prompt into Antigravity and paste its answer below.')).toBeNull();
+    expect(screen.getByText('Already installed? Copy a prompt into Antigravity and paste its answer below.')).toBeTruthy();
+  });
+
+  it('after Check again finds the agent, nothing of its locate card is left under the chips', async () => {
+    let agents: Agent[] = [READY, { ...MISSING }, {
+      slug: 'antigravity', name: 'Antigravity', installed: false, credentials_configured: false,
+    }];
+    apiMock.mockReset();
+    mockApi({});
+    const base = apiMock.getMockImplementation()!;
+    apiMock.mockImplementation(async (path: string, o?: RequestInit) => {
+      if (path === '/api/v2/settings/sub-agents') return agents;
+      if (path === '/api/v2/settings/sub-agents/refresh') {
+        agents = [READY, { ...MISSING }, {
+          slug: 'antigravity', name: 'Antigravity', installed: true, credentials_configured: false, supports_login: true,
+        }];
+        return agents;
+      }
+      return base(path, o);
+    });
+    render(<WelcomePage onComplete={vi.fn()} />);
+    fireEvent.click(await waitFor(() => screen.getByTestId('welcome-agents-add')));
+    fireEvent.click(screen.getByTestId('welcome-locate-chip-antigravity'));
+    expect(screen.getByTestId('sub-agent-not-detected-antigravity')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('welcome-agents-recheck'));
+    await waitFor(() => expect(screen.getByTestId('welcome-agent-login-antigravity')).toBeTruthy());
+    expect(screen.queryByTestId('sub-agent-not-detected-antigravity')).toBeNull();
+    expect(screen.queryByTestId('welcome-locate-chip-antigravity')).toBeNull();
+    // The chips' container holds only the chips, Check again and nothing else.
+    const missing = screen.getByTestId('welcome-agents-missing');
+    expect(missing.querySelectorAll(':scope > div').length).toBe(1);
   });
 });

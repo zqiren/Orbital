@@ -7,7 +7,7 @@ import { api } from '../config';
 import { refreshAgentAvailability } from '../hooks/useAgentAvailability';
 import { useWebSocket } from '../hooks/useWebSocket';
 import MessageAvatar from './MessageAvatar';
-import NotDetectedRow from './NotDetectedRow';
+import NotDetectedRow, { installCommandOf } from './NotDetectedRow';
 import type { StringKey } from '../i18n/strings';
 import { useT } from '../i18n/useT';
 import { LabelWithHint } from './SettingsSection';
@@ -16,6 +16,8 @@ import Select from './Select';
 import { pickLoginUrl } from '../utils/loginUrl';
 import LoginCodeField from './LoginCodeField';
 import { SendDiagnosticsLink } from './SendFeedback';
+import HintSign from './HintSign';
+import { issueLabelKey, notReadyOf, type NotReady } from '../utils/agentIssue';
 
 // ---------------------------------------------------------------------------
 // Types — wire shape of /api/v2/settings/sub-agents
@@ -134,7 +136,16 @@ interface SubAgentEntry {
   source?: SourceInfo | null;
   handshake?: HandshakeInfo | null;
   desktop_app?: DesktopAppInfo | null;
+  /** Why it is not ready, when not (utils/agentIssue). Absent on an older
+   *  daemon. */
+  not_ready?: NotReady | null;
 }
+
+/** Reasons the card already says in its own place (the sign-in pill, the
+ *  update and handshake notes); any other gets its own pill — a vendor that
+ *  refused a turn (a region), a missing dependency, a reason the UI does not
+ *  know. Never a green-only header for an agent that is not ready. */
+const ISSUE_SHOWN_ELSEWHERE = new Set(['not_installed', 'signed_out', 'key_missing', 'auth_expired', 'update_needed', 'handshake_failed']);
 
 type CredentialState = 'configured' | 'missing' | 'unknown';
 
@@ -481,6 +492,7 @@ export default function SubAgentSettings({ standalone = false, onBack }: Props) 
                     overridePath={entry.override_path}
                     overrideMissing={entry.override_missing}
                     onChanged={load}
+                    installCommand={installCommandOf(entry.setup_actions)}
                     desktopApp={entry.desktop_app}
                     fallbackHint={entry.desktop_app
                       ? t('subAgentCard.desktop.locateHint', { app: entry.desktop_app.label })
@@ -598,6 +610,7 @@ function SubAgentCard({ entry, onChanged, onChangeLocation }: CardProps) {
 
   const paramKeys = Object.keys(entry.param_schema);
   const updateNeeded = entry.update_needed === true;
+  const issue = notReadyOf(entry.not_ready);
   const authExpired = entry.auth_expired === true && entry.credentials_configured;
   const supportsUpdate = entry.supports_update !== false;
   const isApiKeyFlow = API_KEY_LOGIN_SLUGS.has(entry.slug);
@@ -920,6 +933,16 @@ function SubAgentCard({ entry, onChanged, onChangeLocation }: CardProps) {
                     : (entry.credentials_configured ? t('subAgentCard.loggedIn') : t('subAgentCard.notLoggedIn'))}
                 variant={entry.credentials_configured && !authExpired ? 'success' : 'warning'}
               />
+            )}
+            {issue && entry.installed && !ISSUE_SHOWN_ELSEWHERE.has(issue.reason) && (
+              <span className="inline-flex items-center gap-1" data-testid={`sub-agent-issue-${entry.slug}`} data-reason={issue.reason}>
+                <StatusPill label={t(issueLabelKey(issue.reason))} variant="warning" />
+                {issue.detail && (
+                  <HintSign label={t('agentIssue.detail')} testId={`sub-agent-issue-detail-${entry.slug}`}>
+                    <span className="block max-w-[260px] whitespace-normal break-words">{issue.detail}</span>
+                  </HintSign>
+                )}
+              </span>
             )}
             {entry.version && (
               <span className="text-secondary font-mono">v{entry.version}</span>
