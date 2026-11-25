@@ -213,6 +213,11 @@ _ORBITAL_OPENERS = (
     "Other agents in this project:",
     "Skills you can use (from Orbital):",
     "Long-running commands: never wait on a command",
+    # The recap block a dispatch starts with (daemon_v2/recap.py), current and
+    # older form. A store that keeps only a short title has cut the user's own
+    # words off, so text_clean cannot recover them from it.
+    "Conversation so far (",
+    "Previous session logs",
 )
 
 

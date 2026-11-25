@@ -1089,5 +1089,7 @@ class TestCopiesOfOrbitalThreadsAreNotListed:
             _native("codex", "c", "  Other agents in this project: codex. When the…"),
             _native("codex", "d", "What other agents in this project can do"),
             _native("codex", "e", None),
+            _native("codex", "f", "Conversation so far (earlier messages in this chat"),
+            _native("codex", "g", "Previous session logs — read only when you need"),
         ])
         assert got == ["What other agents in this project can do", None]
