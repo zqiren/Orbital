@@ -230,6 +230,8 @@ export const STRINGS = {
   "chat.capsule.memoryTidy": { en: "memory tidied · {archived} archived · {restored} restored", zh: "记忆已整理：归档 {archived}、恢复 {restored}" },
   "chat.capsule.memoryTidyFailed": { en: "memory tidy failed · {error}", zh: "记忆整理失败：{error}" },
   "chat.capsule.memoryTidyNothing": { en: "memory tidied · nothing to change", zh: "记忆已整理：无需改动" },
+  "chat.capsule.steps.one": { en: "{n} step", zh: "{n} 步" },
+  "chat.capsule.steps.other": { en: "{n} steps", zh: "{n} 步" },
   "chat.capsule.stoppedAtError": { en: "· stopped at error", zh: "· 出错停止" },
   "chat.capsule.tool.edit.one": { en: "edit", zh: "编辑" },
   "chat.capsule.tool.edit.other": { en: "{n} edits", zh: "编辑 {n} 次" },

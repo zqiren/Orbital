@@ -15,6 +15,7 @@ import {
   placeReplyUnderCard,
   type DispatchCardItem,
 } from './dispatchCards';
+import { isStatusOnly, statusOf } from './statusTag';
 
 /**
  * Locale-aware translator for activity descriptions. Defaults to English so
@@ -60,6 +61,15 @@ export type DisplayItem =
        * visually attach to the preceding user message. See FE-A3.
        */
       isHeaderOnly?: boolean;
+      /**
+       * Only on the empty marker that opens a reply's batch inside an
+       * agent_run: that reply's [STATUS: …] text. A capsule with any such
+       * marker renders as the status fold (one line per run of steps).
+       */
+      status?: string;
+      /** Live only: the status came with a text reply (which keeps its
+       *  bubble); the step shows once a tool runs under it. */
+      statusAfterText?: boolean;
     }
   | { type: 'sub_agent_message'; content: string; source: string; timestamp: string; isHistorical?: boolean }
   | { type: 'reasoning_block'; content: string; timestamp: string; turn_id: string; isHistorical?: boolean }
@@ -2014,10 +2024,20 @@ export function transformChatHistory(
     }
 
     if (msg.role === 'assistant') {
-      const text = msg.content && msg.content.trim() ? msg.content : null;
+      const rawText = msg.content && msg.content.trim() ? msg.content : null;
       const reasoning = (msg.reasoning_content ?? '').trim();
       const hasTools = !!(msg.tool_calls && msg.tool_calls.length > 0);
       const msTime = tsToMs(msg.timestamp);
+      // The manager's [STATUS: …] tag. A reply whose only text is its status
+      // is a step of the run, not a bubble: it goes silent and its status
+      // labels its batch in the capsule (the marker below), so a run of
+      // them folds into one line. Content is never rewritten; ChatMessage
+      // strips the tag from the bubbles that remain. A status-only reply
+      // with no tools or thinking has nowhere else to go and stays a bubble.
+      const status = statusOf(rawText);
+      const text = rawText && status !== null && (reasoning || hasTools) && isStatusOnly(rawText)
+        ? null
+        : rawText;
 
       if (text) {
         // Visible text closes any open capsule, then emits inline.
@@ -2031,8 +2051,9 @@ export function transformChatHistory(
       } else if (reasoning || hasTools) {
         // Silent assistant turn. If we're already inside a capsule with
         // prior items, insert an empty agent_message marker so the UI
-        // can delimit between silent tool batches.
-        if (currentCapsule && currentCapsule.items.length > 0) {
+        // can delimit between silent tool batches. (A reply with a status
+        // gets its status marker below instead.)
+        if (!status && currentCapsule && currentCapsule.items.length > 0) {
           currentCapsule.items.push({
             type: 'agent_message',
             content: '',
@@ -2082,6 +2103,17 @@ export function transformChatHistory(
           // which is handled at render time in ChatView (running ⇒ force-expand).
           // Therefore never force-expand here — open collapsed.
           currentCapsule = openCapsuleAt(msg.timestamp, false);
+        }
+        // The reply's status opens its batch: the fold's step label.
+        if (status) {
+          currentCapsule.items.push({
+            type: 'agent_message',
+            content: '',
+            source: msg.source,
+            timestamp: msg.timestamp,
+            status,
+          });
+          currentCapsule.endedAtMs = msTime;
         }
         // (No force-expand when appending reasoning to an existing capsule
         // either — see the comment above; completed turns stay collapsed.)
@@ -2361,6 +2393,9 @@ export function mergeRecoveredAssistantMessage(
   if (row._kind) return prevItems;
   const text = row.content;
   if (!text) return prevItems;
+  // A status-only step with tools renders in its capsule (the fold), never
+  // as a bubble; the live path put its status there.
+  if (isStatusOnly(text) && row.tool_calls && row.tool_calls.length > 0) return prevItems;
 
   // 1. Dedup against the whole list, not just the tail.
   const exists = prevItems.some(

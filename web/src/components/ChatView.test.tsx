@@ -351,6 +351,7 @@ import { __resetFileHistoryStores } from '../hooks/useFileHistory';
 import { setAgentAvailability } from '../hooks/useAgentAvailability';
 import ChatView, {
   appendLiveReasoning,
+  appendLiveStatus,
   __clearChatHistoryCacheForTests,
 } from './ChatView';
 import { __clearSkillCatalogCacheForTests } from '../lib/skill-catalog';
@@ -7165,5 +7166,87 @@ describe('Batch 1124: the usage-limit switch button with dispatch cards', () => 
     expect(switches).toHaveLength(1);
     expect(limitRows[0].contains(switches[0])).toBe(true);
     expect(switches[0].getAttribute('data-slug')).toBe('pi');
+  });
+});
+
+describe('ChatView: [STATUS: …] fold, live (variant B)', () => {
+  const delta = (text: string, isFinal = false) =>
+    emitWs('chat.stream_delta', {
+      type: 'chat.stream_delta', project_id: 'p1', session_id: 's1', text, source: 'management', is_final: isFinal,
+    });
+  const tool = (id: string, name = 'browser') =>
+    emitWs('agent.activity', {
+      type: 'agent.activity', project_id: 'p1', session_id: 's1', category: 'browser_automation',
+      tool_name: name, tool_call_id: id, description: 'navigate', id: `act-${id}`, timestamp: new Date().toISOString(),
+    });
+
+  it('never shows the tag while it streams, folds status-only steps into one live line, strips it from a text reply', async () => {
+    runStatusHolder = 's1';
+    await renderChat({ agentStatus: 'running', sessionId: 's1' });
+    await flushEffects();
+
+    // A tag arriving token by token: nothing of it renders.
+    for (const part of ['[', 'STA', 'TUS: 读', '猹评']) {
+      await act(async () => { delta(part); });
+      await nextAnimationFrame();
+      expect(container.textContent ?? '').not.toContain('[');
+      expect(container.textContent ?? '').not.toContain('STATUS');
+    }
+    await act(async () => { delta(']', true); });
+    await nextAnimationFrame();
+    await act(async () => { tool('c1'); });
+
+    let fold = container.querySelector('[data-status-fold]');
+    expect(fold).not.toBeNull();
+    expect(fold!.textContent).toContain('读猹评');
+    expect(container.querySelectorAll('[data-testid="agent-message"]')).toHaveLength(0);
+
+    // A second status-only step: still one line, now the latest status.
+    await act(async () => { delta('[STATUS: 写日报文件]'); });
+    await nextAnimationFrame();
+    await act(async () => { delta('', true); });
+    await nextAnimationFrame();
+    await act(async () => { tool('c2', 'write'); });
+    const folds = container.querySelectorAll('[data-status-fold]');
+    expect(folds).toHaveLength(1);
+    fold = folds[0];
+    expect(fold.querySelector('[data-testid="status-line-text"]')!.textContent).toBe('写日报文件');
+    expect(fold.querySelector('[data-testid="status-fold-meta"]')!.textContent).toMatch(/^2 steps · /);
+    // Live: one closed line with the spinner, not a forced-open capsule.
+    expect(fold.querySelector('.animate-spin')).not.toBeNull();
+    expect(fold.querySelectorAll('[data-testid="status-step"]')).toHaveLength(0);
+
+    // Open it: one line per step, labelled by its status.
+    await act(async () => { (fold.querySelector('button') as HTMLButtonElement).click(); });
+    const steps = [...container.querySelectorAll('[data-testid="status-step"]')];
+    expect(steps.map((s) => s.querySelector('[data-testid="status-line-text"]')!.textContent)).toEqual(['读猹评', '写日报文件']);
+
+    // A reply with real text: its own bubble, without the tag.
+    await act(async () => { delta('日报已写入。\n\n[STATUS: 完成]'); });
+    await nextAnimationFrame();
+    await act(async () => { delta('', true); });
+    await nextAnimationFrame();
+    const bubbles = container.querySelectorAll('[data-testid="agent-message"]');
+    expect(bubbles).toHaveLength(1);
+    expect(bubbles[0].textContent).toContain('日报已写入。');
+    expect(container.textContent ?? '').not.toContain('STATUS');
+    // Its status waits for a tool: no empty step line under the reply.
+    expect(container.querySelectorAll('[data-status-fold]')).toHaveLength(1);
+  });
+});
+
+describe('appendLiveStatus', () => {
+  it('opens an anchored running capsule, and is idempotent for the same reply', () => {
+    const ts = '2026-11-25T10:32:00Z';
+    const once = appendLiveStatus([], '读猹评', 'management', ts);
+    expect(once.map((i) => i.type)).toEqual(['agent_message', 'agent_run']);
+    // StrictMode runs the stream updater twice: the second call is a no-op.
+    expect(appendLiveStatus(once, '读猹评', 'management', ts)).toBe(once);
+    const run = once[1] as Extract<DisplayItem, { type: 'agent_run' }>;
+    expect(run.status).toBe('running');
+    expect(run.items).toEqual([{ type: 'agent_message', content: '', source: 'management', timestamp: ts, status: '读猹评' }]);
+    // A new status opens the next step in the same capsule.
+    const twice = appendLiveStatus(once, '写日报', 'management', ts);
+    expect((twice[1] as typeof run).items).toHaveLength(2);
   });
 });

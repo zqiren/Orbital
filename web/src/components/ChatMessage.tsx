@@ -28,6 +28,7 @@ import {
 } from '../lib/source-task-parsing';
 import { useT } from '../i18n/useT';
 import { agentTint, MAIN_AGENT_HANDLE } from '../utils/agentIcons';
+import { displayAgentText } from '../utils/statusTag';
 
 type MessageItem = Extract<
   DisplayItem,
@@ -563,7 +564,10 @@ export default function ChatMessage({
   const isHeaderOnly =
     message.type === 'agent_message' && message.isHeaderOnly === true;
 
-  const hasBody = !isHeaderOnly && message.content.length > 0;
+  // The [STATUS: …] tag never shows, and the copy button copies what shows.
+  // Stored content stays raw (dedup compares it); this is display only.
+  const bodyText = displayAgentText(message.content);
+  const hasBody = !isHeaderOnly && bodyText.length > 0;
   const showRetry = !isHeaderOnly && canRetry && onRetry !== undefined;
 
   return (
@@ -590,7 +594,7 @@ export default function ChatMessage({
           // (negative margin + equal padding) moves that edge out so file
           // cards keep their soft sides, and the text does not move.
           <div className="-mx-4 px-4 -my-1.5 py-1.5 text-body text-primary break-words overflow-x-auto">
-            <MarkdownContent content={message.content} workspace={workspace} onOpenPath={onOpenPath} />
+            <MarkdownContent content={bodyText} workspace={workspace} onOpenPath={onOpenPath} />
           </div>
         )}
         {/* Header-only rows are an anchor for the capsule that follows and
@@ -599,7 +603,7 @@ export default function ChatMessage({
           <ActionRow side="left">
             {hasBody && (
               <CopyButton
-                text={message.content}
+                text={bodyText}
                 ariaLabel={t('chat.message.copyAria')}
                 data-testid="agent-message-copy"
                 className={COPY_BTN}

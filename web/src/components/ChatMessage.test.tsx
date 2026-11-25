@@ -278,6 +278,32 @@ describe('ChatMessage — copy', () => {
     expect(screen.getByTestId('agent-message-copy')).toBeInTheDocument();
   });
 
+  it('an agent reply shows and copies its text without the [STATUS: …] tag', async () => {
+    const writes: string[] = [];
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText: async (text: string) => { writes.push(text); } },
+      configurable: true,
+      writable: true,
+    });
+    const { container } = render(<ChatMessage message={agentMsg('日报已写入。\n\n[STATUS: 完成]')} />);
+    expect(container.textContent).toContain('日报已写入。');
+    expect(container.textContent).not.toContain('STATUS');
+    fireEvent.click(screen.getByTestId('agent-message-copy'));
+    await Promise.resolve();
+    expect(writes).toEqual(['日报已写入。']);
+  });
+
+  it('a reply that is only a tag shows its words, never the brackets', () => {
+    const { container } = render(<ChatMessage message={agentMsg('[STATUS: 完成]')} />);
+    expect(container.textContent).toContain('完成');
+    expect(container.textContent).not.toContain('[');
+  });
+
+  it('a tag inside a code block stays', () => {
+    const { container } = render(<ChatMessage message={agentMsg('Use `[STATUS: x]` in replies.')} />);
+    expect(container.textContent).toContain('[STATUS: x]');
+  });
+
   it('a header-only agent row has NO copy button (it has no body to copy)', () => {
     const headerOnly = { ...agentMsg(''), isHeaderOnly: true } as ReturnType<typeof agentMsg>;
     render(<ChatMessage message={headerOnly} />);

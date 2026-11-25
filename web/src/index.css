@@ -647,6 +647,26 @@ body {
   }
 }
 
+/* The chat's live status line (the [STATUS] fold while a run goes on): the
+   Workbench's 自动 shimmer (workbench.css .wb-shim) and its rise-in
+   (wb-nm-in), so the two live lines move the same way. */
+.status-shim {
+  background: linear-gradient(90deg, var(--color-muted) 0%, var(--color-muted) 38%, color-mix(in srgb, var(--color-primary) 80%, transparent) 50%, var(--color-muted) 62%, var(--color-muted) 100%);
+  background-size: 300% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: status-shim 2.4s linear infinite;
+}
+@keyframes status-shim { from { background-position: 100% 0; } to { background-position: 0 0; } }
+.status-rise { animation: status-shim 2.4s linear infinite, status-rise .5s cubic-bezier(.2,.7,.2,1) .06s both; }
+@keyframes status-rise { from { opacity: 0; transform: translateY(6px); filter: blur(1.5px); } }
+@media (prefers-reduced-motion: reduce) {
+  /* The text still updates; nothing moves or sweeps. */
+  .status-shim { animation: none; background: none; color: var(--color-secondary); }
+  .status-rise { animation: none; }
+}
+
 /* Translucent chrome becomes frosty/solid rather than blurred. */
 @media (prefers-reduced-transparency: reduce) {
   [class*="backdrop-blur"] {

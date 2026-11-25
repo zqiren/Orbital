@@ -87,6 +87,7 @@ import { publishSessionMessages, sessionMessagesKey } from '../utils/sessionMess
 import { budgetTimelineText } from '../budget/timelineText';
 import TurnChangedLine from './history/TurnChangedLine';
 import { isMemoryFile, lastCapsuleOfTurns, stripFileEditCounts } from './history/historyModel';
+import { isStatusFold, isStatusOnly, latestStatus, statusOf, statusSteps, stripStatusTags, type StatusStep } from '../utils/statusTag';
 import { historyApi, historyVisible, requestHistoryFocus, useCapsuleTurn, useHistoryStatus, useSeenOnce } from '../hooks/useFileHistory';
 import type { TurnRef } from './history/TurnUndoSheet';
 import { classifySessionName } from '../lib/sessionLabel';
@@ -384,13 +385,43 @@ function finalizeLiveCapsule(
 ): DisplayItem[] {
   const live = getLiveRunningCapsule(prev, owner);
   if (!live) return prev;
-  if (live.capsule.items.length === 0) {
+  // Nothing ran in it (at most a status marker no tool followed): no capsule.
+  if (!live.capsule.items.some((c) => c.type !== 'agent_message')) {
     return prev.slice(0, live.idx);
   }
   const updated: AgentRunItem = { ...live.capsule, status };
   const next = [...prev];
   next[live.idx] = updated;
   return next;
+}
+
+/**
+ * A manager reply carried a [STATUS: …]: its marker opens the reply's batch
+ * in the running capsule (opened, and anchored under the agent's header, when
+ * there is none), so the tools that follow are that step and the fold shows
+ * the status live. Mirrors chatTransform's status marker.
+ */
+export function appendLiveStatus(
+  prev: DisplayItem[],
+  status: string,
+  source: string,
+  timestamp: string,
+  afterText = false,
+): DisplayItem[] {
+  const marker: CapsuleChild = {
+    type: 'agent_message', content: '', source, timestamp, status,
+    ...(afterText ? { statusAfterText: true } : {}),
+  };
+  const live = getLiveRunningCapsule(prev);
+  if (live) {
+    // Idempotent: the is_final handler can run twice (React re-runs the
+    // stream updater in StrictMode); the same status already opening the
+    // tail batch is this reply's.
+    const tail = live.capsule.items[live.capsule.items.length - 1];
+    if (tail && tail.type === 'agent_message' && tail.status === status) return prev;
+    return appendToLiveCapsule(prev, marker, timestamp);
+  }
+  return appendToLiveCapsule(anchorAgentHeader(prev, source, timestamp), marker, timestamp);
 }
 
 type ToolCallRowItem = Extract<CapsuleChild, { type: 'tool_call_row' }>;
@@ -492,6 +523,159 @@ interface AgentRunCapsuleProps {
   turnEnded?: boolean;
   onUndoTurn?: (turn: { sessionId: string; fromTs: string; toTs: string | null }) => void;
   onOpenHistory?: (path: string, v: number) => void;
+  /** A status fold right under its agent's header-only anchor sits close
+   *  under it, as one message (the anchor has no copy row to clear). */
+  tight?: boolean;
+}
+
+/** A capsule's children as its expanded body draws them. */
+function CapsuleChildren({ items, keyPrefix }: { items: CapsuleChild[]; keyPrefix: string }): React.ReactNode {
+  return (
+    <>
+      {items.map((child, ci) => {
+        if (child.type === 'reasoning_block') {
+          return (
+            <div
+              key={`${keyPrefix}-r-${ci}`}
+              className="mb-2 pl-3 border-l-2 border-accent/40 italic text-secondary text-body whitespace-pre-wrap"
+            >
+              {child.content}
+            </div>
+          );
+        }
+        if (child.type === 'tool_call_row') {
+          return <ToolCallRow key={`${keyPrefix}-t-${ci}-${child.tool_call_id}`} row={child} />;
+        }
+        if (child.type === 'agent_message') {
+          // Empty-content marker delimits silent tool batches.
+          return <div key={`${keyPrefix}-m-${ci}`} className="my-2 border-t border-border/40" aria-hidden />;
+        }
+        return null;
+      })}
+    </>
+  );
+}
+
+// The status line's parts, in the tool-row language: chevron, the status in
+// caption type, then the quiet mono part (tool names, steps, time).
+const STATUS_LINE_BTN = 'flex items-start gap-2 w-full min-h-5 py-0.5 text-left text-secondary cursor-pointer hover:text-primary';
+const STATUS_CHEV_CLS = 'shrink-0 mt-[calc((var(--text-caption--line-height)-13px)/2)]';
+const STATUS_TEXT_CLS = 'min-w-0 text-caption text-primary';
+const STATUS_DOT_CLS = 'shrink-0 font-mono text-micro leading-[var(--text-caption--line-height)] text-muted';
+const STATUS_QUIET_CLS = 'shrink-0 whitespace-nowrap font-mono text-micro leading-[var(--text-caption--line-height)] text-secondary';
+
+/** The status itself: one line with an ellipsis (whole on hover and when
+ *  open); while live, the Workbench shimmer, rising in when it changes. */
+function StatusText({ text, open, live }: { text: string; open: boolean; live: boolean }): React.ReactNode {
+  return (
+    <span
+      key={live ? text : undefined}
+      title={text}
+      data-testid="status-line-text"
+      className={`${STATUS_TEXT_CLS} ${open ? 'whitespace-normal break-words' : 'truncate'} ${live ? 'status-shim status-rise' : ''}`}
+    >
+      {text}
+    </span>
+  );
+}
+
+function StatusStepLine({
+  step,
+  live,
+  endMs,
+  tr,
+}: {
+  step: StatusStep;
+  live: boolean;
+  endMs: number | null;
+  tr: CapsuleTr;
+}): React.ReactNode {
+  const [open, setOpen] = useState(false);
+  const Chevron = open ? ChevronDown : ChevronRight;
+  const breakdown = formatToolBreakdown(step.tool_call_count_by_name, tr);
+  const dur = formatCapsuleDuration(step.started_at, step.ended_at ?? endMs, tr);
+  const label = step.status ?? (breakdown || tr('chat.capsule.agentStep'));
+  const tools = step.status && breakdown ? breakdown : '';
+  return (
+    <div data-testid="status-step" data-open={open || undefined}>
+      <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} className={STATUS_LINE_BTN}>
+        <Chevron size={13} className={STATUS_CHEV_CLS} />
+        {live && <Loader2 size={12} className="shrink-0 animate-spin mt-[calc((var(--text-caption--line-height)-12px)/2)]" />}
+        <StatusText text={label} open={open} live={live} />
+        <span className={STATUS_DOT_CLS} aria-hidden>·</span>
+        <span className={STATUS_QUIET_CLS}>
+          {tools && <span className="max-md:hidden">{tools} · </span>}
+          {dur}
+        </span>
+      </button>
+      {open && step.children.length > 0 && (
+        <div className="pt-1 pb-1.5 pl-[21px]">
+          <CapsuleChildren items={step.children} keyPrefix="st" />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Variant B: a run of status steps as one quiet line — the latest status,
+ * the step count and the run's time. Opens to one line per step, each
+ * opening to its tool rows. Running, it stays closed and the line is the
+ * live status (spinner + shimmer); the user can still open it.
+ */
+function StatusFold({
+  item,
+  steps,
+  status,
+  isExpanded,
+  onToggle,
+  tr,
+}: {
+  item: AgentRunItem;
+  steps: StatusStep[];
+  status: AgentRunItem['status'];
+  isExpanded: boolean;
+  onToggle: (capsuleId: string) => void;
+  tr: CapsuleTr;
+}): React.ReactNode {
+  const running = status === 'running';
+  const stopped = status === 'error' || status === 'stopped' ? ` ${tr('chat.capsule.stoppedAtError')}` : '';
+  if (steps.length === 1) {
+    return <StatusStepLine step={steps[0]} live={running} endMs={item.ended_at} tr={tr} />;
+  }
+  const Chevron = isExpanded ? ChevronDown : ChevronRight;
+  const label = latestStatus(steps) ?? tr('chat.capsule.agentStep');
+  const count = tr(steps.length === 1 ? 'chat.capsule.steps.one' : 'chat.capsule.steps.other', { n: steps.length });
+  const dur = formatCapsuleDuration(item.started_at, item.ended_at, tr);
+  return (
+    <div data-testid="status-fold" data-open={isExpanded || undefined}>
+      <button
+        type="button"
+        onClick={() => onToggle(item.capsule_id)}
+        aria-expanded={isExpanded}
+        className={STATUS_LINE_BTN}
+      >
+        <Chevron size={13} className={STATUS_CHEV_CLS} />
+        {running && <Loader2 size={12} className="shrink-0 animate-spin mt-[calc((var(--text-caption--line-height)-12px)/2)]" />}
+        <StatusText text={label} open={isExpanded} live={running} />
+        <span className={STATUS_DOT_CLS} aria-hidden>·</span>
+        <span className={STATUS_QUIET_CLS} data-testid="status-fold-meta">{`${count} · ${dur}${stopped}`}</span>
+      </button>
+      {isExpanded && (
+        <div className="flex flex-col gap-0.5 pl-[21px] pb-1">
+          {steps.map((step, k) => (
+            <StatusStepLine
+              key={`step-${k}`}
+              step={step}
+              live={running && k === steps.length - 1}
+              endMs={item.ended_at}
+              tr={tr}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 const AgentRunCapsule = memo(function AgentRunCapsule({
@@ -506,6 +690,7 @@ const AgentRunCapsule = memo(function AgentRunCapsule({
   turnEnded = false,
   onUndoTurn,
   onOpenHistory,
+  tight = false,
 }: AgentRunCapsuleProps): React.ReactNode {
   const t = useT();
   const isLocked = derivedStatus === 'running';
@@ -513,6 +698,35 @@ const AgentRunCapsule = memo(function AgentRunCapsule({
   const turn = useCapsuleTurn(projectId, sessionId, turnFrom, turnTo, turnEnded && !isLocked, seen);
   const summary = capsuleSummaryText({ ...item, status: derivedStatus }, t, { stripFileEdits: turn !== null });
   const Chevron = isExpanded ? ChevronDown : ChevronRight;
+  const steps = useMemo(() => statusSteps(item, { running: isLocked }), [item, isLocked]);
+  const changed = turn && sessionId && turnFrom && (
+    <TurnChangedLine
+      turn={turn}
+      onUndo={onUndoTurn ? () => onUndoTurn({ sessionId, fromTs: turnFrom, toTs: turnTo }) : undefined}
+      onOpenFile={onOpenHistory}
+    />
+  );
+  // A status that no step has shown yet (it came with a text bubble and no
+  // tool has run under it): nothing to draw.
+  if (!steps && isStatusFold(item)) return null;
+  if (steps) {
+    return (
+      <div
+        ref={seenRef}
+        data-testid="agent_run"
+        data-capsule-id={item.capsule_id}
+        data-capsule-status={derivedStatus}
+        data-status-fold=""
+        className={`ml-9 flex gap-[10px] ${tight ? '-mt-3' : ''}`}
+      >
+        <div className="w-0.5 shrink-0 rounded-sm bg-border" aria-hidden />
+        <div className="min-w-0 flex-1">
+          <StatusFold item={item} steps={steps} status={derivedStatus} isExpanded={isExpanded} onToggle={onToggle} tr={t} />
+          {changed}
+        </div>
+      </div>
+    );
+  }
   return (
     <div
       ref={seenRef}
@@ -535,46 +749,10 @@ const AgentRunCapsule = memo(function AgentRunCapsule({
         )}
         <span className="truncate text-primary font-medium">{summary}</span>
       </button>
-      {turn && sessionId && turnFrom && (
-        <TurnChangedLine
-          turn={turn}
-          onUndo={onUndoTurn ? () => onUndoTurn({ sessionId, fromTs: turnFrom, toTs: turnTo }) : undefined}
-          onOpenFile={onOpenHistory}
-        />
-      )}
+      {changed}
       {isExpanded && item.items.length > 0 && (
         <div className="mt-2 pt-2 border-t border-border/30">
-          {item.items.map((child, ci) => {
-            if (child.type === 'reasoning_block') {
-              return (
-                <div
-                  key={`rc-r-${ci}`}
-                  className="mb-2 pl-3 border-l-2 border-accent/40 italic text-secondary text-body whitespace-pre-wrap"
-                >
-                  {child.content}
-                </div>
-              );
-            }
-            if (child.type === 'tool_call_row') {
-              return (
-                <ToolCallRow
-                  key={`rc-t-${ci}-${child.tool_call_id}`}
-                  row={child}
-                />
-              );
-            }
-            if (child.type === 'agent_message') {
-              // Empty-content marker delimits silent tool batches.
-              return (
-                <div
-                  key={`rc-m-${ci}`}
-                  className="my-2 border-t border-border/40"
-                  aria-hidden
-                />
-              );
-            }
-            return null;
-          })}
+          <CapsuleChildren items={item.items} keyPrefix="rc" />
         </div>
       )}
       </div>
@@ -1142,6 +1320,12 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   } | null>(null);
   const [loadedOffset, setLoadedOffset] = useState(0);
   const [stream, setStream] = useState<StreamState | null>(null);
+  // The live text without its [STATUS: …] (a tag still arriving included),
+  // so the raw tag never flashes; nothing to show means no bubble yet.
+  const streamShown = useMemo(
+    () => (stream ? stripStatusTags(stream.text, { streaming: true }) : ''),
+    [stream],
+  );
   const [approvals, setApprovals] = useState<Map<string, PendingApproval>>(new Map());
   const [expandedCapsules, setExpandedCapsules] = useState<Set<string>>(new Set());
   const toggleCapsule = useCallback((capsuleId: string) => {
@@ -2998,22 +3182,38 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
           }
           const finalText = prev.text + e.text;
           if (finalText.trim()) {
+            // [STATUS: …]: a reply that is only its status is a step of the
+            // running capsule, not a bubble; a reply with text keeps its
+            // bubble and its status labels the tools that follow.
+            const status = statusOf(finalText);
+            const statusOnly = isStatusOnly(finalText);
+            const ts = new Date().toISOString();
             setItems((prevItems) => {
+              if (status && statusOnly) return appendLiveStatus(prevItems, status, e.source, ts);
+              // Already applied (this handler can run twice): the bubble,
+              // maybe followed by the capsule its status opened.
+              let k = prevItems.length - 1;
+              const tailRun = prevItems[k];
+              if (tailRun && tailRun.type === 'agent_run' && tailRun.status === 'running' &&
+                  tailRun.items.every((c) => c.type === 'agent_message')) k--;
+              const tailMsg = prevItems[k];
+              if (status && tailMsg && tailMsg.type === 'agent_message' && tailMsg.content === finalText) return prevItems;
               // Visible text closes any open live capsule first, then appends.
               const afterCapsule = finalizeLiveCapsule(prevItems, 'completed');
               const last = afterCapsule[afterCapsule.length - 1];
               if (last && last.type === 'agent_message' && 'content' in last && last.content === finalText) {
                 return afterCapsule;
               }
-              return [
+              const withBubble: DisplayItem[] = [
                 ...afterCapsule,
                 {
                   type: 'agent_message',
                   content: finalText,
                   source: e.source,
-                  timestamp: new Date().toISOString(),
+                  timestamp: ts,
                 },
               ];
+              return status ? appendLiveStatus(withBubble, status, e.source, ts, true) : withBubble;
             });
           }
           return null;
@@ -4973,8 +5173,10 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                 isLastItem && isActivelyRunning && item.status === 'completed'
                   ? 'running'
                   : item.status;
+              // A status fold stays one closed line while it runs (its line
+              // is the live status); a plain capsule opens while running.
               const isExpanded =
-                derivedStatus === 'running' ||
+                (derivedStatus === 'running' && !isStatusFold(item)) ||
                 expandedCapsules.has(item.capsule_id);
               const span = turnSpans.get(item.capsule_id);
               rendered = (
@@ -4984,6 +5186,10 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                   derivedStatus={derivedStatus}
                   isExpanded={isExpanded}
                   onToggle={toggleCapsule}
+                  tight={(() => {
+                    const before = items[index - 1];
+                    return before?.type === 'agent_message' && before.isHeaderOnly === true && isStatusFold(item);
+                  })()}
                   {...(span && sessionId
                     ? {
                         projectId,
@@ -5220,9 +5426,9 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
           </div>
         )}
 
-        {stream && (
+        {stream && streamShown && (
           <StreamingMessage
-            text={stream.text}
+            text={streamShown}
             source={stream.source}
             isComplete={stream.isComplete}
           />
