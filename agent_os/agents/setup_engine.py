@@ -310,6 +310,12 @@ class SetupEngine:
         # In-memory cache of the last check_all() result. Tuple of
         # (results, expires_at_monotonic). None when empty or invalidated.
         self._check_all_cache: tuple[list[AgentSetupStatus], float] | None = None
+        # Every read-modify-write of ``_check_all_cache`` (the sweep's write,
+        # a refused turn's patch, a failed handshake's expiry, an
+        # invalidation) runs under this lock, so no writer's change is
+        # overwritten by another's stale copy. Held only around the cache
+        # update itself, never around a probe or a listener call.
+        self._cache_lock = threading.Lock()
         # Single-flight guard for the probe sweep (spec 101): concurrent cold
         # callers — threaded routes, a stale-serve refresh — wait for ONE
         # sweep instead of each spawning ~13 CLI subprocesses.
@@ -409,22 +415,23 @@ class SetupEngine:
         if self._probe_lock.locked():
             self.invalidate_cache()
             return
-        cached = self._check_all_cache
-        if cached is None:
-            return
-        results = []
-        for status in cached[0]:
-            if getattr(status, "slug", None) == slug:
-                status = copy.copy(status)
-                status.auth_expired = bool(
-                    getattr(status, "installed", False)
-                    and getattr(status, "credentials_configured", False)
-                    and slug in self._auth_failures)
-                status.refusal = self._refusal_for(
-                    slug, getattr(status, "installed", False),
-                    getattr(status, "credentials_configured", False))
-            results.append(status)
-        self._check_all_cache = (results, cached[1])
+        with self._cache_lock:
+            cached = self._check_all_cache
+            if cached is None:
+                return
+            results = []
+            for status in cached[0]:
+                if getattr(status, "slug", None) == slug:
+                    status = copy.copy(status)
+                    status.auth_expired = bool(
+                        getattr(status, "installed", False)
+                        and getattr(status, "credentials_configured", False)
+                        and slug in self._auth_failures)
+                    status.refusal = self._refusal_for(
+                        slug, getattr(status, "installed", False),
+                        getattr(status, "credentials_configured", False))
+                results.append(status)
+            self._check_all_cache = (results, cached[1])
         self._publish(results)
 
     def auth_expired(self, slug: str) -> bool:
@@ -824,11 +831,32 @@ class SetupEngine:
                 self._handshakes[identity] = dict(result)
         if result["state"] == "failed":
             # A sweep may already have reported this agent "unknown" while
-            # the handshake ran; let the next caller see the verdict.
-            cached = self._check_all_cache
-            if cached is not None:
-                self._check_all_cache = (cached[0], 0.0)
+            # the handshake ran; let the next caller see the verdict. (A sweep
+            # still in flight checks for it before it caches: _probe_all.)
+            with self._cache_lock:
+                cached = self._check_all_cache
+                if cached is not None:
+                    self._check_all_cache = (cached[0], 0.0)
         return result
+
+    def _hides_failed_handshake(self, results) -> bool:
+        """Whether a sweep result reports a handshake as pending whose
+        "failed" verdict has landed since it was read. Such a result is
+        cached already expired, so the next read re-probes and shows the
+        verdict instead of "unknown" (which reads ready) for the whole TTL."""
+        for status in results:
+            handshake = getattr(status, "handshake", None)
+            if not (isinstance(handshake, dict) and handshake.get("pending")):
+                continue
+            binary = getattr(status, "binary_path", None)
+            if not binary:
+                continue
+            identity = self._binary_identity(status.slug, binary)
+            with self._handshake_lock:
+                verdict = self._handshakes.get(identity)
+            if verdict is not None and verdict.get("state") == "failed":
+                return True
+        return False
 
     def _binary_identity(self, slug: str, binary: str) -> tuple:
         try:
@@ -967,11 +995,17 @@ class SetupEngine:
                 logger.info("check_all sweep: %d agents in %.2fs (slowest: %s %.2fs)",
                             len(results), time.monotonic() - started,
                             slowest, timings[slowest])
-            if generation == self._cache_generation:
-                self._check_all_cache = (
-                    results,
-                    time.monotonic() + CHECK_ALL_CACHE_TTL_SECONDS,
-                )
+            written = False
+            with self._cache_lock:
+                if generation == self._cache_generation:
+                    # A failed verdict that landed after its agent was read
+                    # expires nothing yet (this sweep is not cached), so it
+                    # is checked here, under the lock its expiry also takes.
+                    expires_at = (0.0 if self._hides_failed_handshake(results)
+                                  else time.monotonic() + CHECK_ALL_CACHE_TTL_SECONDS)
+                    self._check_all_cache = (results, expires_at)
+                    written = True
+            if written:
                 self._publish(results)
             return results
 
@@ -995,11 +1029,14 @@ class SetupEngine:
         with self._probe_lock:
             generation = self._cache_generation
             status = self.check_agent(slug)
-            cached = self._check_all_cache
-            if cached is not None and generation == self._cache_generation:
-                results = [status if getattr(r, "slug", None) == slug else r
-                           for r in cached[0]]
-                self._check_all_cache = (results, cached[1])
+            results = None
+            with self._cache_lock:
+                cached = self._check_all_cache
+                if cached is not None and generation == self._cache_generation:
+                    results = [status if getattr(r, "slug", None) == slug else r
+                               for r in cached[0]]
+                    self._check_all_cache = (results, cached[1])
+            if results is not None:
                 self._publish(results)
             return status
 
@@ -1055,8 +1092,9 @@ class SetupEngine:
         copy ``allow_stale`` would serve, and keeps a sweep already in flight
         from writing its (possibly pre-install) result back.
         """
-        self._cache_generation += 1
-        self._check_all_cache = None
+        with self._cache_lock:
+            self._cache_generation += 1
+            self._check_all_cache = None
 
     def invalidate_resolved_path(self, slug: str) -> None:
         """Forget the cached binary path for one agent.

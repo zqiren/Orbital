@@ -928,8 +928,11 @@ def test_the_previous_build_reads_and_writes_the_upgraded_index(ws, monkeypatch)
 
 def test_index_is_found_under_a_path_with_spaces_cjk_and_uri_marks(tmp_path, monkeypatch):
     """The index is opened through a ``file:`` URI (so a read never creates
-    it): the folder name must survive the quoting."""
-    ws = str(tmp_path / "我的 项目 #1 ?a=b %20")
+    it): the folder name must survive the quoting. ``?`` cannot be in a
+    Windows file name (WinError 123), so there the hardest legal name is
+    used; the URI's Windows form is pinned by the pure tests below."""
+    name = "我的 项目 #1 &a=b %20" if os.name == "nt" else "我的 项目 #1 ?a=b &c %20"
+    ws = str(tmp_path / name)
     os.makedirs(ws)
     sessions = _thread_folder(ws)
     _index_folder(sessions)
@@ -938,6 +941,51 @@ def test_index_is_found_under_a_path_with_spaces_cjk_and_uri_marks(tmp_path, mon
     reads = _count_reads(monkeypatch)
     assert si.orbital_thread_ids(ws) == {"t-1"}
     assert reads == []
+
+
+def test_index_uri_for_a_windows_drive_path():
+    """On Windows the URI is SQLite's documented ``file:///C:/…`` form: drive
+    kept, backslashes turned, and ``%``, ``#``, ``&``, ``=``, spaces and CJK
+    percent-encoded, so the appended ``?mode=`` is the only query."""
+    import pathlib
+    from agent_os.daemon_v2.session_index import _index_uri
+    path = r"C:\Users\名字\我的 项目 #1 %20 &a=b\orbital\sessions\.session-index.sqlite"
+    assert _index_uri(path, "ro", pathlib.PureWindowsPath) == (
+        "file:///C:/Users/%E5%90%8D%E5%AD%97/"
+        "%E6%88%91%E7%9A%84%20%E9%A1%B9%E7%9B%AE%20%231%20%2520%20%26a%3Db/"
+        "orbital/sessions/.session-index.sqlite?mode=ro")
+
+
+def test_index_uri_for_a_posix_path_quotes_the_query_mark():
+    import pathlib
+    from agent_os.daemon_v2.session_index import _index_uri
+    assert _index_uri("/home/名/a ?b=c #d%20/.session-index.sqlite", "rw",
+                      pathlib.PurePosixPath) == (
+        "file:///home/%E5%90%8D/a%20%3Fb%3Dc%20%23d%2520/.session-index.sqlite?mode=rw")
+
+
+@pytest.mark.parametrize("windows_path", [
+    r"\\server\share\proj\orbital\sessions\.session-index.sqlite",  # UNC
+    r"\\?\C:\proj\orbital\sessions\.session-index.sqlite",          # extended-length
+])
+def test_a_uri_sqlite_refuses_falls_back_to_reading_the_files(ws, monkeypatch, windows_path):
+    """A UNC workspace's URI has an authority (``file://server/…``), which
+    SQLite refuses on every OS: the read is empty, never an exception, the
+    files are read instead."""
+    import pathlib
+    from agent_os.daemon_v2 import session_index
+    uri = session_index._index_uri(windows_path, "ro", pathlib.PureWindowsPath)
+    with pytest.raises(sqlite3.OperationalError):
+        sqlite3.connect(uri, uri=True).close()
+    sessions = _thread_folder(ws)
+    _index_folder(sessions)
+    monkeypatch.setattr(session_index, "_index_uri",
+                        lambda _path, mode, *_a: uri.replace("?mode=ro", f"?mode={mode}"))
+    assert session_index.read_thread_ids(sessions) == {}
+    session_index.store_thread_ids(sessions, [("s1.jsonl", 1, 1, frozenset({"t-1"}))])
+    reads = _count_reads(monkeypatch)
+    assert si.orbital_thread_ids(ws) == {"t-1"}
+    assert len(reads) == 4
 
 
 def test_no_index_reads_the_files_and_creates_nothing(ws, monkeypatch):

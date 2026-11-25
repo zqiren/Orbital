@@ -107,10 +107,19 @@ def _ensure_thread_ids_column(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE sessions ADD COLUMN thread_ids TEXT")
 
 
+def _index_uri(index_file: str, mode: str, path_cls=pathlib.Path) -> str:
+    """The ``file:`` URI of an absolute index path. Built by pathlib, never by
+    string concatenation: a Windows drive path becomes ``file:///C:/…`` and
+    ``%``, ``#``, ``?``, spaces and CJK are percent-encoded, so ``mode`` is
+    the only query. A UNC path (``file://server/…``) is refused by SQLite;
+    the callers then read the session files instead."""
+    return f"{path_cls(index_file).as_uri()}?mode={mode}"
+
+
 def _connect_existing(sessions_dir: str, mode: str) -> sqlite3.Connection:
     """A connection to the folder's index that never creates the file."""
-    uri = pathlib.Path(os.path.abspath(index_path(sessions_dir))).as_uri()
-    return sqlite3.connect(f"{uri}?mode={mode}", uri=True, timeout=1.0,
+    uri = _index_uri(os.path.abspath(index_path(sessions_dir)), mode)
+    return sqlite3.connect(uri, uri=True, timeout=1.0,
                            isolation_level=None, check_same_thread=False)
 
 

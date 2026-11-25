@@ -18,7 +18,9 @@ status turns not ready, and a successful turn, a sign-in/out or the user's
 
 from __future__ import annotations
 
+import concurrent.futures
 import subprocess
+import threading
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -114,7 +116,7 @@ class TestNotReadyReason:
 # The engine remembers a refused turn
 # ---------------------------------------------------------------------------
 
-def _engine(refusal_reasons=("region_unavailable",)):
+def _engine(refusal_reasons=("region_unavailable",), cls=SetupEngine):
     manifest = AgentManifest(
         manifest_version="1", name="Antigravity", slug="antigravity", description="",
         author="t", version="1",
@@ -128,11 +130,27 @@ def _engine(refusal_reasons=("region_unavailable",)):
     )
     registry = AgentRegistry()
     registry.register(manifest)
-    engine = SetupEngine(registry=registry)
+    engine = cls(registry=registry)
     engine._resolved_paths["antigravity"] = "/x/agy"
-    # No handshake spawn in a unit test.
-    engine._handshake_for = lambda *a, **k: None
+    # No handshake spawn in a unit test. Stubbed at ``_handshake_future``, the
+    # one seam both the per-agent read (``_handshake_for``) and the sweep's
+    # up-front start (``_start_handshakes``) go through: stubbing only
+    # ``_handshake_for`` let every sweep spawn a real handshake against
+    # /x/agy, whose "failed" verdict expired the cached sweep whenever it
+    # landed after the sweep was cached (the macOS CI red, 2026-11-25).
+    engine._handshake_future = _settled_handshake
     return engine
+
+
+def _settled_handshake(*a, **k):
+    done: concurrent.futures.Future = concurrent.futures.Future()
+    done.set_result({"state": "ok", "detail": None,
+                     "agent_name": None, "agent_version": None})
+    return done
+
+
+def _failed_handshake(*a, **k):
+    return {"state": "failed", "detail": "EOF", "agent_name": None, "agent_version": None}
 
 
 def _run(cmd, *a, **kw):
@@ -220,6 +238,140 @@ class TestRefusalRecord:
             assert engine.check_agent("antigravity").refusal is None
         with patch("agent_os.agents.setup_engine.subprocess.run", side_effect=_run):
             assert engine.check_agent("antigravity").refusal is None
+
+
+# ---------------------------------------------------------------------------
+# Writers of the cached sweep never undo each other
+# ---------------------------------------------------------------------------
+
+class _ReadHook(tuple):
+    """A cached sweep ``(results, expires_at)`` whose first item read runs
+    ``between`` on another thread and gives it ``wait`` seconds to finish: the
+    other writer's whole update lands between this reader's read and its
+    write, unless a lock keeps it out until the write is done."""
+
+    def __new__(cls, cached, between, wait=0.5):
+        self = super().__new__(cls, cached)
+        self.between, self.wait, self.thread = between, wait, None
+        return self
+
+    def __getitem__(self, i):
+        if self.thread is None:
+            self.thread = threading.Thread(target=self.between, daemon=True)
+            self.thread.start()
+            self.thread.join(self.wait)
+        return super().__getitem__(i)
+
+
+class _InvalidatedAtWrite(SetupEngine):
+    """The sweep's write-time generation check reads the old generation, and
+    an invalidation (an install, a login) runs right after that read."""
+
+    _armed = False
+    invalidator = None
+
+    @property
+    def _cache_generation(self):
+        value = self._gen
+        if self._armed:
+            self._armed = False
+            self.invalidator = threading.Thread(target=self.invalidate_cache, daemon=True)
+            self.invalidator.start()
+            self.invalidator.join(0.5)
+        return value
+
+    @_cache_generation.setter
+    def _cache_generation(self, value):
+        self._gen = value
+
+
+class TestCachedSweepRaces:
+    """The pin menu, the turn-start gate and the WS all read the cached sweep
+    (``check_all(allow_stale=True)``, ``cached_status``); a refused turn and a
+    handshake verdict both rewrite it from other threads."""
+
+    @staticmethod
+    def _pin_menu(engine):
+        return engine.check_all(allow_stale=True, refresh_if_stale=False)[0]
+
+    @staticmethod
+    def _identity(engine):
+        return engine._binary_identity("antigravity", "/x/agy")
+
+    def test_a_failed_handshake_landing_mid_refusal_keeps_the_refusal(self):
+        """Handshake thread reads the sweep, a refused turn patches it, the
+        handshake writes its expiry: the refusal must survive."""
+        engine = _engine()
+        with patch("agent_os.agents.setup_engine.subprocess.run", side_effect=_run):
+            engine.check_all()
+        hook = _ReadHook(engine._check_all_cache, lambda: engine.note_refusal(
+            "antigravity", "region_unavailable", REFUSAL_TEXT))
+        engine._check_all_cache = hook
+        engine._run_handshake_inner(engine._registry.get("antigravity"), "/x/agy",
+                                    self._identity(engine), _failed_handshake)
+        hook.thread.join(5)
+        assert self._pin_menu(engine).refusal["reason"] == "region_unavailable"
+        assert engine._check_all_cache[1] == 0.0, "the failed verdict still expires it"
+
+    def test_a_refusal_patch_never_undoes_a_failed_handshake_expiry(self):
+        """A refused turn reads the sweep, the failed verdict expires it, the
+        patch writes back: the expiry must survive (else the failed handshake
+        reads "unknown", i.e. ready, until the 60 s TTL)."""
+        engine = _engine()
+        with patch("agent_os.agents.setup_engine.subprocess.run", side_effect=_run):
+            engine.check_all()
+        hook = _ReadHook(engine._check_all_cache, lambda: engine._run_handshake_inner(
+            engine._registry.get("antigravity"), "/x/agy", self._identity(engine),
+            _failed_handshake))
+        engine._check_all_cache = hook
+        engine.note_refusal("antigravity", "region_unavailable", REFUSAL_TEXT)
+        hook.thread.join(5)
+        assert engine._check_all_cache[1] == 0.0
+        assert self._pin_menu(engine).refusal["reason"] == "region_unavailable"
+
+    def test_a_failed_handshake_landing_mid_sweep_is_not_hidden_for_the_ttl(self):
+        """The sweep reads the handshake as pending ("unknown" reads ready),
+        then the failed verdict lands before the sweep is cached: the next
+        read must see "failed", not the pending copy for 60 s."""
+        engine = _engine()
+        del engine._handshake_future  # the real single-flight lookup
+        identity = self._identity(engine)
+        manifest = engine._registry.get("antigravity")
+        in_flight: concurrent.futures.Future = concurrent.futures.Future()
+        engine._handshake_futures[identity] = in_flight  # started, not landed: no spawn
+        real_check = engine.check_agent
+
+        def check_then_land(slug, **kw):
+            status = real_check(slug, **kw)
+            result = engine._run_handshake_inner(manifest, "/x/agy", identity,
+                                                 _failed_handshake)
+            engine._handshake_futures.pop(identity, None)
+            in_flight.set_result(result)
+            return status
+
+        engine.check_agent = check_then_land
+        with patch("agent_os.agents.setup_engine.subprocess.run", side_effect=_run):
+            assert engine.check_all()[0].handshake["state"] == "unknown"
+            engine.check_agent = real_check
+            assert engine.check_all()[0].handshake["state"] == "failed"
+
+    def test_an_invalidation_after_the_sweeps_check_is_not_undone(self):
+        """An install/login invalidates while the sweep is between its
+        generation check and its write: the pre-install result must not be
+        cached over the invalidation."""
+        engine = _engine(cls=_InvalidatedAtWrite)
+        real_check = engine.check_agent
+
+        def check_then_arm(slug, **kw):
+            status = real_check(slug, **kw)
+            engine._armed = True
+            return status
+
+        engine.check_agent = check_then_arm
+        with patch("agent_os.agents.setup_engine.subprocess.run", side_effect=_run):
+            engine.check_all()
+        engine.invalidator.join(5)
+        assert engine._check_all_cache is None
 
 
 # ---------------------------------------------------------------------------
