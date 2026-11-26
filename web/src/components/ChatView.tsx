@@ -975,6 +975,37 @@ function hasMachineBlocks(content: string): boolean {
 /** The composer grows with its text up to this height, then scrolls. */
 const COMPOSER_MAX_HEIGHT_PX = 160;
 
+/**
+ * Fit the composer to its text (spec 105 P2).
+ *
+ * Collapsing `height` to `auto` before reading `scrollHeight` is the usual
+ * auto-grow trick, but in WebKit the collapse is one synchronous full-page
+ * layout and the pixel write after it is a second one, and both move every
+ * height-dependent block on the page (the docked file preview paid ~87 ms
+ * per keystroke for it). Growth never needs the collapse: against the
+ * current fixed height `scrollHeight` already reports the taller content.
+ * Only a shrink hides behind the fixed height, so callers collapse first
+ * (`reset`) only when the text may have got shorter. The write is skipped
+ * when the height is unchanged, so a same-line keystroke does no layout work.
+ *
+ * While collapsed for the measure, a bottom margin of the old height holds
+ * the composer's footprint, so the chat above never gets taller for that one
+ * forced layout. Without it the browser clamps the chat's scrollTop to the
+ * briefly taller view, the restore leaves the transcript displaced (93px with
+ * a 5-line draft) and the clamp's scroll event reads as the user scrolling
+ * away from the bottom. Style writes only: no extra layout.
+ */
+export function fitComposerHeight(ta: HTMLTextAreaElement, reset: boolean): void {
+  const held = reset ? ta.style.height : '';
+  if (reset) {
+    ta.style.height = 'auto';
+    if (held) ta.style.marginBottom = held;
+  }
+  const next = Math.min(ta.scrollHeight, COMPOSER_MAX_HEIGHT_PX) + 'px';
+  if (held) ta.style.marginBottom = '';
+  if (ta.style.height !== next) ta.style.height = next;
+}
+
 function countNewlines(text: string): number {
   let n = 0;
   for (let i = text.indexOf('\n'); i !== -1; i = text.indexOf('\n', i + 1)) n++;
@@ -3993,25 +4024,10 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     }
   }, [items, scrollToBottom]);
 
-  /**
-   * Fit the composer to its text (spec 105 P2).
-   *
-   * Collapsing `height` to `auto` before reading `scrollHeight` is the usual
-   * auto-grow trick, but in WebKit the collapse is one synchronous full-page
-   * layout and the pixel write after it is a second one, and both move every
-   * height-dependent block on the page (the docked file preview paid ~87 ms
-   * per keystroke for it). Growth never needs the collapse: against the
-   * current fixed height `scrollHeight` already reports the taller content.
-   * Only a shrink hides behind the fixed height, so callers collapse first
-   * only when the text may have got shorter. The write is skipped when the
-   * height is unchanged, so a same-line keystroke does no layout work at all.
-   */
+  /** Fit the composer to its text; see `fitComposerHeight`. */
   function adjustTextareaHeight({ reset = true }: { reset?: boolean } = {}) {
     const ta = textareaRef.current;
-    if (!ta) return;
-    if (reset) ta.style.height = 'auto';
-    const next = Math.min(ta.scrollHeight, COMPOSER_MAX_HEIGHT_PX) + 'px';
-    if (ta.style.height !== next) ta.style.height = next;
+    if (ta) fitComposerHeight(ta, reset);
   }
 
   function handleInputChange(value: string) {
