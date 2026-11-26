@@ -20,9 +20,11 @@ export default function PanelHandle({ working, onExpand }: PanelHandleProps) {
   const t = useT();
   // Design pass D (8.10 B): the panel folded to 20px inside the chat's
   // sheet, at its right edge (it takes the sheet's right corners). Its tone
-  // is the open panel's, so closed and open read as one object; the chevron
-  // sits on a raised tab (the New session button's treatment) so it is
-  // findable on a white sheet. The whole band is the hit target.
+  // is the open panel's, so closed and open read as one object. The chevron
+  // sits on the bar itself in the left EdgeStrip's look (`strip-chevron`):
+  // muted, its box lighting while any part of the bar is hovered, so the two
+  // edges read as mirror images (2026-11-26: the raised tab read as a button
+  // of its own). The whole band is the hit target.
   return (
     <button
       type="button"
@@ -31,13 +33,13 @@ export default function PanelHandle({ working, onExpand }: PanelHandleProps) {
       title={t('panel.handle')}
       data-testid="panel-handle"
       data-tour="panel-handle"
-      className="panel-handle group hidden md:flex w-5 shrink-0 h-full flex-col items-center justify-center gap-1.5 bg-dock text-secondary transition-colors focus:outline-none"
+      className="panel-handle group hidden md:flex w-5 shrink-0 h-full flex-col items-center justify-center gap-1.5 bg-dock focus:outline-none"
     >
       <span
-        data-testid="panel-handle-tab"
-        className="panel-handle-tab flex h-9 w-5 items-center justify-center rounded-[var(--r-small)] transition-colors group-hover:text-primary"
+        data-testid="panel-handle-chevron"
+        className="flex h-7 w-5 shrink-0 items-center justify-center rounded-md text-secondary transition-colors group-hover:bg-card-hover group-hover:text-primary"
       >
-        <ChevronLeft size={12} aria-hidden />
+        <ChevronLeft size={16} strokeWidth={2.5} aria-hidden="true" />
       </span>
       {working && (
         <span

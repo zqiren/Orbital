@@ -501,14 +501,7 @@ body {
   [data-testid="file-preview-panel-header"]:has([data-pdf-nav]) [data-history-label] { display: none; }
 }
 /* The closed panel (PanelHandle) inside the chat's sheet. */
-.panel-handle:hover { background-color: var(--color-card-hover); }
-:root[data-theme="dark"] .panel-handle:hover { background-color: var(--color-nav-hover); }
 .panel-handle:focus-visible { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--color-accent) 50%, rgb(from var(--color-accent) r g b / 0)); }
-.panel-handle-tab {
-  background-color: var(--color-card);
-  box-shadow: var(--float-shadow-nested);
-}
-:root[data-theme="dark"] .panel-handle-tab { background-color: var(--color-elevated); }
 /* The phone's bottom sheet keeps its header rule; no second line under it. */
 @media (max-width: 767px) {
   .float-panel-drawer [data-scrolled="true"] { box-shadow: none; }
